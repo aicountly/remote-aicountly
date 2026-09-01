@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Mic, MonitorUp, Send, ShieldCheck, X } from 'lucide-react'
 
 import StatusBadge from '../../components/ui/StatusBadge'
+import InvitePanel from './InvitePanel'
 import type { EngineSnapshot } from '../../services/webrtc/RemoteSessionEngine'
 import type { ChatMessage, SessionDetail } from '../../types/remote'
 import { describeShareMode, describeSurface, formatTime } from '../../utils/format'
@@ -14,7 +15,7 @@ import { describeShareMode, describeSurface, formatTime } from '../../utils/form
  * instead of covering the corner somebody is trying to point at.
  */
 
-type Panel = 'participants' | 'chat' | 'details' | 'security'
+type Panel = 'participants' | 'chat' | 'invite' | 'details' | 'security'
 
 interface Props {
   panel: Panel
@@ -22,6 +23,7 @@ interface Props {
   live: EngineSnapshot | null
   messages: ChatMessage[]
   canChat: boolean
+  canInviteExternal: boolean
   onClose: () => void
   onSendChat: (body: string) => Promise<void>
   onApprove: (participantUuid: string) => Promise<void>
@@ -31,6 +33,7 @@ interface Props {
 const TITLES: Record<Panel, string> = {
   participants: 'Participants',
   chat: 'Chat',
+  invite: 'Invite someone',
   details: 'Session details',
   security: 'Security',
 }
@@ -41,6 +44,7 @@ export default function SessionSidePanel({
   live,
   messages,
   canChat,
+  canInviteExternal,
   onClose,
   onSendChat,
   onApprove,
@@ -61,6 +65,10 @@ export default function SessionSidePanel({
         ) : null}
 
         {panel === 'chat' ? <ChatPanel messages={messages} canChat={canChat} onSend={onSendChat} /> : null}
+
+        {panel === 'invite' ? (
+          <InvitePanel session={session} canInviteExternal={canInviteExternal} />
+        ) : null}
 
         {panel === 'details' ? <DetailsPanel session={session} /> : null}
 

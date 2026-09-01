@@ -188,8 +188,8 @@ Incognito, or Chrome and Firefox.
 ### Testing an external guest
 
 With `allow_external_guest` on for the organisation (the seeded ABC has it):
-in the room's **People** panel, create an external invitation, then open the
-link in a **third** profile with no AICOUNTLY session. Expect a name prompt,
+in the room's **Invite** panel, create an external invitation and copy the
+link (it is shown once and never again), then open it in a **third** profile with no AICOUNTLY session. Expect a name prompt,
 then the waiting state, then the host's approval prompt. Opening the same link
 a second time must fail with *"already been used"*.
 

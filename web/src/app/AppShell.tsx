@@ -15,6 +15,7 @@ import {
   ScrollText,
   Settings,
   ShieldCheck,
+  UserCog,
   Users,
   X,
 } from 'lucide-react'
@@ -85,6 +86,7 @@ export default function AppShell() {
       ? [
           { to: '/admin/policy', label: 'Remote policy', icon: ShieldCheck },
           { to: '/admin/permissions', label: 'User permissions', icon: Users },
+          { to: '/admin/roles', label: 'Role permissions', icon: UserCog },
           ...(can(PERMISSIONS.AUDIT_VIEW) ? [{ to: '/admin/audit', label: 'Audit trail', icon: ScrollText }] : []),
         ]
       : []),

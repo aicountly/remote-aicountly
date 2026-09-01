@@ -16,6 +16,7 @@ import {
   Shield,
   Square,
   StopCircle,
+  UserPlus,
   Users,
 } from 'lucide-react'
 
@@ -55,7 +56,9 @@ export default function SessionRoomPage() {
     guestParticipantUuid: isGuest ? readGuestParticipantUuid() : null,
   })
 
-  const [panel, setPanel] = useState<'participants' | 'chat' | 'details' | 'security' | null>('participants')
+  const [panel, setPanel] = useState<
+    'participants' | 'chat' | 'invite' | 'details' | 'security' | null
+  >('participants')
   const [annotationTool, setAnnotationTool] = useState<AnnotationTool>('none')
   const [pointerOn, setPointerOn] = useState(false)
   const [elapsed, setElapsed] = useState(0)
@@ -128,6 +131,12 @@ export default function SessionRoomPage() {
   const canAnnotate = session.capabilities.annotation && (isGuest || can(PERMISSIONS.ANNOTATION_USE))
   const canUseMicrophone =
     session.capabilities.audio && capabilities.microphone && (isGuest || can(PERMISSIONS.MICROPHONE_SHARE))
+
+  // Only the host invites, and a guest never does. External invitations need
+  // both the organisation's permission and this user's (§23).
+  const canInvite = session.isHost && !isGuest
+  const canInviteExternal =
+    canInvite && session.capabilities.externalGuest && can(PERMISSIONS.EXTERNAL_INVITE)
 
   const waiting = session.waiting ?? []
 
@@ -285,6 +294,7 @@ export default function SessionRoomPage() {
             live={live}
             messages={messages}
             canChat={canChat}
+            canInviteExternal={canInviteExternal}
             onClose={() => setPanel(null)}
             onSendChat={actions.sendChat}
             onApprove={actions.approve}
@@ -383,6 +393,15 @@ export default function SessionRoomPage() {
               label="Chat"
               active={panel === 'chat'}
               onClick={() => setPanel((current) => (current === 'chat' ? null : 'chat'))}
+            />
+          ) : null}
+
+          {canInvite ? (
+            <ToolbarButton
+              icon={<UserPlus size={18} />}
+              label="Invite"
+              active={panel === 'invite'}
+              onClick={() => setPanel((current) => (current === 'invite' ? null : 'invite'))}
             />
           ) : null}
 

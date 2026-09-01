@@ -26,6 +26,7 @@ const SessionRoom = lazy(() => import('../features/room/SessionRoomPage'))
 const GuestJoin = lazy(() => import('../features/sessions/GuestJoinPage'))
 const AdminPolicy = lazy(() => import('../features/admin/PolicyPage'))
 const AdminPermissions = lazy(() => import('../features/admin/PermissionsPage'))
+const AdminRolePermissions = lazy(() => import('../features/admin/RolePermissionsPage'))
 const AdminAudit = lazy(() => import('../features/admin/AuditPage'))
 const SettingsPage = lazy(() => import('../features/settings/SettingsPage'))
 const NotFound = lazy(() => import('../features/misc/NotFoundPage'))
@@ -47,6 +48,7 @@ export const router = createBrowserRouter([
       { path: 'support', element: page(<SupportRequests />) },
       { path: 'admin/policy', element: page(<AdminPolicy />) },
       { path: 'admin/permissions', element: page(<AdminPermissions />) },
+      { path: 'admin/roles', element: page(<AdminRolePermissions />) },
       { path: 'admin/audit', element: page(<AdminAudit />) },
       { path: 'settings', element: page(<SettingsPage />) },
       { path: '*', element: page(<NotFound />) },
