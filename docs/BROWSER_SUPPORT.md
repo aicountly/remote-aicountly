@@ -13,6 +13,7 @@ something is unavailable.
 | View a shared screen | ✅ | ✅ | ✅ | ✅ |
 | Share a screen | ✅ | ✅ | ✅ (macOS) | ❌ |
 | Chat, pointer, annotation | ✅ | ✅ | ✅ | ✅ |
+| File transfer | ✅ | ✅ | ✅ | ✅ |
 | Microphone | ✅ | ✅ | ✅ | ✅ |
 | Surface verification (`displaySurface`) | ✅ | ❌ | ❌ | — |
 | Safe Share verification (Capture Handle) | ✅ | ❌ | ❌ | — |

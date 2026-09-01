@@ -3,19 +3,31 @@ import { Mic, MonitorUp, Send, ShieldCheck, X } from 'lucide-react'
 
 import StatusBadge from '../../components/ui/StatusBadge'
 import InvitePanel from './InvitePanel'
+import FilesPanel from './FilesPanel'
 import type { EngineSnapshot } from '../../services/webrtc/RemoteSessionEngine'
 import type { ChatMessage, SessionDetail } from '../../types/remote'
 import { describeShareMode, describeSurface, formatTime } from '../../utils/format'
 
 /**
- * The collapsible right-hand panel (§33): people, chat, details, security.
+ * The collapsible right-hand panel (§33): people, chat, files, details, security.
  *
  * Chat is deliberately a panel rather than an overlay — §35 asks that it not
  * dominate the shared screen, and a docked column keeps the video at full size
  * instead of covering the corner somebody is trying to point at.
  */
 
-type Panel = 'participants' | 'chat' | 'invite' | 'details' | 'security'
+type Panel = 'participants' | 'chat' | 'files' | 'invite' | 'details' | 'security'
+
+interface FileTransferProps {
+  canSend: boolean
+  canReceive: boolean
+  maxBytes: number
+  onOffer: (file: File, toParticipantUuid?: string | null) => Promise<void>
+  onAccept: (uuid: string) => Promise<void>
+  onDecline: (uuid: string) => Promise<void>
+  onCancel: (uuid: string) => Promise<void>
+  onDismiss: (uuid: string) => void
+}
 
 interface Props {
   panel: Panel
@@ -24,6 +36,7 @@ interface Props {
   messages: ChatMessage[]
   canChat: boolean
   canInviteExternal: boolean
+  files: FileTransferProps
   onClose: () => void
   onSendChat: (body: string) => Promise<void>
   onApprove: (participantUuid: string) => Promise<void>
@@ -33,6 +46,7 @@ interface Props {
 const TITLES: Record<Panel, string> = {
   participants: 'Participants',
   chat: 'Chat',
+  files: 'Files',
   invite: 'Invite someone',
   details: 'Session details',
   security: 'Security',
@@ -45,6 +59,7 @@ export default function SessionSidePanel({
   messages,
   canChat,
   canInviteExternal,
+  files,
   onClose,
   onSendChat,
   onApprove,
@@ -65,6 +80,21 @@ export default function SessionSidePanel({
         ) : null}
 
         {panel === 'chat' ? <ChatPanel messages={messages} canChat={canChat} onSend={onSendChat} /> : null}
+
+        {panel === 'files' ? (
+          <FilesPanel
+            transfers={live?.transfers ?? []}
+            peers={live?.peers ?? []}
+            canSend={files.canSend}
+            canReceive={files.canReceive}
+            maxBytes={files.maxBytes}
+            onOffer={files.onOffer}
+            onAccept={files.onAccept}
+            onDecline={files.onDecline}
+            onCancel={files.onCancel}
+            onDismiss={files.onDismiss}
+          />
+        ) : null}
 
         {panel === 'invite' ? (
           <InvitePanel session={session} canInviteExternal={canInviteExternal} />

@@ -44,6 +44,12 @@ final class EventType
 
     public const CHAT_STARTED = 'CHAT_STARTED';
 
+    // §27 names STARTED, COMPLETED and FAILED. OFFERED and DECLINED are added
+    // because a declined transfer is not a failure, and an administrator asking
+    // "what was offered from this machine?" needs the offer itself recorded —
+    // a transfer nobody accepted would otherwise leave no trace at all.
+    public const FILE_TRANSFER_OFFERED   = 'FILE_TRANSFER_OFFERED';
+    public const FILE_TRANSFER_DECLINED  = 'FILE_TRANSFER_DECLINED';
     public const FILE_TRANSFER_STARTED   = 'FILE_TRANSFER_STARTED';
     public const FILE_TRANSFER_COMPLETED = 'FILE_TRANSFER_COMPLETED';
     public const FILE_TRANSFER_FAILED    = 'FILE_TRANSFER_FAILED';

@@ -25,6 +25,11 @@ nice-to-have.
   resolved per company on every request.
 * **Screen content is never stored.** Not a frame, not a screenshot, not a
   thumbnail. The stream is peer-to-peer and ephemeral.
+* **No file arrives without being accepted.** A transfer is registered with the
+  API before it is announced, and the sender starts only once the recipient's
+  `accept` call has succeeded. The receiving browser has allocated nothing to
+  put unsolicited chunks in, and drops them. File contents never reach a
+  server — there is no upload endpoint to reach.
 
 ## What Remote does not claim
 
@@ -38,6 +43,10 @@ nice-to-have.
   do not report `displaySurface`. Remote proceeds under the mode already
   authorised and records `verified: false` rather than implying a check it
   could not make.
+* It **does not scan transferred files**. Nothing is uploaded, so there is
+  nothing on a server to scan. A received file is held as opaque bytes until the
+  recipient presses Save, and the record shows who sent it — the controls are
+  consent and the audit trail, not inspection.
 * There is no "military-grade" anything here, and the interface says nothing of
   the kind.
 
@@ -153,10 +162,10 @@ authenticates with a Bearer token the browser never attaches automatically.
 ## Data protection
 
 **Stored:** session metadata, participants, durations, policy decisions, audit
-events, chat messages.
+events, chat messages, and a file transfer's name, size, recipient and outcome.
 
-**Never stored:** screen content, passwords, `ses_key`s, guest tokens,
-signalling tokens, TURN credentials.
+**Never stored:** screen content, **file contents**, passwords, `ses_key`s,
+guest tokens, signalling tokens, TURN credentials.
 
 `AuditService::scrub()` walks metadata before it is written and drops any key
 containing `password`, `token`, `secret`, `credential`, `body`, `message`,

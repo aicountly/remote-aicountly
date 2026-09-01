@@ -12,12 +12,16 @@
  * for perfect-negotiation rollback.
  */
 
+import { BUFFER_LOW_WATER } from './fileTransfer'
+
 export type PeerConnectionQuality = 'good' | 'fair' | 'poor' | 'unknown'
 
 export interface PeerEvents {
   onIceCandidate: (candidate: RTCIceCandidateInit) => void
   onTrack: (stream: MediaStream) => void
   onDataMessage: (message: unknown) => void
+  /** A framed file chunk. Binary is kept off the JSON path entirely (§36). */
+  onBinaryMessage: (message: ArrayBuffer) => void
   onStateChange: (state: RTCPeerConnectionState) => void
   onDataChannelOpen: () => void
 }
@@ -180,6 +184,53 @@ export class RemotePeerConnection {
     }
   }
 
+  /** Push one framed binary chunk. Returns false when the channel is not open. */
+  sendBinary(message: ArrayBuffer): boolean {
+    if (this.channel?.readyState !== 'open') return false
+
+    try {
+      this.channel.send(message)
+
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  get bufferedAmount(): number {
+    return this.channel?.bufferedAmount ?? 0
+  }
+
+  /**
+   * Resolve once the outbound buffer has drained.
+   *
+   * A data channel offers no backpressure of its own: writing faster than the
+   * network drains grows `bufferedAmount` without bound until the channel is
+   * torn down. `bufferedamountlow` is the event that says it is safe to
+   * continue, and the timeout is there so a channel that never drains fails the
+   * transfer instead of hanging it forever.
+   */
+  waitForDrain(timeoutMs = 30_000): Promise<void> {
+    const channel = this.channel
+
+    if (!channel || channel.readyState !== 'open') return Promise.resolve()
+    if (channel.bufferedAmount <= BUFFER_LOW_WATER) return Promise.resolve()
+
+    return new Promise((resolve, reject) => {
+      const settle = (fn: () => void) => {
+        clearTimeout(timer)
+        channel.removeEventListener('bufferedamountlow', onLow)
+        fn()
+      }
+
+      const onLow = () => settle(resolve)
+      const timer = setTimeout(() => settle(() => reject(new Error('CHANNEL_STALLED'))), timeoutMs)
+
+      channel.bufferedAmountLowThreshold = BUFFER_LOW_WATER
+      channel.addEventListener('bufferedamountlow', onLow)
+    })
+  }
+
   /**
    * A coarse connection-quality reading for the indicator (§49).
    *
@@ -269,12 +320,34 @@ export class RemotePeerConnection {
   private attachChannel(channel: RTCDataChannel): void {
     this.channel = channel
 
+    // Without this, binary frames arrive as Blobs in some browsers and as
+    // ArrayBuffers in others — and the file receiver would have to handle both.
+    channel.binaryType = 'arraybuffer'
+    channel.bufferedAmountLowThreshold = BUFFER_LOW_WATER
+
     channel.onopen = () => {
       if (!this.disposed) this.events.onDataChannelOpen()
     }
 
     channel.onmessage = (event) => {
       if (this.disposed) return
+
+      // Binary is a file chunk and never JSON. Keeping the two paths separate
+      // means a chunk that happens to start with '{' is not parsed as control.
+      if (event.data instanceof ArrayBuffer) {
+        this.events.onBinaryMessage(event.data)
+
+        return
+      }
+
+      if (typeof Blob !== 'undefined' && event.data instanceof Blob) {
+        // A browser that ignored `binaryType`. Convert rather than drop.
+        void event.data.arrayBuffer().then((buffer) => {
+          if (!this.disposed) this.events.onBinaryMessage(buffer)
+        })
+
+        return
+      }
 
       try {
         this.events.onDataMessage(JSON.parse(String(event.data)))

@@ -98,6 +98,23 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
         'filter' => ['api-auth:guest', 'rate-limit:chat,120,60'],
     ]);
 
+    // --- File transfer (§36) -----------------------------------------------
+    // No file content passes through these — only the offer, the recipient's
+    // decision and the outcome. The bytes go peer-to-peer over the data
+    // channel, so there is nothing here to upload to.
+    $routes->get('sessions/(:segment)/transfers', 'FileTransferController::index/$1', ['filter' => 'api-auth:guest']);
+    $routes->post('sessions/(:segment)/transfers', 'FileTransferController::create/$1', [
+        'filter' => ['api-auth:guest', 'rate-limit:file-offer,20,60'],
+    ]);
+    $routes->post('sessions/(:segment)/transfers/(:segment)/accept', 'FileTransferController::accept/$1/$2', ['filter' => 'api-auth:guest']);
+    $routes->post('sessions/(:segment)/transfers/(:segment)/decline', 'FileTransferController::decline/$1/$2', ['filter' => 'api-auth:guest']);
+    // Progress is throttled client-side; the limit is the backstop.
+    $routes->post('sessions/(:segment)/transfers/(:segment)/progress', 'FileTransferController::progress/$1/$2', [
+        'filter' => ['api-auth:guest', 'rate-limit:file-progress,120,60'],
+    ]);
+    $routes->post('sessions/(:segment)/transfers/(:segment)/complete', 'FileTransferController::complete/$1/$2', ['filter' => 'api-auth:guest']);
+    $routes->post('sessions/(:segment)/transfers/(:segment)/abort', 'FileTransferController::abort/$1/$2', ['filter' => 'api-auth:guest']);
+
     // --- Invitations -------------------------------------------------------
     $routes->get('sessions/(:segment)/invitations', 'InvitationController::index/$1', ['filter' => 'api-auth']);
     $routes->post('sessions/(:segment)/invitations', 'InvitationController::create/$1', [

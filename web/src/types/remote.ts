@@ -257,6 +257,44 @@ export interface ChatMessage {
   createdAt: string | null;
 }
 
+/**
+ * The ledger row for one file (§36).
+ *
+ * Note what is *not* here: the file. These endpoints record who offered what to
+ * whom and how it ended; the bytes go peer-to-peer over the data channel and
+ * never reach the server.
+ */
+export type FileTransferStatus =
+  | 'OFFERED'
+  | 'ACCEPTED'
+  | 'DECLINED'
+  | 'IN_PROGRESS'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'CANCELLED';
+
+export interface FileTransferParty {
+  uuid: string | null;
+  name: string | null;
+}
+
+export interface FileTransfer {
+  uuid: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string | null;
+  status: FileTransferStatus;
+  bytesTransferred: number;
+  /** 0–100, computed by the server so every screen shows the same number. */
+  progress: number;
+  errorCode: string | null;
+  from: FileTransferParty;
+  to: FileTransferParty;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string | null;
+}
+
 export type SupportRequestStatus =
   | 'PENDING'
   | 'ACCEPTED'

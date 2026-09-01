@@ -137,6 +137,14 @@ final class PermissionCatalog
             self::MICROPHONE_SHARE,
             self::CHAT_USE,
             self::ANNOTATION_USE,
+            // File transfer is in the baseline because the company switch that
+            // enables it defaults OFF and is a deliberate act. Leaving these
+            // out would mean an organisation turning file transfer on had
+            // turned it on for administrators only — a switch that does not do
+            // what it says. The capability mask still removes them wherever
+            // the policy, the plan or the feature flag says no.
+            self::FILE_SEND,
+            self::FILE_RECEIVE,
             self::SUPPORT_REQUEST,
             self::SESSION_HISTORY_OWN,
         ];
@@ -153,8 +161,6 @@ final class PermissionCatalog
         return array_values(array_unique(array_merge(self::baselineMember(), [
             self::MONITOR_SHARE,
             self::SYSTEM_AUDIO_SHARE,
-            self::FILE_SEND,
-            self::FILE_RECEIVE,
             self::EXTERNAL_INVITE,
             self::SESSION_HISTORY_COMPANY,
             self::AUDIT_VIEW,

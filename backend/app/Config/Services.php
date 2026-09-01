@@ -11,6 +11,7 @@ use App\Domain\Auth\SourceContextVerifier;
 use App\Domain\Directory\PlatformDirectory;
 use App\Domain\Policy\EffectivePolicyResolver;
 use App\Domain\Session\ChatService;
+use App\Domain\Session\FileTransferService;
 use App\Domain\Session\InvitationService;
 use App\Domain\Session\JoinService;
 use App\Domain\Session\ParticipantService;
@@ -163,6 +164,20 @@ class Services extends BaseService
         }
 
         return new ChatService(db_connect(), static::auditService());
+    }
+
+    public static function fileTransferService(bool $getShared = true): FileTransferService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('fileTransferService');
+        }
+
+        return new FileTransferService(
+            db_connect(),
+            static::auditService(),
+            static::participantService(),
+            static::remoteConfig(),
+        );
     }
 
     public static function signallingTokenService(bool $getShared = true): SignallingTokenService

@@ -376,6 +376,36 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     await reload()
   }, [sessionUuid, reload])
 
+  // --- File transfer (§36) -------------------------------------------------
+  //
+  // Thin pass-throughs: the engine owns the transfer, because a transfer
+  // outlives a render exactly as a peer connection does. What the hook adds is
+  // nothing — deliberately. A file that kept sending because a component
+  // re-rendered would be a bug nobody could reproduce.
+
+  const offerFile = useCallback(async (file: File, toParticipantUuid?: string | null) => {
+    const engine = engineRef.current
+    if (!engine) throw new Error('PEER_NOT_CONNECTED')
+
+    await engine.offerFile(file, toParticipantUuid)
+  }, [])
+
+  const acceptTransfer = useCallback(async (transferUuid: string) => {
+    await engineRef.current?.acceptTransfer(transferUuid)
+  }, [])
+
+  const declineTransfer = useCallback(async (transferUuid: string) => {
+    await engineRef.current?.declineTransfer(transferUuid)
+  }, [])
+
+  const cancelTransfer = useCallback(async (transferUuid: string) => {
+    await engineRef.current?.cancelTransfer(transferUuid)
+  }, [])
+
+  const dismissTransfer = useCallback((transferUuid: string) => {
+    engineRef.current?.dismissTransfer(transferUuid)
+  }, [])
+
   // --- Collaboration -------------------------------------------------------
 
   const sendPointer = useCallback((x: number, y: number) => {
@@ -416,6 +446,11 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
       sendPointer,
       sendAnnotation,
       clearAnnotations,
+      offerFile,
+      acceptTransfer,
+      declineTransfer,
+      cancelTransfer,
+      dismissTransfer,
       approve,
       deny,
       join,

@@ -16,6 +16,7 @@ import type {
   CreatedInvitation,
   EffectivePolicy,
   Entitlement,
+  FileTransfer,
   Invitation,
   Participant,
   PermissionMatrixUser,
@@ -218,6 +219,74 @@ export function postMessage(
   return apiFetch<ChatMessage>(`/sessions/${sessionUuid}/messages`, {
     method: 'POST',
     body: { body, deliveredVia },
+  })
+}
+
+// --- File transfer (§36) ----------------------------------------------------
+//
+// None of these carry file content. They are the ledger: the offer, the
+// recipient's decision, how far it got and how it ended. The bytes travel
+// peer-to-peer over the data channel, which is why there is no upload here to
+// find.
+
+export function fetchTransfers(sessionUuid: string): Promise<FileTransfer[]> {
+  return apiFetch<FileTransfer[]>(`/sessions/${sessionUuid}/transfers`)
+}
+
+export interface FileOfferInput {
+  /** Optional only when there is exactly one other person in the session. */
+  toParticipantUuid?: string | null
+  fileName: string
+  fileSize: number
+  mimeType?: string | null
+}
+
+/**
+ * Register the offer **before** any chunk goes on the wire.
+ *
+ * The server is what enforces the size ceiling, the organisation's file-transfer
+ * switch and this user's permission to send, so a client that skipped its own
+ * checks still gets no further than this call.
+ */
+export function offerFileTransfer(sessionUuid: string, input: FileOfferInput): Promise<FileTransfer> {
+  return apiFetch<FileTransfer>(`/sessions/${sessionUuid}/transfers`, { method: 'POST', body: input })
+}
+
+/** The gate the sender waits on. Nothing is sent until this succeeds. */
+export function acceptFileTransfer(sessionUuid: string, transferUuid: string): Promise<FileTransfer> {
+  return apiFetch<FileTransfer>(`/sessions/${sessionUuid}/transfers/${transferUuid}/accept`, { method: 'POST' })
+}
+
+export function declineFileTransfer(sessionUuid: string, transferUuid: string): Promise<FileTransfer> {
+  return apiFetch<FileTransfer>(`/sessions/${sessionUuid}/transfers/${transferUuid}/decline`, { method: 'POST' })
+}
+
+/** Throttled by the caller: the ledger shows movement, it does not mirror chunks. */
+export function reportTransferProgress(
+  sessionUuid: string,
+  transferUuid: string,
+  bytesTransferred: number,
+): Promise<FileTransfer> {
+  return apiFetch<FileTransfer>(`/sessions/${sessionUuid}/transfers/${transferUuid}/progress`, {
+    method: 'POST',
+    body: { bytesTransferred },
+  })
+}
+
+/** Reported by the recipient — the only side that knows every byte arrived. */
+export function completeFileTransfer(sessionUuid: string, transferUuid: string): Promise<FileTransfer> {
+  return apiFetch<FileTransfer>(`/sessions/${sessionUuid}/transfers/${transferUuid}/complete`, { method: 'POST' })
+}
+
+export function abortFileTransfer(
+  sessionUuid: string,
+  transferUuid: string,
+  status: 'CANCELLED' | 'FAILED' = 'CANCELLED',
+  errorCode?: string | null,
+): Promise<FileTransfer> {
+  return apiFetch<FileTransfer>(`/sessions/${sessionUuid}/transfers/${transferUuid}/abort`, {
+    method: 'POST',
+    body: { status, errorCode },
   })
 }
 

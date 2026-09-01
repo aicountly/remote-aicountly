@@ -899,3 +899,156 @@
   color: var(--text-stage-muted);
   font-size: var(--text-xs);
 }
+
+/* --- File transfer (§36) --------------------------------------------------- */
+
+.files {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+
+.files__lede {
+  color: var(--text-stage-muted);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+}
+
+.files__send {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.files__send .field__label {
+  color: var(--text-stage-muted);
+  font-size: var(--text-xs);
+}
+
+.files__send .input {
+  background: var(--bg-stage-raised);
+  border-color: var(--border-stage);
+  color: var(--text-stage);
+}
+
+.files__choose {
+  align-self: flex-start;
+}
+
+.files__hint,
+.files__empty {
+  color: var(--text-stage-muted);
+  font-size: var(--text-xs);
+}
+
+.files__error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid rgba(217, 45, 32, 0.4);
+  border-radius: var(--radius-md);
+  background: rgba(217, 45, 32, 0.12);
+  color: #ffb4ad;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.files__error svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.files__list {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border-stage);
+}
+
+.transfer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border-stage);
+}
+
+.transfer:last-child {
+  border-bottom: none;
+}
+
+.transfer__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.transfer__name {
+  min-width: 0;
+  font-size: var(--text-sm);
+  font-weight: 550;
+  color: var(--text-stage);
+}
+
+.transfer__size {
+  flex: none;
+  color: var(--text-stage-muted);
+  font-size: var(--text-xs);
+}
+
+.transfer__meta {
+  color: var(--text-stage-muted);
+  font-size: var(--text-xs);
+}
+
+/* An offer waiting for an answer is the one state that should draw the eye. */
+.transfer--offered .transfer__meta {
+  color: #f0b849;
+}
+
+.transfer--completed .transfer__meta {
+  color: #7fe05c;
+}
+
+.transfer--failed .transfer__meta {
+  color: #ffb4ad;
+}
+
+.transfer__bar {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-stage-raised);
+  overflow: hidden;
+}
+
+.transfer__bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--aicountly-green);
+  transition: width var(--duration) var(--ease);
+}
+
+.transfer__error {
+  color: #ffb4ad;
+  font-size: var(--text-xs);
+}
+
+.transfer__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.transfer__actions:empty {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .transfer__bar-fill {
+    transition: none;
+  }
+}

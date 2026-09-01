@@ -175,6 +175,40 @@ presence, inside one room, and drops everything else.
 arrived. There is no tie to break, so both sides never offer at once and no
 perfect-negotiation rollback is needed.
 
+### File transfer
+
+Files move on the same `RTCDataChannel` as chat and annotation, and on the same
+terms as the screen: **peer-to-peer, never through AICOUNTLY.** There is no
+upload endpoint, so there is no storage, no retention question and no deletion
+question for a file two people pass between themselves during a call.
+
+What the API holds is a ledger — `remote_file_transfers` — and it exists because
+four things must not be left to a peer:
+
+1. the organisation permits file transfer at all, and this user may send;
+2. the recipient is a real, admitted participant of *this* session;
+3. the file is within the configured ceiling (`remote.fileTransferMaxBytes`);
+4. **the recipient accepted before a single byte was sent.**
+
+So the order is fixed: `POST /transfers` first, then the offer is announced over
+the data channel, and the sender starts only when `POST /transfers/{uuid}/accept`
+has succeeded on the other side. A client that skips its own checks gets no
+further than the first call, and the receiving browser refuses chunks for a
+transfer it has not accepted — it has allocated nothing to put them in.
+
+On the wire each chunk is a 16 KiB payload behind an 8-byte header (`slot`,
+`index`). 16 KiB because that is the size every browser's SCTP implementation
+handles; larger messages are dropped or close the channel outright on some. The
+sender waits on `bufferedamountlow` between chunks, because a data channel has
+no backpressure of its own and writing faster than the network drains grows
+`bufferedAmount` until the channel dies.
+
+The receiver holds the sender to the size in the ledger, not the size in the
+offer, and aborts at the first byte over — a peer that claims 1 KB and sends
+megabytes gets cut off rather than filling memory. A completed file stays in the
+tab until **Save** is pressed, and is written as `application/octet-stream`
+whatever the sender claimed its type was.
+
 ### STUN and TURN
 
 STUN is enough for most networks. TURN is what makes the strict ones work —
@@ -218,12 +252,17 @@ forever.
 ## What is stored, and what is not
 
 **Stored:** session metadata, participants, durations, policy decisions, audit
-events, chat messages.
+events, chat messages, and — for a file transfer — its name, size, recipient and
+outcome.
 
 **Never stored:** screen pixels, a frame, a screenshot, a password, a token, a
-TURN credential. `AuditService::scrub()` strips anything whose key looks like
-one before it reaches the database, because the caller that forgets is the one
-that matters.
+TURN credential, **or the contents of a transferred file**. `AuditService::scrub()`
+strips anything whose key looks like one before it reaches the database, because
+the caller that forgets is the one that matters.
+
+A file's name and size are business context an administrator needs to answer
+"what left this machine?". Its bytes never do, and they never reach a server to
+be stored in the first place.
 
 Chat and audit are deliberately separate. The audit trail records *that* a
 conversation happened (`CHAT_STARTED`) and nothing about what was said, so

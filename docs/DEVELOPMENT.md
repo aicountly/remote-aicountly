@@ -170,19 +170,30 @@ Incognito, or Chrome and Firefox.
     the video; a labelled cursor appears on the sharer's screen. **Draw**, then
     **Clear**.
 
-12. **Stop sharing.** Press **Stop sharing**, or use the browser's own sharing
+12. **Send a file.** With `allow_file_transfer` on for the organisation (the
+    seeded *ABC Private Limited* has it), open **Files** and choose one. The
+    other side sees an offer with the sender's name and has to press **Accept**
+    before anything moves — watch the network tab and confirm no request
+    carries the file: `POST /transfers` sends the name and size only, and the
+    bytes go over the data channel. Then press **Save** on the receiving side;
+    nothing lands on the disk until you do. Try **Cancel** on a large file
+    mid-transfer and **Decline** on an offer: both end as `CANCELLED` and
+    `DECLINED` in the Files list, never as failures, and the decline appears on
+    the session timeline as `FILE_TRANSFER_DECLINED`.
+
+13. **Stop sharing.** Press **Stop sharing**, or use the browser's own sharing
     bar. Both must leave the session open, with chat still working — stopping a
     share is not ending a session.
 
-13. **End.** **End** on either side. Both land on the summary: duration,
+14. **End.** **End** on either side. Both land on the summary: duration,
     participants, screen sharing stopped.
 
-14. **History and audit.** The session appears in *Sessions* with its duration.
+15. **History and audit.** The session appears in *Sessions* with its duration.
     Open it: the timeline shows created → joined → approved → share started →
     surface → share stopped → ended. As a company administrator, *Audit trail*
     shows the same events with actor and IP.
 
-15. **Confirm the code is dead.** Re-entering the session code now fails with
+16. **Confirm the code is dead.** Re-entering the session code now fails with
     *"That session code is not valid."*
 
 ### Testing an external guest

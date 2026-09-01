@@ -254,6 +254,40 @@ final class Presenter
      * @param  array<string, mixed> $row
      * @return array<string, mixed>
      */
+    public static function fileTransfer(array $row): array
+    {
+        $size  = (int) $row['file_size'];
+        $moved = (int) ($row['bytes_transferred'] ?? 0);
+
+        return [
+            'uuid'      => (string) $row['uuid'],
+            'fileName'  => (string) $row['file_name'],
+            'fileSize'  => $size,
+            'mimeType'  => $row['mime_type'] ?? null,
+            'status'    => (string) $row['status'],
+            'bytesTransferred' => $moved,
+            // Computed here so every screen shows the same number rather than
+            // each one dividing it slightly differently.
+            'progress'  => $size > 0 ? min(100, (int) round(($moved / $size) * 100)) : 0,
+            'errorCode' => $row['error_code'] ?? null,
+            'from'      => [
+                'uuid' => $row['from_uuid'] ?? null,
+                'name' => $row['from_name'] ?? null,
+            ],
+            'to' => [
+                'uuid' => $row['to_uuid'] ?? null,
+                'name' => $row['to_name'] ?? null,
+            ],
+            'startedAt'   => Clock::iso($row['started_at'] ?? null),
+            'completedAt' => Clock::iso($row['completed_at'] ?? null),
+            'createdAt'   => Clock::iso($row['created_at'] ?? null),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed> $row
+     * @return array<string, mixed>
+     */
     public static function companyPolicy(array $row): array
     {
         $out = ['companyId' => (int) $row['company_id'], 'policyPreset' => (string) $row['policy_preset']];

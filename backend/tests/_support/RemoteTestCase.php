@@ -95,6 +95,7 @@ abstract class RemoteTestCase extends CIUnitTestCase
         // resolved earlier in the test keeps the previous secret.
         foreach ([
             'policyResolver', 'sessionService', 'joinService', 'invitationService',
+            'fileTransferService',
             'supportRequestService', 'signallingTokenService', 'iceConfigService',
             'sourceContextVerifier', 'platformDirectory', 'portalClient',
         ] as $service) {

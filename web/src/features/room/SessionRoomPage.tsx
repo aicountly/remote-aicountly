@@ -10,6 +10,7 @@ import {
   MicOff,
   MonitorUp,
   MousePointer2,
+  Paperclip,
   Pause,
   Pencil,
   Play,
@@ -43,10 +44,18 @@ import { getGuestToken } from '../../services/api/client'
  * person may use — browser capability ∧ company policy ∧ role ∧ user permission
  * ∧ session capability (§87) — so a disabled button is never a surprise.
  */
+/**
+ * Used only for a guest, who never calls `/bootstrap` and so has no feature
+ * flags of their own. It matches the backend default; the server is what
+ * actually enforces the ceiling, so being wrong here costs a clearer error
+ * message, not a bypass.
+ */
+const DEFAULT_FILE_MAX_BYTES = 25 * 1024 * 1024
+
 export default function SessionRoomPage() {
   const { uuid = '' } = useParams()
   const navigate = useNavigate()
-  const { policy, can, capabilities } = useRemote()
+  const { policy, can, capabilities, bootstrap } = useRemote()
 
   const isGuest = Boolean(getGuestToken())
 
@@ -57,7 +66,7 @@ export default function SessionRoomPage() {
   })
 
   const [panel, setPanel] = useState<
-    'participants' | 'chat' | 'invite' | 'details' | 'security' | null
+    'participants' | 'chat' | 'files' | 'invite' | 'details' | 'security' | null
   >('participants')
   const [annotationTool, setAnnotationTool] = useState<AnnotationTool>('none')
   const [pointerOn, setPointerOn] = useState(false)
@@ -131,6 +140,22 @@ export default function SessionRoomPage() {
   const canAnnotate = session.capabilities.annotation && (isGuest || can(PERMISSIONS.ANNOTATION_USE))
   const canUseMicrophone =
     session.capabilities.audio && capabilities.microphone && (isGuest || can(PERMISSIONS.MICROPHONE_SHARE))
+
+  // File transfer needs all of: this browser, the session it was created with,
+  // the organisation's policy and this person's own permission (§87). A guest
+  // has no AICOUNTLY policy of their own, so the session's switch is what
+  // governs them — and the server holds them to exactly that, no wider.
+  const canSendFiles =
+    session.capabilities.fileTransfer && capabilities.dataChannel && (isGuest || can(PERMISSIONS.FILE_SEND))
+  const canReceiveFiles =
+    session.capabilities.fileTransfer && capabilities.dataChannel && (isGuest || can(PERMISSIONS.FILE_RECEIVE))
+  const canUseFiles = canSendFiles || canReceiveFiles
+
+  // A file waiting for an answer is the one thing in this panel that is
+  // time-sensitive, so it gets a badge on the closed toolbar.
+  const pendingFiles = (live?.transfers ?? []).filter(
+    (transfer) => transfer.direction === 'incoming' && transfer.phase === 'offered',
+  ).length
 
   // Only the host invites, and a guest never does. External invitations need
   // both the organisation's permission and this user's (§23).
@@ -295,6 +320,16 @@ export default function SessionRoomPage() {
             messages={messages}
             canChat={canChat}
             canInviteExternal={canInviteExternal}
+            files={{
+              canSend: canSendFiles,
+              canReceive: canReceiveFiles,
+              maxBytes: bootstrap?.features.fileTransferMaxBytes ?? DEFAULT_FILE_MAX_BYTES,
+              onOffer: actions.offerFile,
+              onAccept: actions.acceptTransfer,
+              onDecline: actions.declineTransfer,
+              onCancel: actions.cancelTransfer,
+              onDismiss: actions.dismissTransfer,
+            }}
             onClose={() => setPanel(null)}
             onSendChat={actions.sendChat}
             onApprove={actions.approve}
@@ -393,6 +428,16 @@ export default function SessionRoomPage() {
               label="Chat"
               active={panel === 'chat'}
               onClick={() => setPanel((current) => (current === 'chat' ? null : 'chat'))}
+            />
+          ) : null}
+
+          {canUseFiles ? (
+            <ToolbarButton
+              icon={<Paperclip size={18} />}
+              label="Files"
+              active={panel === 'files'}
+              badge={pendingFiles || undefined}
+              onClick={() => setPanel((current) => (current === 'files' ? null : 'files'))}
             />
           ) : null}
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Domain\Audit\EventType;
 use App\Domain\Auth\RemoteIdentity;
 use App\Domain\Policy\PermissionCatalog;
 use CodeIgniter\Test\FeatureTestTrait;
@@ -359,6 +360,212 @@ final class RemoteApiTest extends RemoteTestCase
         $messages = json_decode($listed->getJSON(), true)['data'];
         $this->assertCount(1, $messages);
         $this->assertSame('Please open the GST page.', $messages[0]['body']);
+    }
+
+    // --------------------------------------------------- file transfer
+
+    /**
+     * A company session with a host and an admitted viewer, both able to make
+     * HTTP calls — the shape every transfer test below needs.
+     *
+     * @param  array<string, bool> $policy overrides on the company policy
+     * @return array{session: array<string, mixed>, host: array<string,string>, viewer: array<string,string>, viewerUuid: string, hostIdentity: RemoteIdentity}
+     */
+    private function sessionWithAdmittedViewer(array $policy = []): array
+    {
+        $host   = $this->makeIdentity('Host');
+        $viewer = $this->makeIdentity('Viewer');
+
+        $company = $this->makeCompany(481, 'ABC', array_merge(['allow_file_transfer' => true], $policy));
+        $this->grantCompanyAccess($host, $company);
+        $this->grantCompanyAccess($viewer, $company);
+        $this->setEntitlement($company, ['file_transfer' => true]);
+
+        $hostHeaders   = $this->asUser($host, 'host-key');
+        $viewerHeaders = $this->asUser($viewer, 'viewer-key');
+
+        $session = $this->makeSession($host, 'COMPANY', $company);
+        $code    = str_replace(' ', '', (string) $session['session_code']);
+
+        $joined = $this->withHeaders($viewerHeaders)
+            ->withBodyFormat('json')
+            ->post('v1/remote/join/code', ['code' => $code]);
+        $joined->assertStatus(201);
+
+        $viewerUuid = json_decode($joined->getJSON(), true)['data']['participant']['uuid'];
+
+        $this->withHeaders($hostHeaders)
+            ->post("v1/remote/sessions/{$session['uuid']}/participants/{$viewerUuid}/approve")
+            ->assertStatus(200);
+
+        return [
+            'session'      => $session,
+            'host'         => $hostHeaders,
+            'viewer'       => $viewerHeaders,
+            'viewerUuid'   => $viewerUuid,
+            'hostIdentity' => $host,
+        ];
+    }
+
+    public function testTheFileTransferFlowOverHttp(): void
+    {
+        $ctx  = $this->sessionWithAdmittedViewer();
+        $uuid = $ctx['session']['uuid'];
+
+        $offered = $this->withHeaders($ctx['host'])
+            ->withBodyFormat('json')
+            ->post("v1/remote/sessions/{$uuid}/transfers", [
+                'toParticipantUuid' => $ctx['viewerUuid'],
+                'fileName'          => 'trial-balance.pdf',
+                'fileSize'          => 4096,
+                'mimeType'          => 'application/pdf',
+            ]);
+
+        $offered->assertStatus(201);
+        $transfer = json_decode($offered->getJSON(), true)['data'];
+
+        $this->assertSame('OFFERED', $transfer['status']);
+        $this->assertSame(0, $transfer['bytesTransferred']);
+
+        // The recipient's decision is the gate: nothing moves before it.
+        $this->withHeaders($ctx['viewer'])
+            ->post("v1/remote/sessions/{$uuid}/transfers/{$transfer['uuid']}/accept")
+            ->assertStatus(200);
+
+        $progressed = $this->withHeaders($ctx['host'])
+            ->withBodyFormat('json')
+            ->post("v1/remote/sessions/{$uuid}/transfers/{$transfer['uuid']}/progress", [
+                'bytesTransferred' => 2048,
+            ]);
+
+        $progressed->assertStatus(200);
+        $running = json_decode($progressed->getJSON(), true)['data'];
+
+        $this->assertSame('IN_PROGRESS', $running['status']);
+        $this->assertSame(50, $running['progress']);
+
+        // Completion is the recipient's word — the only side that knows.
+        $completed = $this->withHeaders($ctx['viewer'])
+            ->post("v1/remote/sessions/{$uuid}/transfers/{$transfer['uuid']}/complete");
+
+        $completed->assertStatus(200);
+        $this->assertSame('COMPLETED', json_decode($completed->getJSON(), true)['data']['status']);
+
+        $listed = $this->withHeaders($ctx['viewer'])->get("v1/remote/sessions/{$uuid}/transfers");
+        $listed->assertStatus(200);
+
+        $rows = json_decode($listed->getJSON(), true)['data'];
+        $this->assertCount(1, $rows);
+        $this->assertSame('trial-balance.pdf', $rows[0]['fileName']);
+
+        // The ledger records the file, never its contents. Nothing in the
+        // resource is a byte of the document.
+        $this->assertArrayNotHasKey('content', $rows[0]);
+        $this->assertArrayNotHasKey('url', $rows[0]);
+
+        $this->assertHasAudit(EventType::FILE_TRANSFER_OFFERED);
+        $this->assertHasAudit(EventType::FILE_TRANSFER_COMPLETED);
+    }
+
+    public function testAFileOfferIsRefusedWhenTheCompanyForbidsIt(): void
+    {
+        // The company switch is not advisory, and the frontend hiding the
+        // button is not what enforces it.
+        $ctx = $this->sessionWithAdmittedViewer(['allow_file_transfer' => false]);
+
+        $result = $this->withHeaders($ctx['host'])
+            ->withBodyFormat('json')
+            ->post("v1/remote/sessions/{$ctx['session']['uuid']}/transfers", [
+                'toParticipantUuid' => $ctx['viewerUuid'],
+                'fileName'          => 'payroll.csv',
+                'fileSize'          => 128,
+            ]);
+
+        $result->assertStatus(403);
+        $this->assertSame('FILE_TRANSFER_DISABLED', json_decode($result->getJSON(), true)['error']['code']);
+    }
+
+    public function testAUserDenyOverridesTheCompanyPermissionToSend(): void
+    {
+        $ctx = $this->sessionWithAdmittedViewer();
+
+        // The organisation permits file transfer; this one person does not get
+        // to send. A user rule is applied on top of the company's, and a DENY
+        // is the narrower of the two.
+        $this->setUserPermission($ctx['hostIdentity'], 481, PermissionCatalog::FILE_SEND, 'DENY');
+
+        $result = $this->withHeaders($ctx['host'])
+            ->withBodyFormat('json')
+            ->post("v1/remote/sessions/{$ctx['session']['uuid']}/transfers", [
+                'toParticipantUuid' => $ctx['viewerUuid'],
+                'fileName'          => 'notes.txt',
+                'fileSize'          => 64,
+            ]);
+
+        $result->assertStatus(403);
+        $this->assertSame('FILE_SEND_DENIED', json_decode($result->getJSON(), true)['error']['code']);
+    }
+
+    public function testOnlyTheRecipientCanAnswerForAFile(): void
+    {
+        $ctx  = $this->sessionWithAdmittedViewer();
+        $uuid = $ctx['session']['uuid'];
+
+        $offered = $this->withHeaders($ctx['host'])
+            ->withBodyFormat('json')
+            ->post("v1/remote/sessions/{$uuid}/transfers", [
+                'toParticipantUuid' => $ctx['viewerUuid'],
+                'fileName'          => 'ledger.xlsx',
+                'fileSize'          => 512,
+            ]);
+
+        $transferUuid = json_decode($offered->getJSON(), true)['data']['uuid'];
+
+        // The sender accepting their own offer would make consent meaningless.
+        $result = $this->withHeaders($ctx['host'])
+            ->post("v1/remote/sessions/{$uuid}/transfers/{$transferUuid}/accept");
+
+        $result->assertStatus(403);
+        $this->assertSame('NOT_FILE_RECIPIENT', json_decode($result->getJSON(), true)['error']['code']);
+    }
+
+    public function testNothingMovesBeforeTheRecipientAccepts(): void
+    {
+        $ctx  = $this->sessionWithAdmittedViewer();
+        $uuid = $ctx['session']['uuid'];
+
+        $offered = $this->withHeaders($ctx['host'])
+            ->withBodyFormat('json')
+            ->post("v1/remote/sessions/{$uuid}/transfers", [
+                'toParticipantUuid' => $ctx['viewerUuid'],
+                'fileName'          => 'ledger.xlsx',
+                'fileSize'          => 512,
+            ]);
+
+        $transferUuid = json_decode($offered->getJSON(), true)['data']['uuid'];
+
+        $result = $this->withHeaders($ctx['host'])
+            ->withBodyFormat('json')
+            ->post("v1/remote/sessions/{$uuid}/transfers/{$transferUuid}/progress", ['bytesTransferred' => 512]);
+
+        $result->assertStatus(409);
+        $this->assertSame('FILE_TRANSFER_NOT_ACTIVE', json_decode($result->getJSON(), true)['error']['code']);
+    }
+
+    public function testSomeoneOutsideTheSessionCannotSeeItsTransfers(): void
+    {
+        $ctx       = $this->sessionWithAdmittedViewer();
+        $bystander = $this->makeIdentity('Bystander');
+
+        // Company-wide history makes the session readable; it does not make
+        // this person a party to what is being passed inside it.
+        $this->grantCompanyAccess($bystander, 481, 'COMPANY_ADMIN', true);
+
+        $result = $this->withHeaders($this->asUser($bystander, 'bystander-key'))
+            ->get("v1/remote/sessions/{$ctx['session']['uuid']}/transfers");
+
+        $result->assertStatus(403);
+        $this->assertSame('NOT_A_PARTICIPANT', json_decode($result->getJSON(), true)['error']['code']);
     }
 
     // ------------------------------------------------------ administration

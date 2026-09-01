@@ -14,6 +14,8 @@ someone else, with permission, watches it and helps.
   window, or an entire screen where the organisation permits it
 - **View a shared screen**, after the host admits you
 - **Chat, live pointer and annotation** during a session
+- **Send a file to the other person**, browser to browser — the recipient has to
+  accept, and the bytes never reach AICOUNTLY
 - **Session codes and one-time invitation links**, including external guests
   where policy allows
 - **AICOUNTLY Support requests** carrying the product, area and ticket the
