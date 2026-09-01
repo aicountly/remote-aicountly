@@ -1,9 +1,14 @@
 # AICOUNTLY auth workflow (Remote)
 
 How Remote signs a user in. This is the shared AICOUNTLY SaaS flow — the same
-one Smart Books and the other products use — reduced to what a blank app needs.
-The canonical implementation lives on **my.aicountly.com**; nothing here mints,
-signs or stores a credential of its own.
+one Smart Books and the other products use. The canonical implementation lives
+on **my.aicountly.com**; Remote mints, signs and stores no credential of its
+own for an AICOUNTLY user.
+
+Two Remote-specific credentials exist alongside it, and neither is an identity:
+a **guest token**, bound to one participant in one session, for an external
+guest who has no AICOUNTLY account; and a **signalling token**, valid for two
+minutes and for one room. See [../SECURITY.md](../SECURITY.md).
 
 ## Tokens
 
@@ -28,8 +33,9 @@ another AICOUNTLY product would have to sign in again.
    The portal reuses an existing portal web session — this is what makes moving
    between AICOUNTLY products seamless. With no session it shows its login form.
 3. Portal redirects back to `/auth/callback?auth_token=…`. The SPA history
-   fallback in `web/public/.htaccess` serves the app at that path; there is no
-   router, so `AuthProvider` reads the token at boot and clears it from the URL.
+   fallback in `web/public/.htaccess` serves the app at that path, and the
+   router sends it to the dashboard; `AuthProvider` reads the token at boot and
+   clears it from the URL before anything renders.
 4. App stores `auth_token`, then `POST /api/global/seskey` with
    `Bearer auth_token` → `ses_key`.
 5. Dashboard.
@@ -55,9 +61,17 @@ sign-in.
 One build serves both environments: `resolveProductKeyFromHost()` reads
 `remote` out of either hostname, and `isSandboxHost()` picks the portal.
 
+## Guests do not go through the portal
+
+An external guest holds a one-time invitation, not an AICOUNTLY account, so
+bouncing them to the login form would make guest access impossible. `AuthProvider`
+recognises `/join/:token` and `/room/:uuid` and settles as `guest` instead of
+redirecting; the API authenticates them by the token their redeemed invitation
+returned.
+
 ## Why the calls go through this product's own API
 
-The browser calls `/api/global/seskey` on its **own origin**, and `server-php`
+The browser calls `/api/global/seskey` on its **own origin**, and the API
 relays that to `my.aicountly.com` server-to-server.
 
 A brand-new product domain is not in the portal's CORS allowlist on day one, so
@@ -65,10 +79,12 @@ a direct browser call would fail with nothing but a CORS message to show for it.
 The relay sidesteps that entirely. The app still falls back to calling the
 portal directly if the relay is missing — useful before the API is deployed.
 
-The relay is an **allowlist** (`RELAYED_PATHS` in `server-php/index.php`):
-`seskey`, `seskey/refresh`, `refresh_authtoken`. Forwarding arbitrary paths
-would turn this host into an open proxy for the portal's whole auth surface,
-with the portal seeing this server's IP instead of the caller's.
+The relay is an **allowlist** (`RELAYED_PATHS` in
+`backend/app/Controllers/PortalRelayController.php`): `seskey`,
+`seskey/refresh`, `refresh_authtoken`. Forwarding arbitrary paths would turn
+this host into an open proxy for the portal's whole auth surface, with the
+portal seeing this server's IP instead of the caller's. It is rate limited at
+30 requests a minute per IP.
 
 ## This product's backend
 
@@ -78,10 +94,16 @@ with the portal seeing this server's IP instead of the caller's.
 - Validates a caller by `POST https://my.aicountly.com/api/validatesession` with
   the Bearer `ses_key`; `status: 1` means the session is live. A transport
   failure counts as *not* authenticated, so a portal outage denies access rather
-  than granting it.
+  than granting it. The answer is cached for 60 seconds against a SHA-256 of the
+  key, so a page making six API calls does not make six round trips to the
+  portal.
+- Projects the portal's answer into `remote_identities` — a display name and a
+  stable integer for foreign keys, and nothing else. It holds no password, no
+  credential and no session, and is **not** an authentication store.
 
-`GET /api/session` is the one protected endpoint, and exists so the flow can be
-verified end to end in each environment.
+`GET /api/session` is kept from the previous API so the flow can still be
+verified end to end with one curl. The product API lives under
+`/api/v1/remote`.
 
 ## Verifying an environment
 

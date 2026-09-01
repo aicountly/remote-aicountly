@@ -1,0 +1,3 @@
+# Logs, caches and session files. Serving any of these would publish exactly
+# the diagnostics that must stay private.
+Require all denied

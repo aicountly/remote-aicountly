@@ -1,0 +1,130 @@
+/**
+ * AICOUNTLY Remote — design tokens (§44).
+ *
+ * Every colour, radius, shadow and spacing step in the product comes from here.
+ * A component that reaches for a raw hex value is a component that will drift
+ * from the rest of AICOUNTLY the first time the brand is adjusted.
+ *
+ * The palette is AICOUNTLY green on a very slightly warm neutral ground. It is
+ * deliberately restrained: this is an application people use while something is
+ * going wrong, so the interface should recede and the shared screen should not.
+ */
+
+:root {
+  /* --- Brand ------------------------------------------------------------ */
+  --aicountly-green: #25b003;
+  --aicountly-green-dark: #1d8d03;
+  --aicountly-green-darker: #166b02;
+  --aicountly-green-soft: #edf9e9;
+  --aicountly-green-border: #c6e8bb;
+
+  /* --- Surfaces --------------------------------------------------------- */
+  --bg-app: #f6f8f6;
+  --bg-surface: #ffffff;
+  --bg-muted: #f1f4f1;
+  --bg-inset: #fafbfa;
+  --bg-overlay: rgba(16, 24, 16, 0.48);
+
+  /* The session room is dark on purpose: a shared screen is the content, and
+     a bright chrome around it competes with what the viewer is looking at. */
+  --bg-stage: #101410;
+  --bg-stage-panel: #191e19;
+  --bg-stage-raised: #232a23;
+  --border-stage: #303a30;
+  --text-stage: #eef2ee;
+  --text-stage-muted: #9aa79a;
+
+  /* --- Text ------------------------------------------------------------- */
+  --text-primary: #172018;
+  --text-secondary: #667068;
+  --text-muted: #8b948c;
+  --text-inverse: #ffffff;
+
+  /* --- Lines ------------------------------------------------------------ */
+  --border: #e2e8e2;
+  --border-strong: #cfd8cf;
+
+  /* --- Semantic --------------------------------------------------------- */
+  --danger: #d92d20;
+  --danger-soft: #fef3f2;
+  --danger-border: #fbd5d1;
+
+  --warning: #b76e00;
+  --warning-soft: #fffaeb;
+  --warning-border: #fedf89;
+
+  --info: #2563eb;
+  --info-soft: #eff4ff;
+  --info-border: #c7d7fe;
+
+  --neutral-soft: #f2f4f2;
+  --neutral-border: #dde3dd;
+
+  /* --- Radii ------------------------------------------------------------ */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius-pill: 999px;
+
+  /* --- Shadows ---------------------------------------------------------- */
+  --shadow-sm: 0 1px 2px rgba(16, 24, 16, 0.04);
+  --shadow-md: 0 10px 30px rgba(16, 24, 16, 0.07);
+  --shadow-lg: 0 24px 60px rgba(16, 24, 16, 0.14);
+
+  /* --- Spacing ---------------------------------------------------------- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  /* --- Type ------------------------------------------------------------- */
+  --font-sans:
+    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-md: 0.9375rem;
+  --text-lg: 1.0625rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+
+  /* --- Motion ----------------------------------------------------------- */
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --duration-fast: 120ms;
+  --duration: 180ms;
+
+  /* --- Layout ----------------------------------------------------------- */
+  --header-height: 60px;
+  --sidebar-width: 232px;
+  --content-max: 1180px;
+
+  --focus-ring: 0 0 0 3px rgba(37, 176, 3, 0.22);
+}
+
+/**
+ * Anyone who has asked their operating system to reduce motion means it. Every
+ * transition in the product is decorative; none of them carries information
+ * that is lost by removing it.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration: 0ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,4 @@
+# The application code must never be served over HTTP. The front controller
+# in public/ is the only entry point; everything here is reached by PHP's
+# include path, not by a URL.
+Require all denied

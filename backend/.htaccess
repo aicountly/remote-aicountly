@@ -1,0 +1,54 @@
+# ---------------------------------------------------------------------------
+# AICOUNTLY Remote API — Apache config for <document root>/api on cPanel.
+#
+# CodeIgniter expects its `public/` directory to be the document root, but the
+# deploy target here is a folder *inside* the site's document root. This file
+# bridges the two: every request that arrives at `api/` is rewritten into
+# `api/public/`, where CodeIgniter's own .htaccess and front controller take
+# over.
+#
+# The alternative — deploying `public/` to `api/` and the framework above the
+# document root — needs a second rsync target and a second secret, and gives a
+# layout that no longer matches the repository. This keeps one target, and the
+# directories that must not be served are denied below and by their own
+# .htaccess files.
+# ---------------------------------------------------------------------------
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # No RewriteBase on purpose: Apache resolves the substitution against
+  # whichever directory this file sits in, so the API works at <docroot>/api
+  # and at the root of a dedicated vhost without editing this line.
+
+  # Already inside public/ — CodeIgniter's own rules handle it from here.
+  RewriteRule ^public/ - [L]
+
+  # Everything else goes into public/.
+  RewriteRule ^(.*)$ public/$1 [L]
+
+  # Apache does not hand the Authorization header to PHP under CGI/FastCGI
+  # unless it is copied explicitly. Without this the auth relay forwards no
+  # credential, the portal answers 401, and sign-in fails for everyone with
+  # nothing in the logs to explain it.
+  RewriteCond %{HTTP:Authorization} .
+  RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+</IfModule>
+
+# Without mod_rewrite there is no safe way to serve this layout, so serve
+# nothing rather than exposing the framework directories.
+<IfModule !mod_rewrite.c>
+  Require all denied
+</IfModule>
+
+Options -Indexes
+
+# The API's .env sits inside the document root, so without this it would be
+# fetchable over HTTP at https://remote.aicountly.com/api/.env.
+RedirectMatch 404 /\.(?!well-known)
+
+# Belt and braces for hosts that ignore the per-directory files: nothing with
+# these extensions is ever meant to be served from the API.
+<FilesMatch "\.(env|log|lock|neon|dist|md|sql|sh|bak)$">
+  Require all denied
+</FilesMatch>

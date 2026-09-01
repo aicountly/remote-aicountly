@@ -44,6 +44,31 @@
 <IfModule mod_headers.c>
   Header set X-Content-Type-Options "nosniff"
   Header set Referrer-Policy "strict-origin-when-cross-origin"
+  Header set X-Frame-Options "DENY"
+
+  # Screen capture and microphone are the product; they are permitted for this
+  # origin and denied to anything embedded. `display-capture=(self)` is what
+  # allows getDisplayMedia to run at all under Permissions Policy.
+  Header set Permissions-Policy "display-capture=(self), microphone=(self), camera=(), geolocation=()"
+
+  # Content Security Policy for the app (§29).
+  #
+  # The API's CSP is `default-src 'none'` because it only ever returns JSON.
+  # This one has to permit an actual application, so each directive is the
+  # narrowest thing that still works:
+  #
+  #   script-src 'self'      — Vite emits hashed files; no inline script, no eval
+  #   style-src  … 'unsafe-inline'
+  #                          — React sets element styles for the pointer and
+  #                            annotation overlays, whose values are computed at
+  #                            runtime and cannot be hashed
+  #   img-src    … blob:     — video poster frames
+  #   media-src  blob:       — the MediaStream attached to the <video> element
+  #   connect-src … wss:     — the signalling service, and the API
+  #   frame-ancestors 'none' — Remote must never be embedded; a framed screen
+  #                            share is a screen share the user cannot see the
+  #                            context of
+  Header set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self' https://my.aicountly.com wss: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
 </IfModule>
 
 # Deny access to any dotfile that somehow lands in the docroot (e.g. .env),

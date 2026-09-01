@@ -20,7 +20,27 @@ import { clearAllTokens, getAuthToken, setAuthToken } from './tokens'
  * `loading` covers both "starting up" and "leaving for the portal" — in the
  * redirect case the page is about to unload, so it never renders anything else.
  */
-export type AuthStatus = 'loading' | 'authenticated' | 'signed-out'
+export type AuthStatus = 'loading' | 'authenticated' | 'signed-out' | 'guest'
+
+/**
+ * Paths an external guest reaches without an AICOUNTLY account (§23).
+ *
+ * A guest holds a one-time invitation, not a portal session, so bouncing them
+ * to the login form would make guest access impossible — the whole point of the
+ * invitation is that they do not have an account.
+ */
+function isGuestPath(pathname: string): boolean {
+  return pathname.startsWith('/join/') || pathname.startsWith('/room/')
+}
+
+/** A guest token from a redeemed invitation, held for this tab only. */
+function hasGuestToken(): boolean {
+  try {
+    return sessionStorage.getItem('remote:guestToken') !== null
+  } catch {
+    return false
+  }
+}
 
 interface AuthState {
   status: AuthStatus
@@ -90,6 +110,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // A deliberate sign-out must not be undone by the automatic jump below.
         if (isLogoutInProgress()) {
           settle({ status: 'signed-out', message: null })
+          return
+        }
+
+        // An external guest opening an invitation link has no AICOUNTLY
+        // account and must not be sent to the portal (§23). They continue as a
+        // guest, and the API authenticates them by their invitation token.
+        if (isGuestPath(window.location.pathname) || hasGuestToken()) {
+          settle({ status: 'guest', message: null })
           return
         }
         if (!redirectToPortalSso()) {

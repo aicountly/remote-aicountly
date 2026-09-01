@@ -1,24 +1,44 @@
+import { RouterProvider } from 'react-router-dom'
+
 import { useAuth } from './auth/AuthProvider'
-import Dashboard from './pages/Dashboard'
+import { RemoteProvider } from './app/RemoteProvider'
+import { router } from './app/router'
 import SignIn from './pages/SignIn'
-import './App.css'
+import AicountlyLogo from './components/brand/AicountlyLogo'
 
 /**
- * Login → Dashboard. There is no router because there are no routes: the portal
- * callback lands on /auth/callback, which the SPA history fallback serves with
- * this same document, and AuthProvider consumes the token at boot.
+ * The application root.
+ *
+ * Three states, and the third is the one worth noting: an external guest has no
+ * AICOUNTLY account, so they get the router without {@link RemoteProvider} —
+ * there is no bootstrap to fetch, no organisation to select, and no navigation
+ * they should see (§23).
  */
 export default function App() {
   const { status } = useAuth()
 
-  if (status === 'authenticated') return <Dashboard />
-  if (status === 'signed-out') return <SignIn />
+  if (status === 'signed-out') {
+    return <SignIn />
+  }
+
+  if (status === 'guest') {
+    return <RouterProvider router={router} />
+  }
+
+  if (status === 'authenticated') {
+    return (
+      <RemoteProvider>
+        <RouterProvider router={router} />
+      </RemoteProvider>
+    )
+  }
 
   return (
-    <main className="screen">
-      <div className="panel">
-        <p className="message">Signing you in…</p>
+    <div className="boot">
+      <div className="boot__panel">
+        <AicountlyLogo />
+        <p className="boot__message">Signing you in…</p>
       </div>
-    </main>
+    </div>
   )
 }

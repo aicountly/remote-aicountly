@@ -1,0 +1,4 @@
+# Composer dependencies. Never served — the deploy workflow copies this file
+# into vendor/ after `composer install`, because vendor/ is not in the
+# repository and so cannot carry its own.
+Require all denied

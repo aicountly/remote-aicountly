@@ -1,162 +1,152 @@
-# remote-aicountly
+# AICOUNTLY Remote
 
-Remote for Aicountly — a React single-page app built with Vite and TypeScript,
-with a small PHP API alongside it. Both halves deploy to cPanel.
+Secure browser assistance for the AICOUNTLY platform. Someone shares a screen;
+someone else, with permission, watches it and helps.
 
 | Environment | App | API |
 | --- | --- | --- |
 | Production | https://remote.aicountly.com | https://remote.aicountly.com/api |
 | Sandbox | https://remote.gh.aicountly.com | https://remote.gh.aicountly.com/api |
 
-## What this app does today
+## What it does
 
-Login → Dashboard. The dashboard shows a welcome message and a **Log out**
-button, and nothing else. No navigation, no modules, no placeholder cards —
-those arrive with the product.
+- **Share a screen** — AICOUNTLY Safe Share, a browser tab, an application
+  window, or an entire screen where the organisation permits it
+- **View a shared screen**, after the host admits you
+- **Chat, live pointer and annotation** during a session
+- **Session codes and one-time invitation links**, including external guests
+  where policy allows
+- **AICOUNTLY Support requests** carrying the product, area and ticket the
+  customer was working in
+- **Company policy, role and user permissions**, resolved server-side
+- **Session history and an audit trail** — without ever storing screen content
 
-Signing in is the AICOUNTLY portal's job, the same as every other AICOUNTLY
-SaaS: the app redirects to the portal, the portal returns an `auth_token`, and
-the app exchanges it for a short-lived session key. A user who is already signed
-in to another AICOUNTLY product lands straight on the dashboard.
+## What it deliberately does not do
 
-See [docs/auth/AICOUNTLY_AUTH_WORKFLOW.md](docs/auth/AICOUNTLY_AUTH_WORKFLOW.md).
+Browser V1 is **attended assistance**. It shares and views; it does not control
+a computer and it has no unattended access. A browser cannot do either, and
+nothing in the interface implies otherwise — no "Control computer" button
+exists to be disappointed by.
+
+The desktop agents that will do those things are designed for
+([docs/DESKTOP_AGENT.md](docs/DESKTOP_AGENT.md)) and plug into this same
+session, policy and audit model. They are not built.
 
 ## Layout
 
 ```
-web/          React app (Vite). Builds to web/dist, deployed to the document root.
-server-php/   PHP API. Deployed to the api/ folder inside the document root.
-docs/         deployment and auth notes
+web/          React 19 + TypeScript + Vite. Builds to web/dist, deployed to the document root.
+backend/      CodeIgniter 4 API + PostgreSQL. Deployed to the api/ folder inside it.
+signalling/   Node WebSocket relay for WebRTC signalling. A long-running process.
+docs/         architecture, security, deployment, integration
 ```
+
+Media never touches AICOUNTLY infrastructure: video and audio go directly
+between the two browsers, or through TURN when a network forces it. The
+signalling service carries only the handshake, holds no database, and decides
+nothing — authorisation happens in the API, which mints it a two-minute signed
+token naming exactly one room.
 
 ## Getting started
 
-Requires Node.js 22 or newer.
+Full instructions, including the two-browser end-to-end walkthrough, are in
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ```bash
-cd web
-npm install
-cp ../.env.example ../.env
+# backend — needs PHP 8.2+ with pgsql, and PostgreSQL 14+
+cd backend && composer install && cp .env.example .env
+#   edit .env: database credentials, remote.signallingSecret, remote.contextSecret
+php spark migrate
+php spark db:seed RemotePlatformDefaultsSeeder
+php spark db:seed RemoteDevelopmentSeeder     # two companies with opposite policies
+php spark serve --port 8080
+
+# signalling — needs Node 22+
+cd signalling && npm install && cp .env.example .env
+#   REMOTE_SIGNALLING_TOKEN_SECRET must match remote.signallingSecret exactly
 npm run dev
+
+# web
+cd web && npm install && cp ../.env.example ../.env
+npm run dev                                   # http://localhost:5173
 ```
 
-The dev server runs on http://localhost:5173 and signs in through the **sandbox**
-portal. Point `VITE_API_BASE_URL` at the deployed sandbox API
-(`https://remote.gh.aicountly.com/api`) so the token exchange has somewhere to
-go — and add `http://localhost:5173` to `CORS_ALLOWED_ORIGINS` in that server's
-`api/.env`, since localhost is the one case where the app and API are not
-same-origin.
+Signing in is the AICOUNTLY portal's job, the same as every other AICOUNTLY
+SaaS — Remote issues no credentials of its own for an AICOUNTLY user, so there
+is no local login to fake. See
+[docs/auth/AICOUNTLY_AUTH_WORKFLOW.md](docs/auth/AICOUNTLY_AUTH_WORKFLOW.md).
 
-| Script | Purpose |
-| --- | --- |
-| `npm run dev` | Vite dev server on http://localhost:5173 |
-| `npm run build` | Type-check, then build to `web/dist/` |
-| `npm run typecheck` | Type-check only |
-| `npm run preview` | Serve the production build locally |
-
-The PHP API has no build step and no dependencies. To run it locally:
+## Tests
 
 ```bash
-cd server-php
-cp .env.example .env      # set APP_ENV=local
-php -S localhost:8000
+cd backend    && vendor/bin/phpunit      # 106 — policy, tenant isolation, HTTP
+cd web        && npm test                # 27  — capture, capability, UI gating
+cd signalling && npm test                # 16  — tokens, rooms, live relay
 ```
+
+The backend suite runs against a real PostgreSQL and applies the migrations
+itself. `.github/workflows/ci.yml` runs all three on every push, and verifies
+that the migrations roll back cleanly.
 
 ## Environment variables
 
-`.env` is git-ignored and is never deployed — `.env.example` is the tracked
-template. There are two of them, and they work in opposite ways:
+Two `.env` files, working in opposite ways.
 
 | File | Read | Used by |
 | --- | --- | --- |
-| `.env.example` | **Build time**, inlined into the bundle | `web/` |
-| `server-php/.env.example` | **Runtime**, on every request | `server-php/` |
-
-| Variable | Description |
-| --- | --- |
-| `VITE_API_BASE_URL` | API base URL. Empty = this app's own origin + `/api` |
-| `VITE_APP_NAME` | Display name shown in the UI |
-| `VITE_APP_ENV` | `local`, `sandbox`, or `production` |
-| `VITE_PRODUCT_KEY` | Portal product key. Derived from the hostname when unset |
-| `VITE_PORTAL_LOGIN_URL` | Login portal override. Local development only |
+| `.env.example` | **build time**, inlined into the bundle | `web/` |
+| `backend/.env.example` | **runtime**, on every request | `backend/` |
+| `signalling/.env.example` | process start | `signalling/` |
 
 Only `VITE_`-prefixed variables reach the browser bundle, and Vite inlines them
-at build time, so **treat every one of them as public**. Never put a secret,
-token, or password in a `VITE_` variable.
-
-### These are build-time values, not runtime values
-
-This matters for how you change an endpoint in production.
-
-Vite substitutes each `VITE_*` value into the JavaScript bundle when the app is
-compiled. The deployed result is plain static files — **the app never reads a
-`.env` from disk at runtime**, so placing a `.env` next to it in the cPanel
-document root has no effect. Changing an endpoint means rebuilding and
-redeploying.
-
-This is the opposite of `server-php`, which is PHP and does read its own `.env`
-on every request.
+at build time, so **treat every one of them as public**. Never put a secret in
+one. The signalling URL and the ICE servers are deliberately not build-time
+values: the browser receives them from the API, per session, so a TURN
+credential never ends up in a JavaScript bundle.
 
 ## Deployment
 
-Deployment is **manual only**. Nothing deploys on push or merge — both
-workflows trigger exclusively via `workflow_dispatch`.
-
-To deploy: **Actions** → pick a workflow → **Run workflow** → pick a branch →
-**Run**.
+Manual only — **Actions → pick a workflow → Run workflow**. Nothing deploys on
+push or merge. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 | Workflow | Deploys | To |
 | --- | --- | --- |
-| Deploy to cPanel Production | `web/dist/` then `server-php/` | document root, then `api/` inside it |
-| Deploy to cPanel Sandbox | `web/dist/` then `server-php/` | document root, then `api/` inside it |
+| Deploy to cPanel Production | `web/dist/` then `backend/` | document root, then `api/` inside it |
+| Deploy to cPanel Sandbox | `web/dist/` then `backend/` | document root, then `api/` inside it |
+| CI | nothing — tests only | — |
 
-Production and sandbox deploy separately, so releasing to one cannot disturb
-the other. Within one environment, web and API deploy together in the same
-run — they always change in step, so there is no separate "API only" workflow
-to remember to run. Source, `node_modules`, and `.env` never reach the server.
+Migrations are run by hand over SSH, deliberately: an automated migration
+inside a `--delete` deploy is a schema change nobody reviewed, running against
+production, with no way to stop it half-way.
 
-Before deploying, each workflow checks that every required SSH secret is set and
-that the remote root is a safe path, so a misconfigured repository fails in
-seconds instead of part-way through a deploy.
+## Brand assets
 
-### Configuration
+The AICOUNTLY logo is **not** in this repository and none was invented for it.
+Drop the real asset at `web/public/brand/aicountly-logo.svg` and it appears
+everywhere; until then the header shows the plain wordmark. See
+[docs/BRANDING.md](docs/BRANDING.md).
 
-These repository **secrets** must be set (Settings → Secrets and variables →
-Actions → Secrets):
+## Documentation
 
-`PROD_SSH_HOST`, `PROD_SSH_PORT`, `PROD_SSH_USER`, `PROD_SSH_PRIVATE_KEY`,
-`PROD_SSH_REMOTE_ROOT` — and the same five with a `SANDBOX_` prefix.
+| Document | Covers |
+| --- | --- |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the four pieces fit together |
+| [DATABASE.md](docs/DATABASE.md) | Every table, and why it is shaped that way |
+| [SECURITY.md](docs/SECURITY.md) | The security model, and its honest limits |
+| [DEVELOPMENT.md](docs/DEVELOPMENT.md) | Running it, and the two-browser walkthrough |
+| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | cPanel deployment and first-run setup |
+| [SAFE_SHARE_INTEGRATION.md](docs/SAFE_SHARE_INTEGRATION.md) | Launching Remote from another AICOUNTLY product |
+| [DESKTOP_AGENT.md](docs/DESKTOP_AGENT.md) | How the future agents plug into this |
+| [BROWSER_SUPPORT.md](docs/BROWSER_SUPPORT.md) | What works where, and what degrades |
+| [BRANDING.md](docs/BRANDING.md) | Logo, colour, typography, icons |
+| [auth/AICOUNTLY_AUTH_WORKFLOW.md](docs/auth/AICOUNTLY_AUTH_WORKFLOW.md) | Sign-in |
 
-`*_SSH_REMOTE_ROOT` is the document root to deploy into. It may be relative,
-which is the usual cPanel form — `public_html` resolves against the SSH user's
-home directory, giving `/home/<user>/public_html`. An absolute path works too.
-Because the deploy runs with `--delete`, the workflow refuses a value that would
-resolve to the home directory itself (`.`, `~`, empty), a system directory, or
-anything containing `..`.
+## A note on the CodeIgniter version
 
-The repository **variables** `PROD_API_BASE_URL` and `SANDBOX_API_BASE_URL` are
-optional. Unset, the app calls its own origin + `/api` — which is where the same
-workflow puts the API. Set one only to point the app at a different API domain.
-
-### Notes on the rsync steps
-
-Each workflow runs two `rsync --delete` steps, one after the other, and the
-excludes are what make that safe.
-
-The **web** step syncs the document root and excludes:
-
-- `api/` — the PHP backend lives inside the document root and is deployed by the
-  next step in the same run. **Without this exclude the web step would delete
-  the entire API.**
-- `.well-known/` — Let's Encrypt / AutoSSL validation; removing it breaks
-  certificate renewal
-- `cgi-bin/` — cPanel-managed, present in every document root
-- `.env`, `.env.*`, `.git*` — never published
-
-The **API** step syncs `api/` and excludes `.env`, `.env.*` and `.git*`: the
-API's `.env` is created once on the server and read at runtime, so it must
-survive every deploy. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
-
-`web/public/.htaccess` ships with the build and provides the SPA history
-fallback — which is also what serves the portal's `/auth/callback` landing — plus
-cache headers (`index.html` uncached, hashed assets cached for a year).
+The specification named CodeIgniter **4.6**. This builds on **4.7.4** because
+the 4.6 line carries five open advisories — two critical, including SQL
+injection in the query builder's `deleteBatch()` and an upload-validation bypass
+— all fixed only in 4.7.4, with no patched 4.6 release. 4.7 is the same major
+line with the same conventions, and `composer audit` runs in CI so this stays
+visible. Everything else in the stack is as specified: React, PostgreSQL,
+WebRTC, and AICOUNTLY SSO.
