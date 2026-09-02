@@ -23,6 +23,14 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# CodeIgniter's runtime log directory needs to exist on a fresh deploy target,
+# the same as writable/cache, session, uploads and debugbar — git cannot track
+# an empty directory, so its placeholder must survive the blanket `logs/` rule
+# above. Without this, PHP's file logger fails silently (fopen() on a missing
+# directory just returns false) and a production 500 leaves no trace anywhere.
+!/backend/writable/logs/
+!/backend/writable/logs/index.html
+
 # Editors
 .vscode/*
 !.vscode/extensions.json
