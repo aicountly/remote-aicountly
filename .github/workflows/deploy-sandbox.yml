@@ -335,9 +335,30 @@ jobs:
             backend/ "deploy-target:$REMOTE_ROOT/api/"
 
           # writable/ must be writable by PHP or every request fails on the
-          # first cache write. rsync's --chmod cannot express "755 for these
-          # two trees only", so it is set afterwards.
-          ssh deploy-target "chmod -R 775 '$REMOTE_ROOT/api/writable' 2>/dev/null || true"
+          # first cache write — CodeIgniter's page-cache service throws in its
+          # constructor when writable/cache/ isn't writable, and that runs on
+          # every single request before any route handler, so the failure mode
+          # is "everything 500s", including /health. rsync's --chmod cannot
+          # express "775 for these directories only", so it is set afterwards.
+          #
+          # This used to swallow its own failure (`2>/dev/null || true`), which
+          # is exactly how a permissions problem here once shipped silently: the
+          # deploy step stayed green while the live API 500'd on every request
+          # and nothing said why. It now surfaces the chmod's own error output
+          # and independently verifies the result, because a chmod that exits 0
+          # is not proof the bits actually ended up group-writable — an ACL,
+          # quota, or ownership mismatch can still leave the directory unusable.
+          if ! ssh deploy-target "chmod -R 775 '$REMOTE_ROOT/api/writable'" 2>/tmp/chmod.err; then
+            echo "::error::chmod -R 775 on writable/ failed — see output below. The API will 500 on every request until this is fixed by hand over SSH."
+            sed 's/^/    /' /tmp/chmod.err
+          fi
+
+          unwritable=$(ssh deploy-target "find '$REMOTE_ROOT/api/writable' -type d ! -perm -0020" || true)
+          if [ -n "$unwritable" ]; then
+            echo "::error::These writable/ subdirectories are not group-writable after chmod — the API will 500 on every request that touches them:"
+            echo "$unwritable" | sed 's/^/    /'
+            echo "::error::Fix by hand: ssh in and run chmod -R 775 '$REMOTE_ROOT/api/writable', then confirm with the command above that the list is empty."
+          fi
 
           echo "Deployed backend to \$REMOTE_ROOT/api/"
           echo "::notice::If this is the first API deploy, create api/.env on the server from backend/.env.example, then run the migrations — see docs/DEPLOYMENT.md."
@@ -352,7 +373,13 @@ jobs:
             echo "GET $url → 200"
             cat /tmp/health.json
           else
-            echo "::warning::GET $url returned $code. If this is the first deploy, check that the subdomain's document root is the one in SANDBOX_SSH_REMOTE_ROOT and that api/.env exists."
+            # ::error:: rather than ::warning:: on purpose: this step's job
+            # still ends "success" either way (a first deploy is legitimately
+            # unconfigured at this point, per the notice above), but a warning
+            # buried in a wall of green steps is exactly how a 500 API went
+            # unnoticed here before — an error annotation is what actually
+            # gets seen.
+            echo "::error::GET $url returned $code. The deployed API is not answering. If this is the first deploy, check that the subdomain's document root is the one in SANDBOX_SSH_REMOTE_ROOT and that api/.env exists and migrations have run. Otherwise this is a regression — check writable/logs/log-$(date +%Y-%m-%d).log on the server for the real exception."
           fi
 
       - name: Clean up SSH credentials
