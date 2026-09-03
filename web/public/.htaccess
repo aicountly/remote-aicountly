@@ -57,18 +57,26 @@
   # This one has to permit an actual application, so each directive is the
   # narrowest thing that still works:
   #
-  #   script-src 'self'      — Vite emits hashed files; no inline script, no eval
+  #   script-src 'self'      — Vite emits hashed files; no inline script, no
+  #                            eval. https://www.googletagmanager.com is
+  #                            allowlisted for GA4's gtag.js only — without it
+  #                            the browser silently blocks the script load and
+  #                            no analytics ever reaches GA4, with only a CSP
+  #                            violation in the console to show for it.
   #   style-src  … 'unsafe-inline'
   #                          — React sets element styles for the pointer and
   #                            annotation overlays, whose values are computed at
   #                            runtime and cannot be hashed
-  #   img-src    … blob:     — video poster frames
+  #   img-src    … blob:     — video poster frames; https://www.google-analytics.com
+  #                            covers GA4's no-JS pixel fallback
   #   media-src  blob:       — the MediaStream attached to the <video> element
-  #   connect-src … wss:     — the signalling service, and the API
+  #   connect-src … wss:     — the signalling service, and the API (the
+  #                            trailing `https:` scheme-source already permits
+  #                            GA4's collect beacon, so no addition needed there)
   #   frame-ancestors 'none' — Remote must never be embedded; a framed screen
   #                            share is a screen share the user cannot see the
   #                            context of
-  Header set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self' https://my.aicountly.com wss: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+  Header set Content-Security-Policy "default-src 'self'; script-src 'self' https://www.googletagmanager.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://www.google-analytics.com; media-src 'self' blob:; font-src 'self' data:; connect-src 'self' https://my.aicountly.com wss: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
 </IfModule>
 
 # Deny access to any dotfile that somehow lands in the docroot (e.g. .env),
