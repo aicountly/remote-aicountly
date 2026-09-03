@@ -20,7 +20,12 @@ import { WebSocketServer } from 'ws';
 import { Rooms } from './rooms.js';
 import { TokenError, verifySignallingToken } from './token.js';
 
-const PORT = Number(process.env.REMOTE_SIGNAL_PORT ?? 8787);
+// `PORT` takes priority: it is the port Phusion Passenger assigns and expects
+// the app to listen on under cPanel's Setup Node.js App, which manages its own
+// reverse proxy in front of it. REMOTE_SIGNAL_PORT is for every deployment that
+// is not Passenger — systemd, a container, a bare `node src/server.js` — where
+// this process owns its own port instead of being handed one.
+const PORT = Number(process.env.PORT ?? process.env.REMOTE_SIGNAL_PORT ?? 8787);
 const HOST = process.env.REMOTE_SIGNAL_HOST ?? '0.0.0.0';
 const SECRET = process.env.REMOTE_SIGNALLING_TOKEN_SECRET ?? '';
 
@@ -62,8 +67,15 @@ const rooms = new Rooms();
 // HTTP: health only. Everything else is the WebSocket upgrade.
 // ---------------------------------------------------------------------------
 
+// Passenger's Application URL prefix is not stripped for a plain Node app the
+// way it would be for a framework it understands, so the same request can
+// arrive as either '/health' or '/signal/health' depending on the proxy in
+// front — matching both is what makes the documented health check work under
+// cPanel without caring which convention this particular install uses.
+const HEALTH_PATHS = new Set(['/', '/health', '/signal', '/signal/health']);
+
 const server = createServer((req, res) => {
-  if (req.url === '/health' || req.url === '/') {
+  if (HEALTH_PATHS.has(req.url ?? '')) {
     const body = JSON.stringify({
       status: 'ok',
       service: 'aicountly-remote-signalling',

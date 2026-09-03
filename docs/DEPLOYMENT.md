@@ -174,20 +174,31 @@ Startup file:        src/server.js
 Node version:        22
 ```
 
-Environment variables:
+Environment variables — **set these in cPanel's Setup Node.js App "Environment
+variables" section, not a `.env` file.** This service has no `dotenv`
+dependency (see `signalling/package.json`); a `.env` file dropped next to
+`src/server.js` is never read on cPanel and silently does nothing:
 
 ```
 REMOTE_SIGNALLING_TOKEN_SECRET   the same value as remote.signallingSecret
 REMOTE_SIGNAL_ALLOWED_ORIGINS    https://remote.aicountly.com
-REMOTE_SIGNAL_HOST               127.0.0.1
-REMOTE_SIGNAL_PORT               8787
 ```
+
+Leave `REMOTE_SIGNAL_HOST` and `REMOTE_SIGNAL_PORT` unset on cPanel. Passenger
+assigns the app a port through its own `PORT` variable and expects the app to
+listen on exactly that; `server.js` checks `PORT` before `REMOTE_SIGNAL_PORT`
+for this reason. Setting `REMOTE_SIGNAL_PORT` yourself is for a deployment
+where this process owns its port outright — systemd, a container, a bare
+`node src/server.js` — never Passenger.
 
 The secret must be **byte-identical** to the API's. If it differs, every token
 is rejected and no session connects — the signalling service logs a refused
 upgrade for each attempt, which is the fastest way to diagnose it.
 
-Behind Apache, the WebSocket needs an upgrade-aware proxy:
+On cPanel, Passenger's own reverse proxy handles the WebSocket upgrade once
+the Application URL is set to `/signal` — no Apache config to add by hand.
+The Apache snippet below is only for a deployment where you are running
+Apache yourself, in front of a systemd-managed process:
 
 ```apache
 RewriteEngine On
