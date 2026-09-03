@@ -24,6 +24,7 @@ import { useAuth } from '../auth/AuthProvider'
 import { useRemote } from './RemoteProvider'
 import { PERMISSIONS } from '../types/remote'
 import AicountlyLogo from '../components/brand/AicountlyLogo'
+import { AppLauncher } from '../components/AppLauncher'
 
 /**
  * The application frame: AICOUNTLY header, organisation switcher, navigation.
@@ -113,6 +114,8 @@ export default function AppShell() {
         >
           {mobileNavOpen ? <Menu size={18} aria-hidden="true" /> : <Menu size={18} aria-hidden="true" />}
         </button>
+
+        <AppLauncher />
 
         <div className="shell__brand">
           <AicountlyLogo />
