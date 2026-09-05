@@ -50,8 +50,24 @@ tauri-plugin-single-instance = "2"
 open = "5"
 
 [target.'cfg(windows)'.dependencies]
+# Only the features the platform layer actually calls. Pulling all of `windows`
+# adds minutes to every build and a great deal of surface nothing touches —
+# and a missing feature is a compile error, which is how this list stays true.
 windows = { version = "0.62", features = [
+    "Wdk",
+    "Wdk_System",
+    "Wdk_System_SystemServices",
     "Win32_Foundation",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Security_Cryptography",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_System_Services",
+    "Win32_System_SystemInformation",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    "Win32_UI_Input",
+    "Win32_System_StationsAndDesktops",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Direct3D",

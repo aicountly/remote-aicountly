@@ -24,8 +24,8 @@
 
 use std::sync::Mutex;
 
-use remote_device::{InputProvider, PlatformError, PlatformResult};
-use remote_protocol::{Key, KeyEvent, MouseButton, MouseEvent, PointerPosition, ScrollEvent};
+use remote_device::{InputProvider, PlatformResult};
+use remote_protocol::{Key, KeyEvent, MouseEvent, PointerPosition, ScrollEvent};
 
 /// One notch of a wheel, as Windows counts it.
 pub const WHEEL_DELTA: i32 = 120;
@@ -326,6 +326,11 @@ mod imp {
 
     /// Where a normalised position on one monitor lands on the virtual desktop.
     fn resolve(monitor_id: u32, position: PointerPosition) -> PlatformResult<(i32, i32)> {
+        // The trait has to be in scope for `monitors()`; it is the same
+        // provider the capture side uses, so the coordinates a click is
+        // resolved against are the ones the viewer was looking at.
+        use remote_device::ScreenCaptureProvider;
+
         let layout = super::super::capture::WindowsCapture::new().monitors()?;
 
         let monitor = layout
@@ -366,7 +371,9 @@ mod imp {
                 mi: MOUSEINPUT {
                     dx: x,
                     dy: y,
-                    mouseData: data,
+                    // `mouseData` is unsigned; a negative scroll notch is the
+                    // same bit pattern, which is what Windows reads it as.
+                    mouseData: data as u32,
                     dwFlags: flags,
                     time: 0,
                     dwExtraInfo: 0,
@@ -531,6 +538,9 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Used only by the no-implementation test below, which is the one that
+    // does not compile on Windows.
+    #[cfg(not(target_os = "windows"))]
     use remote_protocol::Modifiers;
 
     fn desktop() -> VirtualDesktop {

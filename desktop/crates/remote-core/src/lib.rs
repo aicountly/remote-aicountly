@@ -18,7 +18,7 @@ pub mod state;
 
 pub use api::{ApiClient, ApiError, DeviceCredential};
 pub use backoff::Backoff;
-pub use config::{AgentConfig, ConfigError};
+pub use config::{config_path, AgentConfig, ConfigError};
 pub use state::{
     AgentEvent, AgentState, AgentStatus, ControlStateView, ControlSummary, SessionSummary,
     UnattendedState,

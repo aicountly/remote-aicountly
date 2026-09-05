@@ -45,7 +45,7 @@ impl Default for Agent {
 }
 
 impl Agent {
-    /// A new agent, not yet enrolled.
+    /// A new agent on the default configuration, not yet enrolled.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -55,6 +55,25 @@ impl Agent {
             providers: Mutex::new(platform::providers().ok()),
             description: Mutex::new(None),
         }
+    }
+
+    /// A new agent on this machine's stored configuration.
+    ///
+    /// Read from the machine-wide file the service also reads, so the two
+    /// halves of the agent cannot end up pointing at different deployments. A
+    /// missing or unreadable file gives the default, which points at
+    /// production: an agent that refused to start because somebody edited a
+    /// JSON file would be an agent needing a visit to the machine, and that is
+    /// the one thing a remote-support tool must not need.
+    #[must_use]
+    pub fn load() -> Self {
+        let agent = Self::new();
+
+        if let Ok(mut held) = agent.config.lock() {
+            *held = AgentConfig::load();
+        }
+
+        agent
     }
 
     /// The state the window renders from.
@@ -86,15 +105,22 @@ impl Agent {
             .unwrap_or_default()
     }
 
-    /// Replace the configuration, after validating it.
+    /// Replace the configuration, after validating it, and write it back.
+    ///
+    /// Validated before it is stored and stored before it is written, so a
+    /// value the agent would refuse never reaches the file the service reads
+    /// on its next start.
     pub fn set_config(&self, config: AgentConfig) -> Result<(), AgentError> {
         config.validate().map_err(AgentError::Config)?;
 
         if let Ok(mut held) = self.config.lock() {
-            *held = config;
+            *held = config.clone();
         }
 
-        Ok(())
+        // A write that fails leaves the running agent on the new setting and
+        // the next start on the old one. Worth reporting; not worth discarding
+        // a change the person just made.
+        config.save().map_err(AgentError::Config)
     }
 
     /// What the machine currently permits.
@@ -684,8 +710,19 @@ mod tests {
         assert_eq!(agent.rejected_control_messages(), 2);
     }
 
+    /// A setting the agent would refuse must never reach the file the service
+    /// reads on its next start.
     #[test]
-    fn the_configuration_is_validated_before_it_is_stored() {
+    fn the_configuration_is_validated_before_it_is_stored_or_written() {
+        // Written into a directory of this test's own, so the test does not
+        // depend on — or disturb — whatever this machine has configured.
+        let root = std::env::temp_dir().join(format!(
+            "aicountly-remote-config-test-{}",
+            std::process::id()
+        ));
+        std::env::set_var("XDG_CONFIG_HOME", &root);
+        std::env::set_var("ProgramData", &root);
+
         let agent = Agent::new();
 
         let bad = AgentConfig {
@@ -703,6 +740,11 @@ mod tests {
 
         assert!(agent.set_config(good.clone()).is_ok());
         assert_eq!(agent.config(), good);
+
+        // And it survives a restart, which is the whole reason it is written.
+        assert_eq!(Agent::load().config(), good);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// The declaration is already constrained by what the machine permits, so

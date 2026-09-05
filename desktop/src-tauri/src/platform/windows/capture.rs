@@ -34,7 +34,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use remote_device::{
-    CaptureProfile, Frame, PlatformError, PlatformResult, ScreenCaptureProvider,
+    CaptureProfile, Frame, PlatformResult, ScreenCaptureProvider,
 };
 use remote_protocol::{Monitor, MonitorLayout, Orientation};
 
@@ -280,14 +280,14 @@ mod imp {
     use remote_protocol::MonitorLayout;
     use std::sync::atomic::{AtomicU64, Ordering};
     use windows::core::Interface;
-    use windows::Foundation::TypedEventHandler;
     use windows::Graphics::Capture::{
         Direct3D11CaptureFrame, Direct3D11CaptureFramePool, GraphicsCaptureItem,
         GraphicsCaptureSession,
     };
     use windows::Graphics::DirectX::DirectXPixelFormat;
     use windows::Graphics::SizeInt32;
-    use windows::Win32::Foundation::{BOOL, HANDLE, HWND, LPARAM, RECT};
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, RECT};
     use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
     use windows::Win32::Graphics::Direct3D11::{
         D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
@@ -296,14 +296,15 @@ mod imp {
     };
     use windows::Win32::Graphics::Dxgi::IDXGIDevice;
     use windows::Win32::Graphics::Gdi::{
-        EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW, MONITORINFOF_PRIMARY,
+        EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
     };
     use windows::Win32::System::WinRT::Direct3D11::CreateDirect3D11DeviceFromDXGIDevice;
     use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
     use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, OpenInputDesktop, DESKTOP_READOBJECTS,
+    use windows::Win32::System::StationsAndDesktops::{
+        CloseDesktop, OpenInputDesktop, DESKTOP_READOBJECTS,
     };
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, MONITORINFOF_PRIMARY};
 
     /// The frame pool depth.
     ///
@@ -324,7 +325,7 @@ mod imp {
         unsafe {
             match OpenInputDesktop(Default::default(), false, DESKTOP_READOBJECTS) {
                 Ok(desktop) => {
-                    let _ = windows::Win32::System::StationsAndDesktops::CloseDesktop(desktop);
+                    let _ = CloseDesktop(desktop);
 
                     SecureDesktopState::UserDesktop
                 }
@@ -446,7 +447,10 @@ mod imp {
                 D3D11CreateDevice(
                     None,
                     D3D_DRIVER_TYPE_HARDWARE,
-                    None,
+                    // No software rasteriser module: the hardware driver type
+                    // above is the one being asked for, and a null module is
+                    // what that combination expects.
+                    windows::Win32::Foundation::HMODULE::default(),
                     D3D11_CREATE_DEVICE_BGRA_SUPPORT,
                     None,
                     D3D11_SDK_VERSION,

@@ -155,12 +155,12 @@ mod imp {
     use remote_security::{StorageError, StorageScope};
     use windows::Win32::Foundation::LocalFree;
     use windows::Win32::Security::Cryptography::{
-        CryptProtectData, CryptUnprotectData, CRYPTOAPI_BLOB, CRYPTPROTECT_LOCAL_MACHINE,
+        CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_LOCAL_MACHINE,
         CRYPTPROTECT_UI_FORBIDDEN,
     };
 
-    fn blob(bytes: &[u8]) -> CRYPTOAPI_BLOB {
-        CRYPTOAPI_BLOB {
+    fn blob(bytes: &[u8]) -> CRYPT_INTEGER_BLOB {
+        CRYPT_INTEGER_BLOB {
             cbData: bytes.len() as u32,
             pbData: bytes.as_ptr() as *mut u8,
         }
@@ -171,7 +171,7 @@ mod imp {
     /// # Safety
     ///
     /// `out` must be a blob DPAPI produced and has not yet been freed.
-    unsafe fn take(out: CRYPTOAPI_BLOB) -> Vec<u8> {
+    unsafe fn take(out: CRYPT_INTEGER_BLOB) -> Vec<u8> {
         let bytes = if out.pbData.is_null() {
             Vec::new()
         } else {
@@ -204,7 +204,7 @@ mod imp {
     pub fn protect(secret: &[u8], scope: StorageScope) -> Result<Vec<u8>, StorageError> {
         let input = blob(secret);
         let entropy = blob(ENTROPY);
-        let mut output = CRYPTOAPI_BLOB::default();
+        let mut output = CRYPT_INTEGER_BLOB::default();
 
         // SAFETY: both input blobs point at live slices for the duration of
         // the call, and the output blob is freed by `take`.
@@ -227,7 +227,7 @@ mod imp {
     pub fn unprotect(protected: &[u8], scope: StorageScope) -> Result<Vec<u8>, StorageError> {
         let input = blob(protected);
         let entropy = blob(ENTROPY);
-        let mut output = CRYPTOAPI_BLOB::default();
+        let mut output = CRYPT_INTEGER_BLOB::default();
 
         // SAFETY: as above.
         unsafe {

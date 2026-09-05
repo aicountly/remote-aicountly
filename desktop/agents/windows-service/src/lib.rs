@@ -15,8 +15,6 @@
 //!     device identity and presence      the machine is reachable
 //!     device authentication             holds no user's credential
 //!     reboot, service lifecycle         privileged, and only where needed
-//!     starts the UI in the active       via WTSGetActiveConsoleSessionId
-//!       session when there is one       and CreateProcessAsUser
 //!           │
 //!           │  named pipe, ACL'd, authenticated both ways, versioned
 //!           ▼
@@ -30,7 +28,11 @@
 //! # What this service deliberately cannot do
 //!
 //! * **It is not interactive.** It creates no window, no dialog and no tray
-//!   icon. Anything a person must see is the UI process's job.
+//!   icon, and it does not launch the UI process either — Windows removed
+//!   interactive services, and a service that pushed a window into somebody's
+//!   session would be doing the thing that was removed. The installer
+//!   registers the tray application to start at sign-in; the two find each
+//!   other over the pipe.
 //! * **It executes nothing arbitrary.** [`IpcRequest`] has no variant naming a
 //!   program, a path, an argument or a command line, and there is no
 //!   passthrough. The widest thing it will do is restart the machine.
@@ -44,12 +46,14 @@
 #![deny(missing_docs)]
 
 pub mod ipc;
+pub mod machine;
 pub mod pipe;
 
 #[cfg(windows)]
 pub mod service;
 
 pub use ipc::{IpcError, IpcFrame, IpcRequest, IpcResponse, IPC_PROTOCOL_VERSION};
+pub use machine::{handle, Connection, Effect, MachineState};
 pub use pipe::{pipe_name, PipeSecurity};
 
 /// The display name Windows shows in `services.msc`.

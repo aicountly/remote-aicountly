@@ -122,6 +122,98 @@ impl AgentConfig {
     pub fn api_origin(&self) -> &str {
         &self.api_base_url
     }
+
+    /// Read the machine's configuration, or the default when there is none.
+    ///
+    /// A missing file is not an error: a fresh installation has none, and the
+    /// default points at production. A *corrupt* file is not an error either —
+    /// an agent that refuses to start because somebody edited a JSON file is
+    /// an agent somebody has to visit the machine to fix, which is the one
+    /// thing a remote-support tool must not need.
+    #[must_use]
+    pub fn load() -> Self {
+        let Some(path) = config_path() else {
+            return Self::default();
+        };
+
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return Self::default();
+        };
+
+        Self::from_json(&text).unwrap_or_default()
+    }
+
+    /// Write the configuration back, creating the directory if needed.
+    ///
+    /// Written atomically — to a temporary file in the same directory, then
+    /// renamed — so a machine that loses power mid-write comes back with the
+    /// previous configuration rather than half of the new one.
+    pub fn save(&self) -> Result<(), ConfigError> {
+        self.validate()?;
+
+        let path = config_path().ok_or(ConfigError::OutOfRange {
+            field: "configPath",
+            detail: "could not be determined on this machine",
+        })?;
+
+        let directory = path.parent().ok_or(ConfigError::OutOfRange {
+            field: "configPath",
+            detail: "has no parent directory",
+        })?;
+
+        std::fs::create_dir_all(directory)
+            .map_err(|error| ConfigError::Malformed(error.to_string()))?;
+
+        let temporary = directory.join("config.json.new");
+
+        std::fs::write(&temporary, self.to_json())
+            .map_err(|error| ConfigError::Malformed(error.to_string()))?;
+
+        std::fs::rename(&temporary, &path).map_err(|error| {
+            // Leaving the temporary file behind would make the next save look
+            // as though it had succeeded before.
+            let _ = std::fs::remove_file(&temporary);
+
+            ConfigError::Malformed(error.to_string())
+        })
+    }
+}
+
+/// Where the configuration lives.
+///
+/// Machine-wide rather than per-user, and deliberately: the service runs as
+/// `LocalSystem` and the tray application runs as whoever is signed in, and
+/// the two must read the same endpoint. A per-user file would give a machine
+/// as many configurations as it has accounts.
+///
+/// The file holds a URL and some numbers. There is no field in
+/// [`AgentConfig`] for a secret, which is what makes an ordinary file the
+/// right place for it — the device key is in the operating system's key store
+/// and never comes near this path.
+#[must_use]
+pub fn config_path() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("ProgramData").map(|root| {
+            std::path::PathBuf::from(root)
+                .join("AICOUNTLY")
+                .join("Remote")
+                .join("config.json")
+        })
+    }
+
+    #[cfg(not(windows))]
+    {
+        // Only used by developers running the agent's portable half on a
+        // workstation; the shipped product is Windows.
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|home| std::path::PathBuf::from(home).join(".config"))
+            })
+            .map(|root| root.join("aicountly-remote").join("config.json"))
+    }
 }
 
 /// HTTPS, or `http://localhost` in a debug build and nowhere else.
@@ -165,6 +257,34 @@ pub enum ConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The configuration is a URL and some numbers. If a secret is ever added
+    /// to it, this fails — which is the point, because the file is an
+    /// ordinary one and the whole reason that is safe is that nothing secret
+    /// is in it.
+    #[test]
+    fn the_configuration_holds_nothing_secret() {
+        let json = AgentConfig::default().to_json().to_lowercase();
+
+        for forbidden in ["token", "secret", "password", "key", "credential", "bearer"] {
+            assert!(
+                !json.contains(forbidden),
+                "the configuration file must never carry a {forbidden}"
+            );
+        }
+    }
+
+    /// A machine-wide path, so the service running as LocalSystem and the tray
+    /// application running as a signed-in user read the same endpoint.
+    #[test]
+    fn the_configuration_path_is_machine_wide_and_named_predictably() {
+        // The environment decides, and a machine with neither variable set
+        // simply has no path — the agent then runs on the default rather than
+        // refusing to start.
+        if let Some(path) = config_path() {
+            assert!(path.ends_with("config.json"));
+        }
+    }
 
     #[test]
     fn the_default_configuration_is_valid_and_points_at_production() {

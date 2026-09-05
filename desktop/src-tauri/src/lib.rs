@@ -52,7 +52,7 @@ pub fn run() {
         .with_ansi(false)
         .init();
 
-    let agent = std::sync::Arc::new(agent::Agent::new());
+    let agent = std::sync::Arc::new(agent::Agent::load());
 
     tauri::Builder::default()
         // One instance. A second copy of the agent would mean two tray icons,
