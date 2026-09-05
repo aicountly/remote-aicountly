@@ -1,57 +1,60 @@
-# Future: AICOUNTLY Remote for Windows, macOS and Linux
+# AICOUNTLY Remote for Windows, macOS and Linux
 
-**Nothing in this document is built.** It records the seams V1 deliberately
-left, so that the desktop agents can be added to *this* product rather than
-becoming a second one.
+This document was written before any of it existed, to record the seams V1
+deliberately left. **The Windows agent now fills them.** What follows is the
+contract, and then an honest account of how much of it is built.
 
-If they were built as a separate system, AICOUNTLY would end up with two
-session models, two audit trails, two policy engines and two products called
-Remote. Everything below exists so that does not happen.
+The detail lives in [`docs/desktop/`](desktop/):
 
-## The one rule V1 obeys
+| | |
+|---|---|
+| [ARCHITECTURE.md](desktop/ARCHITECTURE.md) | how the agent is put together, and what is not built |
+| [SECURITY.md](desktop/SECURITY.md) | the five checks a keystroke passes, and the real limits |
+| [DEVICE_ENROLMENT.md](desktop/DEVICE_ENROLMENT.md) | how a machine gets an identity and how it loses one |
+| [WINDOWS_AGENT.md](desktop/WINDOWS_AGENT.md) | capture, input, the service, and what Windows forbids |
+| [WINDOWS_RELEASE.md](desktop/WINDOWS_RELEASE.md) | building, signing, releasing, and why updates are off |
+| [TESTING.md](desktop/TESTING.md) | what is covered, and what is not |
+
+## The one rule, still obeyed
 
 > The UI is built from a participant's declared capabilities, never from
 > `clientType === 'BROWSER'`.
 
-A browser reports `remote_control: false`. An agent will report `true`, and the
-session screen grows the control it was always able to render — no schema
+A browser reports `remote_control: false`. An agent reports `true`, and the
+session screen grew the control it was always able to render — no schema
 change, no parallel API, no rename of the SaaS.
+
+`web/src/features/room/ControlPanel.tsx` renders from
+`controllableHostUuid` — which the server derives from negotiated capabilities
+— and from the effective policy. A browser-to-browser session gets one honest
+sentence and no button. `ControlPanel.test.tsx` asserts it directly:
+`hasControllableHost: false` is `unavailable` whatever the policy says.
+
+**Browser V1 still cannot be controlled, and nothing implies otherwise.**
 
 ## Capability negotiation
 
-Already in the schema (`remote_participants.capabilities`, JSONB) and already
+Unchanged from the original design: `remote_participants.capabilities`, JSONB,
 sent on every participant resource.
 
 ```jsonc
-// what a browser reports today
-{
-  "screen_share": true,
-  "screen_view": true,
-  "remote_control": false,      // the Screen Capture API cannot do it
-  "unattended_access": false,
-  "file_transfer": true,
-  "clipboard_sync": false,
-  "reboot": false
-}
+// a browser
+{ "screen_share": true, "screen_view": true, "remote_control": false,
+  "unattended_access": false, "file_transfer": true, "clipboard_sync": false,
+  "reboot": false }
 
-// what an agent will report
-{
-  "screen_share": true,
-  "screen_view": true,
-  "remote_control": true,
-  "unattended_access": true,
-  "file_transfer": true,
-  "clipboard_sync": true,
-  "reboot": true
-}
+// a Windows agent
+{ "screen_share": true, "screen_view": true, "remote_control": true,
+  "unattended_access": true, "file_transfer": true, "clipboard_sync": true,
+  "reboot": true }
 ```
 
-`App\Domain\Session\ClientCapabilities` holds both shapes and normalises a
-claim against the ceiling for its client type. **A client cannot grant itself a
-capability by asserting one** — the declaration is an upper bound, and policy is
-still evaluated on top.
+`ClientCapabilities` normalises a claim against the ceiling for its client
+type, and `DeviceService::effectiveCapabilities()` intersects the stored
+declaration with the company's policy **on every read**. A client cannot grant
+itself a capability by asserting one.
 
-## What an agent reuses unchanged
+## What the agent reuses unchanged
 
 | Concern | Reused |
 |---|---|
@@ -64,59 +67,62 @@ still evaluated on top.
 | Company context | the signed launch token |
 | Realtime | the same signalling service and token |
 
-An agent is a participant with different capabilities. That is the entire
-architectural claim.
+An unattended connection goes through `SessionService::create()` like every
+other session. There is no second session model, no second audit trail and no
+second policy engine.
 
-## What has to be added
+## What was added
 
 ### Devices
 
-`remote_devices` exists and is empty. It carries `public_key`, `agent_version`,
-`operating_system`, `status`, `unattended_access_enabled` and `last_seen_at`.
+`remote_devices` was an empty table with a `public_key` column. It now carries
+the key algorithm, a fingerprint (uniquely indexed), presence, the agent
+version, the unattended switch with who enabled it and when it was last used,
+and revocation. `remote_device_challenges` holds single-use nonces.
 
-An agent will need its own authentication: a device keypair, enrolled once by a
-signed-in user, with the agent proving possession of the private key. A device
-is not a person, so it cannot use a `ses_key` — that is why the column is there
-and why the identity projection is separate from it.
+Authentication is Ed25519 proof of possession over a canonical, domain-
+separated payload — never a permanent bearer token. See
+[DEVICE_ENROLMENT.md](desktop/DEVICE_ENROLMENT.md).
 
 ### Policy
 
-New switches, following the existing pattern exactly:
+The four switches, exactly as designed, all defaulting **off**:
 
 ```
-allow_remote_control          default OFF
-allow_unattended_access       default OFF
-allow_clipboard_sync          default OFF
-allow_device_reboot           default OFF
+allow_remote_control          allow_unattended_access
+allow_clipboard_sync          allow_device_reboot
 ```
 
-New permissions in `PermissionCatalog`:
+with database CHECKs enforcing the dependencies — unattended access and reboot
+require remote control, so the data cannot hold a combination the resolver
+would have to interpret.
+
+The five permissions, all defaulting off:
 
 ```
-remote.control.request
-remote.control.accept
-remote.device.enrol
-remote.device.manage
-remote.unattended.access
+remote.control.request   remote.control.accept   remote.device.enrol
+remote.device.manage     remote.unattended.access
 ```
 
-Every one defaults off, and every one goes through the same resolver — so the
-"company prohibition beats user grant" property applies to remote control on
-the day it ships, without new code to enforce it.
+The capability mask is applied **last** in `EffectivePolicyResolver`, so a
+company prohibition beats a user-level ALLOW. `DesktopPolicyTest` proves it.
 
 ### Consent
 
-Attended control needs the same explicit consent screen sharing has: the person
-at the machine agrees, sees a persistent indicator, and can revoke instantly.
+Attended control has the explicit consent screen sharing has: the person at the
+machine sees who is asking and from which organisation, agrees or refuses, sees
+a persistent indicator, and can stop it instantly — locally, with no network
+round trip and no permission required.
 
-**Unattended access is a different thing and must be treated as one.** It needs
-its own enrolment, its own company switch, its own audit event on every
-connection, and a visible record on the device. It must never be a checkbox
-inside an attended session.
+**Unattended access is a different thing and is treated as one.** Its own
+entitlement, its own company switch, its own permission, its own device-level
+enablement, its own audit event on every connection, and a visible record on
+the device and in the console. It is never a checkbox inside an attended
+session, and `ControlDecision` has no fourth variant that could become one.
 
 ### Events
 
-Add to `EventType`, no schema change needed:
+Added to `EventType`, no schema change:
 
 ```
 CONTROL_REQUESTED / CONTROL_GRANTED / CONTROL_DENIED / CONTROL_REVOKED
@@ -125,19 +131,34 @@ DEVICE_ENROLLED / DEVICE_REVOKED
 UNATTENDED_SESSION_STARTED
 ```
 
+`remote_session_events.actor_type` and `remote_audit_logs.actor_type` now
+accept `'DEVICE'`, so a decision the machine made is recorded as the machine's.
+
 ### Entitlements
 
-`remote_entitlements.desktop_devices` and `.unattended_access` exist already and
-default to false, so the plan gate is in place before the feature is.
+`remote_entitlements.desktop_devices` and `.unattended_access` already existed
+and defaulted to false. They are now the plan gate they were put there to be.
 
-## Where the browser boundary is enforced today
+## How much of it is built
 
-* `ClientCapabilities::browser()` returns `remote_control: false` — the ceiling
-  a browser participant is normalised against.
-* The session toolbar renders from capabilities and policy, so there is no
-  "Control computer" button to hide.
-* The product copy says *browser assistance*, *share*, *view* — never *control*.
+**The whole server side, the whole browser side, and the machine's identity,
+policy, consent and lifecycle.** 583 automated tests across the five parts of
+the product.
 
-That last point is not cosmetic. §2 is explicit that the limitation must never
-be misrepresented in the interface, and the wording is what a customer decides
-to trust the product on.
+**Not the media pipeline.** There is no video encoder: `remote-webrtc`
+negotiates a VP8 track and the Windows capture provider produces BGRA frames,
+and nothing converts one to the other. The agent's signalling client is not
+written either. So today an agent registers, stays reachable, appears in the
+Computers page, joins the policy and consent model completely — and does not
+yet send a picture.
+
+The full list of what is and is not built is in
+[ARCHITECTURE.md](desktop/ARCHITECTURE.md#what-is-built-and-what-is-not), and
+it is deliberately at the end of that document rather than buried: a design
+document that describes intentions as though they were code is how a team
+discovers a gap at the wrong moment.
+
+**macOS and Linux are not built.** Every provider in
+`src-tauri/src/platform/macos/` returns `PlatformError::Unsupported`. The trait
+boundary is what would keep that work confined; the work has not been done, and
+nothing pretends it has.

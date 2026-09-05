@@ -1,7 +1,8 @@
 # AICOUNTLY Remote
 
-Secure browser assistance for the AICOUNTLY platform. Someone shares a screen;
-someone else, with permission, watches it and helps.
+Secure remote assistance for the AICOUNTLY platform. Someone shares a screen;
+someone else, with permission, watches it — and on a Windows machine running
+the desktop agent, controls it.
 
 | Environment | App | API |
 | --- | --- | --- |
@@ -23,16 +24,37 @@ someone else, with permission, watches it and helps.
 - **Company policy, role and user permissions**, resolved server-side
 - **Session history and an audit trail** — without ever storing screen content
 
+On a Windows machine with **AICOUNTLY Remote for Windows** installed:
+
+- **Remote control**, after the person at the machine agrees — visible while it
+  is running, and stoppable from the machine instantly, without the network
+- **Registered computers** with their own cryptographic identity, revocable
+  server-side
+- **Unattended access** as its own deliberate, audited, revocable setting —
+  never a remembered approval
+- **Restarting a machine**, separately authorised and recorded before it happens
+
 ## What it deliberately does not do
 
-Browser V1 is **attended assistance**. It shares and views; it does not control
-a computer and it has no unattended access. A browser cannot do either, and
-nothing in the interface implies otherwise — no "Control computer" button
-exists to be disappointed by.
+**A browser still cannot be controlled.** The Screen Capture API cannot do it,
+so a browser participant reports `remote_control: false` and the session screen
+offers nothing — no "Control computer" button exists to be disappointed by. The
+control UI appears when a participant's *negotiated capabilities* say a machine
+can be controlled and the organisation's policy allows it, never because of
+what kind of client something is.
 
-The desktop agents that will do those things are designed for
-([docs/DESKTOP_AGENT.md](docs/DESKTOP_AGENT.md)) and plug into this same
-session, policy and audit model. They are not built.
+**A UAC prompt cannot be answered remotely.** It runs on the Windows Secure
+Desktop, which a user-session process cannot capture or inject into. The agent
+notices and says so; it does not disable UAC, and it does not ask you to. See
+[docs/desktop/WINDOWS_AGENT.md](docs/desktop/WINDOWS_AGENT.md).
+
+**The Windows agent does not yet send a picture.** Device identity, policy,
+consent, control, unattended access and the whole session model are built and
+tested; the video encoder and the agent's signalling client are not. See
+[docs/desktop/ARCHITECTURE.md](docs/desktop/ARCHITECTURE.md#what-is-built-and-what-is-not).
+
+**macOS and Linux agents are not built.** Every provider returns
+`Unsupported` rather than pretending.
 
 ## Layout
 
@@ -40,6 +62,7 @@ session, policy and audit model. They are not built.
 web/          React 19 + TypeScript + Vite. Builds to web/dist, deployed to the document root.
 backend/      CodeIgniter 4 API + PostgreSQL. Deployed to the api/ folder inside it.
 signalling/   Node WebSocket relay for WebRTC signalling. A long-running process.
+desktop/      AICOUNTLY Remote for Windows: React + Tauri 2 + Rust, and the Windows service.
 docs/         architecture, security, deployment, integration
 ```
 
@@ -71,6 +94,13 @@ npm run dev
 # web
 cd web && npm install && cp ../.env.example ../.env
 npm run dev                                   # http://localhost:5173
+
+# desktop agent — needs Rust 1.82+ and Node 22+. Builds and tests on any host;
+# the Windows-only half needs Windows (or a mingw cross-check — see
+# docs/desktop/TESTING.md).
+cd desktop && npm install
+cargo test --workspace
+npm run tauri dev
 ```
 
 Signing in is the AICOUNTLY portal's job, the same as every other AICOUNTLY
@@ -81,14 +111,23 @@ is no local login to fake. See
 ## Tests
 
 ```bash
-cd backend    && vendor/bin/phpunit      # 106 — policy, tenant isolation, HTTP
-cd web        && npm test                # 27  — capture, capability, UI gating
-cd signalling && npm test                # 16  — tokens, rooms, live relay
+cd backend    && vendor/bin/phpunit      # 208 — policy, tenant isolation, devices, control
+cd web        && npm test                # 104 — capture, capability gating, control input
+cd signalling && npm test                #  24 — tokens, rooms, device rooms, live relay
+cd desktop    && cargo test --workspace  # 235 — protocol, gate, identity, state, service
+cd desktop    && npm test                #  12 — the agent's own interface
 ```
 
 The backend suite runs against a real PostgreSQL and applies the migrations
-itself. `.github/workflows/ci.yml` runs all three on every push, and verifies
-that the migrations roll back cleanly.
+itself. `.github/workflows/ci.yml` runs the first three on every push and
+verifies that the migrations roll back cleanly;
+`.github/workflows/desktop-ci.yml` runs the desktop workspace on Linux **and**
+on a Windows runner, with `cargo audit` and `npm audit`.
+
+What is **not** covered — no Windows-only code path has been executed on a
+Windows machine — is set out in
+[docs/desktop/TESTING.md](docs/desktop/TESTING.md), and the manual pass that
+has to precede a release is `desktop/tests/MANUAL.md`.
 
 ## Environment variables
 
@@ -115,7 +154,13 @@ push or merge. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 | --- | --- | --- |
 | Deploy to cPanel Production | `web/dist/` then `backend/` | document root, then `api/` inside it |
 | Deploy to cPanel Sandbox | `web/dist/` then `backend/` | document root, then `api/` inside it |
-| CI | nothing — tests only | — |
+| Release AICOUNTLY Remote for Windows | the desktop installers | a GitHub release — never cPanel |
+| CI / Desktop CI | nothing — tests only | — |
+
+The Windows release takes a version and a channel (`sandbox`, `beta`,
+`production`), signs beta and production inside a protected GitHub Environment,
+and has no branch by which an unsigned artifact becomes a release. See
+[docs/desktop/WINDOWS_RELEASE.md](docs/desktop/WINDOWS_RELEASE.md).
 
 Migrations are run by hand over SSH, deliberately: an automated migration
 inside a `--delete` deploy is a schema change nobody reviewed, running against
@@ -138,7 +183,13 @@ everywhere; until then the header shows the plain wordmark. See
 | [DEVELOPMENT.md](docs/DEVELOPMENT.md) | Running it, and the two-browser walkthrough |
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | cPanel deployment and first-run setup |
 | [SAFE_SHARE_INTEGRATION.md](docs/SAFE_SHARE_INTEGRATION.md) | Launching Remote from another AICOUNTLY product |
-| [DESKTOP_AGENT.md](docs/DESKTOP_AGENT.md) | How the future agents plug into this |
+| [DESKTOP_AGENT.md](docs/DESKTOP_AGENT.md) | How the desktop agent plugs into this |
+| [desktop/ARCHITECTURE.md](docs/desktop/ARCHITECTURE.md) | The agent's design, and what is not built |
+| [desktop/SECURITY.md](docs/desktop/SECURITY.md) | What has to be true before a keystroke lands |
+| [desktop/DEVICE_ENROLMENT.md](docs/desktop/DEVICE_ENROLMENT.md) | Registering a computer, and un-registering it |
+| [desktop/WINDOWS_AGENT.md](docs/desktop/WINDOWS_AGENT.md) | Windows specifics, and what Windows forbids |
+| [desktop/WINDOWS_RELEASE.md](docs/desktop/WINDOWS_RELEASE.md) | Building, signing and releasing the agent |
+| [desktop/TESTING.md](docs/desktop/TESTING.md) | Coverage, and its gaps |
 | [BROWSER_SUPPORT.md](docs/BROWSER_SUPPORT.md) | What works where, and what degrades |
 | [BRANDING.md](docs/BRANDING.md) | Logo, colour, typography, icons |
 | [auth/AICOUNTLY_AUTH_WORKFLOW.md](docs/auth/AICOUNTLY_AUTH_WORKFLOW.md) | Sign-in |

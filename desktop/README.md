@@ -32,7 +32,7 @@ agents/windows-service/  the Session 0 service and the named-pipe protocol
 src/                     the window: React 19 + TypeScript
 installers/windows/      NSIS hooks — the service, and what uninstall removes
 scripts/windows/         build, sign and verify
-tests/                   the end-to-end test document
+tests/                   MANUAL.md — the pass that has to happen on real Windows
 ```
 
 ## Why two processes
@@ -63,19 +63,32 @@ npm run dev
 # the whole agent (needs Windows for the native layer)
 npm run tauri dev
 
-# the portable crates, on any host
-cargo test -p remote-protocol -p remote-security -p remote-device -p remote-core -p remote-webrtc
-
-# everything, on Windows
+# everything, on any host — the Windows-only modules are compiled out
 cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+
+# type-check the Windows-only half without a Windows machine
+rustup target add x86_64-pc-windows-gnu     # plus gcc-mingw-w64-x86-64
+cargo build --target x86_64-pc-windows-gnu -p aicountly-remote-service
+cp target/x86_64-pc-windows-gnu/debug/AicountlyRemoteService.exe \
+   src-tauri/binaries/AicountlyRemoteService-x86_64-pc-windows-gnu.exe
+cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnu -- -D warnings
+
+# the installers, on Windows
+pwsh -File scripts/windows/build.ps1
 ```
 
 ## Tests
 
 ```bash
-cargo test --workspace   # 210 — protocol, gate, keys, state, capture maths, IPC
+cargo test --workspace   # 235 — protocol, gate, keys, state, capture maths, IPC, the loop
 npm test                 #  12 — the session banner and the unattended screen
+cargo audit --deny warnings
 ```
+
+**No Windows-only code path has been executed on a Windows machine.** It is
+compiled, clippy-clean and type-checked for the Windows target; running it is
+`tests/MANUAL.md`, and that pass has to happen before a release.
 
 ## Documentation
 
@@ -86,4 +99,5 @@ npm test                 #  12 — the session banner and the unattended screen
 | [../docs/desktop/DEVICE_ENROLMENT.md](../docs/desktop/DEVICE_ENROLMENT.md) | Keys, challenges, unattended access, revocation |
 | [../docs/desktop/WINDOWS_AGENT.md](../docs/desktop/WINDOWS_AGENT.md) | The two processes, capture, input, and what Windows will not allow |
 | [../docs/desktop/WINDOWS_RELEASE.md](../docs/desktop/WINDOWS_RELEASE.md) | Building, signing, releasing |
-| [../docs/desktop/TESTING.md](../docs/desktop/TESTING.md) | The end-to-end matrix |
+| [../docs/desktop/TESTING.md](../docs/desktop/TESTING.md) | What is covered, and what is not |
+| [tests/MANUAL.md](tests/MANUAL.md) | The manual pass on a real Windows machine |
