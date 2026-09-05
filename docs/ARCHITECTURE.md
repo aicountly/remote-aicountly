@@ -3,17 +3,22 @@
 Remote is AICOUNTLY's secure browser assistance product. Somebody shares a
 screen; somebody else, with permission, watches it and helps.
 
-**What V1 is:** attended, browser-only assistance — share, view, chat, point,
-annotate.
+**What the browser client is:** attended assistance — share, view, chat, point,
+annotate. A browser cannot control an operating system and has no unattended
+access, and nothing in the interface implies otherwise.
 
-**What V1 is not:** operating-system remote control or unattended access.
-A browser cannot do either, and nothing in the interface implies otherwise.
-The desktop agents that will do those things are designed for
-([DESKTOP_AGENT.md](DESKTOP_AGENT.md)) but not built.
+**What the Windows agent adds:** a participant that *can* be controlled, with
+its own cryptographic identity, its own consent flow, and unattended access as
+a separate deliberate setting. It is a fifth piece of the same product, not a
+second product — same sessions, same policy resolver, same audit trail, same
+signalling service. Its own architecture is
+[desktop/ARCHITECTURE.md](desktop/ARCHITECTURE.md); how much of it is built is
+at the end of that document, and the answer is "everything except the media
+pipeline".
 
 ---
 
-## The four pieces
+## The five pieces
 
 ```
                     ┌──────────────────────────┐
@@ -43,12 +48,22 @@ The desktop agents that will do those things are designed for
 |---|---|---|
 | `web/` | The interface. Capture, WebRTC, everything a person sees. | cPanel document root |
 | `backend/` | Identity, policy, sessions, audit, token issuance. | `<docroot>/api/` |
-| `signalling/` | Relays SDP and ICE between two authorised browsers. | A Node process |
+| `signalling/` | Relays SDP and ICE between two authorised peers. | A Node process |
+| `desktop/` | AICOUNTLY Remote for Windows: the agent and its service. | A customer's machine, by installer |
 | PostgreSQL | Every durable fact about a session. Never screen content. | The database host |
 
+The desktop agent talks to the same API over HTTPS and the same signalling
+service over WSS. It authenticates as a **device** rather than as a person —
+Ed25519 proof of possession, a credential that lasts minutes — so nothing it
+holds is a user's credential and nothing it can reach is a user's data. It is
+released through its own manual workflow and never through the cPanel
+deployment.
+
 **Media never touches AICOUNTLY infrastructure.** Video and audio go directly
-between the two browsers, or through TURN when a network forces it. The
-signalling service carries only the handshake.
+between the two peers — two browsers, or a browser and a Windows agent — or
+through TURN when a network forces it. The signalling service carries only the
+handshake. Remote-control input travels on a WebRTC data channel between the
+same two peers, and never through the API.
 
 ---
 
@@ -315,9 +330,11 @@ out of twenty.
 |---|---|
 | [DATABASE.md](DATABASE.md) | Every table, and why it is shaped that way |
 | [SECURITY.md](SECURITY.md) | The security model, and its honest limits |
-| [DEVELOPMENT.md](DEVELOPMENT.md) | Running all three pieces, and the two-browser walkthrough |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Running the pieces, and the two-browser walkthrough |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | cPanel deployment and first-run setup |
 | [SAFE_SHARE_INTEGRATION.md](SAFE_SHARE_INTEGRATION.md) | Launching Remote from another AICOUNTLY product |
-| [DESKTOP_AGENT.md](DESKTOP_AGENT.md) | How the future agents plug into this |
+| [DESKTOP_AGENT.md](DESKTOP_AGENT.md) | How the desktop agent plugs into this |
+| [desktop/ARCHITECTURE.md](desktop/ARCHITECTURE.md) | The Windows agent's own design |
+| [desktop/SECURITY.md](desktop/SECURITY.md) | What has to be true before a keystroke lands |
 | [BROWSER_SUPPORT.md](BROWSER_SUPPORT.md) | What works where, and what degrades |
 | [auth/AICOUNTLY_AUTH_WORKFLOW.md](auth/AICOUNTLY_AUTH_WORKFLOW.md) | Sign-in |

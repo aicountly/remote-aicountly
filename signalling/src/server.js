@@ -10,6 +10,16 @@
  *   * trust a room id from a client — the room is inside the signed token;
  *   * carry media — audio and video go peer-to-peer (or via TURN), never here.
  *
+ * Two kinds of room exist, and the token says which:
+ *
+ *   * a **session room**, named by a session uuid, carrying the handshake and
+ *     the collaboration channel between two participants;
+ *   * a **device presence room**, named `device-<uuid>`, where a registered
+ *     desktop agent holds one outbound connection so that an authorised
+ *     colleague can reach it without a port being opened on the machine. It
+ *     relays a heartbeat and an invitation to join a session, and refuses
+ *     everything else — see DEVICE_ROOM_BROADCASTABLE below.
+ *
  * Keeping business logic out is what lets this run as a small always-on process
  * beside a PHP application that has no long-lived processes at all.
  */
@@ -34,6 +44,10 @@ const SECRET = process.env.REMOTE_SIGNALLING_TOKEN_SECRET ?? '';
  * appropriate behind a reverse proxy that already restricts it — the Origin
  * header is not a security boundary on its own, since a non-browser client can
  * send anything. The token is the real gate.
+ *
+ * A connection with NO Origin at all is allowed through this check: that is a
+ * non-browser client, which is what the desktop agent is, and the check was
+ * only ever about a page on another site.
  */
 const ALLOWED_ORIGINS = (process.env.REMOTE_SIGNAL_ALLOWED_ORIGINS ?? '')
   .split(',')
@@ -42,6 +56,26 @@ const ALLOWED_ORIGINS = (process.env.REMOTE_SIGNAL_ALLOWED_ORIGINS ?? '')
 
 /** A signalling message is SDP at worst; anything larger is not one. */
 const MAX_MESSAGE_BYTES = 256 * 1024;
+
+/**
+ * Whether a connection's Origin is one to accept.
+ *
+ * The check exists to stop a page on another site opening a socket, and a
+ * browser always sends an Origin. An **absent** one means a non-browser client
+ * — which the desktop agent is — and that is what this check was never
+ * protecting against; refusing it here would lock the agent out of a
+ * deployment that sets an allowlist, and gain nothing. The signed token is the
+ * real gate for both kinds of client.
+ *
+ * @param {string|undefined} origin
+ * @param {string[]} allowed
+ */
+export function originAllowed(origin, allowed) {
+  if (allowed.length === 0) return true;
+  if (typeof origin !== 'string' || origin === '') return true;
+
+  return allowed.includes(origin);
+}
 
 /** Dead sockets are indistinguishable from idle ones without a heartbeat. */
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -53,6 +87,22 @@ const RATE_LIMIT_WINDOW_MS = 10_000;
 /** The only message types a client may send. Anything else is dropped. */
 const RELAYABLE = new Set(['offer', 'answer', 'ice-candidate', 'peer-ready', 'renegotiate']);
 const BROADCASTABLE = new Set(['presence', 'chat', 'pointer', 'annotation', 'share-state', 'session-ended']);
+
+/**
+ * A device's presence room is not a session room, and carries almost nothing.
+ *
+ * The agent holds one outbound connection here for hours so that an authorised
+ * colleague can reach it without a port being opened on the endpoint. What that
+ * connection is *for* is a heartbeat and an invitation to join a session — so
+ * SDP, ICE, chat, pointers and annotations are all refused in it, and there is
+ * no code path by which a presence credential could be used to push media
+ * negotiation at a machine.
+ *
+ * `device-invite` still authorises nothing: it names a session, and the agent
+ * re-reads that session from the API before joining it. A fabricated invite
+ * reaches an agent that finds no such session and does nothing.
+ */
+const DEVICE_ROOM_BROADCASTABLE = new Set(['device-invite', 'device-status', 'presence']);
 
 if (!SECRET) {
   console.error(
@@ -103,11 +153,8 @@ server.on('upgrade', (request, socket, head) => {
     return refuseUpgrade(socket, 404, 'Not found');
   }
 
-  if (ALLOWED_ORIGINS.length > 0) {
-    const origin = request.headers.origin ?? '';
-    if (!ALLOWED_ORIGINS.includes(origin)) {
-      return refuseUpgrade(socket, 403, 'Origin not allowed');
-    }
+  if (!originAllowed(request.headers.origin, ALLOWED_ORIGINS)) {
+    return refuseUpgrade(socket, 403, 'Origin not allowed');
   }
 
   // The token may arrive as a query parameter or as the WebSocket subprotocol.
@@ -245,6 +292,24 @@ function handle(ws, message) {
     return;
   }
 
+  // A device presence room has its own, much shorter, list — and nothing falls
+  // through from it into the session handling below.
+  if (participant.kind === 'device') {
+    if (DEVICE_ROOM_BROADCASTABLE.has(type)) {
+      broadcast(participant.room, participant.participantUuid, {
+        type,
+        from: participant.participantUuid,
+        payload: message.payload ?? null,
+      });
+
+      return;
+    }
+
+    send(ws, { type: 'error', code: 'UNSUPPORTED_IN_DEVICE_ROOM', message: `Not relayed in a device room: ${type}` });
+
+    return;
+  }
+
   if (RELAYABLE.has(type)) {
     const to = typeof message.to === 'string' ? message.to : '';
     const target = to ? rooms.member(participant.room, to) : null;
@@ -296,6 +361,7 @@ function describe({ participant }) {
     role: participant.role,
     name: participant.name,
     capabilities: participant.capabilities,
+    kind: participant.kind ?? 'session',
   };
 }
 

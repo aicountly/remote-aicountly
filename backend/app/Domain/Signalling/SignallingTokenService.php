@@ -25,6 +25,16 @@ use Config\Remote as RemoteConfig;
  */
 class SignallingTokenService
 {
+    /**
+     * The hard ceiling the Node service enforces on a token's lifetime.
+     *
+     * Duplicated here on purpose: minting something the relay will refuse is a
+     * failure nobody can diagnose from either side, so the API declines to
+     * issue it in the first place. `signalling/src/token.js` carries the same
+     * number, and `SupportAndSignallingTest` asserts they agree.
+     */
+    public const MAX_TTL_SECONDS = 600;
+
     public function __construct(private readonly RemoteConfig $config)
     {
     }
@@ -36,7 +46,17 @@ class SignallingTokenService
 
     /**
      * @param  array<string, bool> $capabilities
-     * @return array{token: string, expiresAt: int, url: string, room: string}
+     * @param  int|null            $ttlSeconds  overrides the configured TTL — a
+     *                                          device holds one connection for
+     *                                          hours and re-mints, where a
+     *                                          browser re-mints per session
+     * @param  'session'|'device'  $kind        what the connection *is*. The
+     *                                          signalling service uses it to
+     *                                          decide which message types are
+     *                                          relayable in the room, so a
+     *                                          presence connection cannot be
+     *                                          used to push SDP at somebody.
+     * @return array{token: string, expiresAt: int, url: string, room: string, kind: string}
      */
     public function issue(
         string $sessionUuid,
@@ -44,6 +64,8 @@ class SignallingTokenService
         string $participantRole,
         string $displayName,
         array $capabilities,
+        ?int $ttlSeconds = null,
+        string $kind = 'session',
     ): array {
         if (! $this->isConfigured()) {
             // Failing loudly beats issuing an unsigned token: without a secret
@@ -55,7 +77,14 @@ class SignallingTokenService
             );
         }
 
-        $expiresAt = time() + $this->config->signallingTokenTtlSeconds;
+        // Clamped to what the signalling service will accept: it refuses a
+        // token whose lifetime exceeds what this API is supposed to mint, so a
+        // configuration mistake here becomes a refusal to issue rather than a
+        // fleet of agents that cannot connect.
+        $ttl       = max(30, min($ttlSeconds ?? $this->config->signallingTokenTtlSeconds, self::MAX_TTL_SECONDS));
+        $expiresAt = time() + $ttl;
+
+        $kind = $kind === 'device' ? 'device' : 'session';
 
         $header = $this->encode(['alg' => 'HS256', 'typ' => 'JWT']);
         $body   = $this->encode([
@@ -66,6 +95,7 @@ class SignallingTokenService
             'role' => $participantRole,
             'name' => mb_substr($displayName, 0, 120),
             'cap'  => $capabilities,
+            'knd'  => $kind,
             'iat'  => time(),
             'exp'  => $expiresAt,
         ]);
@@ -77,6 +107,7 @@ class SignallingTokenService
             'expiresAt' => $expiresAt,
             'url'       => $this->config->signalUrl,
             'room'      => $sessionUuid,
+            'kind'      => $kind,
         ];
     }
 

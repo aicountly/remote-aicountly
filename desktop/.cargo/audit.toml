@@ -1,0 +1,45 @@
+# ---------------------------------------------------------------------------
+# cargo-audit configuration for the AICOUNTLY Remote desktop workspace.
+#
+# `cargo audit --deny warnings` runs in CI, so a NEW advisory of any kind fails
+# the build. That is only useful if the standing ones are listed here with a
+# reason — an audit whose output nobody reads is an audit that is not running.
+#
+# Every entry below is an `unmaintained` or `unsound` advisory, none is a
+# vulnerability, and every one of them is on the **Linux** build path only:
+# they come from `tauri`'s GTK3/webkit2gtk backend, which the shipped Windows
+# product does not contain. They are re-checked whenever Tauri is upgraded.
+#
+# A vulnerability advisory must never be added to this list. If one appears,
+# the dependency gets upgraded or replaced.
+# ---------------------------------------------------------------------------
+[advisories]
+ignore = [
+    # gtk-rs GTK3 bindings, unmaintained. Pulled in by tauri on Linux only;
+    # the Windows build uses WebView2 and links none of them.
+    "RUSTSEC-2024-0411",
+    "RUSTSEC-2024-0412",
+    "RUSTSEC-2024-0413",
+    "RUSTSEC-2024-0414",
+    "RUSTSEC-2024-0415",
+    "RUSTSEC-2024-0416",
+    "RUSTSEC-2024-0417",
+    "RUSTSEC-2024-0418",
+    "RUSTSEC-2024-0419",
+    "RUSTSEC-2024-0420",
+    # Unsoundness in glib's VariantStrIter. Same story: glib is the GTK
+    # backend's dependency and is not in the Windows binary.
+    "RUSTSEC-2024-0429",
+    # proc-macro-error, unmaintained. A build-time macro dependency; nothing
+    # from it is in any shipped binary.
+    "RUSTSEC-2024-0370",
+    # The unic-* family, unmaintained. Reached through Tauri's URL/IDNA
+    # handling on the Linux build path.
+    "RUSTSEC-2025-0075",
+    "RUSTSEC-2025-0080",
+    "RUSTSEC-2025-0081",
+    "RUSTSEC-2025-0098",
+    "RUSTSEC-2025-0100",
+]
+informational_warnings = ["unmaintained", "unsound", "notice"]
+severity_threshold = "low"

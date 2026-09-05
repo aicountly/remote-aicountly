@@ -1,0 +1,96 @@
+[package]
+name = "aicountly-remote-desktop"
+description = "AICOUNTLY Remote — the desktop agent's user-session process: tray, window, capture, input and the WebRTC session."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+# The executable name a person sees in Task Manager and the installer registers.
+name = "AicountlyRemote"
+path = "src/main.rs"
+
+[lib]
+# Everything except `main.rs` is a library, so the parts that are not Tauri or
+# Win32 can be tested on any host.
+name = "aicountly_remote_desktop"
+path = "src/lib.rs"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio.workspace = true
+time.workspace = true
+
+remote-core.workspace = true
+remote-protocol.workspace = true
+remote-security.workspace = true
+remote-device.workspace = true
+remote-webrtc.workspace = true
+aicountly-remote-service = { path = "../agents/windows-service" }
+
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+# Signed automatic updates. Verification happens before installation and the
+# public key lives in `tauri.conf.json`; the private half is a release secret
+# that is never in this repository. See docs/desktop/WINDOWS_RELEASE.md.
+tauri-plugin-updater = "2"
+tauri-plugin-single-instance = "2"
+# Opening a URL in the person's own browser. Used behind an allowlist — see
+# `commands::is_permitted_url` — never as a passthrough.
+open = "5"
+
+[target.'cfg(windows)'.dependencies]
+# Only the features the platform layer actually calls. Pulling all of `windows`
+# adds minutes to every build and a great deal of surface nothing touches —
+# and a missing feature is a compile error, which is how this list stays true.
+windows = { version = "0.62", features = [
+    "Wdk",
+    "Wdk_System",
+    "Wdk_System_SystemServices",
+    "Win32_Foundation",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Security_Cryptography",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_System_Services",
+    "Win32_System_SystemInformation",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    "Win32_UI_Input",
+    "Win32_System_StationsAndDesktops",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_HiDpi",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_System_Com",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Foundation",
+] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
+remote-security = { workspace = true, features = ["test-support"] }

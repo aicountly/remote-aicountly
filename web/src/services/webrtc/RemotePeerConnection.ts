@@ -13,6 +13,7 @@
  */
 
 import { BUFFER_LOW_WATER } from './fileTransfer'
+import { CONTROL_CHANNEL_LABEL } from './remoteControl'
 
 export type PeerConnectionQuality = 'good' | 'fair' | 'poor' | 'unknown'
 
@@ -22,6 +23,13 @@ export interface PeerEvents {
   onDataMessage: (message: unknown) => void
   /** A framed file chunk. Binary is kept off the JSON path entirely (§36). */
   onBinaryMessage: (message: ArrayBuffer) => void
+  /**
+   * A remote-control message from the agent.
+   *
+   * Its own channel, and its own callback, so a bug in chat or file transfer
+   * cannot deliver into the path that moves somebody's mouse.
+   */
+  onControlMessage: (message: ArrayBuffer) => void
   onStateChange: (state: RTCPeerConnectionState) => void
   onDataChannelOpen: () => void
 }
@@ -32,6 +40,14 @@ const DATA_CHANNEL_LABEL = 'aicountly-remote'
 export class RemotePeerConnection {
   private pc: RTCPeerConnection
   private channel: RTCDataChannel | null = null
+  /**
+   * The remote-control channel, when the peer is a desktop agent.
+   *
+   * Separate from the collaboration channel above: input and clipboard travel
+   * here, chat and file chunks travel there, and neither can deliver into the
+   * other's handler.
+   */
+  private controlChannel: RTCDataChannel | null = null
   private disposed = false
   /** Candidates that arrived before the remote description was set. */
   private pendingCandidates: RTCIceCandidateInit[] = []
@@ -69,10 +85,14 @@ export class RemotePeerConnection {
       this.events.onStateChange(this.pc.connectionState)
     }
 
-    // The answering side receives the channel rather than creating one.
+    // The answering side receives the channels rather than creating them.
     this.pc.ondatachannel = (event) => {
       if (event.channel.label === DATA_CHANNEL_LABEL) {
         this.attachChannel(event.channel)
+      }
+
+      if (event.channel.label === CONTROL_CHANNEL_LABEL) {
+        this.attachControlChannel(event.channel)
       }
     }
   }
@@ -85,12 +105,28 @@ export class RemotePeerConnection {
     return this.channel?.readyState === 'open'
   }
 
-  /** Create the offer, and with it the data channel this pair will use. */
+  /** Whether the control channel is open. False for a browser-to-browser peer. */
+  get controlChannelReady(): boolean {
+    return this.controlChannel?.readyState === 'open'
+  }
+
+  /** Create the offer, and with it the two channels this pair will use. */
   async createOffer(): Promise<RTCSessionDescriptionInit> {
     this.attachChannel(
       this.pc.createDataChannel(DATA_CHANNEL_LABEL, {
         // Ordered and reliable: chat and annotation events are meaningless out
         // of order, and pointer updates are throttled rather than dropped.
+        ordered: true,
+      }),
+    )
+
+    // The control channel is opened whether or not this peer turns out to be
+    // controllable. Opening it later would need a renegotiation at the moment
+    // somebody asks for control, which is the worst possible moment for one.
+    this.attachControlChannel(
+      this.pc.createDataChannel(CONTROL_CHANNEL_LABEL, {
+        // An input event applied out of order is a click somewhere nobody
+        // intended, so this is ordered and reliable too.
         ordered: true,
       }),
     )
@@ -197,6 +233,24 @@ export class RemotePeerConnection {
     }
   }
 
+  /**
+   * Send one control-protocol message.
+   *
+   * Returns false when the channel is not open, which the caller shows as
+   * "control is not connected" rather than silently dropping a keystroke.
+   */
+  sendControl(message: ArrayBuffer): boolean {
+    if (this.controlChannel?.readyState !== 'open') return false
+
+    try {
+      this.controlChannel.send(message)
+
+      return true
+    } catch {
+      return false
+    }
+  }
+
   get bufferedAmount(): number {
     return this.channel?.bufferedAmount ?? 0
   }
@@ -282,18 +336,23 @@ export class RemotePeerConnection {
     if (this.disposed) return
     this.disposed = true
 
-    if (this.channel) {
-      this.channel.onmessage = null
-      this.channel.onopen = null
-      this.channel.onclose = null
-      this.channel.onerror = null
+    for (const channel of [this.channel, this.controlChannel]) {
+      if (!channel) continue
+
+      channel.onmessage = null
+      channel.onopen = null
+      channel.onclose = null
+      channel.onerror = null
+
       try {
-        this.channel.close()
+        channel.close()
       } catch {
         /* already closed */
       }
-      this.channel = null
     }
+
+    this.channel = null
+    this.controlChannel = null
 
     this.pc.onicecandidate = null
     this.pc.ontrack = null
@@ -353,6 +412,41 @@ export class RemotePeerConnection {
         this.events.onDataMessage(JSON.parse(String(event.data)))
       } catch {
         // Not our message format; ignore rather than tearing down the channel.
+      }
+    }
+  }
+
+  /**
+   * Wire the control channel.
+   *
+   * Deliberately minimal: it hands bytes to the engine and does nothing else.
+   * Every decision about whether a message may be acted on happens on the
+   * agent, in its own gate — the browser is the side *asking*, and a browser
+   * that decided for itself would be a browser worth compromising.
+   */
+  private attachControlChannel(channel: RTCDataChannel): void {
+    this.controlChannel = channel
+    channel.binaryType = 'arraybuffer'
+
+    channel.onmessage = (event) => {
+      if (this.disposed) return
+
+      if (event.data instanceof ArrayBuffer) {
+        this.events.onControlMessage(event.data)
+
+        return
+      }
+
+      if (typeof Blob !== 'undefined' && event.data instanceof Blob) {
+        void event.data.arrayBuffer().then((buffer) => {
+          if (!this.disposed) this.events.onControlMessage(buffer)
+        })
+
+        return
+      }
+
+      if (typeof event.data === 'string') {
+        this.events.onControlMessage(new TextEncoder().encode(event.data).buffer as ArrayBuffer)
       }
     }
   }
