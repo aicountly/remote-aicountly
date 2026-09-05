@@ -149,7 +149,9 @@ impl MonitorLayout {
     /// The monitor currently being shared, if the layout is coherent.
     #[must_use]
     pub fn active(&self) -> Option<&Monitor> {
-        self.monitors.iter().find(|m| m.id == self.active_monitor_id)
+        self.monitors
+            .iter()
+            .find(|m| m.id == self.active_monitor_id)
     }
 
     /// Look one up by id.
@@ -173,7 +175,10 @@ impl MonitorLayout {
         for (index, monitor) in self.monitors.iter().enumerate() {
             monitor.validate()?;
 
-            if self.monitors[..index].iter().any(|other| other.id == monitor.id) {
+            if self.monitors[..index]
+                .iter()
+                .any(|other| other.id == monitor.id)
+            {
                 return Err(ProtocolError::OutOfBounds);
             }
         }
@@ -239,7 +244,9 @@ mod tests {
         let primary = monitor(1, 0, 0, 1920, 1080);
         let right = monitor(2, 1920, 0, 1920, 1080);
 
-        let (x, _) = primary.denormalise(PointerPosition { x: 1.0, y: 0.5 }).unwrap();
+        let (x, _) = primary
+            .denormalise(PointerPosition { x: 1.0, y: 0.5 })
+            .unwrap();
 
         assert_eq!(x, 1919);
         assert_ne!(x, right.x);
@@ -274,8 +281,17 @@ mod tests {
     fn an_invalid_position_yields_no_coordinate_at_all() {
         let display = monitor(1, 0, 0, 1920, 1080);
 
-        assert_eq!(display.denormalise(PointerPosition { x: f64::NAN, y: 0.5 }), None);
-        assert_eq!(display.denormalise(PointerPosition { x: 1.2, y: 0.5 }), None);
+        assert_eq!(
+            display.denormalise(PointerPosition {
+                x: f64::NAN,
+                y: 0.5
+            }),
+            None
+        );
+        assert_eq!(
+            display.denormalise(PointerPosition { x: 1.2, y: 0.5 }),
+            None
+        );
     }
 
     #[test]
@@ -299,7 +315,10 @@ mod tests {
     #[test]
     fn duplicate_monitor_ids_are_refused() {
         let layout = MonitorLayout {
-            monitors: vec![monitor(1, 0, 0, 1920, 1080), monitor(1, 1920, 0, 1920, 1080)],
+            monitors: vec![
+                monitor(1, 0, 0, 1920, 1080),
+                monitor(1, 1920, 0, 1920, 1080),
+            ],
             active_monitor_id: 1,
         };
 
@@ -308,7 +327,10 @@ mod tests {
 
     #[test]
     fn an_empty_layout_is_refused() {
-        let layout = MonitorLayout { monitors: vec![], active_monitor_id: 1 };
+        let layout = MonitorLayout {
+            monitors: vec![],
+            active_monitor_id: 1,
+        };
 
         assert_eq!(layout.validate(), Err(ProtocolError::OutOfBounds));
     }

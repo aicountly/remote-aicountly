@@ -238,7 +238,9 @@ impl AgentState {
         self.status = match (self.status, event) {
             // Revocation is terminal. Nothing brings a revoked device back
             // except enrolling it again, which replaces the whole state.
-            (AgentStatus::Revoked, AgentEvent::Enrolled { .. }) => AgentStatus::Authenticating { attempt: 0 },
+            (AgentStatus::Revoked, AgentEvent::Enrolled { .. }) => {
+                AgentStatus::Authenticating { attempt: 0 }
+            }
             (AgentStatus::Revoked, _) => AgentStatus::Revoked,
 
             (_, AgentEvent::Revoked) => {
@@ -248,7 +250,15 @@ impl AgentState {
                 AgentStatus::Revoked
             }
 
-            (_, AgentEvent::Enrolled { device_uuid, device_name, company_name, key_fingerprint }) => {
+            (
+                _,
+                AgentEvent::Enrolled {
+                    device_uuid,
+                    device_name,
+                    company_name,
+                    key_fingerprint,
+                },
+            ) => {
                 self.device_uuid = Some(device_uuid);
                 self.device_name = Some(device_name);
                 self.company_name = company_name;
@@ -271,17 +281,24 @@ impl AgentState {
             // enrolling it.
             (AgentStatus::NotEnrolled, _) => AgentStatus::NotEnrolled,
 
-            (_, AgentEvent::AuthenticationFailed { attempt }) => AgentStatus::Authenticating { attempt },
+            (_, AgentEvent::AuthenticationFailed { attempt }) => {
+                AgentStatus::Authenticating { attempt }
+            }
             (_, AgentEvent::Authenticated) => AgentStatus::Online,
 
-            (_, AgentEvent::Disconnected { reason, retryable }) => AgentStatus::Offline { reason, retryable },
+            (_, AgentEvent::Disconnected { reason, retryable }) => {
+                AgentStatus::Offline { reason, retryable }
+            }
             (_, AgentEvent::Connected) => AgentStatus::Online,
 
             (_, AgentEvent::SessionStarted(session)) => AgentStatus::InSession(session),
 
             (AgentStatus::InSession(session), AgentEvent::ControlChanged { state, clipboard }) => {
                 AgentStatus::InSession(SessionSummary {
-                    control: ControlSummary { state, clipboard: clipboard && state == ControlStateView::Granted },
+                    control: ControlSummary {
+                        state,
+                        clipboard: clipboard && state == ControlStateView::Granted,
+                    },
                     ..session
                 })
             }
@@ -369,7 +386,10 @@ mod tests {
             company_name: Some("Northwind".into()),
             started_at: "2026-02-10T09:00:00Z".into(),
             unattended,
-            control: ControlSummary { state: ControlStateView::None, clipboard: false },
+            control: ControlSummary {
+                state: ControlStateView::None,
+                clipboard: false,
+            },
         }
     }
 
@@ -430,8 +450,14 @@ mod tests {
         let state = enrolled()
             .apply(AgentEvent::Authenticated)
             .apply(AgentEvent::SessionStarted(session(false)))
-            .apply(AgentEvent::ControlChanged { state: ControlStateView::Granted, clipboard: true })
-            .apply(AgentEvent::ControlChanged { state: ControlStateView::Revoked, clipboard: true });
+            .apply(AgentEvent::ControlChanged {
+                state: ControlStateView::Granted,
+                clipboard: true,
+            })
+            .apply(AgentEvent::ControlChanged {
+                state: ControlStateView::Revoked,
+                clipboard: true,
+            });
 
         assert!(!state.is_being_controlled());
         assert!(!state.active_session().unwrap().control.clipboard);
@@ -571,10 +597,25 @@ mod tests {
 
     #[test]
     fn the_protocols_control_state_maps_across_without_a_gap() {
-        assert_eq!(ControlStateView::from(ControlState::None), ControlStateView::None);
-        assert_eq!(ControlStateView::from(ControlState::Requested), ControlStateView::Requested);
-        assert_eq!(ControlStateView::from(ControlState::Granted), ControlStateView::Granted);
-        assert_eq!(ControlStateView::from(ControlState::Denied), ControlStateView::Denied);
-        assert_eq!(ControlStateView::from(ControlState::Revoked), ControlStateView::Revoked);
+        assert_eq!(
+            ControlStateView::from(ControlState::None),
+            ControlStateView::None
+        );
+        assert_eq!(
+            ControlStateView::from(ControlState::Requested),
+            ControlStateView::Requested
+        );
+        assert_eq!(
+            ControlStateView::from(ControlState::Granted),
+            ControlStateView::Granted
+        );
+        assert_eq!(
+            ControlStateView::from(ControlState::Denied),
+            ControlStateView::Denied
+        );
+        assert_eq!(
+            ControlStateView::from(ControlState::Revoked),
+            ControlStateView::Revoked
+        );
     }
 }

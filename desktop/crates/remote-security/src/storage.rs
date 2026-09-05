@@ -150,7 +150,12 @@ impl SecureStorageProvider for InMemoryStorage {
 pub struct UnsupportedStorage;
 
 impl SecureStorageProvider for UnsupportedStorage {
-    fn store(&self, _entry: &str, _secret: &[u8], _scope: StorageScope) -> Result<(), StorageError> {
+    fn store(
+        &self,
+        _entry: &str,
+        _secret: &[u8],
+        _scope: StorageScope,
+    ) -> Result<(), StorageError> {
         Err(StorageError::Unsupported)
     }
 
@@ -178,7 +183,11 @@ mod tests {
         let keys = DeviceKeypair::generate();
 
         store
-            .store(DEVICE_KEY_ENTRY, keys.secret_bytes().as_ref(), StorageScope::LocalMachine)
+            .store(
+                DEVICE_KEY_ENTRY,
+                keys.secret_bytes().as_ref(),
+                StorageScope::LocalMachine,
+            )
             .expect("stores");
 
         let loaded = store
@@ -209,15 +218,25 @@ mod tests {
     fn scopes_are_separate_stores() {
         let store = InMemoryStorage::new();
 
-        store.store("k", b"machine", StorageScope::LocalMachine).unwrap();
-        store.store("k", b"user", StorageScope::CurrentUser).unwrap();
+        store
+            .store("k", b"machine", StorageScope::LocalMachine)
+            .unwrap();
+        store
+            .store("k", b"user", StorageScope::CurrentUser)
+            .unwrap();
 
         assert_eq!(
-            store.load("k", StorageScope::LocalMachine).unwrap().as_deref(),
+            store
+                .load("k", StorageScope::LocalMachine)
+                .unwrap()
+                .as_deref(),
             Some(&b"machine"[..])
         );
         assert_eq!(
-            store.load("k", StorageScope::CurrentUser).unwrap().as_deref(),
+            store
+                .load("k", StorageScope::CurrentUser)
+                .unwrap()
+                .as_deref(),
             Some(&b"user"[..])
         );
     }
@@ -226,7 +245,9 @@ mod tests {
     fn deleting_is_idempotent() {
         let store = InMemoryStorage::new();
 
-        store.store("k", b"value", StorageScope::LocalMachine).unwrap();
+        store
+            .store("k", b"value", StorageScope::LocalMachine)
+            .unwrap();
         store.delete("k", StorageScope::LocalMachine).unwrap();
         store.delete("k", StorageScope::LocalMachine).unwrap();
 
@@ -237,11 +258,18 @@ mod tests {
     fn storing_again_replaces_rather_than_appends() {
         let store = InMemoryStorage::new();
 
-        store.store("k", b"first", StorageScope::LocalMachine).unwrap();
-        store.store("k", b"second", StorageScope::LocalMachine).unwrap();
+        store
+            .store("k", b"first", StorageScope::LocalMachine)
+            .unwrap();
+        store
+            .store("k", b"second", StorageScope::LocalMachine)
+            .unwrap();
 
         assert_eq!(
-            store.load("k", StorageScope::LocalMachine).unwrap().as_deref(),
+            store
+                .load("k", StorageScope::LocalMachine)
+                .unwrap()
+                .as_deref(),
             Some(&b"second"[..])
         );
     }

@@ -59,7 +59,11 @@ impl ScreenCaptureProvider for NoCapture {
         unsupported("Reading the display layout")
     }
 
-    fn start(&mut self, _monitor_id: u32, _profile: remote_device::CaptureProfile) -> PlatformResult<()> {
+    fn start(
+        &mut self,
+        _monitor_id: u32,
+        _profile: remote_device::CaptureProfile,
+    ) -> PlatformResult<()> {
         unsupported("Screen capture")
     }
 
@@ -239,7 +243,9 @@ mod tests {
 
         let error = providers.capture.monitors().unwrap_err();
         assert!(matches!(error, PlatformError::Unsupported(_)));
-        assert!(error.to_string().contains("not available on this platform yet"));
+        assert!(error
+            .to_string()
+            .contains("not available on this platform yet"));
 
         assert!(providers
             .input

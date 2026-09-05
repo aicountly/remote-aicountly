@@ -32,7 +32,9 @@ impl PermissionsProvider for WindowsPermissions {
             .unwrap_or(false);
 
         let service_running = super::service::WindowsService.is_running().unwrap_or(false);
-        let service_installed = super::service::WindowsService.is_installed().unwrap_or(false);
+        let service_installed = super::service::WindowsService
+            .is_installed()
+            .unwrap_or(false);
 
         Ok(PermissionSummary {
             // Capture and input need no consent on Windows — but they do need
@@ -125,8 +127,7 @@ mod tests {
             ..PermissionSummary::all_ready()
         };
 
-        let capabilities =
-            summary.constrain(remote_device::AgentCapabilities::windows());
+        let capabilities = summary.constrain(remote_device::AgentCapabilities::windows());
 
         assert!(!capabilities.unattended_access);
         assert!(capabilities.remote_control, "attended control still works");

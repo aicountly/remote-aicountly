@@ -61,7 +61,9 @@ pub fn save_configuration(
     agent: tauri::State<'_, Arc<Agent>>,
     config: AgentConfig,
 ) -> Result<AgentConfig, String> {
-    agent.set_config(config).map_err(|error| error.to_string())?;
+    agent
+        .set_config(config)
+        .map_err(|error| error.to_string())?;
 
     Ok(agent.config())
 }
@@ -75,7 +77,9 @@ pub fn save_configuration(
 /// get it out of this process.
 #[tauri::command]
 pub fn enrol_device(agent: tauri::State<'_, Arc<Agent>>) -> Result<EnrolmentMaterial, String> {
-    let public_key = agent.create_device_key().map_err(|error| error.to_string())?;
+    let public_key = agent
+        .create_device_key()
+        .map_err(|error| error.to_string())?;
     let description = agent.describe().map_err(|error| error.to_string())?;
 
     Ok(EnrolmentMaterial {
@@ -116,8 +120,12 @@ pub struct EnrolmentMaterial {
 /// endpoint as well, and both happen — a key left on a machine whose device
 /// row was revoked authenticates nothing but is still there.
 #[tauri::command]
-pub fn unregister_device(agent: tauri::State<'_, Arc<Agent>>) -> Result<remote_core::AgentState, String> {
-    agent.forget_device_key().map_err(|error| error.to_string())?;
+pub fn unregister_device(
+    agent: tauri::State<'_, Arc<Agent>>,
+) -> Result<remote_core::AgentState, String> {
+    agent
+        .forget_device_key()
+        .map_err(|error| error.to_string())?;
 
     Ok(agent.apply(remote_core::AgentEvent::EnrolmentRemoved))
 }
@@ -220,7 +228,9 @@ pub fn is_permitted_url(url: &str, config: &AgentConfig) -> bool {
     permitted.iter().any(|origin| {
         let origin = origin.trim_end_matches('/');
 
-        url == origin || url.starts_with(&format!("{origin}/")) || url.starts_with(&format!("{origin}?"))
+        url == origin
+            || url.starts_with(&format!("{origin}/"))
+            || url.starts_with(&format!("{origin}?"))
     })
 }
 
@@ -252,7 +262,10 @@ mod tests {
     #[test]
     fn only_https_urls_under_a_configured_origin_are_opened() {
         assert!(is_permitted_url("https://my.aicountly.com", &config()));
-        assert!(is_permitted_url("https://my.aicountly.com/login", &config()));
+        assert!(is_permitted_url(
+            "https://my.aicountly.com/login",
+            &config()
+        ));
         assert!(is_permitted_url(
             "https://remote.aicountly.com/api/v1/remote/devices",
             &config()

@@ -81,6 +81,10 @@ pub fn restart_message(reason: &str, requested_by: &str) -> String {
 }
 
 #[cfg(test)]
+// Several tests here assert on constants on purpose: they are the design's
+// own bounds, and the point is that editing one past what the design intends
+// fails here rather than at some later runtime.
+#[allow(clippy::assertions_on_constants)]
 mod tests {
     use super::*;
 

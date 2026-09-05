@@ -1,0 +1,260 @@
+# ---------------------------------------------------------------------------
+# Release AICOUNTLY Remote for Windows.
+#
+# MANUAL ONLY. The single trigger is workflow_dispatch — merging or pushing
+# never releases. Add no push/pull_request/schedule triggers to this file.
+#
+# It publishes nothing to the cPanel hosts. The two deploy-*.yml workflows own
+# that, they are untouched by this, and a desktop release does not go near the
+# web deployment.
+#
+# What it produces
+# ----------------
+#   sandbox     an UNSIGNED development build, kept as a workflow artifact for
+#               seven days. Clearly labelled. Never a GitHub release.
+#   beta        a signed build, published as a GitHub pre-release.
+#   production  a signed build, published as a GitHub release.
+#
+# beta and production require the `windows-release` GitHub Environment, which
+# is where the signing credentials live and where required reviewers are
+# configured. A job that cannot reach that environment cannot sign, which is
+# the point: the protection is GitHub's, not a check inside a script.
+#
+# What this workflow will not do
+# ------------------------------
+#   * It will not sign with a self-signed certificate. `sign.ps1` refuses one.
+#   * It will not describe an unsigned artifact as a release. The sandbox
+#     channel cannot create a GitHub release at all.
+#   * It will not enable the auto-updater. The updater stays inactive in
+#     tauri.conf.json until updater-signing keys and a release feed are
+#     configured — see docs/desktop/WINDOWS_RELEASE.md. Those keys are a
+#     different thing from the Authenticode certificate and are not
+#     interchangeable with it.
+# ---------------------------------------------------------------------------
+name: Release AICOUNTLY Remote for Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. 1.0.0. Must match desktop/Cargo.toml.'
+        required: true
+        type: string
+      channel:
+        description: 'Release channel'
+        required: true
+        type: choice
+        default: sandbox
+        options:
+          - sandbox
+          - beta
+          - production
+
+concurrency:
+  group: release-windows-${{ inputs.channel }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ inputs.version }} (${{ inputs.channel }})
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    # sandbox builds nothing that needs a secret, so it needs no environment
+    # and no reviewer. beta and production get the protected one.
+    environment: ${{ inputs.channel == 'sandbox' && '' || 'windows-release' }}
+
+    permissions:
+      contents: write
+
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The version is one authoritative value in desktop/Cargo.toml, and the
+      # input has to match it. Without this a release could be tagged 1.2.0 and
+      # contain a binary reporting 1.1.0, which is the kind of thing nobody
+      # notices until a support call.
+      - name: Check the version matches the workspace
+        shell: pwsh
+        run: |
+          $cargo = Get-Content desktop/Cargo.toml -Raw
+          if ($cargo -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
+            throw 'The workspace version could not be read from desktop/Cargo.toml.'
+          }
+          $workspace = $Matches[1]
+
+          $conf = Get-Content desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $package = Get-Content desktop/package.json -Raw | ConvertFrom-Json
+
+          Write-Host "workspace: $workspace"
+          Write-Host "tauri.conf.json: $($conf.version)"
+          Write-Host "package.json: $($package.version)"
+          Write-Host "requested: ${{ inputs.version }}"
+
+          if ($workspace -ne '${{ inputs.version }}') {
+            throw "desktop/Cargo.toml is $workspace but this run asked for ${{ inputs.version }}."
+          }
+          if ($conf.version -ne $workspace) { throw 'tauri.conf.json disagrees with the workspace version.' }
+          if ($package.version -ne $workspace) { throw 'package.json disagrees with the workspace version.' }
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      # The same script a developer runs, so a release build and a local build
+      # are the same build.
+      - name: Build
+        shell: pwsh
+        working-directory: desktop
+        run: pwsh -File scripts/windows/build.ps1 -Configuration release -Target x86_64-pc-windows-msvc
+
+      # ---------------------------------------------------------------- signing
+      #
+      # Every credential comes from the protected environment. None of them has
+      # a default, none is a workflow input, and none is ever written to the
+      # workspace — so a sandbox run, or a fork, simply has nothing to sign
+      # with and says so.
+      - name: Install the Trusted Signing client
+        if: inputs.channel != 'sandbox' && vars.AICOUNTLY_SIGN_METHOD == 'trusted-signing'
+        shell: pwsh
+        run: |
+          # Installed at release time rather than committed: a signing client
+          # is somebody else's software to keep current.
+          Install-Module -Name TrustedSigning -Force -Scope CurrentUser -AllowClobber
+          $module = (Get-Module -ListAvailable TrustedSigning | Sort-Object Version -Descending | Select-Object -First 1)
+          $dlib = Join-Path $module.ModuleBase 'Bin/x64/Azure.CodeSigning.Dlib.dll'
+          if (-not (Test-Path $dlib)) { throw "The signing dlib was not found at $dlib." }
+          "AICOUNTLY_SIGN_DLIB=$dlib" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Sign
+        id: sign
+        if: inputs.channel != 'sandbox'
+        shell: pwsh
+        working-directory: desktop
+        env:
+          AICOUNTLY_SIGN_METHOD: ${{ vars.AICOUNTLY_SIGN_METHOD }}
+          AICOUNTLY_SIGN_TIMESTAMP_URL: ${{ vars.AICOUNTLY_SIGN_TIMESTAMP_URL }}
+          AICOUNTLY_SIGN_ENDPOINT: ${{ vars.AICOUNTLY_SIGN_ENDPOINT }}
+          AICOUNTLY_SIGN_ACCOUNT: ${{ vars.AICOUNTLY_SIGN_ACCOUNT }}
+          AICOUNTLY_SIGN_PROFILE: ${{ vars.AICOUNTLY_SIGN_PROFILE }}
+          AICOUNTLY_SIGN_THUMBPRINT: ${{ secrets.AICOUNTLY_SIGN_THUMBPRINT }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: |
+          if (-not $env:AICOUNTLY_SIGN_METHOD) {
+            throw @'
+This channel publishes a signed build, and no signing method is configured.
+
+Set the variable AICOUNTLY_SIGN_METHOD (and its companions) on the
+windows-release environment. See docs/desktop/WINDOWS_RELEASE.md.
+'@
+          }
+
+          $target = 'target/x86_64-pc-windows-msvc/release'
+          pwsh -File scripts/windows/sign.ps1 -Path `
+            "$target/AicountlyRemote.exe", `
+            "$target/AicountlyRemoteService.exe", `
+            "$target/bundle/nsis/*.exe", `
+            "$target/bundle/msi/*.msi"
+
+          "signed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      # Verified after signing, and verified again on exactly the files that
+      # are about to be uploaded. A signature that did not take, or took
+      # without a timestamp, is something a release process should catch rather
+      # than a customer.
+      - name: Verify signatures
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          $target = 'target/x86_64-pc-windows-msvc/release'
+          $allowUnsigned = '${{ inputs.channel }}' -eq 'sandbox'
+
+          pwsh -File scripts/windows/verify.ps1 `
+            -Path "$target/bundle/nsis/*.exe", "$target/bundle/msi/*.msi" `
+            -AllowUnsigned:$allowUnsigned
+
+      - name: Collect artifacts
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          $target = 'target/x86_64-pc-windows-msvc/release'
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+
+          Get-ChildItem "$target/bundle/nsis/*.exe" | Copy-Item -Destination release
+          Get-ChildItem "$target/bundle/msi/*.msi" | Copy-Item -Destination release
+
+          # Checksums, so somebody who downloaded an installer from anywhere
+          # can tell whether it is the one this run produced.
+          Get-ChildItem release -File | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+            "$hash  $($_.Name)"
+          } | Set-Content -Path release/SHA256SUMS.txt -Encoding utf8
+
+          Get-Content release/SHA256SUMS.txt
+
+          if ('${{ inputs.channel }}' -eq 'sandbox') {
+            # Travels with the artifact, so an unsigned build cannot be handed
+            # to somebody as though it were a release.
+            @"
+UNSIGNED DEVELOPMENT BUILD
+==========================
+
+Built from ${{ github.sha }} on the sandbox channel.
+
+These installers are NOT signed. Windows SmartScreen will warn about them and
+that warning is correct — nothing here vouches for who produced them.
+
+Do not distribute them to customers, and do not describe them as a release.
+Signed builds come from the beta and production channels.
+"@ | Set-Content -Path release/UNSIGNED-DEVELOPMENT-BUILD.txt -Encoding utf8
+          }
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: aicountly-remote-windows-${{ inputs.version }}-${{ inputs.channel }}
+          path: desktop/release/*
+          # A development build is a thing somebody looked at this week, not an
+          # archive. Signed builds live in the GitHub release below.
+          retention-days: ${{ inputs.channel == 'sandbox' && 7 || 90 }}
+          if-no-files-found: error
+
+      # A GitHub release only for a channel that actually signs. There is no
+      # branch here that could publish an unsigned artifact as a release.
+      - name: Publish a GitHub release
+        if: inputs.channel != 'sandbox'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: desktop-v${{ inputs.version }}${{ inputs.channel == 'beta' && '-beta' || '' }}
+          name: AICOUNTLY Remote for Windows ${{ inputs.version }}
+          prerelease: ${{ inputs.channel == 'beta' }}
+          draft: false
+          files: desktop/release/*
+          body: |
+            AICOUNTLY Remote for Windows ${{ inputs.version }} (${{ inputs.channel }}).
+
+            Signed and timestamped. Verify a download against `SHA256SUMS.txt`,
+            and check the signature with:
+
+                Get-AuthenticodeSignature .\AICOUNTLY-Remote-x64-Setup.exe
+
+            Built from ${{ github.sha }}.

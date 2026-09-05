@@ -1,0 +1,4 @@
+# Build outputs. The service binary is copied here by scripts/windows/build.ps1.
+*
+!.gitignore
+!README.md

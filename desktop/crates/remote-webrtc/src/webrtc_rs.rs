@@ -48,7 +48,9 @@ use webrtc::peer_connection::{
     RTCPeerConnectionState, RTCSessionDescription, StatsSelector,
 };
 
-use crate::{Congestion, IceConfiguration, PeerSession, PeerSessionFactory, PeerState, WebRtcError};
+use crate::{
+    Congestion, IceConfiguration, PeerSession, PeerSessionFactory, PeerState, WebRtcError,
+};
 
 /// The collaboration channel Browser V1 already uses.
 const DATA_CHANNEL_LABEL: &str = "aicountly-remote";
@@ -284,7 +286,6 @@ impl WebRtcSession {
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or_default()
                         .to_owned(),
-                    ..RTCIceServer::default()
                 })
             })
             .collect()
@@ -419,7 +420,10 @@ impl PeerSession for WebRtcSession {
         serde_json::to_value(offer).map_err(|error| WebRtcError::Sdp(error.to_string()))
     }
 
-    async fn accept_offer(&mut self, offer: serde_json::Value) -> Result<serde_json::Value, WebRtcError> {
+    async fn accept_offer(
+        &mut self,
+        offer: serde_json::Value,
+    ) -> Result<serde_json::Value, WebRtcError> {
         let description: RTCSessionDescription =
             serde_json::from_value(offer).map_err(|error| WebRtcError::Sdp(error.to_string()))?;
 
@@ -453,8 +457,8 @@ impl PeerSession for WebRtcSession {
     }
 
     async fn add_ice_candidate(&mut self, candidate: serde_json::Value) -> Result<(), WebRtcError> {
-        let init: RTCIceCandidateInit =
-            serde_json::from_value(candidate).map_err(|error| WebRtcError::Sdp(error.to_string()))?;
+        let init: RTCIceCandidateInit = serde_json::from_value(candidate)
+            .map_err(|error| WebRtcError::Sdp(error.to_string()))?;
 
         // A candidate the library cannot use is normal during trickle — the
         // connection succeeds on another one — so this is not fatal.
@@ -509,7 +513,10 @@ impl PeerSession for WebRtcSession {
     async fn congestion(&self) -> Option<Congestion> {
         let report = self
             .peer
-            .get_stats(self.started_at + self.started_at.elapsed(), StatsSelector::None)
+            .get_stats(
+                self.started_at + self.started_at.elapsed(),
+                StatsSelector::None,
+            )
             .await;
 
         let mut round_trip_ms = 0.0_f64;
@@ -641,8 +648,14 @@ mod tests {
         let sdp = offer["sdp"].as_str().expect("carries sdp");
         assert!(sdp.contains("v=0"));
         assert!(sdp.contains("m=video"), "the agent must offer video");
-        assert!(sdp.contains("VP8"), "the agent must offer a codec browsers decode");
-        assert!(sdp.contains("m=application"), "the agent must offer data channels");
+        assert!(
+            sdp.contains("VP8"),
+            "the agent must offer a codec browsers decode"
+        );
+        assert!(
+            sdp.contains("m=application"),
+            "the agent must offer data channels"
+        );
 
         session.close().await.expect("closes");
         assert_eq!(session.state(), PeerState::Closed);
@@ -667,7 +680,9 @@ mod tests {
         let answer_sdp = answer["sdp"].as_str().expect("carries sdp").to_owned();
         assert!(answer_sdp.contains("m=video"));
 
-        host.accept_answer(answer).await.expect("accepts the answer");
+        host.accept_answer(answer)
+            .await
+            .expect("accepts the answer");
 
         host.close().await.expect("closes host");
         viewer.close().await.expect("closes viewer");

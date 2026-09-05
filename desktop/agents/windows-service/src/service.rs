@@ -341,7 +341,9 @@ impl PipeSecurityDescriptor {
                 None,
             )
         }
-        .map_err(ServiceError::windows("building the IPC channel's permissions"))?;
+        .map_err(ServiceError::windows(
+            "building the IPC channel's permissions",
+        ))?;
 
         Ok(Self { descriptor })
     }
@@ -387,7 +389,10 @@ impl Drop for PipeInstance {
 unsafe impl Send for PipeInstance {}
 
 /// Accept connections until the service is told to stop.
-fn accept_loop(stopping: &Arc<AtomicBool>, state: &Arc<Mutex<MachineState>>) -> Result<(), ServiceError> {
+fn accept_loop(
+    stopping: &Arc<AtomicBool>,
+    state: &Arc<Mutex<MachineState>>,
+) -> Result<(), ServiceError> {
     let security = PipeSecurityDescriptor::build()?;
     let name = wide(&pipe_name());
     let live = Arc::new(AtomicUsize::new(0));
@@ -572,9 +577,7 @@ fn peek(handle: win::HANDLE) -> Result<u32, ()> {
 
     // SAFETY: `handle` is a connected pipe owned by the caller, and
     // `available` is a valid out-pointer.
-    let result = unsafe {
-        win::PeekNamedPipe(handle, None, 0, None, Some(&mut available), None)
-    };
+    let result = unsafe { win::PeekNamedPipe(handle, None, 0, None, Some(&mut available), None) };
 
     match result {
         Ok(()) => Ok(available),
@@ -696,11 +699,8 @@ fn enable_shutdown_privilege() -> Result<(), ServiceError> {
         let name = wide("SeShutdownPrivilege");
         let mut luid = win::LUID::default();
 
-        let looked_up = win::LookupPrivilegeValueW(
-            win::PCWSTR::null(),
-            win::PCWSTR(name.as_ptr()),
-            &mut luid,
-        );
+        let looked_up =
+            win::LookupPrivilegeValueW(win::PCWSTR::null(), win::PCWSTR(name.as_ptr()), &mut luid);
 
         let result = looked_up.and_then(|()| {
             let privileges = win::TOKEN_PRIVILEGES {
@@ -730,7 +730,10 @@ fn enable_shutdown_privilege() -> Result<(), ServiceError> {
 fn presence_loop(stopping: &Arc<AtomicBool>, state: &Arc<Mutex<MachineState>>) {
     let config = remote_core::AgentConfig::load();
 
-    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
         Ok(runtime) => runtime,
         Err(error) => {
             tracing::error!(%error, "the presence loop could not start");

@@ -84,7 +84,10 @@ pub fn prepare_for_clipboard(text: &str) -> Result<Vec<u16>, PlatformError> {
 /// first NUL, because that is where the C API says it ends.
 #[must_use]
 pub fn text_from_clipboard(units: &[u16]) -> String {
-    let end = units.iter().position(|unit| *unit == 0).unwrap_or(units.len());
+    let end = units
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(units.len());
 
     String::from_utf16_lossy(&units[..end]).replace("\r\n", "\n")
 }
@@ -149,12 +152,11 @@ mod imp {
                 return Ok(None);
             }
 
-            let handle: HANDLE = GetClipboardData(CF_UNICODETEXT.0.into()).map_err(|error| {
-                PlatformError::Os {
+            let handle: HANDLE =
+                GetClipboardData(CF_UNICODETEXT.0.into()).map_err(|error| PlatformError::Os {
                     operation: "reading the clipboard",
                     detail: error.message(),
-                }
-            })?;
+                })?;
 
             let global = HGLOBAL(handle.0);
             let pointer = GlobalLock(global) as *const u16;
@@ -220,6 +222,10 @@ mod imp {
 }
 
 #[cfg(test)]
+// Several tests here assert on constants on purpose: they are the design's
+// own bounds, and the point is that editing one past what the design intends
+// fails here rather than at some later runtime.
+#[allow(clippy::assertions_on_constants)]
 mod tests {
     use super::*;
 
@@ -287,7 +293,10 @@ mod tests {
     /// without; blocking a control session on it would be far worse.
     #[test]
     fn the_retry_is_bounded() {
-        assert!(OPEN_ATTEMPTS > 1, "one attempt fails often enough to be a bug report");
+        assert!(
+            OPEN_ATTEMPTS > 1,
+            "one attempt fails often enough to be a bug report"
+        );
         assert!(
             u64::from(OPEN_ATTEMPTS) * OPEN_RETRY_MS < 1_000,
             "the whole retry must stay well under a second"

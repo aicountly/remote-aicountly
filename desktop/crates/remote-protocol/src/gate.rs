@@ -186,7 +186,12 @@ impl ControlGate {
     /// machine pressed Stop is a server working from a stale read, and the
     /// person in the room wins. The API is caught up by the revoke call the
     /// agent makes at the same moment.
-    pub fn sync_from_api(&mut self, state: ControlState, controller: Option<String>, clipboard: bool) {
+    pub fn sync_from_api(
+        &mut self,
+        state: ControlState,
+        controller: Option<String>,
+        clipboard: bool,
+    ) {
         if self.state == ControlState::Revoked && state == ControlState::Granted {
             return;
         }
@@ -234,7 +239,10 @@ impl ControlGate {
     /// Every check that could reject is applied before any that could allow,
     /// and the order runs cheapest-first: a message for another session costs
     /// a string comparison, not a validation pass.
-    pub fn admit<'a>(&mut self, envelope: &'a ControlEnvelope) -> Result<&'a ControlEnvelope, GateError> {
+    pub fn admit<'a>(
+        &mut self,
+        envelope: &'a ControlEnvelope,
+    ) -> Result<&'a ControlEnvelope, GateError> {
         match self.check(envelope) {
             Ok(()) => {
                 // Only advance the counter for a message that was admitted. A
@@ -264,7 +272,10 @@ impl ControlGate {
         let needs_grant = envelope.is_input()
             || matches!(envelope.message, crate::ControlMessage::Clipboard(_))
             || matches!(envelope.message, crate::ControlMessage::Reboot { .. })
-            || matches!(envelope.message, crate::ControlMessage::SelectMonitor { .. });
+            || matches!(
+                envelope.message,
+                crate::ControlMessage::SelectMonitor { .. }
+            );
 
         if !needs_grant {
             // A ping, a pong or a monitor layout is not an act on the machine
@@ -286,7 +297,9 @@ impl ControlGate {
 
         // (4) The sequence. Strictly newer, so a replay is dropped.
         if envelope.sequence <= self.last_sequence {
-            return Err(GateError::Stale { seen: self.last_sequence });
+            return Err(GateError::Stale {
+                seen: self.last_sequence,
+            });
         }
 
         // Clipboard is a separate switch from control, and its own ceiling.
@@ -460,7 +473,11 @@ mod tests {
         let mut gate = granted_gate();
         assert!(gate.admit(&move_to(400, CONTROLLER, SESSION)).is_ok());
 
-        gate.sync_from_api(ControlState::Granted, Some("participant-cccc".into()), false);
+        gate.sync_from_api(
+            ControlState::Granted,
+            Some("participant-cccc".into()),
+            false,
+        );
 
         assert!(gate.admit(&move_to(1, "participant-cccc", SESSION)).is_ok());
     }
@@ -513,8 +530,12 @@ mod tests {
         let ping = ControlEnvelope::new(SESSION, CONTROLLER, 1, ControlMessage::Ping { nonce: 1 });
         assert!(gate.admit(&ping).is_ok());
 
-        let elsewhere =
-            ControlEnvelope::new("another-session", CONTROLLER, 2, ControlMessage::Ping { nonce: 2 });
+        let elsewhere = ControlEnvelope::new(
+            "another-session",
+            CONTROLLER,
+            2,
+            ControlMessage::Ping { nonce: 2 },
+        );
         assert_eq!(gate.admit(&elsewhere), Err(GateError::WrongSession));
     }
 
@@ -527,7 +548,9 @@ mod tests {
             SESSION,
             CONTROLLER,
             1,
-            ControlMessage::Reboot { session_uuid: SESSION.into() },
+            ControlMessage::Reboot {
+                session_uuid: SESSION.into(),
+            },
         );
 
         assert_eq!(gate.admit(&reboot), Err(GateError::NotGranted));

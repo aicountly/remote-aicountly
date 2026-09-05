@@ -67,7 +67,14 @@ impl Frame {
             return None;
         }
 
-        Some(Self { width, height, stride, format, timestamp_us, data })
+        Some(Self {
+            width,
+            height,
+            stride,
+            format,
+            timestamp_us,
+            data,
+        })
     }
 
     /// How many bytes this frame occupies.
@@ -177,18 +184,30 @@ impl CaptureProfile {
     #[must_use]
     pub fn degraded(self) -> Self {
         if self.max_dimension > 1280 {
-            return Self { max_dimension: 1280, ..self };
+            return Self {
+                max_dimension: 1280,
+                ..self
+            };
         }
 
         if self.max_dimension > 960 {
-            return Self { max_dimension: 960, ..self };
+            return Self {
+                max_dimension: 960,
+                ..self
+            };
         }
 
         if self.max_fps > 15 {
-            return Self { max_fps: 15, ..self };
+            return Self {
+                max_fps: 15,
+                ..self
+            };
         }
 
-        Self { max_fps: self.max_fps.max(5).min(8), ..self }
+        Self {
+            max_fps: self.max_fps.clamp(5, 8),
+            ..self
+        }
     }
 
     /// Step back up towards the ceiling for this quality, one step at a time.
@@ -197,7 +216,10 @@ impl CaptureProfile {
         let ceiling = Self::for_quality(self.quality);
 
         if self.max_fps < ceiling.max_fps {
-            return Self { max_fps: (self.max_fps * 2).min(ceiling.max_fps), ..self };
+            return Self {
+                max_fps: (self.max_fps * 2).min(ceiling.max_fps),
+                ..self
+            };
         }
 
         if self.max_dimension < ceiling.max_dimension {
@@ -331,7 +353,10 @@ mod tests {
             profile = profile.degraded();
         }
 
-        assert!(profile.max_fps >= 5, "frame rate must not collapse to nothing");
+        assert!(
+            profile.max_fps >= 5,
+            "frame rate must not collapse to nothing"
+        );
         assert!(profile.max_dimension >= 960);
     }
 
@@ -353,7 +378,10 @@ mod tests {
         assert_eq!(CaptureProfile::adaptive().frame_interval_ms(), 33);
         assert_eq!(CaptureProfile::low_bandwidth().frame_interval_ms(), 83);
 
-        let zero = CaptureProfile { max_fps: 0, ..CaptureProfile::adaptive() };
+        let zero = CaptureProfile {
+            max_fps: 0,
+            ..CaptureProfile::adaptive()
+        };
         assert_eq!(zero.frame_interval_ms(), 1000, "must never divide by zero");
     }
 }

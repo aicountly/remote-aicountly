@@ -121,7 +121,8 @@ impl Backoff {
         self.seed ^= self.seed >> 12;
         self.seed ^= self.seed << 25;
         self.seed ^= self.seed >> 27;
-        let random = ((self.seed.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 33) as f64) / f64::from(u32::MAX);
+        let random =
+            ((self.seed.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 33) as f64) / f64::from(u32::MAX);
 
         let factor = 1.0 - self.jitter + (random * self.jitter * 2.0);
 
@@ -182,7 +183,8 @@ mod tests {
 
     #[test]
     fn the_delay_doubles_until_it_reaches_the_ceiling() {
-        let mut backoff = Backoff::new(Duration::from_secs(1), Duration::from_secs(60)).with_jitter(0.0);
+        let mut backoff =
+            Backoff::new(Duration::from_secs(1), Duration::from_secs(60)).with_jitter(0.0);
 
         assert_eq!(backoff.next_delay(), Duration::from_secs(1));
         assert_eq!(backoff.next_delay(), Duration::from_secs(2));
@@ -196,7 +198,8 @@ mod tests {
 
     #[test]
     fn a_successful_connection_resets_the_sequence() {
-        let mut backoff = Backoff::new(Duration::from_secs(1), Duration::from_secs(60)).with_jitter(0.0);
+        let mut backoff =
+            Backoff::new(Duration::from_secs(1), Duration::from_secs(60)).with_jitter(0.0);
 
         for _ in 0..3 {
             let _ = backoff.next_delay();
@@ -213,12 +216,16 @@ mod tests {
     /// turns a long outage into a hot loop hammering the API.
     #[test]
     fn a_very_long_outage_stays_at_the_ceiling_rather_than_overflowing() {
-        let mut backoff = Backoff::new(Duration::from_secs(1), Duration::from_secs(60)).with_jitter(0.0);
+        let mut backoff =
+            Backoff::new(Duration::from_secs(1), Duration::from_secs(60)).with_jitter(0.0);
 
         for _ in 0..200 {
             let delay = backoff.next_delay();
 
-            assert!(delay >= Duration::from_secs(1), "delay collapsed to {delay:?}");
+            assert!(
+                delay >= Duration::from_secs(1),
+                "delay collapsed to {delay:?}"
+            );
             assert!(delay <= Duration::from_secs(60));
         }
     }
@@ -251,13 +258,20 @@ mod tests {
 
     #[test]
     fn jitter_stays_inside_its_declared_band() {
-        let mut backoff = Backoff::new(Duration::from_secs(10), Duration::from_secs(10)).with_jitter(0.3);
+        let mut backoff =
+            Backoff::new(Duration::from_secs(10), Duration::from_secs(10)).with_jitter(0.3);
 
         for _ in 0..500 {
             let delay = backoff.next_delay();
 
-            assert!(delay >= Duration::from_millis(7_000), "{delay:?} below the band");
-            assert!(delay <= Duration::from_millis(13_000), "{delay:?} above the band");
+            assert!(
+                delay >= Duration::from_millis(7_000),
+                "{delay:?} below the band"
+            );
+            assert!(
+                delay <= Duration::from_millis(13_000),
+                "{delay:?} above the band"
+            );
         }
     }
 

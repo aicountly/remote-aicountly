@@ -194,7 +194,10 @@ pub fn verify_challenge(
     let payload = challenge_payload(device_uuid, nonce, issued_at);
 
     verifying
-        .verify(payload.as_bytes(), &ed25519_dalek::Signature::from_bytes(&signature))
+        .verify(
+            payload.as_bytes(),
+            &ed25519_dalek::Signature::from_bytes(&signature),
+        )
         .is_ok()
 }
 
@@ -408,9 +411,21 @@ mod tests {
         let good = keys.sign_challenge(UUID, &nonce(), 1);
 
         assert!(!verify_challenge("not base64", UUID, &nonce(), 1, &good));
-        assert!(!verify_challenge(&keys.public_key_base64(), UUID, &nonce(), 1, "short"));
+        assert!(!verify_challenge(
+            &keys.public_key_base64(),
+            UUID,
+            &nonce(),
+            1,
+            "short"
+        ));
         assert!(!verify_challenge("", UUID, &nonce(), 1, &good));
-        assert!(!verify_challenge(&keys.public_key_base64(), UUID, &nonce(), 1, ""));
+        assert!(!verify_challenge(
+            &keys.public_key_base64(),
+            UUID,
+            &nonce(),
+            1,
+            ""
+        ));
     }
 
     /// The API emits standard base64; a URL-safe spelling of the same key must
@@ -419,7 +434,9 @@ mod tests {
     fn both_base64_alphabets_decode_to_the_same_key() {
         let keys = DeviceKeypair::generate();
         let standard = keys.public_key_base64();
-        let raw = base64::engine::general_purpose::STANDARD.decode(&standard).unwrap();
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(&standard)
+            .unwrap();
         let url_safe = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&raw);
 
         let signature = keys.sign_challenge(UUID, &nonce(), 1);
@@ -448,6 +465,9 @@ mod tests {
         assert!(!json.contains(&secret_hex));
         assert!(!json.to_lowercase().contains("private"));
         assert!(!json.to_lowercase().contains("secret"));
-        assert_eq!(serde_json::from_str::<EnrolmentRecord>(&json).unwrap(), record);
+        assert_eq!(
+            serde_json::from_str::<EnrolmentRecord>(&json).unwrap(),
+            record
+        );
     }
 }

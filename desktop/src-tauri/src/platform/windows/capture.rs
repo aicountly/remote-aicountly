@@ -33,9 +33,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use remote_device::{
-    CaptureProfile, Frame, PlatformResult, ScreenCaptureProvider,
-};
+use remote_device::{CaptureProfile, Frame, PlatformResult, ScreenCaptureProvider};
 use remote_protocol::{Monitor, MonitorLayout, Orientation};
 
 /// Whether the Secure Desktop is in front of the user's own.
@@ -224,6 +222,12 @@ impl ScreenCaptureProvider for WindowsCapture {
 ///
 /// Pulled out of the Windows-only code so the arithmetic that decides where a
 /// click lands is tested on every host.
+///
+/// Nine arguments, and they stay nine: every one is a separate value Windows
+/// hands back from a different call, and bundling them into a struct would
+/// only move the same nine assignments to the caller while making the
+/// enumeration loop harder to read.
+#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn describe_monitor(
     id: u32,
@@ -280,13 +284,13 @@ mod imp {
     use remote_protocol::MonitorLayout;
     use std::sync::atomic::{AtomicU64, Ordering};
     use windows::core::Interface;
+    use windows::core::BOOL;
     use windows::Graphics::Capture::{
         Direct3D11CaptureFrame, Direct3D11CaptureFramePool, GraphicsCaptureItem,
         GraphicsCaptureSession,
     };
     use windows::Graphics::DirectX::DirectXPixelFormat;
     use windows::Graphics::SizeInt32;
-    use windows::core::BOOL;
     use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, RECT};
     use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
     use windows::Win32::Graphics::Direct3D11::{
@@ -298,12 +302,12 @@ mod imp {
     use windows::Win32::Graphics::Gdi::{
         EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
     };
-    use windows::Win32::System::WinRT::Direct3D11::CreateDirect3D11DeviceFromDXGIDevice;
-    use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
-    use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
     use windows::Win32::System::StationsAndDesktops::{
         CloseDesktop, OpenInputDesktop, DESKTOP_READOBJECTS,
     };
+    use windows::Win32::System::WinRT::Direct3D11::CreateDirect3D11DeviceFromDXGIDevice;
+    use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
+    use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
     use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, MONITORINFOF_PRIMARY};
 
     /// The frame pool depth.
@@ -362,7 +366,12 @@ mod imp {
                 continue;
             }
 
-            let RECT { left, top, right, bottom } = info.monitorInfo.rcMonitor;
+            let RECT {
+                left,
+                top,
+                right,
+                bottom,
+            } = info.monitorInfo.rcMonitor;
 
             let mut dpi_x = 96_u32;
             let mut dpi_y = 96_u32;
@@ -400,7 +409,10 @@ mod imp {
             .find(|monitor| monitor.primary)
             .map_or(1, |monitor| monitor.id);
 
-        Ok(MonitorLayout { monitors, active_monitor_id })
+        Ok(MonitorLayout {
+            monitors,
+            active_monitor_id,
+        })
     }
 
     unsafe extern "system" fn enum_monitor(
@@ -478,9 +490,11 @@ mod imp {
                 })?;
 
                 let winrt_device =
-                    CreateDirect3D11DeviceFromDXGIDevice(&dxgi).map_err(|error| PlatformError::Os {
-                        operation: "creating the capture device",
-                        detail: error.message(),
+                    CreateDirect3D11DeviceFromDXGIDevice(&dxgi).map_err(|error| {
+                        PlatformError::Os {
+                            operation: "creating the capture device",
+                            detail: error.message(),
+                        }
                     })?;
                 let winrt_device: windows::Graphics::DirectX::Direct3D11::IDirect3DDevice =
                     winrt_device.cast().map_err(|error| PlatformError::Os {
@@ -496,12 +510,12 @@ mod imp {
                         })?;
 
                 let item: GraphicsCaptureItem =
-                    interop
-                        .CreateForMonitor(handle)
-                        .map_err(|error| PlatformError::PermissionDenied(format!(
+                    interop.CreateForMonitor(handle).map_err(|error| {
+                        PlatformError::PermissionDenied(format!(
                             "Windows would not let AICOUNTLY Remote capture this display: {}",
                             error.message()
-                        )))?;
+                        ))
+                    })?;
 
                 let (width, height) = profile.fit(monitor.width, monitor.height);
 
@@ -509,19 +523,23 @@ mod imp {
                     &winrt_device,
                     DirectXPixelFormat::B8G8R8A8UIntNormalized,
                     FRAME_POOL_DEPTH,
-                    SizeInt32 { Width: width as i32, Height: height as i32 },
+                    SizeInt32 {
+                        Width: width as i32,
+                        Height: height as i32,
+                    },
                 )
                 .map_err(|error| PlatformError::Os {
                     operation: "creating the capture frame pool",
                     detail: error.message(),
                 })?;
 
-                let session = frame_pool
-                    .CreateCaptureSession(&item)
-                    .map_err(|error| PlatformError::Os {
-                        operation: "starting screen capture",
-                        detail: error.message(),
-                    })?;
+                let session =
+                    frame_pool
+                        .CreateCaptureSession(&item)
+                        .map_err(|error| PlatformError::Os {
+                            operation: "starting screen capture",
+                            detail: error.message(),
+                        })?;
 
                 // The cursor is drawn in because a viewer helping somebody
                 // needs to see where they are pointing.
@@ -579,7 +597,9 @@ mod imp {
 
         pub fn reconfigure(&mut self, profile: CaptureProfile) -> PlatformResult<()> {
             self.profile = profile;
-            let _ = self.session.SetIsCursorCaptureEnabled(profile.include_cursor);
+            let _ = self
+                .session
+                .SetIsCursorCaptureEnabled(profile.include_cursor);
 
             Ok(())
         }
@@ -783,7 +803,17 @@ mod tests {
 
     #[test]
     fn a_secondary_monitor_at_a_negative_origin_is_described_correctly() {
-        let left = describe_monitor(2, "Left", false, -1920, 0, 1920, 1080, 96, Orientation::Landscape);
+        let left = describe_monitor(
+            2,
+            "Left",
+            false,
+            -1920,
+            0,
+            1920,
+            1080,
+            96,
+            Orientation::Landscape,
+        );
 
         assert_eq!(left.x, -1920);
         assert_eq!(
@@ -808,7 +838,9 @@ mod tests {
     fn the_secure_desktop_is_explained_rather_than_left_as_a_frozen_frame() {
         assert!(SecureDesktopState::UserDesktop.describe().is_none());
 
-        let explanation = SecureDesktopState::Active.describe().expect("says something");
+        let explanation = SecureDesktopState::Active
+            .describe()
+            .expect("says something");
 
         assert!(explanation.contains("Windows security prompt"));
         assert!(explanation.contains("remote control does not reach it"));

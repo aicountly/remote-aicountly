@@ -147,7 +147,8 @@ impl Agent {
     /// so an agent on a box with no background service does not enrol claiming
     /// it can be reached unattended.
     pub fn capabilities(&self) -> AgentCapabilities {
-        self.permissions().constrain(platform::declared_capabilities())
+        self.permissions()
+            .constrain(platform::declared_capabilities())
     }
 
     /// Describe this machine, for enrolment and for the About panel.
@@ -158,16 +159,19 @@ impl Agent {
             }
         }
 
-        let providers = self.providers.lock().map_err(|_| {
-            remote_device::PlatformError::Os {
+        let providers = self
+            .providers
+            .lock()
+            .map_err(|_| remote_device::PlatformError::Os {
                 operation: "reading this computer's details",
                 detail: "the platform layer was unavailable".into(),
-            }
-        })?;
+            })?;
 
-        let providers = providers.as_ref().ok_or(
-            remote_device::PlatformError::Unsupported("This operating system"),
-        )?;
+        let providers = providers
+            .as_ref()
+            .ok_or(remote_device::PlatformError::Unsupported(
+                "This operating system",
+            ))?;
 
         let description = DeviceDescription::read(providers.device_info.as_ref(), crate::VERSION)?;
 
@@ -322,7 +326,12 @@ impl Agent {
     }
 
     /// Adopt the control state the API reports.
-    pub fn sync_control(&self, state: ControlState, controller: Option<String>, clipboard: bool) -> AgentState {
+    pub fn sync_control(
+        &self,
+        state: ControlState,
+        controller: Option<String>,
+        clipboard: bool,
+    ) -> AgentState {
         if let Ok(mut gate) = self.gate.lock() {
             if let Some(gate) = gate.as_mut() {
                 gate.sync_from_api(state, controller, clipboard);
@@ -533,7 +542,10 @@ mod tests {
     fn no_input_is_acted_on_without_a_session() {
         let agent = Agent::new();
 
-        assert_eq!(agent.handle_control(&pointer(1)), Err(GateError::NotGranted));
+        assert_eq!(
+            agent.handle_control(&pointer(1)),
+            Err(GateError::NotGranted)
+        );
     }
 
     #[test]
@@ -541,10 +553,16 @@ mod tests {
         let agent = Agent::new();
         agent.begin_session(summary());
 
-        assert_eq!(agent.handle_control(&pointer(1)), Err(GateError::NotGranted));
+        assert_eq!(
+            agent.handle_control(&pointer(1)),
+            Err(GateError::NotGranted)
+        );
 
         agent.control_requested(CONTROLLER);
-        assert_eq!(agent.handle_control(&pointer(1)), Err(GateError::NotGranted));
+        assert_eq!(
+            agent.handle_control(&pointer(1)),
+            Err(GateError::NotGranted)
+        );
     }
 
     /// Stop control takes effect on the next message, with no network round
@@ -561,7 +579,10 @@ mod tests {
 
         agent.stop_control();
 
-        assert_eq!(agent.handle_control(&pointer(2)), Err(GateError::NotGranted));
+        assert_eq!(
+            agent.handle_control(&pointer(2)),
+            Err(GateError::NotGranted)
+        );
         assert!(!agent.state().is_being_controlled());
     }
 
@@ -582,7 +603,10 @@ mod tests {
         .encode()
         .unwrap();
 
-        assert_eq!(agent.handle_control(&impostor), Err(GateError::NotTheController));
+        assert_eq!(
+            agent.handle_control(&impostor),
+            Err(GateError::NotTheController)
+        );
     }
 
     #[test]
@@ -602,7 +626,10 @@ mod tests {
         .encode()
         .unwrap();
 
-        assert_eq!(agent.handle_control(&elsewhere), Err(GateError::WrongSession));
+        assert_eq!(
+            agent.handle_control(&elsewhere),
+            Err(GateError::WrongSession)
+        );
     }
 
     #[test]
@@ -637,7 +664,10 @@ mod tests {
         .encode()
         .unwrap();
 
-        assert_eq!(agent.handle_control(&clipboard), Err(GateError::ClipboardDisabled));
+        assert_eq!(
+            agent.handle_control(&clipboard),
+            Err(GateError::ClipboardDisabled)
+        );
     }
 
     /// A stale server grant must not undo a local Stop. The person in the room
@@ -652,7 +682,10 @@ mod tests {
         agent.sync_control(ControlState::Granted, Some(CONTROLLER.into()), true);
 
         assert_eq!(agent.control_state(), ControlState::Revoked);
-        assert_eq!(agent.handle_control(&pointer(9)), Err(GateError::NotGranted));
+        assert_eq!(
+            agent.handle_control(&pointer(9)),
+            Err(GateError::NotGranted)
+        );
     }
 
     #[test]
@@ -665,7 +698,10 @@ mod tests {
 
         assert!(!state.is_session_active());
         assert_eq!(agent.control_state(), ControlState::None);
-        assert_eq!(agent.handle_control(&pointer(1)), Err(GateError::NotGranted));
+        assert_eq!(
+            agent.handle_control(&pointer(1)),
+            Err(GateError::NotGranted)
+        );
     }
 
     #[test]
@@ -677,7 +713,10 @@ mod tests {
         let state = agent.revoked();
 
         assert!(!state.is_session_active());
-        assert_eq!(agent.handle_control(&pointer(1)), Err(GateError::NotGranted));
+        assert_eq!(
+            agent.handle_control(&pointer(1)),
+            Err(GateError::NotGranted)
+        );
     }
 
     #[test]

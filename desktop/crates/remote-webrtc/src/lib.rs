@@ -193,7 +193,10 @@ pub trait PeerSession: Send {
     async fn create_offer(&mut self) -> Result<serde_json::Value, WebRtcError>;
 
     /// Accept a peer's offer and produce the answer.
-    async fn accept_offer(&mut self, offer: serde_json::Value) -> Result<serde_json::Value, WebRtcError>;
+    async fn accept_offer(
+        &mut self,
+        offer: serde_json::Value,
+    ) -> Result<serde_json::Value, WebRtcError>;
 
     /// Accept the answer to our offer.
     async fn accept_answer(&mut self, answer: serde_json::Value) -> Result<(), WebRtcError>;

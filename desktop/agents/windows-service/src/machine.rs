@@ -194,10 +194,7 @@ pub fn handle(
         // with its own credential.
         IpcRequest::Authenticate => match state.credential_expires_at.clone() {
             Some(expires_at) => (IpcResponse::Authenticated { expires_at }, None),
-            None => (
-                IpcResponse::Acknowledged,
-                Some(Effect::Authenticate),
-            ),
+            None => (IpcResponse::Acknowledged, Some(Effect::Authenticate)),
         },
 
         IpcRequest::PresenceStatus => (
@@ -218,8 +215,9 @@ pub fn handle(
                     return (
                         IpcResponse::Error {
                             code: "TOO_MANY_SESSIONS".into(),
-                            message: "This computer is already hosting as many sessions as it will."
-                                .into(),
+                            message:
+                                "This computer is already hosting as many sessions as it will."
+                                    .into(),
                         },
                         None,
                     );
@@ -410,8 +408,7 @@ mod tests {
     fn device_status_carries_the_fingerprint_and_no_key() {
         let (mut state, mut connection) = live();
 
-        let (response, effect) =
-            handle(&mut state, &mut connection, IpcRequest::DeviceStatus, 0);
+        let (response, effect) = handle(&mut state, &mut connection, IpcRequest::DeviceStatus, 0);
 
         assert_eq!(effect, None);
         assert_eq!(
@@ -602,15 +599,13 @@ mod tests {
     fn authentication_reports_an_expiry_and_asks_for_one_when_there_is_none() {
         let (mut state, mut connection) = live();
 
-        let (response, effect) =
-            handle(&mut state, &mut connection, IpcRequest::Authenticate, 0);
+        let (response, effect) = handle(&mut state, &mut connection, IpcRequest::Authenticate, 0);
         assert_eq!(response, IpcResponse::Acknowledged);
         assert_eq!(effect, Some(Effect::Authenticate));
 
         state.credential_expires_at = Some("2026-02-10T09:15:00Z".into());
 
-        let (response, effect) =
-            handle(&mut state, &mut connection, IpcRequest::Authenticate, 0);
+        let (response, effect) = handle(&mut state, &mut connection, IpcRequest::Authenticate, 0);
         assert_eq!(effect, None);
         assert_eq!(
             response,

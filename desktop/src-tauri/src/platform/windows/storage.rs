@@ -56,7 +56,9 @@ impl DpapiStorage {
     pub fn path_for(entry: &str, scope: StorageScope) -> Result<std::path::PathBuf, StorageError> {
         if entry.is_empty()
             || entry.len() > 64
-            || !entry.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            || !entry
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         {
             return Err(StorageError::Platform(
                 "that is not a valid secure-storage entry name".into(),
@@ -155,8 +157,8 @@ mod imp {
     use remote_security::{StorageError, StorageScope};
     use windows::Win32::Foundation::LocalFree;
     use windows::Win32::Security::Cryptography::{
-        CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_LOCAL_MACHINE,
-        CRYPTPROTECT_UI_FORBIDDEN,
+        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_LOCAL_MACHINE,
+        CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
 
     fn blob(bytes: &[u8]) -> CRYPT_INTEGER_BLOB {
@@ -184,7 +186,9 @@ mod imp {
             // SAFETY: the pointer came from DPAPI, which documents LocalFree
             // as the way to release it.
             unsafe {
-                let _ = LocalFree(Some(windows::Win32::Foundation::HLOCAL(out.pbData as *mut _)));
+                let _ = LocalFree(Some(windows::Win32::Foundation::HLOCAL(
+                    out.pbData as *mut _,
+                )));
             }
         }
 
@@ -306,7 +310,10 @@ mod tests {
 
     #[test]
     fn the_store_names_itself_for_the_diagnostics_panel() {
-        assert_eq!(DpapiStorage::new().describe(), "Windows DPAPI (machine scope)");
+        assert_eq!(
+            DpapiStorage::new().describe(),
+            "Windows DPAPI (machine scope)"
+        );
     }
 
     /// Deleting something that is not there succeeds: unenrolling a machine

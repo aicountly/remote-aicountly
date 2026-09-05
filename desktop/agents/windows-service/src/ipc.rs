@@ -313,9 +313,16 @@ mod tests {
             IpcRequest::DeviceStatus,
             IpcRequest::Authenticate,
             IpcRequest::PresenceStatus,
-            IpcRequest::SessionStarted { session_uuid: "s".into() },
-            IpcRequest::SessionEnded { session_uuid: "s".into() },
-            IpcRequest::Reboot { session_uuid: "s".into(), reason: "update".into() },
+            IpcRequest::SessionStarted {
+                session_uuid: "s".into(),
+            },
+            IpcRequest::SessionEnded {
+                session_uuid: "s".into(),
+            },
+            IpcRequest::Reboot {
+                session_uuid: "s".into(),
+                reason: "update".into(),
+            },
             IpcRequest::Ping,
         ];
 
@@ -325,18 +332,29 @@ mod tests {
         }
 
         let responses = vec![
-            IpcResponse::Hello { protocol_version: 1, service_version: "1.0.0".into() },
+            IpcResponse::Hello {
+                protocol_version: 1,
+                service_version: "1.0.0".into(),
+            },
             IpcResponse::DeviceStatus {
                 enrolled: true,
                 device_uuid: Some("u".into()),
                 key_fingerprint: Some("AAAA BBBB".into()),
                 unattended_enabled: false,
             },
-            IpcResponse::Authenticated { expires_at: "2026-02-10T09:15:00Z".into() },
-            IpcResponse::Presence { online: true, last_reported_at: None },
+            IpcResponse::Authenticated {
+                expires_at: "2026-02-10T09:15:00Z".into(),
+            },
+            IpcResponse::Presence {
+                online: true,
+                last_reported_at: None,
+            },
             IpcResponse::Acknowledged,
             IpcResponse::Pong,
-            IpcResponse::Error { code: "X".into(), message: "y".into() },
+            IpcResponse::Error {
+                code: "X".into(),
+                message: "y".into(),
+            },
         ];
 
         for response in responses {
@@ -373,7 +391,10 @@ mod tests {
 
         assert_eq!(
             IpcFrame::decode::<IpcRequest>(&bytes),
-            Err(IpcError::VersionMismatch { expected: IPC_PROTOCOL_VERSION, found: 99 })
+            Err(IpcError::VersionMismatch {
+                expected: IPC_PROTOCOL_VERSION,
+                found: 99
+            })
         );
     }
 
@@ -392,12 +413,18 @@ mod tests {
 
     #[test]
     fn a_truncated_frame_is_refused_rather_than_blocking() {
-        assert_eq!(IpcFrame::decode_header(&[1, 0, 4]), Err(IpcError::Truncated));
+        assert_eq!(
+            IpcFrame::decode_header(&[1, 0, 4]),
+            Err(IpcError::Truncated)
+        );
 
         let mut bytes = IpcFrame::encode(&IpcRequest::Ping).unwrap();
         bytes.truncate(bytes.len() - 1);
 
-        assert_eq!(IpcFrame::decode::<IpcRequest>(&bytes), Err(IpcError::Truncated));
+        assert_eq!(
+            IpcFrame::decode::<IpcRequest>(&bytes),
+            Err(IpcError::Truncated)
+        );
     }
 
     #[test]
@@ -408,7 +435,10 @@ mod tests {
         bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         bytes.extend_from_slice(payload);
 
-        assert_eq!(IpcFrame::decode::<IpcRequest>(&bytes), Err(IpcError::Malformed));
+        assert_eq!(
+            IpcFrame::decode::<IpcRequest>(&bytes),
+            Err(IpcError::Malformed)
+        );
     }
 
     /// **The property this protocol exists to hold.** There is no message that
@@ -422,9 +452,16 @@ mod tests {
             IpcRequest::DeviceStatus,
             IpcRequest::Authenticate,
             IpcRequest::PresenceStatus,
-            IpcRequest::SessionStarted { session_uuid: "s".into() },
-            IpcRequest::SessionEnded { session_uuid: "s".into() },
-            IpcRequest::Reboot { session_uuid: "s".into(), reason: "r".into() },
+            IpcRequest::SessionStarted {
+                session_uuid: "s".into(),
+            },
+            IpcRequest::SessionEnded {
+                session_uuid: "s".into(),
+            },
+            IpcRequest::Reboot {
+                session_uuid: "s".into(),
+                reason: "r".into(),
+            },
             IpcRequest::Ping,
         ];
 
@@ -432,8 +469,17 @@ mod tests {
             let json = serde_json::to_string(&request).unwrap().to_lowercase();
 
             for forbidden in [
-                "command", "exec", "shell", "cmd", "powershell", "path",
-                "argument", "argv", "script", "dll", "load",
+                "command",
+                "exec",
+                "shell",
+                "cmd",
+                "powershell",
+                "path",
+                "argument",
+                "argv",
+                "script",
+                "dll",
+                "load",
             ] {
                 assert!(
                     !json.contains(forbidden),
@@ -461,8 +507,12 @@ mod tests {
         assert!(!json.contains("private_key"));
         assert!(!json.contains("secret"));
         // The authenticated response carries an expiry, never the token.
-        let authenticated = IpcResponse::Authenticated { expires_at: "2026-02-10T09:15:00Z".into() };
-        let json = serde_json::to_string(&authenticated).unwrap().to_lowercase();
+        let authenticated = IpcResponse::Authenticated {
+            expires_at: "2026-02-10T09:15:00Z".into(),
+        };
+        let json = serde_json::to_string(&authenticated)
+            .unwrap()
+            .to_lowercase();
         assert!(!json.contains("token"));
         assert!(!json.contains("bearer"));
     }

@@ -60,11 +60,19 @@ pub struct MenuLine {
 
 impl MenuLine {
     fn action(id: &'static str, label: impl Into<String>) -> Self {
-        Self { id, label: label.into(), enabled: true }
+        Self {
+            id,
+            label: label.into(),
+            enabled: true,
+        }
     }
 
     fn info(id: &'static str, label: impl Into<String>) -> Self {
-        Self { id, label: label.into(), enabled: false }
+        Self {
+            id,
+            label: label.into(),
+            enabled: false,
+        }
     }
 }
 
@@ -100,7 +108,11 @@ pub fn menu_for(state: &AgentState) -> Vec<MenuLine> {
             format!(
                 "Session active — {}{}",
                 session.connected_name,
-                if session.unattended { " (unattended)" } else { "" }
+                if session.unattended {
+                    " (unattended)"
+                } else {
+                    ""
+                }
             ),
         ));
 
@@ -311,8 +323,12 @@ mod tests {
     fn a_running_session_always_appears_in_the_tray() {
         let state = enrolled().apply(AgentEvent::SessionStarted(session(false)));
 
-        assert!(labels(&state).iter().any(|label| label.contains("Session active")));
-        assert!(labels(&state).iter().any(|label| label.contains("Sam in support")));
+        assert!(labels(&state)
+            .iter()
+            .any(|label| label.contains("Session active")));
+        assert!(labels(&state)
+            .iter()
+            .any(|label| label.contains("Sam in support")));
         assert!(has_action(&state, ids::END_SESSION));
     }
 
@@ -322,7 +338,9 @@ mod tests {
     fn an_unattended_session_is_labelled_as_one() {
         let state = enrolled().apply(AgentEvent::SessionStarted(session(true)));
 
-        assert!(labels(&state).iter().any(|label| label.contains("(unattended)")));
+        assert!(labels(&state)
+            .iter()
+            .any(|label| label.contains("(unattended)")));
     }
 
     /// The whole point of the tray: stopping somebody controlling the machine
@@ -344,13 +362,12 @@ mod tests {
     /// switched something off that is still on.
     #[test]
     fn closing_the_window_quitting_and_disabling_unattended_are_three_things() {
-        let state = enrolled()
-            .apply(AgentEvent::UnattendedChanged(UnattendedState {
-                enabled: true,
-                enabled_at: Some("2026-02-10T08:00:00Z".into()),
-                last_used_at: None,
-                allowed_by_policy: true,
-            }));
+        let state = enrolled().apply(AgentEvent::UnattendedChanged(UnattendedState {
+            enabled: true,
+            enabled_at: Some("2026-02-10T08:00:00Z".into()),
+            last_used_at: None,
+            allowed_by_policy: true,
+        }));
 
         assert!(has_action(&state, ids::CLOSE_WINDOW));
         assert!(has_action(&state, ids::QUIT));
@@ -381,7 +398,9 @@ mod tests {
     fn an_unregistered_machine_says_so_and_offers_nothing_it_cannot_do() {
         let state = AgentState::not_enrolled("1.0.0");
 
-        assert!(labels(&state).iter().any(|label| label.contains("not registered")));
+        assert!(labels(&state)
+            .iter()
+            .any(|label| label.contains("not registered")));
         assert!(!has_action(&state, ids::STOP_CONTROL));
         assert!(!has_action(&state, ids::END_SESSION));
         assert!(!has_action(&state, ids::UNATTENDED));

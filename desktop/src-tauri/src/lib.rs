@@ -24,6 +24,7 @@ pub mod agent;
 pub mod commands;
 pub mod ipc;
 pub mod platform;
+pub mod runtime;
 pub mod tray;
 
 pub use agent::{Agent, AgentError};
@@ -82,7 +83,26 @@ pub fn run() {
             commands::about,
         ])
         .setup(|app| {
+            use tauri::Manager;
+
             tray::install(app.handle())?;
+
+            // The connection loop: authenticate, stay reachable, and notice
+            // what changed on the server. Its handle lives in Tauri's managed
+            // state so it is dropped — and the loop stops — when the
+            // application does.
+            let agent = app.state::<std::sync::Arc<Agent>>().inner().clone();
+            let handle = app.handle().clone();
+
+            app.manage(runtime::start(
+                agent,
+                std::sync::Arc::new(move |state: remote_core::AgentState| {
+                    // One event, one payload, the same one the tray and the
+                    // window both render from — so there is no path by which
+                    // the two disagree about whether a session is running.
+                    let _ = tauri::Emitter::emit(&handle, "aicountly-remote://state", state);
+                }),
+            ));
 
             Ok(())
         })

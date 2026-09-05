@@ -54,7 +54,9 @@ impl WindowsInput {
     /// A provider with nothing held.
     #[must_use]
     pub fn new() -> Self {
-        Self { held: Mutex::new(Vec::new()) }
+        Self {
+            held: Mutex::new(Vec::new()),
+        }
     }
 
     /// Remember or forget a held key.
@@ -75,7 +77,10 @@ impl WindowsInput {
     /// What is currently held. For the diagnostics panel and the tests.
     #[must_use]
     pub fn held_keys(&self) -> Vec<Key> {
-        self.held.lock().map(|held| held.clone()).unwrap_or_default()
+        self.held
+            .lock()
+            .map(|held| held.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -338,12 +343,10 @@ mod imp {
             .or_else(|| layout.active())
             .ok_or(PlatformError::NotFound("That display"))?;
 
-        monitor
-            .denormalise(position)
-            .ok_or(PlatformError::Os {
-                operation: "moving the pointer",
-                detail: "the position was not usable".into(),
-            })
+        monitor.denormalise(position).ok_or(PlatformError::Os {
+            operation: "moving the pointer",
+            detail: "the position was not usable".into(),
+        })
     }
 
     fn send(inputs: &[INPUT]) -> PlatformResult<()> {
@@ -461,11 +464,21 @@ mod imp {
             // Windows counts a wheel turn away from the user as positive; the
             // protocol counts down as positive, matching every platform's own
             // scroll direction. Hence the negation.
-            inputs.push(mouse_input(MOUSEEVENTF_WHEEL, 0, 0, -wheel_delta(event.delta_y)));
+            inputs.push(mouse_input(
+                MOUSEEVENTF_WHEEL,
+                0,
+                0,
+                -wheel_delta(event.delta_y),
+            ));
         }
 
         if event.delta_x != 0.0 {
-            inputs.push(mouse_input(MOUSEEVENTF_HWHEEL, 0, 0, wheel_delta(event.delta_x)));
+            inputs.push(mouse_input(
+                MOUSEEVENTF_HWHEEL,
+                0,
+                0,
+                wheel_delta(event.delta_x),
+            ));
         }
 
         if inputs.is_empty() {
@@ -544,7 +557,12 @@ mod tests {
     use remote_protocol::Modifiers;
 
     fn desktop() -> VirtualDesktop {
-        VirtualDesktop { left: 0, top: 0, width: 1920, height: 1080 }
+        VirtualDesktop {
+            left: 0,
+            top: 0,
+            width: 1920,
+            height: 1080,
+        }
     }
 
     /// The arithmetic that decides where a click lands. Windows accepts any
@@ -563,7 +581,12 @@ mod tests {
     /// most common way remote control clicks the wrong screen.
     #[test]
     fn a_negative_virtual_desktop_origin_is_handled() {
-        let two_screens = VirtualDesktop { left: -1920, top: 0, width: 3840, height: 1080 };
+        let two_screens = VirtualDesktop {
+            left: -1920,
+            top: 0,
+            width: 3840,
+            height: 1080,
+        };
 
         // The far left of the left-hand monitor.
         assert_eq!(to_virtual_desktop(two_screens, -1920, 0), (0, 0));
@@ -571,18 +594,29 @@ mod tests {
         let (x, _) = to_virtual_desktop(two_screens, 0, 0);
         assert!((32_000..33_600).contains(&x), "the join mapped to {x}");
         // The far right of the right-hand monitor.
-        assert_eq!(to_virtual_desktop(two_screens, 1919, 1079), (65_535, 65_535));
+        assert_eq!(
+            to_virtual_desktop(two_screens, 1919, 1079),
+            (65_535, 65_535)
+        );
     }
 
     #[test]
     fn a_coordinate_outside_the_desktop_is_clamped_rather_than_wrapping() {
         assert_eq!(to_virtual_desktop(desktop(), -5000, -5000), (0, 0));
-        assert_eq!(to_virtual_desktop(desktop(), 99_999, 99_999), (65_535, 65_535));
+        assert_eq!(
+            to_virtual_desktop(desktop(), 99_999, 99_999),
+            (65_535, 65_535)
+        );
     }
 
     #[test]
     fn a_degenerate_desktop_does_not_divide_by_zero() {
-        let tiny = VirtualDesktop { left: 0, top: 0, width: 1, height: 1 };
+        let tiny = VirtualDesktop {
+            left: 0,
+            top: 0,
+            width: 1,
+            height: 1,
+        };
 
         let (x, y) = to_virtual_desktop(tiny, 0, 0);
         assert_eq!((x, y), (0, 0));
@@ -713,7 +747,11 @@ mod tests {
             .move_pointer(1, PointerPosition { x: 0.5, y: 0.5 })
             .is_err());
         assert!(input
-            .key(KeyEvent { key: Key::Enter, pressed: true, modifiers: Modifiers::none() })
+            .key(KeyEvent {
+                key: Key::Enter,
+                pressed: true,
+                modifiers: Modifiers::none()
+            })
             .is_err());
         assert!(input
             .mouse_button(

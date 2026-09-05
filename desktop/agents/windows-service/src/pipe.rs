@@ -126,14 +126,26 @@ mod tests {
 
         // The three that matter, spelled out so a future edit that drops one
         // fails here rather than in production.
-        assert!(sddl.contains("(A;;GA;;;SY)"), "LocalSystem must have full control");
-        assert!(sddl.contains("(A;;GA;;;BA)"), "Administrators must have full control");
-        assert!(sddl.contains("(A;;GRGW;;;IU)"), "the interactive user must be able to speak");
+        assert!(
+            sddl.contains("(A;;GA;;;SY)"),
+            "LocalSystem must have full control"
+        );
+        assert!(
+            sddl.contains("(A;;GA;;;BA)"),
+            "Administrators must have full control"
+        );
+        assert!(
+            sddl.contains("(A;;GRGW;;;IU)"),
+            "the interactive user must be able to speak"
+        );
 
         // And the ones that must never appear.
         assert!(!sddl.contains(";WD)"), "Everyone must have no entry");
         assert!(!sddl.contains(";AN)"), "Anonymous must have no entry");
-        assert!(!sddl.contains(";BU)"), "Users must have no entry — Interactive is narrower");
+        assert!(
+            !sddl.contains(";BU)"),
+            "Users must have no entry — Interactive is narrower"
+        );
     }
 
     /// A sandboxed browser runs at low integrity. The mandatory label keeps it
@@ -147,7 +159,9 @@ mod tests {
 
     #[test]
     fn the_permissive_descriptor_check_actually_catches_a_permissive_one() {
-        assert!(PipeSecurity::grants_world_access("D:(A;;GA;;;SY)(A;;GRGW;;;WD)"));
+        assert!(PipeSecurity::grants_world_access(
+            "D:(A;;GA;;;SY)(A;;GRGW;;;WD)"
+        ));
         assert!(PipeSecurity::grants_world_access("D:(A;;GA;;;AN)"));
         assert!(PipeSecurity::grants_world_access("D:(A;;GRGW;;;BU)"));
 
@@ -156,7 +170,12 @@ mod tests {
 
     /// An unbounded pipe server is a resource-exhaustion primitive for
     /// anything that satisfies the ACL.
+    ///
+    /// These are constants, so the assertions are constant too — which is the
+    /// point: they fail the build the moment somebody edits one of them past
+    /// what the design intends, rather than at some later runtime.
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn the_number_of_connections_is_bounded() {
         assert!(MAX_PIPE_INSTANCES > 0);
         assert!(MAX_PIPE_INSTANCES <= 16);

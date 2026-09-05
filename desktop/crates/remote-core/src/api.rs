@@ -298,7 +298,11 @@ impl ApiClient {
     pub fn new(config: AgentConfig) -> Result<Self, ApiError> {
         let http = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
-            .user_agent(format!("AicountlyRemote/{} ({})", crate::AGENT_VERSION, std::env::consts::OS))
+            .user_agent(format!(
+                "AicountlyRemote/{} ({})",
+                crate::AGENT_VERSION,
+                std::env::consts::OS
+            ))
             // The agent talks to one host it was configured with. A redirect
             // to somewhere else is not something to follow with a credential
             // attached.
@@ -306,7 +310,11 @@ impl ApiClient {
             .build()
             .map_err(|error| ApiError::Transport(error.to_string()))?;
 
-        Ok(Self { config, http, credential: None })
+        Ok(Self {
+            config,
+            http,
+            credential: None,
+        })
     }
 
     /// The credential currently held, if any.
@@ -434,8 +442,11 @@ impl ApiClient {
 
     /// A token for this device's own presence room.
     pub async fn presence_token(&self) -> Result<serde_json::Value, ApiError> {
-        self.post("/v1/remote/devices/me/presence-token", &serde_json::json!({}))
-            .await
+        self.post(
+            "/v1/remote/devices/me/presence-token",
+            &serde_json::json!({}),
+        )
+        .await
     }
 
     /// Join a session as its screen-sharing host.
@@ -487,7 +498,10 @@ impl ApiClient {
         }
 
         let body: Body = self
-            .post("/v1/remote/devices/me/unattended/disable", &serde_json::json!({}))
+            .post(
+                "/v1/remote/devices/me/unattended/disable",
+                &serde_json::json!({}),
+            )
             .await?;
 
         Ok(body.device)
@@ -535,7 +549,9 @@ impl ApiClient {
     /// shows the `message` to the person. A body that is not that shape gets a
     /// generic code rather than the raw text, because raw text from a proxy or
     /// a WAF is not something to render in a product's window.
-    async fn read<T: for<'de> Deserialize<'de>>(response: reqwest::Response) -> Result<T, ApiError> {
+    async fn read<T: for<'de> Deserialize<'de>>(
+        response: reqwest::Response,
+    ) -> Result<T, ApiError> {
         let status = response.status();
 
         if status.is_success() {
@@ -692,11 +708,26 @@ mod tests {
     #[test]
     fn transport_failures_and_server_errors_are_retried() {
         assert!(ApiError::Transport("connection reset".into()).is_retryable());
-        assert!(ApiError::Refused { status: 503, code: "X".into(), message: "y".into() }.is_retryable());
-        assert!(ApiError::Refused { status: 429, code: "RATE_LIMITED".into(), message: "y".into() }.is_retryable());
+        assert!(ApiError::Refused {
+            status: 503,
+            code: "X".into(),
+            message: "y".into()
+        }
+        .is_retryable());
+        assert!(ApiError::Refused {
+            status: 429,
+            code: "RATE_LIMITED".into(),
+            message: "y".into()
+        }
+        .is_retryable());
 
         // A 403 is an answer, not a blip.
-        assert!(!ApiError::Refused { status: 403, code: "X".into(), message: "y".into() }.is_retryable());
+        assert!(!ApiError::Refused {
+            status: 403,
+            code: "X".into(),
+            message: "y".into()
+        }
+        .is_retryable());
     }
 
     /// The session id goes into a URL path; anything but a plain identifier
@@ -727,13 +758,17 @@ mod tests {
                 .report_control_decision(candidate, "participant-1", ControlDecision::Grant, false)
                 .await
                 .unwrap_err();
-            assert!(matches!(&error, ApiError::Refused { code, .. } if code == "IDENTIFIER_INVALID"));
+            assert!(
+                matches!(&error, ApiError::Refused { code, .. } if code == "IDENTIFIER_INVALID")
+            );
 
             let error = client
                 .report_control_decision("session-1", candidate, ControlDecision::Grant, false)
                 .await
                 .unwrap_err();
-            assert!(matches!(&error, ApiError::Refused { code, .. } if code == "IDENTIFIER_INVALID"));
+            assert!(
+                matches!(&error, ApiError::Refused { code, .. } if code == "IDENTIFIER_INVALID")
+            );
         }
     }
 
@@ -750,7 +785,10 @@ mod tests {
     async fn a_device_call_with_no_credential_is_refused_before_the_network() {
         let client = ApiClient::new(AgentConfig::default()).expect("builds");
 
-        assert_eq!(client.describe_self().await.unwrap_err(), ApiError::NoCredential);
+        assert_eq!(
+            client.describe_self().await.unwrap_err(),
+            ApiError::NoCredential
+        );
     }
 
     #[test]
@@ -793,7 +831,10 @@ mod tests {
         assert!(active.is_active());
         assert!(!active.is_revoked());
 
-        let revoked = DeviceResource { status: "REVOKED".into(), ..active };
+        let revoked = DeviceResource {
+            status: "REVOKED".into(),
+            ..active
+        };
         assert!(!revoked.is_active());
         assert!(revoked.is_revoked());
     }
@@ -817,12 +858,17 @@ mod tests {
         };
 
         let json = serde_json::to_string(&request).unwrap();
-        let secret = remote_security::DeviceKeypair::from_secret_bytes(keys.secret_bytes().as_ref())
-            .unwrap()
-            .secret_bytes();
+        let secret =
+            remote_security::DeviceKeypair::from_secret_bytes(keys.secret_bytes().as_ref())
+                .unwrap()
+                .secret_bytes();
 
         assert!(json.contains("publicKey"));
-        assert!(!json.contains(&remote_security::display_fingerprint(&hex_of(secret.as_ref()))));
+        assert!(
+            !json.contains(&remote_security::display_fingerprint(&hex_of(
+                secret.as_ref()
+            )))
+        );
         assert!(!json.to_lowercase().contains("privatekey"));
         assert!(!json.to_lowercase().contains("secret"));
     }

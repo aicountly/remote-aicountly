@@ -260,9 +260,11 @@ mod tests {
         assert!(effective.screen_share);
 
         // And a policy cannot conjure a capability the agent does not have.
-        assert!(!AgentCapabilities::none()
-            .intersect(AgentCapabilities::windows())
-            .remote_control);
+        assert!(
+            !AgentCapabilities::none()
+                .intersect(AgentCapabilities::windows())
+                .remote_control
+        );
     }
 
     /// A machine where input injection is unavailable must not declare that

@@ -26,7 +26,11 @@ pub struct WindowsDeviceInfo;
 /// years ago — so the build number is the only thing that tells them apart.
 #[must_use]
 pub fn describe_build(build: u32, display_version: &str) -> String {
-    let family = if build >= FIRST_WINDOWS_11_BUILD { "11" } else { "10" };
+    let family = if build >= FIRST_WINDOWS_11_BUILD {
+        "11"
+    } else {
+        "10"
+    };
 
     if display_version.is_empty() {
         format!("{family} (build {build})")
@@ -203,7 +207,10 @@ mod tests {
     fn windows_ten_before_twenty_two_h_two_is_not_supported() {
         assert!(!is_supported_build(18_363), "1909 must not be supported");
         assert!(!is_supported_build(19_044), "21H2 must not be supported");
-        assert!(is_supported_build(MINIMUM_WINDOWS_10_BUILD), "22H2 must be supported");
+        assert!(
+            is_supported_build(MINIMUM_WINDOWS_10_BUILD),
+            "22H2 must be supported"
+        );
         assert!(is_supported_build(22_631));
         assert!(is_supported_build(26_100));
     }

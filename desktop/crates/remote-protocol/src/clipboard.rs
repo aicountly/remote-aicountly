@@ -192,7 +192,10 @@ mod tests {
     /// A clipboard holds passwords. Formatting one must not print it.
     #[test]
     fn debug_output_never_contains_the_content() {
-        let payload = ClipboardPayload::text("hunter2-the-actual-password", ClipboardDirection::ToController);
+        let payload = ClipboardPayload::text(
+            "hunter2-the-actual-password",
+            ClipboardDirection::ToController,
+        );
 
         let rendered = format!("{payload:?}");
 

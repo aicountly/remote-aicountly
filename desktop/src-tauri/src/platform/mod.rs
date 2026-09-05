@@ -127,7 +127,9 @@ mod tests {
         let error = unsupported::<()>("Screen capture").unwrap_err();
 
         assert!(error.to_string().contains("Screen capture"));
-        assert!(error.to_string().contains("not available on this platform yet"));
+        assert!(error
+            .to_string()
+            .contains("not available on this platform yet"));
     }
 
     /// On a platform with no key store, storage refuses rather than falling

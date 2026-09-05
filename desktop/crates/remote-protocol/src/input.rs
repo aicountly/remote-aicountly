@@ -48,8 +48,16 @@ impl PointerPosition {
     #[must_use]
     pub fn clamped(self) -> Self {
         Self {
-            x: if self.x.is_finite() { self.x.clamp(0.0, 1.0) } else { 0.0 },
-            y: if self.y.is_finite() { self.y.clamp(0.0, 1.0) } else { 0.0 },
+            x: if self.x.is_finite() {
+                self.x.clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
+            y: if self.y.is_finite() {
+                self.y.clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
         }
     }
 }
@@ -311,9 +319,24 @@ mod tests {
     /// it straight through to the platform's pointer API.
     #[test]
     fn nan_is_refused_rather_than_slipping_past_a_range_check() {
-        assert!(PointerPosition { x: f64::NAN, y: 0.5 }.validate().is_err());
-        assert!(PointerPosition { x: 0.5, y: f64::NAN }.validate().is_err());
-        assert!(PointerPosition { x: f64::INFINITY, y: 0.0 }.validate().is_err());
+        assert!(PointerPosition {
+            x: f64::NAN,
+            y: 0.5
+        }
+        .validate()
+        .is_err());
+        assert!(PointerPosition {
+            x: 0.5,
+            y: f64::NAN
+        }
+        .validate()
+        .is_err());
+        assert!(PointerPosition {
+            x: f64::INFINITY,
+            y: 0.0
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]
@@ -323,7 +346,11 @@ mod tests {
             PointerPosition { x: 1.0, y: 0.0 }
         );
         assert_eq!(
-            PointerPosition { x: f64::NAN, y: 0.5 }.clamped(),
+            PointerPosition {
+                x: f64::NAN,
+                y: 0.5
+            }
+            .clamped(),
             PointerPosition { x: 0.0, y: 0.5 }
         );
     }
@@ -342,9 +369,27 @@ mod tests {
 
     #[test]
     fn scrolling_is_bounded_so_it_can_be_scrolled_back() {
-        assert!(ScrollEvent { delta_x: 0.0, delta_y: 3.0, position: None }.validate().is_ok());
-        assert!(ScrollEvent { delta_x: 0.0, delta_y: 1e9, position: None }.validate().is_err());
-        assert!(ScrollEvent { delta_x: f64::NAN, delta_y: 0.0, position: None }.validate().is_err());
+        assert!(ScrollEvent {
+            delta_x: 0.0,
+            delta_y: 3.0,
+            position: None
+        }
+        .validate()
+        .is_ok());
+        assert!(ScrollEvent {
+            delta_x: 0.0,
+            delta_y: 1e9,
+            position: None
+        }
+        .validate()
+        .is_err());
+        assert!(ScrollEvent {
+            delta_x: f64::NAN,
+            delta_y: 0.0,
+            position: None
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]
@@ -370,7 +415,10 @@ mod tests {
         let event = KeyEvent {
             key: Key::Character('c'),
             pressed: true,
-            modifiers: Modifiers { ctrl: true, ..Modifiers::none() },
+            modifiers: Modifiers {
+                ctrl: true,
+                ..Modifiers::none()
+            },
         };
 
         let json = serde_json::to_string(&event).unwrap();

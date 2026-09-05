@@ -29,6 +29,7 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tokio.workspace = true
+time.workspace = true
 
 remote-core.workspace = true
 remote-protocol.workspace = true

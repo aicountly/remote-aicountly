@@ -75,11 +75,15 @@ impl SystemServiceProvider for WindowsService {
     }
 
     fn install(&self) -> PlatformResult<()> {
-        Err(PlatformError::ElevationRequired("Installing the background service"))
+        Err(PlatformError::ElevationRequired(
+            "Installing the background service",
+        ))
     }
 
     fn uninstall(&self) -> PlatformResult<()> {
-        Err(PlatformError::ElevationRequired("Removing the background service"))
+        Err(PlatformError::ElevationRequired(
+            "Removing the background service",
+        ))
     }
 
     fn start(&self) -> PlatformResult<()> {
@@ -95,12 +99,16 @@ impl SystemServiceProvider for WindowsService {
     }
 
     fn stop(&self) -> PlatformResult<()> {
-        Err(PlatformError::ElevationRequired("Stopping the background service"))
+        Err(PlatformError::ElevationRequired(
+            "Stopping the background service",
+        ))
     }
 
     fn service_version(&self) -> PlatformResult<Option<String>> {
         match self.hello() {
-            Ok(IpcResponse::Hello { service_version, .. }) => Ok(Some(service_version)),
+            Ok(IpcResponse::Hello {
+                service_version, ..
+            }) => Ok(Some(service_version)),
             // A half-finished update leaves a new UI beside an old service.
             // Saying which is far more useful than "it did not work".
             Err(IpcError::VersionMismatch { found, .. }) => Ok(Some(format!("protocol {found}"))),
@@ -111,8 +119,8 @@ impl SystemServiceProvider for WindowsService {
 
 #[cfg(target_os = "windows")]
 mod imp {
-    use aicountly_remote_service::{pipe_name, IpcError, IpcFrame, IpcRequest, IpcResponse};
     use aicountly_remote_service::ipc::HEADER_BYTES;
+    use aicountly_remote_service::{pipe_name, IpcError, IpcFrame, IpcRequest, IpcResponse};
     use remote_device::{PlatformError, PlatformResult};
     use std::io::{Read, Write};
 
@@ -121,15 +129,13 @@ mod imp {
     /// Connect, send, read one answer, disconnect.
     pub fn round_trip(request: &IpcRequest) -> Result<IpcResponse, IpcError> {
         use std::fs::OpenOptions;
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows::Win32::Storage::FileSystem::FILE_FLAG_OVERLAPPED;
 
+        // Opened without FILE_FLAG_OVERLAPPED: this is one synchronous
+        // request and one response, and the pipe's own idle timeout on the
+        // service side is what bounds a peer that stops answering.
         let mut pipe = OpenOptions::new()
             .read(true)
             .write(true)
-            // Not overlapped: this is a synchronous request/response and the
-            // timeout below is what bounds it.
-            .custom_flags(0 & FILE_FLAG_OVERLAPPED.0)
             .open(pipe_name())
             .map_err(|error| match error.kind() {
                 std::io::ErrorKind::NotFound => IpcError::NotRunning,
@@ -160,7 +166,8 @@ mod imp {
     pub fn is_installed() -> PlatformResult<bool> {
         use windows::core::HSTRING;
         use windows::Win32::System::Services::{
-            CloseServiceHandle, OpenSCManagerW, OpenServiceW, SC_MANAGER_CONNECT, SERVICE_QUERY_STATUS,
+            CloseServiceHandle, OpenSCManagerW, OpenServiceW, SC_MANAGER_CONNECT,
+            SERVICE_QUERY_STATUS,
         };
 
         // SAFETY: every handle opened below is closed on every path.
@@ -219,11 +226,13 @@ mod imp {
             let _ = CloseServiceHandle(service);
             let _ = CloseServiceHandle(manager);
 
-            result.map_err(|error| PlatformError::ElevationRequired(match error.code().0 {
-                // ERROR_ACCESS_DENIED
-                -2_147_024_891 => "Starting the background service",
-                _ => "Starting the background service",
-            }))
+            result.map_err(|error| {
+                PlatformError::ElevationRequired(match error.code().0 {
+                    // ERROR_ACCESS_DENIED
+                    -2_147_024_891 => "Starting the background service",
+                    _ => "Starting the background service",
+                })
+            })
         }
     }
 
@@ -234,6 +243,10 @@ mod imp {
 }
 
 #[cfg(test)]
+// Several tests here assert on constants on purpose: they are the design's
+// own bounds, and the point is that editing one past what the design intends
+// fails here rather than at some later runtime.
+#[allow(clippy::assertions_on_constants)]
 mod tests {
     use super::*;
 

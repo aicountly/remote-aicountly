@@ -25,7 +25,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use remote_protocol::{ClipboardPayload, KeyEvent, MonitorLayout, MouseEvent, PointerPosition, ScrollEvent};
+use remote_protocol::{
+    ClipboardPayload, KeyEvent, MonitorLayout, MouseEvent, PointerPosition, ScrollEvent,
+};
 use serde::{Deserialize, Serialize};
 
 pub mod capability;
@@ -371,7 +373,9 @@ mod tests {
         let error = DeviceDescription::read(&UnimplementedInfo, "1.0.0").unwrap_err();
 
         assert!(matches!(error, PlatformError::Unsupported(_)));
-        assert!(error.to_string().contains("not available on this platform yet"));
+        assert!(error
+            .to_string()
+            .contains("not available on this platform yet"));
     }
 
     /// A permission failure has a different remedy from an OS failure, so the
@@ -379,7 +383,10 @@ mod tests {
     #[test]
     fn error_kinds_stay_distinguishable_for_the_interface() {
         let denied = PlatformError::PermissionDenied("Screen Recording is not granted".into());
-        let os = PlatformError::Os { operation: "capture", detail: "device lost".into() };
+        let os = PlatformError::Os {
+            operation: "capture",
+            detail: "device lost".into(),
+        };
         let elevation = PlatformError::ElevationRequired("Installing the service");
 
         assert!(matches!(denied, PlatformError::PermissionDenied(_)));

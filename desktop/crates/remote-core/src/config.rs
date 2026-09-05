@@ -64,7 +64,8 @@ impl Default for AgentConfig {
 impl AgentConfig {
     /// Parse and validate a configuration document.
     pub fn from_json(json: &str) -> Result<Self, ConfigError> {
-        let config: Self = serde_json::from_str(json).map_err(|error| ConfigError::Malformed(error.to_string()))?;
+        let config: Self = serde_json::from_str(json)
+            .map_err(|error| ConfigError::Malformed(error.to_string()))?;
         config.validate()?;
 
         Ok(config)
@@ -209,8 +210,7 @@ pub fn config_path() -> Option<std::path::PathBuf> {
         std::env::var_os("XDG_CONFIG_HOME")
             .map(std::path::PathBuf::from)
             .or_else(|| {
-                std::env::var_os("HOME")
-                    .map(|home| std::path::PathBuf::from(home).join(".config"))
+                std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
             })
             .map(|root| root.join("aicountly-remote").join("config.json"))
     }
@@ -304,10 +304,7 @@ mod tests {
             ..AgentConfig::default()
         };
 
-        assert_eq!(
-            config.validate(),
-            Err(ConfigError::InsecureEndpoint("API"))
-        );
+        assert_eq!(config.validate(), Err(ConfigError::InsecureEndpoint("API")));
     }
 
     /// Localhost is allowed only in a debug build, and the exception is

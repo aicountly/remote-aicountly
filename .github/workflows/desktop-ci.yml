@@ -1,0 +1,213 @@
+# ---------------------------------------------------------------------------
+# Continuous integration for the AICOUNTLY Remote desktop agent.
+#
+# Separate from ci.yml because it has different runners, a different cache and
+# a much longer cold build: putting it in the same file would make every
+# backend change wait for a Windows runner.
+#
+# It does NOT deploy, publish or sign anything. Releases are release-windows.yml,
+# manually, with a protected environment.
+#
+# Path-filtered, so a change to web/ or backend/ does not spend a Windows
+# runner. The workflow file itself is in the filter — a change to how the agent
+# is built has to be exercised by the change that makes it.
+# ---------------------------------------------------------------------------
+name: Desktop CI
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop-ci.yml'
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # A remote-control agent is not a place to discover that a warning became a
+  # compile error in a later release, or to let one through because nobody read
+  # the log.
+  RUSTFLAGS: '-D warnings'
+
+jobs:
+  # -------------------------------------------------------------------------
+  # The portable crates. Everything that is not a native call lives in
+  # `desktop/crates/`, so the great majority of the agent's logic — the wire
+  # protocol, the control gate, the device identity, the state machine — is
+  # tested here, on a fast runner, on every push.
+  # -------------------------------------------------------------------------
+  rust:
+    name: Rust (portable crates)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+
+      - name: Formatting
+        working-directory: desktop
+        run: cargo fmt --all -- --check
+
+      # webkit2gtk and friends are what `tauri` links against on Linux. The
+      # shipped product is Windows; building the Tauri crate here is how the
+      # non-Windows half of the platform layer stays compiling.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Clippy
+        working-directory: desktop
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: desktop
+        run: cargo test --workspace
+
+  # -------------------------------------------------------------------------
+  # The Windows half.
+  #
+  # `cargo check` for the Windows target, not a full bundle: this job's purpose
+  # is that `src-tauri/src/platform/windows/` and `agents/windows-service/`
+  # compile, which is exactly what a Linux-only CI cannot tell you. The
+  # installer is built in the release workflow.
+  # -------------------------------------------------------------------------
+  windows:
+    name: Rust (Windows target)
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+
+      # The service is built first because Tauri's build script resolves the
+      # sidecar at compile time on Windows: without the file, the application
+      # crate does not even configure. Building it first is also the order the
+      # release script uses, so the two cannot disagree.
+      - name: Build the service
+        working-directory: desktop
+        run: cargo build -p aicountly-remote-service
+
+      - name: Stage the service as a sidecar
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          Copy-Item target/debug/AicountlyRemoteService.exe `
+            src-tauri/binaries/AicountlyRemoteService-x86_64-pc-windows-msvc.exe -Force
+
+      - name: Clippy
+        working-directory: desktop
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: desktop
+        run: cargo test --workspace
+
+  # -------------------------------------------------------------------------
+  # The agent's own interface. Same React/TypeScript checks the web client
+  # gets, because it is the same kind of code and has the same ways to break.
+  # -------------------------------------------------------------------------
+  frontend:
+    name: Desktop interface (React + TypeScript)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Type-check
+        working-directory: desktop
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: desktop
+        run: npm test
+
+      - name: Build
+        working-directory: desktop
+        run: npm run build
+
+  # -------------------------------------------------------------------------
+  # Dependency advisories.
+  #
+  # Its own job and not allowed to fail silently: an agent that runs as
+  # LocalSystem on a customer's machine and injects input into their desktop is
+  # not somewhere to carry a known-vulnerable dependency because a build was
+  # green.
+  # -------------------------------------------------------------------------
+  audit:
+    name: Dependency advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Rust advisories
+        working-directory: desktop
+        run: cargo audit --deny warnings
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: npm advisories
+        working-directory: desktop
+        run: npm audit --audit-level=high

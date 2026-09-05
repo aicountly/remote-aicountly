@@ -49,9 +49,7 @@ pub mod monitor;
 
 pub use clipboard::{ClipboardDirection, ClipboardPayload};
 pub use gate::{ControlGate, ControlState, GateError};
-pub use input::{
-    Key, KeyEvent, Modifiers, MouseButton, MouseEvent, PointerPosition, ScrollEvent,
-};
+pub use input::{Key, KeyEvent, Modifiers, MouseButton, MouseEvent, PointerPosition, ScrollEvent};
 pub use monitor::{Monitor, MonitorLayout, Orientation};
 
 /// The wire version.
@@ -371,7 +369,10 @@ mod tests {
             ControlMessage::MouseMove {
                 position: PointerPosition { x: 0.5, y: 0.25 },
             },
-            ControlMessage::MouseMoveRelative { dx: -0.01, dy: 0.02 },
+            ControlMessage::MouseMoveRelative {
+                dx: -0.01,
+                dy: 0.02,
+            },
             ControlMessage::MouseButton(MouseEvent {
                 button: MouseButton::Right,
                 pressed: true,
@@ -388,10 +389,7 @@ mod tests {
                 pressed: true,
                 modifiers: Modifiers::default(),
             }),
-            ControlMessage::Clipboard(ClipboardPayload::text(
-                "hello",
-                ClipboardDirection::ToHost,
-            )),
+            ControlMessage::Clipboard(ClipboardPayload::text("hello", ClipboardDirection::ToHost)),
             ControlMessage::ControlEnded {
                 reason: ControlEndReason::StoppedLocally,
             },
@@ -450,8 +448,8 @@ mod tests {
     /// is what keeps it that way when somebody adds a variant.
     #[test]
     fn the_protocol_expresses_nothing_executable() {
-        let vocabulary = serde_json::to_string(&envelope(ControlMessage::Ping { nonce: 0 }))
-            .unwrap_or_default();
+        let vocabulary =
+            serde_json::to_string(&envelope(ControlMessage::Ping { nonce: 0 })).unwrap_or_default();
 
         for forbidden in ["exec", "shell", "command", "spawn", "path", "script"] {
             assert!(
@@ -472,12 +470,20 @@ mod tests {
 
     #[test]
     fn refuses_a_non_finite_coordinate() {
-        for (x, y) in [(f64::NAN, 0.5), (0.5, f64::INFINITY), (f64::NEG_INFINITY, 0.0)] {
+        for (x, y) in [
+            (f64::NAN, 0.5),
+            (0.5, f64::INFINITY),
+            (f64::NEG_INFINITY, 0.0),
+        ] {
             let env = envelope(ControlMessage::MouseMove {
                 position: PointerPosition { x, y },
             });
 
-            assert_eq!(env.validate(), Err(ProtocolError::OutOfBounds), "({x}, {y})");
+            assert_eq!(
+                env.validate(),
+                Err(ProtocolError::OutOfBounds),
+                "({x}, {y})"
+            );
         }
     }
 
@@ -523,12 +529,8 @@ mod tests {
             (&"x".repeat(65) as &str, "p"),
             ("s", &"y".repeat(65) as &str),
         ] {
-            let env = ControlEnvelope::new(
-                session,
-                participant,
-                1,
-                ControlMessage::Ping { nonce: 0 },
-            );
+            let env =
+                ControlEnvelope::new(session, participant, 1, ControlMessage::Ping { nonce: 0 });
 
             assert_eq!(env.validate(), Err(ProtocolError::Malformed));
         }
