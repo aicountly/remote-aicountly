@@ -10,10 +10,10 @@ cd desktop    && cargo test --workspace   # 248 — protocol, gate, identity, st
 cd desktop    && npm test                 #  12 — the agent's own interface
 cd backend    && vendor/bin/phpunit       # 211 — devices, policy, control, unattended
 cd web        && npm test                 # 104 — capability gating, control input, devices
-cd signalling && npm test                 #  24 — tokens, rooms, device rooms, live relay
+cd signalling && npm test                 #  27 — tokens, rooms, device rooms, live relay
 ```
 
-**599 automated tests.** The split by crate:
+**602 automated tests.** The split by crate:
 
 | | |
 |---|---|

@@ -221,6 +221,45 @@ describe('Rooms', () => {
 // End-to-end: two real WebSocket clients through the real server.
 // ---------------------------------------------------------------------------
 
+/**
+ * The Origin check, on its own.
+ *
+ * Its purpose is to stop a page on another site opening a socket. A browser
+ * always sends an Origin; a desktop agent is not a browser and sends none, and
+ * refusing that would lock the agent out of every deployment that sets an
+ * allowlist while gaining nothing — the signed token is the gate for both.
+ */
+describe('originAllowed', () => {
+  let originAllowed;
+
+  before(async () => {
+    process.env.REMOTE_SIGNALLING_TOKEN_SECRET = SECRET;
+    process.env.REMOTE_SIGNAL_PORT = '0';
+
+    ({ originAllowed } = await import('../src/server.js'));
+  });
+
+  it('accepts anything when no allowlist is configured', () => {
+    assert.equal(originAllowed('https://anywhere.test', []), true);
+    assert.equal(originAllowed(undefined, []), true);
+  });
+
+  it('accepts an allowed browser origin and refuses another site', () => {
+    const allowed = ['https://remote.aicountly.com'];
+
+    assert.equal(originAllowed('https://remote.aicountly.com', allowed), true);
+    assert.equal(originAllowed('https://evil.test', allowed), false);
+    assert.equal(originAllowed('null', allowed), false);
+  });
+
+  it('accepts a client that sends no Origin at all — the desktop agent', () => {
+    const allowed = ['https://remote.aicountly.com'];
+
+    assert.equal(originAllowed(undefined, allowed), true);
+    assert.equal(originAllowed('', allowed), true);
+  });
+});
+
 describe('signalling server', () => {
   let server;
   let wss;

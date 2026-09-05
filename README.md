@@ -114,7 +114,7 @@ is no local login to fake. See
 ```bash
 cd backend    && vendor/bin/phpunit      # 211 — policy, tenant isolation, devices, control
 cd web        && npm test                # 104 — capture, capability gating, control input
-cd signalling && npm test                #  24 — tokens, rooms, device rooms, live relay
+cd signalling && npm test                #  27 — tokens, rooms, device rooms, live relay
 cd desktop    && cargo test --workspace  # 248 — protocol, gate, identity, state, session, service
 cd desktop    && npm test                #  12 — the agent's own interface
 ```

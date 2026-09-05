@@ -44,6 +44,10 @@ const SECRET = process.env.REMOTE_SIGNALLING_TOKEN_SECRET ?? '';
  * appropriate behind a reverse proxy that already restricts it — the Origin
  * header is not a security boundary on its own, since a non-browser client can
  * send anything. The token is the real gate.
+ *
+ * A connection with NO Origin at all is allowed through this check: that is a
+ * non-browser client, which is what the desktop agent is, and the check was
+ * only ever about a page on another site.
  */
 const ALLOWED_ORIGINS = (process.env.REMOTE_SIGNAL_ALLOWED_ORIGINS ?? '')
   .split(',')
@@ -52,6 +56,26 @@ const ALLOWED_ORIGINS = (process.env.REMOTE_SIGNAL_ALLOWED_ORIGINS ?? '')
 
 /** A signalling message is SDP at worst; anything larger is not one. */
 const MAX_MESSAGE_BYTES = 256 * 1024;
+
+/**
+ * Whether a connection's Origin is one to accept.
+ *
+ * The check exists to stop a page on another site opening a socket, and a
+ * browser always sends an Origin. An **absent** one means a non-browser client
+ * — which the desktop agent is — and that is what this check was never
+ * protecting against; refusing it here would lock the agent out of a
+ * deployment that sets an allowlist, and gain nothing. The signed token is the
+ * real gate for both kinds of client.
+ *
+ * @param {string|undefined} origin
+ * @param {string[]} allowed
+ */
+export function originAllowed(origin, allowed) {
+  if (allowed.length === 0) return true;
+  if (typeof origin !== 'string' || origin === '') return true;
+
+  return allowed.includes(origin);
+}
 
 /** Dead sockets are indistinguishable from idle ones without a heartbeat. */
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -129,11 +153,8 @@ server.on('upgrade', (request, socket, head) => {
     return refuseUpgrade(socket, 404, 'Not found');
   }
 
-  if (ALLOWED_ORIGINS.length > 0) {
-    const origin = request.headers.origin ?? '';
-    if (!ALLOWED_ORIGINS.includes(origin)) {
-      return refuseUpgrade(socket, 403, 'Origin not allowed');
-    }
+  if (!originAllowed(request.headers.origin, ALLOWED_ORIGINS)) {
+    return refuseUpgrade(socket, 403, 'Origin not allowed');
   }
 
   // The token may arrive as a query parameter or as the WebSocket subprotocol.
