@@ -34,43 +34,16 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use remote_device::{CaptureProfile, Frame, PlatformResult, ScreenCaptureProvider};
-use remote_protocol::{Monitor, MonitorLayout, Orientation};
+// Only the refusals a host without an implementation returns need it.
+#[cfg(not(target_os = "windows"))]
+use remote_device::PlatformError;
+use remote_protocol::MonitorLayout;
 
-/// Whether the Secure Desktop is in front of the user's own.
-///
-/// The agent polls this while capturing. When it becomes `Active`, the viewer
-/// is told "the person at this computer is answering a Windows security
-/// prompt" instead of being left looking at a frozen frame and wondering
-/// whether the connection died.
-///
-/// It is deliberately only a *notification*. Nothing here attempts to capture
-/// the Secure Desktop or to inject into it — Windows prevents both by design,
-/// and defeating that protection is not something a remote-assistance product
-/// should be trying to do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SecureDesktopState {
-    /// The user's own desktop is in front. Capture is showing what they see.
-    UserDesktop,
-    /// A UAC prompt, Ctrl+Alt+Del or the sign-in screen is in front.
-    ///
-    /// Frames are still arriving, but they show what is *underneath* the
-    /// prompt rather than the prompt, and input is not delivered.
-    Active,
-}
-
-impl SecureDesktopState {
-    /// What the viewer is told.
-    #[must_use]
-    pub fn describe(self) -> Option<&'static str> {
-        match self {
-            Self::UserDesktop => None,
-            Self::Active => Some(
-                "The person at this computer is answering a Windows security prompt. \
-                 Windows hides it from screen sharing, and remote control does not reach it.",
-            ),
-        }
-    }
-}
+// The arithmetic itself is plain numbers, so it lives beside the platform
+// modules rather than inside this one — see `platform::display`.
+pub use crate::platform::display::{
+    describe_monitor, orientation_from_windows, scale_from_dpi, SecureDesktopState,
+};
 
 /// Capture, through `Windows.Graphics.Capture`.
 pub struct WindowsCapture {
@@ -153,7 +126,7 @@ impl ScreenCaptureProvider for WindowsCapture {
         {
             let _ = (monitor_id, profile);
 
-            return Err(PlatformError::Unsupported("Screen capture"));
+            Err(PlatformError::Unsupported("Screen capture"))
         }
 
         #[cfg(target_os = "windows")]
@@ -215,63 +188,6 @@ impl ScreenCaptureProvider for WindowsCapture {
 
     fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
-    }
-}
-
-/// Scale a monitor to the profile, and describe it for the protocol.
-///
-/// Pulled out of the Windows-only code so the arithmetic that decides where a
-/// click lands is tested on every host.
-///
-/// Nine arguments, and they stay nine: every one is a separate value Windows
-/// hands back from a different call, and bundling them into a struct would
-/// only move the same nine assignments to the caller while making the
-/// enumeration loop harder to read.
-#[allow(clippy::too_many_arguments)]
-#[must_use]
-pub fn describe_monitor(
-    id: u32,
-    name: &str,
-    primary: bool,
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-    dpi: u32,
-    orientation: Orientation,
-) -> Monitor {
-    Monitor {
-        id,
-        // Bounded and stripped: a display name is a string Windows read from
-        // the monitor's own EDID, which is to say from hardware somebody else
-        // manufactured.
-        name: name
-            .chars()
-            .filter(|c| !c.is_control())
-            .take(120)
-            .collect::<String>(),
-        primary,
-        x,
-        y,
-        // Physical pixels. The scale is reported *beside* them rather than
-        // applied to them — multiplying by it as well is the classic way a
-        // click on a 150% display lands half a screen away.
-        width,
-        height,
-        scale: f64::from(dpi.max(1)) / 96.0,
-        refresh_hz: None,
-        orientation,
-    }
-}
-
-/// Windows' `DMDO_*` display orientation, as the protocol spells it.
-#[must_use]
-pub fn orientation_from_windows(value: u32) -> Orientation {
-    match value {
-        1 => Orientation::Portrait,
-        2 => Orientation::LandscapeFlipped,
-        3 => Orientation::PortraitFlipped,
-        _ => Orientation::Landscape,
     }
 }
 
@@ -753,104 +669,8 @@ mod tests {
         assert!(capture.stop().is_ok());
     }
 
-    /// The arithmetic that decides where a click lands, tested on every host.
-    #[test]
-    fn a_monitor_description_keeps_physical_pixels_and_reports_scale_beside_them() {
-        let monitor = describe_monitor(
-            1,
-            r"\\.\DISPLAY1",
-            true,
-            0,
-            0,
-            2880,
-            1620,
-            144,
-            Orientation::Landscape,
-        );
-
-        assert_eq!(monitor.width, 2880);
-        assert_eq!(monitor.height, 1620);
-        assert!((monitor.scale - 1.5).abs() < f64::EPSILON);
-        assert!(monitor.validate().is_ok());
-
-        // And the scale is reported, not applied.
-        assert_eq!(
-            monitor.denormalise(remote_protocol::PointerPosition { x: 0.5, y: 0.5 }),
-            Some((1439, 809))
-        );
-    }
-
-    /// A display name comes from hardware somebody else manufactured.
-    #[test]
-    fn a_display_name_is_stripped_and_bounded() {
-        let monitor = describe_monitor(
-            1,
-            &format!("Dell\u{0}\u{7}U2720Q{}", "x".repeat(200)),
-            false,
-            0,
-            0,
-            1920,
-            1080,
-            96,
-            Orientation::Landscape,
-        );
-
-        assert!(!monitor.name.contains('\0'));
-        assert!(!monitor.name.contains('\u{7}'));
-        assert!(monitor.name.len() <= 120);
-        assert!(monitor.validate().is_ok());
-    }
-
-    #[test]
-    fn a_secondary_monitor_at_a_negative_origin_is_described_correctly() {
-        let left = describe_monitor(
-            2,
-            "Left",
-            false,
-            -1920,
-            0,
-            1920,
-            1080,
-            96,
-            Orientation::Landscape,
-        );
-
-        assert_eq!(left.x, -1920);
-        assert_eq!(
-            left.denormalise(remote_protocol::PointerPosition { x: 0.0, y: 0.0 }),
-            Some((-1920, 0))
-        );
-    }
-
-    #[test]
-    fn windows_orientation_values_map_to_the_protocols() {
-        assert_eq!(orientation_from_windows(0), Orientation::Landscape);
-        assert_eq!(orientation_from_windows(1), Orientation::Portrait);
-        assert_eq!(orientation_from_windows(2), Orientation::LandscapeFlipped);
-        assert_eq!(orientation_from_windows(3), Orientation::PortraitFlipped);
-        // Anything else is the ordinary way up rather than a failure.
-        assert_eq!(orientation_from_windows(99), Orientation::Landscape);
-    }
-
-    /// A frozen frame with no explanation reads as a dropped connection. The
-    /// agent says what is happening instead.
-    #[test]
-    fn the_secure_desktop_is_explained_rather_than_left_as_a_frozen_frame() {
-        assert!(SecureDesktopState::UserDesktop.describe().is_none());
-
-        let explanation = SecureDesktopState::Active
-            .describe()
-            .expect("says something");
-
-        assert!(explanation.contains("Windows security prompt"));
-        assert!(explanation.contains("remote control does not reach it"));
-    }
-
-    #[test]
-    fn a_zero_dpi_reading_does_not_produce_a_zero_scale() {
-        let monitor = describe_monitor(1, "X", true, 0, 0, 1920, 1080, 0, Orientation::Landscape);
-
-        assert!(monitor.scale > 0.0);
-        assert!(monitor.validate().is_ok());
-    }
+    // The monitor arithmetic, the DPI fallback and the Secure Desktop wording
+    // are tested in `platform::display`, which compiles on every host. They
+    // used to be tested here — where a Windows runner was the only thing that
+    // ran them, and a rounding mistake in one reached CI rather than a laptop.
 }

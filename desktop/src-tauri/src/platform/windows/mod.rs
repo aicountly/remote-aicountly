@@ -4,6 +4,23 @@
 //! nothing here is architecture-specific, so ARM64 is a build target rather
 //! than a port.
 //!
+//! # Why this compiles on a Linux runner too
+//!
+//! The module is **not** gated on the target. Every file inside puts its
+//! native calls in an inner `#[cfg(target_os = "windows")] mod imp` and
+//! returns [`remote_device::PlatformError::Unsupported`] from the outer half
+//! everywhere else, so the parts that are only arithmetic and tables — where a
+//! click lands, which virtual-key code a key is, whether a key needs the
+//! extended flag, how a wheel notch is counted, what the clipboard will carry
+//! — compile and are **tested on every push**, not only when a Windows runner
+//! is available.
+//!
+//! Gating the module instead was a real mistake, corrected here: it hid a
+//! rounding bug and a DPI conversion that would have dropped a working display
+//! out of the monitor layout, and it left a test written specifically for
+//! non-Windows hosts running on no host at all. Anything added here should keep
+//! the same shape — decide in the outer half, call in `imp`.
+//!
 //! # What runs where
 //!
 //! Everything in this module runs in the **user's own interactive session**,

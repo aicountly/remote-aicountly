@@ -10,6 +10,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::{input::PointerPosition, ProtocolError};
 
+/// The smallest display scale the protocol will carry.
+///
+/// A platform whose DPI reading falls outside [`MIN_SCALE`]..=[`MAX_SCALE`] has
+/// not reported a scale — it has reported a failure — and the caller should
+/// substitute 100% rather than pass the number on. Exposed so the platform
+/// layer and [`Monitor::validate`] cannot drift apart about what is plausible.
+pub const MIN_SCALE: f64 = 0.25;
+
+/// The largest display scale the protocol will carry. See [`MIN_SCALE`].
+pub const MAX_SCALE: f64 = 8.0;
+
 /// How a display is turned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -109,7 +120,7 @@ impl Monitor {
             return Err(ProtocolError::OutOfBounds);
         }
 
-        if !self.scale.is_finite() || !(0.25..=8.0).contains(&self.scale) {
+        if !self.scale.is_finite() || !(MIN_SCALE..=MAX_SCALE).contains(&self.scale) {
             return Err(ProtocolError::OutOfBounds);
         }
 

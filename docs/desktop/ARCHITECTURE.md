@@ -79,11 +79,13 @@ desktop/
 The split between `crates/` and `src-tauri/src/platform/` is the design. Every
 decision — what a control message means, whether input is admitted, how a
 challenge is signed, when to retry — is in `crates/`, compiles on any host, and
-is tested on Linux CI. What is left in `platform/windows/` is native calls with
-almost no branching, which is the part a Linux runner genuinely cannot check
-and the part a Windows runner therefore has to.
+is tested on Linux CI. `platform/windows/` is not gated on the target either:
+each file keeps its native calls in an inner `mod imp`, so the arithmetic and
+the lookup tables around them — where a click lands, the virtual-key codes, the
+clipboard bounds — are tested on Linux as well. What only a Windows runner can
+check is `mod imp` itself, and that is what it compiles and clippy-checks.
 
-`cargo test --workspace` runs **248 Rust tests** on any host.
+`cargo test --workspace` runs **299 Rust tests** on any host.
 
 ### The platform traits
 
@@ -195,8 +197,9 @@ gap at the wrong moment.
   implementation byte for byte, DPAPI storage, enrolment, authentication;
 * the agent state machine, configuration, API client, backoff;
 * the Windows platform layer — capture, input, clipboard, storage, device
-  info, service control, power — compiling for `x86_64-pc-windows-msvc` and
-  checked in CI on a Windows runner;
+  info, service control, power — compiling for `x86_64-pc-windows-msvc`,
+  checked in CI on a Windows runner, and with everything around its native
+  calls tested on every host;
 * the Windows service: SCM registration, the ACL'd named pipe, the IPC
   protocol, the restart;
 * the connection loop: authentication, renewal, presence, policy refresh;
@@ -205,7 +208,7 @@ gap at the wrong moment.
   the gate;
 * the tray, the window and the consent screens;
 * the whole server side — devices, policy, control, unattended sessions,
-  presence rooms, audit — with 208 backend tests;
+  presence rooms, audit — with 211 backend tests;
 * the browser side — capability-driven control UI, input capture, the
   Computers page — with 104 web tests.
 

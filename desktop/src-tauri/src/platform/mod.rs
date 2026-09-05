@@ -4,6 +4,12 @@
 //! below it is Windows or macOS, and each is behind the traits in
 //! `remote-device` so nothing above ever learns which.
 //!
+//! "Below it" is about what the code *does*, not about what will compile:
+//! [`windows`] is deliberately not gated on the target, because each of its
+//! files keeps its native calls in an inner `mod imp` and everything else —
+//! coordinates, key tables, bounds — is arithmetic that should be tested
+//! wherever CI happens to run. See that module for why.
+//!
 //! # macOS is Unsupported, and says so
 //!
 //! [`macos`] returns [`PlatformError::Unsupported`] from every method. It does
@@ -23,9 +29,18 @@ use remote_device::{
 };
 use remote_security::SecureStorageProvider;
 
+/// Describing a display, and the Secure Desktop. Plain numbers, so it lives
+/// above the platform gate and is tested on every host.
+pub mod display;
+
 pub mod macos;
 
-#[cfg(target_os = "windows")]
+/// Windows. Not gated on the target: every file inside guards its own native
+/// half with `#[cfg(target_os = "windows")]`, so the coordinate arithmetic,
+/// the virtual-key table and the held-key tracking compile — and are tested —
+/// on a Linux runner too. Gating the module here is what once hid a rounding
+/// bug and a scale conversion that dropped a working display, and left a test
+/// written for non-Windows hosts running nowhere at all.
 pub mod windows;
 
 /// Everything the platform layer provides, assembled once at startup.

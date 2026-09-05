@@ -142,7 +142,7 @@ and defaulted to false. They are now the plan gate they were put there to be.
 ## How much of it is built
 
 **The whole server side, the whole browser side, and the machine's identity,
-policy, consent, session transport and lifecycle.** 602 automated tests across
+policy, consent, session transport and lifecycle.** 653 automated tests across
 the five parts of the product.
 
 **Not the video.** There is no encoder: `remote-webrtc` negotiates a VP8 track

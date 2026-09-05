@@ -50,7 +50,7 @@ pub mod monitor;
 pub use clipboard::{ClipboardDirection, ClipboardPayload};
 pub use gate::{ControlGate, ControlState, GateError};
 pub use input::{Key, KeyEvent, Modifiers, MouseButton, MouseEvent, PointerPosition, ScrollEvent};
-pub use monitor::{Monitor, MonitorLayout, Orientation};
+pub use monitor::{Monitor, MonitorLayout, Orientation, MAX_SCALE, MIN_SCALE};
 
 /// The wire version.
 ///

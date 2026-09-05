@@ -32,6 +32,10 @@ use remote_security::{SecureStorageProvider, StorageError, StorageScope};
 /// Additional entropy mixed into the DPAPI derivation.
 ///
 /// Not a secret. See the module documentation for what it is and is not for.
+// Only DPAPI reads it, and DPAPI is only compiled on Windows. The constant
+// stays here rather than inside the Windows half so it sits beside the
+// documentation that explains it.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 const ENTROPY: &[u8] = b"AICOUNTLY-REMOTE-DEVICE-KEY-v1";
 
 /// Where machine-scoped secrets live, under `%ProgramData%`.

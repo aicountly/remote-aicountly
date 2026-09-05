@@ -65,11 +65,11 @@ npm run dev
 # the whole agent (needs Windows for the native layer)
 npm run tauri dev
 
-# everything, on any host — the Windows-only modules are compiled out
+# everything, on any host — only each module's native `mod imp` is compiled out
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 
-# type-check the Windows-only half without a Windows machine
+# type-check the native half without a Windows machine
 rustup target add x86_64-pc-windows-gnu     # plus gcc-mingw-w64-x86-64
 cargo build --target x86_64-pc-windows-gnu -p aicountly-remote-service
 cp target/x86_64-pc-windows-gnu/debug/AicountlyRemoteService.exe \
@@ -83,14 +83,16 @@ pwsh -File scripts/windows/build.ps1
 ## Tests
 
 ```bash
-cargo test --workspace   # 248 — protocol, gate, keys, state, capture maths, IPC, the session
+cargo test --workspace   # 299 — protocol, gate, keys, state, capture maths, IPC, the session
 npm test                 #  12 — the session banner and the unattended screen
 cargo audit --deny warnings
 ```
 
-**No Windows-only code path has been executed on a Windows machine.** It is
-compiled, clippy-clean and type-checked for the Windows target; running it is
-`tests/MANUAL.md`, and that pass has to happen before a release.
+**No native Windows call has been executed on a Windows machine.** Everything
+around them — coordinates, key tables, bounds, the IPC client's own logic —
+is tested here; the calls themselves are compiled, clippy-clean and type-checked
+for the Windows target, and running them is `tests/MANUAL.md`, a pass that has
+to happen before a release.
 
 ## Documentation
 

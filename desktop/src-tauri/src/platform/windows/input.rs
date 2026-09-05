@@ -25,6 +25,9 @@
 use std::sync::Mutex;
 
 use remote_device::{InputProvider, PlatformResult};
+// Only the refusals a host without an implementation returns need it.
+#[cfg(not(target_os = "windows"))]
+use remote_device::PlatformError;
 use remote_protocol::{Key, KeyEvent, MouseEvent, PointerPosition, ScrollEvent};
 
 /// One notch of a wheel, as Windows counts it.
@@ -60,6 +63,9 @@ impl WindowsInput {
     }
 
     /// Remember or forget a held key.
+    // Called from the injection path and from the tests, both of which the
+    // non-Windows build has nothing of.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     fn track(&self, key: Key, pressed: bool) {
         let Ok(mut held) = self.held.lock() else {
             return;
@@ -554,7 +560,7 @@ mod tests {
     // Used only by the no-implementation test below, which is the one that
     // does not compile on Windows.
     #[cfg(not(target_os = "windows"))]
-    use remote_protocol::Modifiers;
+    use remote_protocol::{Modifiers, MouseButton};
 
     fn desktop() -> VirtualDesktop {
         VirtualDesktop {

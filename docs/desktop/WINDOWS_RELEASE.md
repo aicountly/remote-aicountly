@@ -195,12 +195,13 @@ Genuinely blocking, and none of it is something code can decide:
       weeks.
 - [ ] **The `windows-release` environment** configured as above.
 - [ ] **A real end-to-end run on Windows.** Everything in this repository is
-      compiled for Windows and checked by a Windows CI runner; the Windows-only
-      code paths have not been *executed* on a Windows machine. See
+      compiled for Windows and checked by a Windows CI runner; the native
+      Windows calls have not been *executed* on a Windows machine. See
       [TESTING.md](TESTING.md) and `desktop/tests/MANUAL.md`.
-- [ ] **The remaining runtime work** — the encoder and the agent's signalling
-      client. Until those exist the agent joins sessions and carries control
-      messages but does not send a picture. See
+- [ ] **The remaining runtime work** — the encoder. Until it exists the agent
+      enrols, stays reachable, joins sessions over the same signalling socket
+      the browser uses and carries control messages through its gate, but does
+      not send a picture. See
       [ARCHITECTURE.md](ARCHITECTURE.md#what-is-built-and-what-is-not).
 
 ## Checklist for a release that is ready

@@ -97,7 +97,7 @@ cd web && npm install && cp ../.env.example ../.env
 npm run dev                                   # http://localhost:5173
 
 # desktop agent — needs Rust 1.82+ and Node 22+. Builds and tests on any host;
-# the Windows-only half needs Windows (or a mingw cross-check — see
+# the native Windows calls need Windows (or a mingw cross-check — see
 # docs/desktop/TESTING.md).
 cd desktop && npm install
 cargo test --workspace
@@ -115,7 +115,7 @@ is no local login to fake. See
 cd backend    && vendor/bin/phpunit      # 211 — policy, tenant isolation, devices, control
 cd web        && npm test                # 104 — capture, capability gating, control input
 cd signalling && npm test                #  27 — tokens, rooms, device rooms, live relay
-cd desktop    && cargo test --workspace  # 248 — protocol, gate, identity, state, session, service
+cd desktop    && cargo test --workspace  # 299 — protocol, gate, identity, state, session, service
 cd desktop    && npm test                #  12 — the agent's own interface
 ```
 
@@ -125,7 +125,7 @@ verifies that the migrations roll back cleanly;
 `.github/workflows/desktop-ci.yml` runs the desktop workspace on Linux **and**
 on a Windows runner, with `cargo audit` and `npm audit`.
 
-What is **not** covered — no Windows-only code path has been executed on a
+What is **not** covered — no native Windows call has been executed on a
 Windows machine — is set out in
 [docs/desktop/TESTING.md](docs/desktop/TESTING.md), and the manual pass that
 has to precede a release is `desktop/tests/MANUAL.md`.

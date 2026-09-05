@@ -10,7 +10,9 @@
 //! button that triggers the normal Windows consent prompt. AICOUNTLY Remote
 //! does not disable UAC and does not try to get around it.
 
-use aicountly_remote_service::{IpcError, IpcRequest, IpcResponse, SERVICE_NAME};
+#[cfg(target_os = "windows")]
+use aicountly_remote_service::SERVICE_NAME;
+use aicountly_remote_service::{IpcError, IpcRequest, IpcResponse};
 use remote_device::{PlatformError, PlatformResult, SystemServiceProvider};
 
 /// How long to wait for the service to answer one request.
