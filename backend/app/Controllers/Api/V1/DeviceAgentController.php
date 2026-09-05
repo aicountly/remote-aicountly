@@ -20,9 +20,10 @@ use Config\Services;
  * route by which an agent could read a session, administer a company or see
  * another device.
  *
- * What an agent can do here is exactly four things: say it is still there,
+ * What an agent can do here is exactly five things: say it is still there,
  * find out what it is currently permitted to do, pick up an unattended session
- * it has been asked to host, and switch its own unattended access off.
+ * it has been asked to host, report what the person at the machine decided
+ * about remote control, and switch its own unattended access off.
  */
 class DeviceAgentController extends BaseApiController
 {
@@ -201,6 +202,40 @@ class DeviceAgentController extends BaseApiController
             ],
             'iceServers'     => $ice->iceServers(),
             'relayAvailable' => $ice->hasRelay(),
+        ]);
+    }
+
+    /**
+     * `POST /devices/me/sessions/{uuid}/control`
+     *
+     * The machine reporting what the person at it decided: Allow, Not now, or
+     * Stop control.
+     *
+     * The agent's own gate has already taken effect by the time this arrives —
+     * it is local and needs no network, which is the property that makes Stop
+     * control trustworthy. This is how the *server* and the other participant
+     * find out, so the browser stops sending and the decision is recorded
+     * against the person the machine belongs to.
+     */
+    public function control(string $uuid): ResponseInterface
+    {
+        $principal = $this->context()->requireDevice();
+        $principal->assertScope(DevicePrincipal::SCOPE_SESSION);
+
+        $session = Services::sessionService()->findByUuidOrFail($uuid);
+        $body    = $this->body();
+
+        $result = Services::deviceSessionService()->decideControl(
+            $session,
+            $principal,
+            $this->requiredString($body, 'participantUuid', 64),
+            $this->enum($body, 'decision', ['GRANT', 'DENY', 'REVOKE'], 'REVOKE'),
+            $this->boolean($body, 'allowClipboard'),
+        );
+
+        return $this->ok([
+            'participant' => Presenter::participant($result['participant']),
+            'control'     => Services::controlService()->stateFor($session),
         ]);
     }
 

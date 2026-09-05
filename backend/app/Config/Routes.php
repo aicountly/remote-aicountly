@@ -156,6 +156,12 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
     $routes->post('devices/me/sessions/(:segment)/join', 'DeviceAgentController::joinSession/$1', [
         'filter' => ['device-auth:device.session', 'rate-limit:device-join,30,60'],
     ]);
+    // The machine reporting what the person at it decided about control. The
+    // agent's own gate already applied it locally; this is how the server and
+    // the browser find out.
+    $routes->post('devices/me/sessions/(:segment)/control', 'DeviceAgentController::control/$1', [
+        'filter' => ['device-auth:device.session', 'rate-limit:device-control,60,60'],
+    ]);
     $routes->post('devices/me/unattended/disable', 'DeviceAgentController::disableUnattended', [
         'filter' => 'device-auth:device.self',
     ]);

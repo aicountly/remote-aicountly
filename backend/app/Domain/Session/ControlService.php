@@ -201,8 +201,35 @@ class ControlService
             );
         }
 
-        $clipboard = $allowClipboard && $policy->allowClipboardSync;
+        return $this->applyGrant(
+            $session,
+            $requester,
+            $allowClipboard && $policy->allowClipboardSync,
+            $host->id,
+            'USER',
+            (string) $hostParticipant['uuid'],
+        );
+    }
 
+    /**
+     * Write the grant and record it, whoever decided.
+     *
+     * Shared by the browser host and by a desktop agent answering for its own
+     * machine — the decision is the same one and must leave the same row and
+     * the same audit entry behind, or the two paths would drift.
+     *
+     * @param  array<string, mixed> $session
+     * @param  array<string, mixed> $requester
+     * @return array<string, mixed>
+     */
+    private function applyGrant(
+        array $session,
+        array $requester,
+        bool $clipboard,
+        ?int $actorUserId,
+        string $actorType,
+        string $hostParticipantUuid,
+    ): array {
         // Guarded on the state it was read in, so two Allow taps produce one
         // grant and one no-op rather than two audit entries.
         $this->db->table('remote_participants')
@@ -211,7 +238,7 @@ class ControlService
             ->update([
                 'control_state'              => self::STATE_GRANTED,
                 'control_granted_at'         => Clock::now(),
-                'control_granted_by_user_id' => $host->id,
+                'control_granted_by_user_id' => $actorUserId,
                 'control_revoked_at'         => null,
                 'clipboard_enabled'          => $clipboard,
                 'updated_at'                 => Clock::now(),
@@ -226,14 +253,56 @@ class ControlService
         $this->audit->record(
             $session,
             EventType::CONTROL_GRANTED,
-            $host->id,
-            'USER',
+            $actorUserId,
+            $actorType,
             (int) $updated['id'],
             (string) $updated['uuid'],
             [
-                'hostParticipantUuid' => (string) $hostParticipant['uuid'],
+                'hostParticipantUuid' => $hostParticipantUuid,
                 'clipboard'           => $clipboard,
             ],
+        );
+
+        return $updated;
+    }
+
+    /**
+     * Move a participant out of control, whoever decided and for whichever
+     * of the two reasons.
+     *
+     * @param  array<string, mixed> $session
+     * @param  array<string, mixed> $target
+     * @return array<string, mixed>
+     */
+    private function applyEnd(
+        array $session,
+        array $target,
+        string $state,
+        string $eventType,
+        ?int $actorUserId,
+        string $actorType,
+        array $metadata = [],
+    ): array {
+        $this->db->table('remote_participants')
+            ->where('id', $target['id'])
+            ->whereIn('control_state', [self::STATE_REQUESTED, self::STATE_GRANTED])
+            ->update([
+                'control_state'      => $state,
+                'control_revoked_at' => Clock::now(),
+                'clipboard_enabled'  => false,
+                'updated_at'         => Clock::now(),
+            ]);
+
+        $updated = $this->participants->findByIdOrFail((int) $target['id']);
+
+        $this->audit->record(
+            $session,
+            $eventType,
+            $actorUserId,
+            $actorType,
+            (int) $updated['id'],
+            (string) $updated['uuid'],
+            $metadata,
         );
 
         return $updated;
@@ -250,28 +319,14 @@ class ControlService
         $this->requireHost($session, $host);
         $requester = $this->requireParticipantByUuid($session, $requesterUuid);
 
-        $this->db->table('remote_participants')
-            ->where('id', $requester['id'])
-            ->whereIn('control_state', [self::STATE_REQUESTED, self::STATE_GRANTED])
-            ->update([
-                'control_state'      => self::STATE_DENIED,
-                'control_revoked_at' => Clock::now(),
-                'clipboard_enabled'  => false,
-                'updated_at'         => Clock::now(),
-            ]);
-
-        $updated = $this->participants->findByIdOrFail((int) $requester['id']);
-
-        $this->audit->record(
+        return $this->applyEnd(
             $session,
+            $requester,
+            self::STATE_DENIED,
             EventType::CONTROL_DENIED,
             $host->id,
             'USER',
-            (int) $updated['id'],
-            (string) $updated['uuid'],
         );
-
-        return $updated;
     }
 
     /**
@@ -310,29 +365,133 @@ class ControlService
             );
         }
 
-        $this->db->table('remote_participants')
-            ->where('id', $target['id'])
-            ->whereIn('control_state', [self::STATE_REQUESTED, self::STATE_GRANTED])
-            ->update([
-                'control_state'      => self::STATE_REVOKED,
-                'control_revoked_at' => Clock::now(),
-                'clipboard_enabled'  => false,
-                'updated_at'         => Clock::now(),
-            ]);
-
-        $updated = $this->participants->findByIdOrFail((int) $target['id']);
-
-        $this->audit->record(
+        return $this->applyEnd(
             $session,
+            $target,
+            self::STATE_REVOKED,
             EventType::CONTROL_REVOKED,
             $identity->id,
             'USER',
-            (int) $updated['id'],
-            (string) $updated['uuid'],
             ['by' => $isController && ! $isHost ? 'CONTROLLER' : 'HOST'],
         );
+    }
 
-        return $updated;
+    /**
+     * The machine itself answering: the person at the keyboard pressed Allow,
+     * Not now, or Stop control in the desktop agent.
+     *
+     * The agent's own gate has *already* taken effect by the time this is
+     * called — it is local, it needs no network, and that is the property the
+     * whole design rests on. This is how the server and the other participant
+     * find out, so the browser can stop sending and the audit trail records
+     * who decided.
+     *
+     * The consent belongs to the machine, so the checks are the machine's:
+     *
+     *   1. the session is live;
+     *   2. the organisation permits remote control;
+     *   3. the device's own owner holds `remote.control.accept` — a machine
+     *      cannot consent more widely than the person it belongs to may;
+     *   4. the participant answering *is* the session's controllable host, so
+     *      one device cannot answer for another;
+     *   5. the clipboard is a separate decision, and still bounded by policy.
+     *
+     * @param  array<string, mixed> $session
+     * @param  array<string, mixed> $deviceParticipant the device's own row
+     * @return array<string, mixed> the requester, updated
+     */
+    public function decideAsDevice(
+        array $session,
+        array $deviceParticipant,
+        string $requesterUuid,
+        string $decision,
+        EffectivePolicy $ownerPolicy,
+        bool $allowClipboard = false,
+    ): array {
+        if (! SessionStatus::isLive((string) $session['status'])) {
+            throw ApiException::conflict('SESSION_ALREADY_ENDED', 'This Remote session has already finished.');
+        }
+
+        // A device answering for a session whose controllable host is some
+        // other participant is a device answering a question it was not asked.
+        $host = $this->controllableHost($session);
+
+        if ($host === null || (int) $host['id'] !== (int) $deviceParticipant['id']) {
+            throw ApiException::forbidden(
+                'NOT_SESSION_HOST',
+                'Only the computer being shared can decide about remote control.',
+            );
+        }
+
+        $requester = $this->requireParticipantByUuid($session, $requesterUuid);
+        $ownerId   = $deviceParticipant['user_id'] !== null ? (int) $deviceParticipant['user_id'] : null;
+
+        // Ending control needs no permission at all, in either direction. A
+        // machine that could be stopped only by somebody holding a grant would
+        // be a machine whose owner cannot stop it.
+        if ($decision === 'DENY' || $decision === 'REVOKE') {
+            return $this->applyEnd(
+                $session,
+                $requester,
+                $decision === 'DENY' ? self::STATE_DENIED : self::STATE_REVOKED,
+                $decision === 'DENY' ? EventType::CONTROL_DENIED : EventType::CONTROL_REVOKED,
+                $ownerId,
+                'DEVICE',
+                ['by' => 'DEVICE', 'deviceParticipantUuid' => (string) $deviceParticipant['uuid']],
+            );
+        }
+
+        if ($decision !== 'GRANT') {
+            throw ApiException::badRequest(
+                'VALIDATION_FAILED',
+                'Some of the details sent were not valid.',
+                ['fields' => ['decision' => 'This must be GRANT, DENY or REVOKE.']],
+            );
+        }
+
+        if (! $ownerPolicy->allowRemoteControl) {
+            throw ApiException::forbidden(
+                'REMOTE_CONTROL_NOT_ALLOWED',
+                'Remote control is not enabled for this organisation.',
+                ['restrictions' => $ownerPolicy->restrictions],
+            );
+        }
+
+        if (! $ownerPolicy->can(PermissionCatalog::CONTROL_ACCEPT)) {
+            throw ApiException::forbidden(
+                'CONTROL_ACCEPT_DENIED',
+                'This computer is not permitted to hand over control.',
+                ['permission' => PermissionCatalog::CONTROL_ACCEPT],
+            );
+        }
+
+        if ((string) $requester['control_state'] !== self::STATE_REQUESTED) {
+            throw ApiException::conflict(
+                'CONTROL_NOT_REQUESTED',
+                'That person is not waiting for control of this computer.',
+                ['controlState' => $requester['control_state']],
+            );
+        }
+
+        // One controller at a time, for the same reason as the browser path:
+        // two people typing into one desktop is not a feature.
+        $existing = $this->currentController((int) $session['id']);
+        if ($existing !== null && (int) $existing['id'] !== (int) $requester['id']) {
+            throw ApiException::conflict(
+                'CONTROL_ALREADY_GRANTED',
+                'Someone else is already controlling this computer. Stop their control first.',
+                ['controllerName' => (string) $existing['display_name']],
+            );
+        }
+
+        return $this->applyGrant(
+            $session,
+            $requester,
+            $allowClipboard && $ownerPolicy->allowClipboardSync,
+            $ownerId,
+            'DEVICE',
+            (string) $deviceParticipant['uuid'],
+        );
     }
 
     /**

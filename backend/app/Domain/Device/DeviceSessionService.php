@@ -360,6 +360,66 @@ class DeviceSessionService
     }
 
     /** @return array<string, mixed>|null */
+    /**
+     * The machine answering a control request from the desktop agent.
+     *
+     * The agent's gate has already taken effect locally — pressing Stop
+     * control stops input on the next message, with no network involved. This
+     * is how the server learns, so the browser stops sending, the session
+     * screen updates and the audit trail records who decided.
+     *
+     * Everything is re-read here rather than taken from the agent: the device,
+     * its company, its participant row in this session and its owner's
+     * effective policy. A device that declared itself controllable at
+     * enrolment still cannot consent more widely than the person it belongs to
+     * may — the capability was only ever an upper bound.
+     *
+     * @param  array<string, mixed> $session
+     * @return array{participant: array<string, mixed>, device: array<string, mixed>}
+     */
+    public function decideControl(
+        array $session,
+        DevicePrincipal $principal,
+        string $requesterUuid,
+        string $decision,
+        bool $allowClipboard = false,
+    ): array {
+        $device = $this->devices->findByUuidOrFail($principal->deviceUuid);
+
+        if ((int) $device['company_id'] !== ($session['company_id'] !== null ? (int) $session['company_id'] : -1)) {
+            throw ApiException::notFound('That Remote session could not be found.');
+        }
+
+        $participant = $this->findDeviceParticipant((int) $session['id'], (int) $device['id']);
+
+        if ($participant === null) {
+            throw ApiException::conflict(
+                'DEVICE_NOT_IN_SESSION',
+                'This computer is not part of that Remote session.',
+            );
+        }
+
+        $owner = $this->ownerIdentity($device);
+
+        if ($owner === null) {
+            throw ApiException::conflict(
+                'DEVICE_OWNER_MISSING',
+                'This device is not linked to an AICOUNTLY user any more. Register it again.',
+            );
+        }
+
+        $updated = $this->control->decideAsDevice(
+            $session,
+            $participant,
+            $requesterUuid,
+            $decision,
+            $this->policies->resolve($owner, 'COMPANY', (int) $device['company_id']),
+            $allowClipboard,
+        );
+
+        return ['participant' => $updated, 'device' => $device];
+    }
+
     private function findDeviceParticipant(int $sessionId, int $deviceId): ?array
     {
         $row = $this->db->table('remote_participants')

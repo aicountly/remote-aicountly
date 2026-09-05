@@ -16,7 +16,7 @@ pub mod backoff;
 pub mod config;
 pub mod state;
 
-pub use api::{ApiClient, ApiError, DeviceCredential};
+pub use api::{ApiClient, ApiError, ControlDecision, DeviceCredential};
 pub use backoff::Backoff;
 pub use config::{config_path, AgentConfig, ConfigError};
 pub use state::{

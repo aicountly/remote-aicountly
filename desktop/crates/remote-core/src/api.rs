@@ -238,6 +238,54 @@ pub struct PendingSession {
     pub expires_at: Option<String>,
 }
 
+/// What the person at the machine decided.
+///
+/// Three answers and no fourth. There is no "always allow": that is unattended
+/// access, which is a separate entitlement, a separate policy switch, a
+/// separate permission and a separate deliberate act — and never something a
+/// consent dialog can quietly become.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlDecision {
+    /// Allow this person to control the machine.
+    Grant,
+    /// Not now.
+    Deny,
+    /// Stop control that was already granted.
+    Revoke,
+}
+
+impl ControlDecision {
+    /// The wire spelling, matching `ControlService::decideAsDevice`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Grant => "GRANT",
+            Self::Deny => "DENY",
+            Self::Revoke => "REVOKE",
+        }
+    }
+}
+
+/// A uuid that is about to become part of a request path.
+///
+/// Checked rather than trusted: it reaches the agent over a data channel from
+/// another participant, and anything but a plain identifier is refused here
+/// rather than producing a request to a path nobody intended.
+fn require_identifier(value: &str) -> Result<(), ApiError> {
+    if value.is_empty()
+        || value.len() > 64
+        || !value.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err(ApiError::Refused {
+            status: 400,
+            code: "IDENTIFIER_INVALID".into(),
+            message: "That is not an identifier.".into(),
+        });
+    }
+
+    Ok(())
+}
+
 /// The agent's HTTP client.
 pub struct ApiClient {
     config: AgentConfig,
@@ -392,25 +440,41 @@ impl ApiClient {
 
     /// Join a session as its screen-sharing host.
     pub async fn join_session(&self, session_uuid: &str) -> Result<serde_json::Value, ApiError> {
-        // The session id goes into the path, so it must not be able to escape
-        // it: anything but a plain identifier is refused here rather than
-        // producing a request to a path nobody intended.
-        if !session_uuid
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
-            || session_uuid.len() > 64
-            || session_uuid.is_empty()
-        {
-            return Err(ApiError::Refused {
-                status: 400,
-                code: "SESSION_UUID_INVALID".into(),
-                message: "That is not a session identifier.".into(),
-            });
-        }
+        require_identifier(session_uuid)?;
 
         self.post(
             &format!("/v1/remote/devices/me/sessions/{session_uuid}/join"),
             &serde_json::json!({}),
+        )
+        .await
+    }
+
+    /// Tell the API what the person at this machine decided about control.
+    ///
+    /// The agent's own gate has **already** applied the decision by the time
+    /// this is called — it is local and needs no network, which is what makes
+    /// Stop control trustworthy. This is how the server and the controlling
+    /// browser find out, so it is reported after the fact and a failure here
+    /// does not leave the machine being controlled.
+    pub async fn report_control_decision(
+        &self,
+        session_uuid: &str,
+        participant_uuid: &str,
+        decision: ControlDecision,
+        allow_clipboard: bool,
+    ) -> Result<serde_json::Value, ApiError> {
+        require_identifier(session_uuid)?;
+        require_identifier(participant_uuid)?;
+
+        self.post(
+            &format!("/v1/remote/devices/me/sessions/{session_uuid}/control"),
+            &serde_json::json!({
+                "participantUuid": participant_uuid,
+                "decision": decision.as_str(),
+                // Never inferred from the grant. Control and the clipboard are
+                // different exposures and the person ticked one of them.
+                "allowClipboard": allow_clipboard && decision == ControlDecision::Grant,
+            }),
         )
         .await
     }
@@ -653,10 +717,33 @@ mod tests {
             let error = client.join_session(candidate).await.unwrap_err();
 
             assert!(
-                matches!(&error, ApiError::Refused { code, .. } if code == "SESSION_UUID_INVALID"),
+                matches!(&error, ApiError::Refused { code, .. } if code == "IDENTIFIER_INVALID"),
                 "{candidate} should have been refused, got {error:?}"
             );
+
+            // The same check guards the control report, which carries two
+            // identifiers that both arrived over a data channel.
+            let error = client
+                .report_control_decision(candidate, "participant-1", ControlDecision::Grant, false)
+                .await
+                .unwrap_err();
+            assert!(matches!(&error, ApiError::Refused { code, .. } if code == "IDENTIFIER_INVALID"));
+
+            let error = client
+                .report_control_decision("session-1", candidate, ControlDecision::Grant, false)
+                .await
+                .unwrap_err();
+            assert!(matches!(&error, ApiError::Refused { code, .. } if code == "IDENTIFIER_INVALID"));
         }
+    }
+
+    /// The clipboard is a separate exposure and never rides along with a
+    /// decision that is not a grant.
+    #[test]
+    fn the_three_decisions_are_spelled_the_way_the_api_reads_them() {
+        assert_eq!(ControlDecision::Grant.as_str(), "GRANT");
+        assert_eq!(ControlDecision::Deny.as_str(), "DENY");
+        assert_eq!(ControlDecision::Revoke.as_str(), "REVOKE");
     }
 
     #[tokio::test]
