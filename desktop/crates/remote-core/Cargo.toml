@@ -1,0 +1,23 @@
+[package]
+name = "remote-core"
+description = "The portable heart of the AICOUNTLY Remote desktop agent: configuration, the API client, the agent state machine and reconnection."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+time.workspace = true
+remote-protocol.workspace = true
+remote-security.workspace = true
+remote-device.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

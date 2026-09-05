@@ -49,3 +49,15 @@ Thumbs.db
 .eslintcache
 *.tsbuildinfo
 .cache/
+
+# --- Desktop agent ---------------------------------------------------------
+# Cargo's build directory. `desktop/Cargo.lock` is NOT ignored: a
+# remote-control agent is not a place to discover that a transitive dependency
+# changed between two builds of the same tag.
+/desktop/target/
+/desktop/src-tauri/target/
+# Tauri's generated schemas and capability output.
+/desktop/src-tauri/gen/
+# Installer artifacts. Built by the release workflow, never committed.
+/desktop/installers/windows/out/
+/desktop/installers/macos/out/

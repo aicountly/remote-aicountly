@@ -1,0 +1,41 @@
+{
+  "name": "@aicountly/remote-desktop",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "AICOUNTLY Remote for Windows \u2014 the desktop agent's interface.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.9.0",
+    "@tauri-apps/plugin-dialog": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.9.0",
+    "lucide-react": "^1.38.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.0",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.6",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "jsdom": "^30.0.1",
+    "typescript": "~5.9.0",
+    "vite": "^8.0.0",
+    "vitest": "^4.1.11",
+    "@testing-library/dom": "^10.4.0"
+  }
+}
