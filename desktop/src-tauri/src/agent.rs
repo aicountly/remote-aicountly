@@ -16,6 +16,7 @@
 use std::sync::Mutex;
 
 use remote_core::{AgentConfig, AgentEvent, AgentState, ControlStateView, UnattendedState};
+use remote_core::{ApiClient, ControlDecision, DeviceCredential};
 use remote_device::{
     AgentCapabilities, DeviceDescription, PermissionSummary, PlatformProviders, PlatformResult,
 };
@@ -36,6 +37,13 @@ pub struct Agent {
     providers: Mutex<Option<PlatformProviders>>,
     /// What this machine is, read once at startup.
     description: Mutex<Option<DeviceDescription>>,
+    /// The device credential the connection loop currently holds.
+    ///
+    /// In memory only, and never written anywhere. It is here rather than
+    /// inside the loop so that a decision made in the window — Allow, Not now,
+    /// Stop control — can be reported to the API without waiting for the loop
+    /// to come round again.
+    credential: Mutex<Option<DeviceCredential>>,
 }
 
 impl Default for Agent {
@@ -54,6 +62,7 @@ impl Agent {
             gate: Mutex::new(None),
             providers: Mutex::new(platform::providers().ok()),
             description: Mutex::new(None),
+            credential: Mutex::new(None),
         }
     }
 
@@ -235,6 +244,58 @@ impl Agent {
         })
     }
 
+    // ---------------------------------------------------------- credential
+
+    /// Record the credential the connection loop obtained.
+    pub fn set_credential(&self, credential: Option<DeviceCredential>) {
+        if let Ok(mut held) = self.credential.lock() {
+            *held = credential;
+        }
+    }
+
+    /// A client carrying the current credential, if there is one.
+    ///
+    /// A fresh client rather than a shared one: sharing would mean a slow
+    /// presence request blocking an urgent Stop control report, which is the
+    /// wrong way round for the two of them.
+    fn device_client(&self) -> Option<ApiClient> {
+        let credential = self.credential.lock().ok()?.clone()?;
+
+        ApiClient::new(self.config())
+            .ok()
+            .map(|client| client.with_credential(credential))
+    }
+
+    /// Tell the API what the person at this machine decided about control.
+    ///
+    /// Fire and forget, deliberately. The gate has already applied the
+    /// decision locally and no answer from the network can change that — so
+    /// this reports, and a failure to report leaves the machine in the state
+    /// the person chose rather than in the one the server last heard about.
+    pub fn report_control_decision(
+        &self,
+        session_uuid: &str,
+        participant_uuid: &str,
+        decision: ControlDecision,
+        clipboard: bool,
+    ) {
+        let Some(client) = self.device_client() else {
+            return;
+        };
+
+        let session = session_uuid.to_owned();
+        let participant = participant_uuid.to_owned();
+
+        tauri::async_runtime::spawn(async move {
+            if let Err(error) = client
+                .report_control_decision(&session, &participant, decision, clipboard)
+                .await
+            {
+                tracing::warn!(%error, "the control decision could not be reported");
+            }
+        });
+    }
+
     // ------------------------------------------------------------- control
 
     /// Begin a session, and with it a fresh gate.
@@ -283,6 +344,17 @@ impl Agent {
             }
         }
 
+        // The gate first, the network second. Nothing below can change what
+        // the person just decided; it only tells the rest of the system.
+        if let Some(session) = self.session_uuid() {
+            self.report_control_decision(
+                &session,
+                participant_uuid,
+                ControlDecision::Grant,
+                clipboard,
+            );
+        }
+
         self.apply(AgentEvent::ControlChanged {
             state: ControlStateView::Granted,
             clipboard,
@@ -291,10 +363,16 @@ impl Agent {
 
     /// The person at the machine said no.
     pub fn deny_control(&self) -> AgentState {
+        let requester = self.controller_uuid();
+
         if let Ok(mut gate) = self.gate.lock() {
             if let Some(gate) = gate.as_mut() {
                 gate.deny();
             }
+        }
+
+        if let (Some(session), Some(participant)) = (self.session_uuid(), requester) {
+            self.report_control_decision(&session, &participant, ControlDecision::Deny, false);
         }
 
         self.apply(AgentEvent::ControlChanged {
@@ -311,6 +389,8 @@ impl Agent {
     /// afterwards, and if that call fails the machine is still not being
     /// controlled.
     pub fn stop_control(&self) -> AgentState {
+        let controller = self.controller_uuid();
+
         if let Ok(mut gate) = self.gate.lock() {
             if let Some(gate) = gate.as_mut() {
                 gate.revoke();
@@ -319,9 +399,31 @@ impl Agent {
 
         self.release_all_input();
 
+        // Reported after the fact and never waited on: if the network is the
+        // reason somebody pressed Stop, waiting for it would be the worst
+        // possible behaviour.
+        if let (Some(session), Some(participant)) = (self.session_uuid(), controller) {
+            self.report_control_decision(&session, &participant, ControlDecision::Revoke, false);
+        }
+
         self.apply(AgentEvent::ControlChanged {
             state: ControlStateView::Revoked,
             clipboard: false,
+        })
+    }
+
+    /// The session currently running, if one is.
+    fn session_uuid(&self) -> Option<String> {
+        self.state()
+            .active_session()
+            .map(|session| session.session_uuid.clone())
+    }
+
+    /// Whoever the gate currently names as the controller.
+    fn controller_uuid(&self) -> Option<String> {
+        self.gate.lock().ok().and_then(|gate| {
+            gate.as_ref()
+                .and_then(|gate| gate.controller().map(str::to_owned))
         })
     }
 

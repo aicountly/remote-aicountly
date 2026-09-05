@@ -328,6 +328,19 @@ impl ApiClient {
         self.credential = None;
     }
 
+    /// Attach a credential this client did not obtain itself.
+    ///
+    /// For a second client built to make one call on a credential the
+    /// connection loop already holds — the alternative is sharing one client
+    /// across tasks behind a lock, which would make a slow request block an
+    /// unrelated one.
+    #[must_use]
+    pub fn with_credential(mut self, credential: DeviceCredential) -> Self {
+        self.credential = Some(credential);
+
+        self
+    }
+
     /// Register this machine.
     ///
     /// The **only** call that takes a `ses_key`, and it takes it by value so

@@ -115,18 +115,14 @@ export default function App() {
   const stopControl = useCallback(
     () =>
       run(async () => {
-        // Local first, and unconditionally. The API call below may fail; the
-        // machine is still not being controlled either way, because the Rust
-        // side's gate stopped admitting input before this returned.
-        const next = await bridge.stopControl()
-        setState(next)
-
-        const current = activeSession(next) ?? session
-        if (current && config && api.hasSessionKey()) {
-          await api.revokeControl(config.apiBaseUrl, current.sessionUuid).catch(() => undefined)
-        }
+        // One call, and it is local. The Rust side's gate stops admitting
+        // input before this resolves; telling the API is something it does
+        // afterwards with the machine's own device credential, and a failure
+        // there leaves the machine in the state the person chose rather than
+        // in the one the server last heard about.
+        setState(await bridge.stopControl())
       }),
-    [run, session, config],
+    [run],
   )
 
   const endSession = useCallback(() => run(() => bridge.endSession()), [run])

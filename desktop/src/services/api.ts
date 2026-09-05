@@ -174,37 +174,13 @@ export function revokeDevice(baseUrl: string, deviceUuid: string): Promise<{ dev
   })
 }
 
-/** Grant control to a waiting participant. */
-export function grantControl(
-  baseUrl: string,
-  sessionUuid: string,
-  participantUuid: string,
-  allowClipboard: boolean,
-): Promise<unknown> {
-  return request(baseUrl, `/sessions/${sessionUuid}/control/grant`, {
-    method: 'POST',
-    body: { participantUuid, allowClipboard },
-  })
-}
-
-export function denyControl(
-  baseUrl: string,
-  sessionUuid: string,
-  participantUuid: string,
-): Promise<unknown> {
-  return request(baseUrl, `/sessions/${sessionUuid}/control/deny`, {
-    method: 'POST',
-    body: { participantUuid },
-  })
-}
-
-/**
- * Tell the API control has stopped.
+/*
+ * There is deliberately no control API in this window.
  *
- * Called **after** the local stop, never instead of it. If this fails the
- * machine is still not being controlled — the Rust side's gate saw to that
- * before this request was made.
+ * A control decision is made by the *machine*, and the machine reports it with
+ * its own device credential from the Rust side — see
+ * `Agent::report_control_decision`. Reporting it from here would need the
+ * portal `ses_key`, which exists only for the few seconds somebody is
+ * registering this computer, so a grant made an hour later would be a call
+ * that could only ever be refused.
  */
-export function revokeControl(baseUrl: string, sessionUuid: string): Promise<unknown> {
-  return request(baseUrl, `/sessions/${sessionUuid}/control/revoke`, { method: 'POST' })
-}

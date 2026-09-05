@@ -154,9 +154,14 @@ pub async fn run(agent: Arc<Agent>, sink: StateSink, stopping: Arc<AtomicBool>) 
         match authenticate(&agent, &mut client, &device_uuid).await {
             Outcome::Continue => {
                 backoff.reset();
+                // Shared with the window, so a decision made there — Allow,
+                // Not now, Stop control — can be reported without waiting for
+                // this loop to come round again.
+                agent.set_credential(client.credential().cloned());
                 emit(&sink, agent.apply(AgentEvent::Authenticated));
             }
             Outcome::Revoked => {
+                agent.set_credential(None);
                 emit(&sink, agent.apply(AgentEvent::Revoked));
 
                 return;
