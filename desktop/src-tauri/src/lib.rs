@@ -25,6 +25,7 @@ pub mod commands;
 pub mod ipc;
 pub mod platform;
 pub mod runtime;
+pub mod session;
 pub mod tray;
 
 pub use agent::{Agent, AgentError};
@@ -102,6 +103,7 @@ pub fn run() {
                     // the two disagree about whether a session is running.
                     let _ = tauri::Emitter::emit(&handle, "aicountly-remote://state", state);
                 }),
+                remote_webrtc::webrtc_rs::WebRtcFactory,
             ));
 
             Ok(())

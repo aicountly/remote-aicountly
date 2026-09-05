@@ -62,10 +62,11 @@ desktop/
     remote-protocol/    the control wire format, and the gate that admits input
     remote-security/    device keys, the canonical signed payload, key storage
     remote-device/      the platform traits every OS implements
-    remote-core/        configuration, the API client, backoff, the state machine
+    remote-core/        configuration, the API client, signalling, the state machine
     remote-webrtc/      the peer connection, behind one interface
   src-tauri/
     src/                the application: tray, commands, the connection loop
+    src/session.rs      one session: join, negotiate, pump the control channel
     src/platform/       the ONLY place a native API is called
       windows/          capture, input, clipboard, DPAPI, service, power
       macos/            every provider returns Unsupported
@@ -82,7 +83,7 @@ is tested on Linux CI. What is left in `platform/windows/` is native calls with
 almost no branching, which is the part a Linux runner genuinely cannot check
 and the part a Windows runner therefore has to.
 
-`cargo test --workspace` runs **235 Rust tests** on any host.
+`cargo test --workspace` runs **248 Rust tests** on any host.
 
 ### The platform traits
 
@@ -157,7 +158,7 @@ trustworthy.
 
 ## The connection loop
 
-`src-tauri/src/runtime.rs`, one background task:
+`src-tauri/src/runtime.rs`, one background task on a thread of its own:
 
 1. authenticate with the device key (challenge → signature → credential);
 2. renew a minute before expiry, rather than after the first refusal;
@@ -169,6 +170,17 @@ trustworthy.
 A network failure backs off with jitter and never gives up. A **revoked
 device** is the one state it deliberately does not retry from: it stops, and
 says the machine was removed.
+
+When a session is waiting it hands over to `src-tauri/src/session.rs`, which
+joins through the API, opens the same signalling socket the browser uses,
+negotiates the peer connection, and pumps the control channel through the gate
+until the session ends. One at a time: two sessions on one desktop is not a
+feature, and deciding whose input wins is not a decision anybody should have to
+make afterwards.
+
+Who is *waiting* for control is polled from the API, never taken from a
+data-channel message — so a peer cannot put a consent dialog in front of
+somebody by sending one.
 
 ## What is built, and what is not
 
@@ -188,6 +200,9 @@ gap at the wrong moment.
 * the Windows service: SCM registration, the ACL'd named pipe, the IPC
   protocol, the restart;
 * the connection loop: authentication, renewal, presence, policy refresh;
+* the session runtime: joining through the API, the **same** signalling socket
+  the browser uses, offer/answer/ICE, and the control channel pumped through
+  the gate;
 * the tray, the window and the consent screens;
 * the whole server side — devices, policy, control, unattended sessions,
   presence rooms, audit — with 208 backend tests;
@@ -202,13 +217,15 @@ gap at the wrong moment.
   a picture. This is the single largest remaining piece and it is a real
   dependency decision (libvpx, or a Media Foundation hardware encoder), not an
   afternoon's work.
-* **The signalling client in the agent.** The API issues the agent a room
-  token; nothing in `src-tauri` opens the WebSocket yet, so the offer/answer
-  exchange does not happen from the desktop side.
 * **File transfer in the agent.** The protocol and the browser half exist; the
-  agent does not implement the receiving side.
-* **Clipboard synchronisation end to end.** The provider and the protocol
-  message exist and are bounded and validated; nothing pumps them.
+  agent does not read the collaboration channel, so it neither offers nor
+  receives a file.
+* **The clipboard in the other direction.** A controller's clipboard reaches
+  the machine — the message goes through the gate to the clipboard provider —
+  but the machine's clipboard is not sent back to the controller.
+* **Reconnecting a session.** A signalling token lasts two minutes; the socket
+  is not re-established after it closes, so a session that loses its relay
+  connection mid-negotiation ends rather than recovering.
 * **Automatic updates.** Deliberately inactive — see
   [WINDOWS_RELEASE.md](WINDOWS_RELEASE.md).
 * **macOS.** Every provider returns `Unsupported`.

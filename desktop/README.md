@@ -18,11 +18,13 @@ crates/                  portable. Compiles and is tested on any host.
   remote-protocol/       the control channel: input, clipboard, framing, the gate
   remote-security/       the device keypair, the canonical challenge, secure storage
   remote-device/         the seven platform traits every target implements
-  remote-core/           configuration, the API client, the state machine, backoff
+  remote-core/           configuration, the API client, signalling, the state machine
   remote-webrtc/         one trait, and webrtc-rs behind it
 
 src-tauri/               the user-session process
   src/agent.rs           the one path from the network to the operating system
+  src/runtime.rs         the connection loop: authenticate, presence, policy
+  src/session.rs         one session: join, negotiate, pump the control channel
   src/commands/          the short, named set the window may call
   src/ipc/               talking to the service
   src/platform/windows/  the only place a Win32 or WinRT call is made
@@ -81,7 +83,7 @@ pwsh -File scripts/windows/build.ps1
 ## Tests
 
 ```bash
-cargo test --workspace   # 235 — protocol, gate, keys, state, capture maths, IPC, the loop
+cargo test --workspace   # 248 — protocol, gate, keys, state, capture maths, IPC, the session
 npm test                 #  12 — the session banner and the unattended screen
 cargo audit --deny warnings
 ```

@@ -37,8 +37,10 @@
 //! # What it does not do
 //!
 //! It does not open a media session. The session runtime — signalling, the
-//! peer connection, capture — is separate, and what is and is not built of it
-//! is set out in `docs/desktop/ARCHITECTURE.md` rather than implied here.
+//! It does not run a session itself. When one is waiting it hands over to
+//! [`crate::session`], which joins, negotiates and pumps the control channel,
+//! and comes back here when the session ends. What is and is not built of that
+//! — there is no encoder — is set out in `docs/desktop/ARCHITECTURE.md`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -47,7 +49,9 @@ use std::time::Duration;
 use remote_core::{
     AgentConfig, AgentEvent, AgentState, ApiClient, ApiError, Backoff, UnattendedState,
 };
+use remote_webrtc::PeerSessionFactory;
 
+use crate::session;
 use crate::Agent;
 
 /// How long before expiry a credential is renewed.
@@ -98,16 +102,47 @@ impl Drop for RuntimeHandle {
 /// `docs/desktop/TESTING.md` asks of it.
 pub type StateSink = Arc<dyn Fn(AgentState) + Send + Sync>;
 
-/// Start the connection loop on the Tauri async runtime.
-pub fn start(agent: Arc<Agent>, sink: StateSink) -> RuntimeHandle {
+/// Start the connection loop.
+///
+/// The factory is passed in rather than named here, so this file — and the
+/// session runtime under it — never mentions which WebRTC implementation is
+/// behind the seam.
+pub fn start<F>(agent: Arc<Agent>, sink: StateSink, factory: F) -> RuntimeHandle
+where
+    F: PeerSessionFactory + Clone + Send + 'static,
+{
     let stopping = Arc::new(AtomicBool::new(false));
     let handle = RuntimeHandle {
         stopping: Arc::clone(&stopping),
     };
 
-    tauri::async_runtime::spawn(async move {
-        run(agent, sink, stopping).await;
-    });
+    // Its own thread with its own current-thread runtime, rather than a task
+    // on Tauri's.
+    //
+    // The `PeerSession` trait uses `async fn` in a trait, so its futures are
+    // not `Send` — which is correct for what they are, since a peer connection
+    // is owned by exactly one task and moving one between threads mid-session
+    // is not something to make possible. Giving the loop a runtime of its own
+    // is what lets it hold one.
+    std::thread::Builder::new()
+        .name("aicountly-remote-connection".into())
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    tracing::error!(%error, "the connection loop could not start");
+
+                    return;
+                }
+            };
+
+            runtime.block_on(run(agent, sink, factory, stopping));
+        })
+        .map_err(|error| tracing::error!(%error, "the connection loop could not start"))
+        .ok();
 
     handle
 }
@@ -116,7 +151,10 @@ pub fn start(agent: Arc<Agent>, sink: StateSink) -> RuntimeHandle {
 ///
 /// Public so an integration test can drive it against a stub, and separate
 /// from [`start`] so it carries no Tauri types.
-pub async fn run(agent: Arc<Agent>, sink: StateSink, stopping: Arc<AtomicBool>) {
+pub async fn run<F>(agent: Arc<Agent>, sink: StateSink, factory: F, stopping: Arc<AtomicBool>)
+where
+    F: PeerSessionFactory + Clone,
+{
     let mut backoff = Backoff::authentication();
 
     while !stopping.load(Ordering::SeqCst) {
@@ -183,7 +221,7 @@ pub async fn run(agent: Arc<Agent>, sink: StateSink, stopping: Arc<AtomicBool>) 
 
         // Authenticated. Stay in the presence loop until the credential is
         // near expiry, the device is rejected, or the runtime is stopped.
-        connected(&agent, &sink, &client, &config, &stopping).await;
+        connected(&agent, &sink, &client, &config, &factory, &stopping).await;
     }
 }
 
@@ -224,13 +262,17 @@ async fn authenticate(agent: &Arc<Agent>, client: &mut ApiClient, device_uuid: &
 }
 
 /// The presence loop, for as long as the credential lasts.
-async fn connected(
+#[allow(clippy::too_many_arguments)]
+async fn connected<F>(
     agent: &Arc<Agent>,
     sink: &StateSink,
     client: &ApiClient,
     config: &AgentConfig,
+    factory: &F,
     stopping: &Arc<AtomicBool>,
-) {
+) where
+    F: PeerSessionFactory + Clone,
+{
     // The server's figure, adopted rather than argued with. The configured
     // value applies only until the first answer, so the two halves of the
     // system cannot disagree about what "stale" means.
@@ -271,16 +313,32 @@ async fn connected(
                     })),
                 );
 
-                if !description.pending_sessions.is_empty() {
-                    // Recorded, not joined: joining is the session runtime's
-                    // job and this loop does not pretend to do it.
-                    for pending in &description.pending_sessions {
-                        tracing::info!(
-                            session = %pending.uuid,
-                            display_id = %pending.display_id,
-                            "an unattended session is waiting for this computer"
-                        );
-                    }
+                // Somebody is waiting. Host one at a time — two sessions on
+                // one desktop is not a feature, and deciding whose input wins
+                // is not a decision anybody should have to make afterwards.
+                if let Some(pending) = description.pending_sessions.first() {
+                    tracing::info!(
+                        session = %pending.uuid,
+                        display_id = %pending.display_id,
+                        "an unattended session is waiting for this computer"
+                    );
+
+                    let ended = session::host(
+                        Arc::clone(agent),
+                        Arc::clone(sink),
+                        factory.clone(),
+                        pending.uuid.clone(),
+                        true,
+                        Arc::clone(stopping),
+                    )
+                    .await;
+
+                    tracing::info!(?ended, session = %pending.uuid, "the session ended");
+
+                    // The credential may well have expired while it ran, so
+                    // the outer loop re-authenticates rather than this one
+                    // carrying on with a stale one.
+                    return;
                 }
             }
             Err(error) if error.is_device_rejected() => {

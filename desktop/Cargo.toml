@@ -59,6 +59,10 @@ hex = "0.4.3"
 uuid = { version = "1.19", features = ["v4", "serde"] }
 time = { version = "0.3", features = ["formatting", "parsing"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "webpki-roots", "charset", "http2"] }
+# The signalling socket. WSS only — the same relay the browser uses, with the
+# same two-minute token, and no second protocol of its own.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 remote-protocol = { path = "crates/remote-protocol" }
 remote-security = { path = "crates/remote-security" }

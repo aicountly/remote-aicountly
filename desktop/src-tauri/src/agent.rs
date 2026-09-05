@@ -258,7 +258,7 @@ impl Agent {
     /// A fresh client rather than a shared one: sharing would mean a slow
     /// presence request blocking an urgent Stop control report, which is the
     /// wrong way round for the two of them.
-    fn device_client(&self) -> Option<ApiClient> {
+    pub fn device_client(&self) -> Option<ApiClient> {
         let credential = self.credential.lock().ok()?.clone()?;
 
         ApiClient::new(self.config())

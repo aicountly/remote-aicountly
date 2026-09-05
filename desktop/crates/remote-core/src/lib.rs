@@ -14,11 +14,16 @@
 pub mod api;
 pub mod backoff;
 pub mod config;
+pub mod signalling;
 pub mod state;
 
-pub use api::{ApiClient, ApiError, ControlDecision, DeviceCredential};
+pub use api::{
+    ApiClient, ApiError, ControlDecision, DeviceCredential, PendingControlRequest,
+    SessionControlView,
+};
 pub use backoff::Backoff;
 pub use config::{config_path, AgentConfig, ConfigError};
+pub use signalling::{Outbound, Peer, Signal, SignallingError, SignallingSocket};
 pub use state::{
     AgentEvent, AgentState, AgentStatus, ControlStateView, ControlSummary, SessionSummary,
     UnattendedState,

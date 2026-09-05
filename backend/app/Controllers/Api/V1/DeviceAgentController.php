@@ -206,6 +206,29 @@ class DeviceAgentController extends BaseApiController
     }
 
     /**
+     * `GET /devices/me/sessions/{uuid}/control`
+     *
+     * What the agent polls while a session is running: who is waiting for
+     * control, who has it, and what the organisation currently permits.
+     *
+     * Polled from the API rather than taken from the peer. A control request
+     * that reached the API is the only kind that can be granted, so it is the
+     * only kind that should be able to put a consent dialog in front of
+     * somebody — a peer cannot conjure one by sending a message.
+     */
+    public function controlState(string $uuid): ResponseInterface
+    {
+        $principal = $this->context()->requireDevice();
+        $principal->assertScope(DevicePrincipal::SCOPE_SESSION);
+
+        $session = Services::sessionService()->findByUuidOrFail($uuid);
+
+        return $this->ok(
+            Services::deviceSessionService()->controlStateFor($session, $principal),
+        );
+    }
+
+    /**
      * `POST /devices/me/sessions/{uuid}/control`
      *
      * The machine reporting what the person at it decided: Allow, Not now, or

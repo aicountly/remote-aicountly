@@ -204,6 +204,13 @@ pub trait PeerSession: Send {
     /// Add a trickled candidate.
     async fn add_ice_candidate(&mut self, candidate: serde_json::Value) -> Result<(), WebRtcError>;
 
+    /// Local candidates gathered since the last call, drained.
+    ///
+    /// Drained rather than accumulated: the signalling client trickles each
+    /// one exactly once, and a candidate re-sent after a reconnect is one the
+    /// peer has already tried.
+    fn take_local_candidates(&mut self) -> Vec<serde_json::Value>;
+
     /// Push one captured frame into the encoder.
     ///
     /// Takes the frame by value and drops it: nothing here retains a frame,

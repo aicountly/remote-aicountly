@@ -122,7 +122,7 @@ Short-lived, held in memory, scoped:
 | Scope | Reaches |
 |---|---|
 | `device.presence` | presence, and a token for its own presence room |
-| `device.session` | joining a session it was invited to; reporting a control decision |
+| `device.session` | joining a session it was invited to; reading and reporting control |
 | `device.self` | switching its own unattended access off |
 
 Nothing under `devices/me` can reach a session it was not invited to, another

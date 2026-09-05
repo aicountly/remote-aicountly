@@ -361,6 +361,47 @@ class DeviceSessionService
 
     /** @return array<string, mixed>|null */
     /**
+     * Control state, as the machine needs to render it.
+     *
+     * The agent polls this while a session is running rather than believing
+     * anything the peer says over the data channel. A control request that
+     * reached the API is the only kind that can be granted — so it is the only
+     * kind that should be able to put a consent dialog in front of somebody.
+     *
+     * @param  array<string, mixed> $session
+     * @return array<string, mixed>
+     */
+    public function controlStateFor(array $session, DevicePrincipal $principal): array
+    {
+        $device = $this->devices->findByUuidOrFail($principal->deviceUuid);
+
+        if ((int) $device['company_id'] !== ($session['company_id'] !== null ? (int) $session['company_id'] : -1)) {
+            throw ApiException::notFound('That Remote session could not be found.');
+        }
+
+        if ($this->findDeviceParticipant((int) $session['id'], (int) $device['id']) === null) {
+            throw ApiException::conflict(
+                'DEVICE_NOT_IN_SESSION',
+                'This computer is not part of that Remote session.',
+            );
+        }
+
+        $owner = $this->ownerIdentity($device);
+
+        $policy = $owner !== null
+            ? $this->policies->resolve($owner, 'COMPANY', (int) $device['company_id'])
+            : null;
+
+        return array_merge($this->control->stateFor($session), [
+            // The organisation's answer, so the agent's consent dialog cannot
+            // offer something the server would refuse.
+            'allowRemoteControl' => $policy?->allowRemoteControl ?? false,
+            'allowClipboardSync' => $policy?->allowClipboardSync ?? false,
+            'allowDeviceReboot'  => $policy?->allowDeviceReboot ?? false,
+        ]);
+    }
+
+    /**
      * The machine answering a control request from the desktop agent.
      *
      * The agent's gate has already taken effect locally — pressing Stop

@@ -280,6 +280,83 @@ final class DeviceControlDecisionTest extends RemoteTestCase
         $this->assertHasEvent($session, EventType::CONTROL_DENIED);
     }
 
+    // ---------------------------------------------------------- what it sees
+
+    /**
+     * The agent polls the API for who is waiting rather than believing the
+     * peer. A request that reached the API is the only kind that can be
+     * granted, so it is the only kind that should put a dialog in front of
+     * somebody.
+     */
+    public function testTheMachineSeesWhoIsWaitingAndWhatIsPermitted(): void
+    {
+        [
+            'session'   => $session,
+            'viewer'    => $viewer,
+            'principal' => $principal,
+        ] = $this->scenario();
+
+        $before = Services::deviceSessionService()->controlStateFor($session, $principal);
+        $this->assertSame([], $before['pendingRequests']);
+        $this->assertTrue($before['allowRemoteControl']);
+        $this->assertTrue($before['allowClipboardSync']);
+
+        $this->request($session, $viewer);
+
+        $after = Services::deviceSessionService()->controlStateFor($session, $principal);
+        $this->assertCount(1, $after['pendingRequests']);
+        $this->assertSame('Sam in support', $after['pendingRequests'][0]['displayName']);
+        $this->assertNotNull($after['controllableHostUuid']);
+    }
+
+    public function testTheStateReflectsAPolicyTurnedOffUnderneathTheSession(): void
+    {
+        [
+            'session'   => $session,
+            'principal' => $principal,
+        ] = $this->scenario();
+
+        $this->db->table('remote_company_policies')
+            ->where('company_id', $this->companyId)
+            ->update([
+                'allow_remote_control'    => false,
+                'allow_unattended_access' => false,
+                'allow_clipboard_sync'    => false,
+                'allow_device_reboot'     => false,
+            ]);
+
+        $state = Services::deviceSessionService()->controlStateFor($session, $principal);
+
+        $this->assertFalse($state['allowRemoteControl']);
+        $this->assertFalse($state['allowClipboardSync']);
+        $this->assertFalse($state['allowDeviceReboot']);
+    }
+
+    public function testAMachineCannotReadTheControlStateOfASessionItIsNotIn(): void
+    {
+        [
+            'session' => $session,
+            'owner'   => $owner,
+        ] = $this->scenario();
+
+        ['device' => $other] = $this->enrolDevice($owner, $this->companyId, [
+            'deviceName' => 'Another Workstation',
+            'hostname'   => 'WS-TEST-03',
+        ]);
+
+        $intruder = new DevicePrincipal(
+            (string) $other['uuid'],
+            $this->companyId,
+            DevicePrincipal::agentScopes(),
+            time() + 300,
+        );
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('not part of that Remote session');
+
+        Services::deviceSessionService()->controlStateFor($session, $intruder);
+    }
+
     // ------------------------------------------------------------- isolation
 
     /** A machine answering for a session it is not in is answering a question nobody asked it. */

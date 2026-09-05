@@ -6,20 +6,20 @@ what is not covered at all.
 ## The numbers
 
 ```bash
-cd desktop    && cargo test --workspace   # 235 — protocol, gate, identity, state, service
+cd desktop    && cargo test --workspace   # 248 — protocol, gate, identity, state, session, service
 cd desktop    && npm test                 #  12 — the agent's own interface
-cd backend    && vendor/bin/phpunit       # 208 — devices, policy, control, unattended
+cd backend    && vendor/bin/phpunit       # 211 — devices, policy, control, unattended
 cd web        && npm test                 # 104 — capability gating, control input, devices
 cd signalling && npm test                 #  24 — tokens, rooms, device rooms, live relay
 ```
 
-**583 automated tests.** The split by crate:
+**599 automated tests.** The split by crate:
 
 | | |
 |---|---|
 | `remote-protocol` | 58 — the wire format, the gate, clipboard bounds, monitors |
-| `remote-core` | 43 — configuration, the API client, backoff, the state machine |
-| `aicountly-remote-desktop` | 47 — the agent, its commands, the connection loop |
+| `remote-core` | 52 — configuration, the API client, signalling, backoff, the state machine |
+| `aicountly-remote-desktop` | 51 — the agent, its commands, the connection loop, the session |
 | `aicountly-remote-service` | 29 — the IPC protocol, the pipe ACL, the service's decisions |
 | `remote-device` | 21 — capture profiles, capability declaration |
 | `remote-security` | 20 — keys, the canonical payload, storage |
@@ -98,6 +98,10 @@ Read this rather than assuming the test count covers it.
   [ARCHITECTURE.md](ARCHITECTURE.md#what-is-built-and-what-is-not). The WebRTC
   tests negotiate a real session, exchange SDP and assert that the answer
   carries `m=video`, `VP8` and `m=application`; nothing sends a frame.
+* **There is no test against a running relay.** The signalling messages are
+  parsed and asserted against the shapes `signalling/src/server.js` relays, and
+  the session loop's join handling is tested; nothing in CI opens a socket to a
+  real relay. That is a step in `desktop/tests/MANUAL.md`.
 * **The installer has not been run.** `hooks.nsh` is reviewed and not executed;
   NSIS is not on a Linux runner and the release workflow is manual.
 * **No signed build exists**, so nothing has been verified against a real

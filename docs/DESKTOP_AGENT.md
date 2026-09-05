@@ -142,15 +142,15 @@ and defaulted to false. They are now the plan gate they were put there to be.
 ## How much of it is built
 
 **The whole server side, the whole browser side, and the machine's identity,
-policy, consent and lifecycle.** 583 automated tests across the five parts of
-the product.
+policy, consent, session transport and lifecycle.** 599 automated tests across
+the five parts of the product.
 
-**Not the media pipeline.** There is no video encoder: `remote-webrtc`
-negotiates a VP8 track and the Windows capture provider produces BGRA frames,
-and nothing converts one to the other. The agent's signalling client is not
-written either. So today an agent registers, stays reachable, appears in the
-Computers page, joins the policy and consent model completely — and does not
-yet send a picture.
+**Not the video.** There is no encoder: `remote-webrtc` negotiates a VP8 track
+and the Windows capture provider produces BGRA frames, and nothing converts one
+into the other. So today an agent registers, stays reachable, appears in the
+Computers page, joins a session, negotiates a peer connection, honours control
+messages through its gate and reports its own decisions — and does not yet send
+a picture.
 
 The full list of what is and is not built is in
 [ARCHITECTURE.md](desktop/ARCHITECTURE.md#what-is-built-and-what-is-not), and

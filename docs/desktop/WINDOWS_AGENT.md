@@ -73,8 +73,9 @@ time). Nothing is hardcoded to 1080p30 — a connection that cannot sustain it
 gets a picture that arrives instead of one that stalls.
 
 > **Not built.** There is no encoder. `remote-webrtc` negotiates a VP8 track
-> and the capture provider produces BGRA frames; nothing converts one to the
-> other yet, so the agent cannot currently send a picture. See
+> and the capture provider produces BGRA frames; nothing converts one into the
+> other yet, so the agent joins a session and carries control without sending a
+> picture. See
 > [ARCHITECTURE.md](ARCHITECTURE.md#what-is-built-and-what-is-not).
 
 ## Input injection

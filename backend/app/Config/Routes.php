@@ -159,6 +159,9 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
     // The machine reporting what the person at it decided about control. The
     // agent's own gate already applied it locally; this is how the server and
     // the browser find out.
+    $routes->get('devices/me/sessions/(:segment)/control', 'DeviceAgentController::controlState/$1', [
+        'filter' => ['device-auth:device.session', 'rate-limit:device-control-state,120,60'],
+    ]);
     $routes->post('devices/me/sessions/(:segment)/control', 'DeviceAgentController::control/$1', [
         'filter' => ['device-auth:device.session', 'rate-limit:device-control,60,60'],
     ]);

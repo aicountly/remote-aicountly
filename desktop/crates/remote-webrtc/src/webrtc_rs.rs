@@ -81,7 +81,7 @@ const VIDEO_SSRC: u32 = 0x4149_434F;
 const MAX_QUEUED_CONTROL_MESSAGES: usize = 1024;
 
 /// Builds webrtc-rs sessions.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct WebRtcFactory;
 
 impl PeerSessionFactory for WebRtcFactory {
@@ -291,19 +291,6 @@ impl WebRtcSession {
             .collect()
     }
 
-    /// Local ICE candidates gathered since the last call.
-    ///
-    /// Drained rather than accumulated: the signalling client trickles each
-    /// one exactly once, and a candidate re-sent after a reconnect is a
-    /// candidate the peer has already tried.
-    pub fn take_local_candidates(&self) -> Vec<serde_json::Value> {
-        self.shared
-            .local_candidates
-            .lock()
-            .map(|mut queue| std::mem::take(&mut *queue))
-            .unwrap_or_default()
-    }
-
     /// The channels the peer opened, once it has opened them.
     ///
     /// Called by the agent's loop after negotiation. Adopting them here rather
@@ -465,6 +452,19 @@ impl PeerSession for WebRtcSession {
         let _ = self.peer.add_ice_candidate(init).await;
 
         Ok(())
+    }
+
+    /// Local ICE candidates gathered since the last call.
+    ///
+    /// Drained rather than accumulated: the signalling client trickles each
+    /// one exactly once, and a candidate re-sent after a reconnect is a
+    /// candidate the peer has already tried.
+    fn take_local_candidates(&mut self) -> Vec<serde_json::Value> {
+        self.shared
+            .local_candidates
+            .lock()
+            .map(|mut queue| std::mem::take(&mut *queue))
+            .unwrap_or_default()
     }
 
     async fn send_frame(&mut self, frame: Frame) -> Result<(), WebRtcError> {

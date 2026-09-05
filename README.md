@@ -49,8 +49,9 @@ notices and says so; it does not disable UAC, and it does not ask you to. See
 [docs/desktop/WINDOWS_AGENT.md](docs/desktop/WINDOWS_AGENT.md).
 
 **The Windows agent does not yet send a picture.** Device identity, policy,
-consent, control, unattended access and the whole session model are built and
-tested; the video encoder and the agent's signalling client are not. See
+consent, control, unattended access, joining a session and negotiating the
+connection are all built and tested; the **video encoder** is not, so the agent
+carries control without a picture. See
 [docs/desktop/ARCHITECTURE.md](docs/desktop/ARCHITECTURE.md#what-is-built-and-what-is-not).
 
 **macOS and Linux agents are not built.** Every provider returns
@@ -111,10 +112,10 @@ is no local login to fake. See
 ## Tests
 
 ```bash
-cd backend    && vendor/bin/phpunit      # 208 — policy, tenant isolation, devices, control
+cd backend    && vendor/bin/phpunit      # 211 — policy, tenant isolation, devices, control
 cd web        && npm test                # 104 — capture, capability gating, control input
 cd signalling && npm test                #  24 — tokens, rooms, device rooms, live relay
-cd desktop    && cargo test --workspace  # 235 — protocol, gate, identity, state, service
+cd desktop    && cargo test --workspace  # 248 — protocol, gate, identity, state, session, service
 cd desktop    && npm test                #  12 — the agent's own interface
 ```
 

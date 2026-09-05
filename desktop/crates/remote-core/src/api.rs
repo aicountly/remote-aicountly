@@ -238,6 +238,51 @@ pub struct PendingSession {
     pub expires_at: Option<String>,
 }
 
+/// Control, as the API currently has it for one session.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionControlView {
+    /// The participant whose machine can be controlled — this one, normally.
+    #[serde(default)]
+    pub controllable_host_uuid: Option<String>,
+    /// Who currently holds control.
+    #[serde(default)]
+    pub controller_uuid: Option<String>,
+    /// Their name, for the indicator.
+    #[serde(default)]
+    pub controller_name: Option<String>,
+    /// Whether the clipboard was granted alongside it.
+    #[serde(default)]
+    pub clipboard_enabled: bool,
+    /// Everyone waiting for an answer.
+    #[serde(default)]
+    pub pending_requests: Vec<PendingControlRequest>,
+    /// The organisation's switch, so the dialog cannot offer what would be
+    /// refused.
+    #[serde(default)]
+    pub allow_remote_control: bool,
+    /// Whether the clipboard may be offered at all.
+    #[serde(default)]
+    pub allow_clipboard_sync: bool,
+    /// Whether a restart may be asked for at all.
+    #[serde(default)]
+    pub allow_device_reboot: bool,
+}
+
+/// Somebody waiting for control of this machine.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingControlRequest {
+    /// Their participant uuid.
+    pub participant_uuid: String,
+    /// Their name, as the dialog shows it.
+    #[serde(default)]
+    pub display_name: String,
+    /// When they asked.
+    #[serde(default)]
+    pub requested_at: Option<String>,
+}
+
 /// What the person at the machine decided.
 ///
 /// Three answers and no fourth. There is no "always allow": that is unattended
@@ -470,6 +515,24 @@ impl ApiClient {
             &format!("/v1/remote/devices/me/sessions/{session_uuid}/join"),
             &serde_json::json!({}),
         )
+        .await
+    }
+
+    /// Who is waiting for control, who has it, and what is permitted.
+    ///
+    /// Polled while a session is running, and it is the **only** thing that
+    /// puts a consent dialog in front of the person at the machine. A peer
+    /// cannot conjure one by sending a data-channel message, because nothing
+    /// reads one for this purpose.
+    pub async fn session_control(
+        &self,
+        session_uuid: &str,
+    ) -> Result<SessionControlView, ApiError> {
+        require_identifier(session_uuid)?;
+
+        self.get(&format!(
+            "/v1/remote/devices/me/sessions/{session_uuid}/control"
+        ))
         .await
     }
 
