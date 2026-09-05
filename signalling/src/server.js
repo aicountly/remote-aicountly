@@ -10,6 +10,16 @@
  *   * trust a room id from a client — the room is inside the signed token;
  *   * carry media — audio and video go peer-to-peer (or via TURN), never here.
  *
+ * Two kinds of room exist, and the token says which:
+ *
+ *   * a **session room**, named by a session uuid, carrying the handshake and
+ *     the collaboration channel between two participants;
+ *   * a **device presence room**, named `device-<uuid>`, where a registered
+ *     desktop agent holds one outbound connection so that an authorised
+ *     colleague can reach it without a port being opened on the machine. It
+ *     relays a heartbeat and an invitation to join a session, and refuses
+ *     everything else — see DEVICE_ROOM_BROADCASTABLE below.
+ *
  * Keeping business logic out is what lets this run as a small always-on process
  * beside a PHP application that has no long-lived processes at all.
  */
@@ -53,6 +63,22 @@ const RATE_LIMIT_WINDOW_MS = 10_000;
 /** The only message types a client may send. Anything else is dropped. */
 const RELAYABLE = new Set(['offer', 'answer', 'ice-candidate', 'peer-ready', 'renegotiate']);
 const BROADCASTABLE = new Set(['presence', 'chat', 'pointer', 'annotation', 'share-state', 'session-ended']);
+
+/**
+ * A device's presence room is not a session room, and carries almost nothing.
+ *
+ * The agent holds one outbound connection here for hours so that an authorised
+ * colleague can reach it without a port being opened on the endpoint. What that
+ * connection is *for* is a heartbeat and an invitation to join a session — so
+ * SDP, ICE, chat, pointers and annotations are all refused in it, and there is
+ * no code path by which a presence credential could be used to push media
+ * negotiation at a machine.
+ *
+ * `device-invite` still authorises nothing: it names a session, and the agent
+ * re-reads that session from the API before joining it. A fabricated invite
+ * reaches an agent that finds no such session and does nothing.
+ */
+const DEVICE_ROOM_BROADCASTABLE = new Set(['device-invite', 'device-status', 'presence']);
 
 if (!SECRET) {
   console.error(
@@ -245,6 +271,24 @@ function handle(ws, message) {
     return;
   }
 
+  // A device presence room has its own, much shorter, list — and nothing falls
+  // through from it into the session handling below.
+  if (participant.kind === 'device') {
+    if (DEVICE_ROOM_BROADCASTABLE.has(type)) {
+      broadcast(participant.room, participant.participantUuid, {
+        type,
+        from: participant.participantUuid,
+        payload: message.payload ?? null,
+      });
+
+      return;
+    }
+
+    send(ws, { type: 'error', code: 'UNSUPPORTED_IN_DEVICE_ROOM', message: `Not relayed in a device room: ${type}` });
+
+    return;
+  }
+
   if (RELAYABLE.has(type)) {
     const to = typeof message.to === 'string' ? message.to : '';
     const target = to ? rooms.member(participant.room, to) : null;
@@ -296,6 +340,7 @@ function describe({ participant }) {
     role: participant.role,
     name: participant.name,
     capabilities: participant.capabilities,
+    kind: participant.kind ?? 'session',
   };
 }
 

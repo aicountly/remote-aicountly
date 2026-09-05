@@ -21,6 +21,9 @@ use CodeIgniter\Router\RouteCollection;
  *   `api-auth`         a signed-in AICOUNTLY user
  *   `api-auth:guest`   …or a guest holding a one-time session token
  *   `api-auth:optional` anonymous permitted
+ *   `device-auth`      an enrolled device holding a short-lived credential it
+ *                      obtained by proving possession of its private key; the
+ *                      argument names the scope the route needs
  *   `remote-context`   verify and consume a launch context, when present
  *   `rate-limit:name,capacity,seconds`
  *
@@ -114,6 +117,70 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
     ]);
     $routes->post('sessions/(:segment)/transfers/(:segment)/complete', 'FileTransferController::complete/$1/$2', ['filter' => 'api-auth:guest']);
     $routes->post('sessions/(:segment)/transfers/(:segment)/abort', 'FileTransferController::abort/$1/$2', ['filter' => 'api-auth:guest']);
+
+    // --- Remote control (docs/desktop/*) ------------------------------------
+    // Attended control of a desktop agent. Every one of these resolves the
+    // caller's policy for the *session's own* scope, so holding
+    // `remote.control.request` at one organisation grants nothing in another's
+    // session. Revoking needs no permission at all: stopping someone
+    // controlling your computer must never depend on a grant.
+    $routes->get('sessions/(:segment)/control', 'ControlController::show/$1', ['filter' => 'api-auth']);
+    $routes->post('sessions/(:segment)/control/request', 'ControlController::request/$1', [
+        'filter' => ['api-auth', 'rate-limit:control-request,20,60'],
+    ]);
+    $routes->post('sessions/(:segment)/control/grant', 'ControlController::grant/$1', ['filter' => 'api-auth']);
+    $routes->post('sessions/(:segment)/control/deny', 'ControlController::deny/$1', ['filter' => 'api-auth']);
+    $routes->post('sessions/(:segment)/control/revoke', 'ControlController::revoke/$1', ['filter' => 'api-auth']);
+    $routes->post('sessions/(:segment)/control/clipboard', 'ControlController::clipboard/$1', ['filter' => 'api-auth']);
+
+    // --- Devices ------------------------------------------------------------
+    //
+    // Two audiences, two filters, and the split is deliberate: `api-auth` is a
+    // person, `device-auth` is a machine holding a credential it obtained by
+    // proving possession of its enrolled private key. Nothing under
+    // `devices/me` can reach a session, a company or another device.
+    $routes->post('devices/enrol', 'DeviceController::enrol', [
+        'filter' => ['api-auth', 'rate-limit:device-enrol,10,60'],
+    ]);
+    $routes->get('devices', 'DeviceController::index', ['filter' => 'api-auth']);
+
+    // The agent's own routes come *before* `devices/(:segment)`, or `me` would
+    // be routed as a device uuid and 404 on every call.
+    $routes->get('devices/me', 'DeviceAgentController::me', ['filter' => 'device-auth']);
+    $routes->post('devices/me/presence', 'DeviceAgentController::presence', [
+        'filter' => ['device-auth:device.presence', 'rate-limit:device-presence,120,60'],
+    ]);
+    $routes->post('devices/me/presence-token', 'DeviceAgentController::presenceToken', [
+        'filter' => ['device-auth:device.presence', 'rate-limit:device-presence-token,30,60'],
+    ]);
+    $routes->post('devices/me/sessions/(:segment)/join', 'DeviceAgentController::joinSession/$1', [
+        'filter' => ['device-auth:device.session', 'rate-limit:device-join,30,60'],
+    ]);
+    $routes->post('devices/me/unattended/disable', 'DeviceAgentController::disableUnattended', [
+        'filter' => 'device-auth:device.self',
+    ]);
+
+    // Unauthenticated by design — a nonce is worthless without the private key,
+    // and the signature *is* the authentication. Both are rate-limited because
+    // running them in a loop is the only load they can put on anything.
+    $routes->post('devices/auth/challenge', 'DeviceAgentController::challenge', [
+        'filter' => 'rate-limit:device-challenge,20,60',
+    ]);
+    $routes->post('devices/auth/verify', 'DeviceAgentController::verify', [
+        'filter' => 'rate-limit:device-verify,20,60',
+    ]);
+
+    $routes->get('devices/(:segment)', 'DeviceController::show/$1', ['filter' => 'api-auth']);
+    $routes->patch('devices/(:segment)', 'DeviceController::update/$1', ['filter' => 'api-auth']);
+    $routes->post('devices/(:segment)/revoke', 'DeviceController::revoke/$1', ['filter' => 'api-auth']);
+    $routes->post('devices/(:segment)/unattended/enable', 'DeviceController::enableUnattended/$1', ['filter' => 'api-auth']);
+    $routes->post('devices/(:segment)/unattended/disable', 'DeviceController::disableUnattended/$1', ['filter' => 'api-auth']);
+    $routes->post('devices/(:segment)/connect', 'DeviceController::connect/$1', [
+        'filter' => ['api-auth', 'rate-limit:device-connect,20,60'],
+    ]);
+    $routes->post('devices/(:segment)/reboot', 'DeviceController::reboot/$1', [
+        'filter' => ['api-auth', 'rate-limit:device-reboot,5,60'],
+    ]);
 
     // --- Invitations -------------------------------------------------------
     $routes->get('sessions/(:segment)/invitations', 'InvitationController::index/$1', ['filter' => 'api-auth']);

@@ -124,6 +124,14 @@ final class Presenter
             'microphoneEnabled' => self::bool($row['microphone_enabled'] ?? false),
             'connectionState' => (string) ($row['connection_state'] ?? 'IDLE'),
             'capabilities'    => $capabilities,
+            // The desktop agent's own identity in a session. `deviceUuid` is
+            // what tells the UI the thing on the other side is a machine; it
+            // still renders from `capabilities`, never from `clientType` (§51).
+            'deviceUuid'      => $row['device_uuid'] ?? null,
+            'controlState'    => (string) ($row['control_state'] ?? 'NONE'),
+            'clipboardEnabled' => self::bool($row['clipboard_enabled'] ?? false),
+            'controlRequestedAt' => Clock::iso($row['control_requested_at'] ?? null),
+            'controlGrantedAt'   => Clock::iso($row['control_granted_at'] ?? null),
             'requestedAt'     => Clock::iso($row['requested_at'] ?? null),
             'joinedAt'        => Clock::iso($row['joined_at'] ?? null),
             'leftAt'          => Clock::iso($row['left_at'] ?? null),
@@ -317,6 +325,62 @@ final class Presenter
         $out['updatedAt']                 = Clock::iso($row['updated_at'] ?? null);
 
         return $out;
+    }
+
+    /**
+     * A registered device (§52).
+     *
+     * What is deliberately absent: the public key itself. An administrator
+     * comparing a device with what the agent shows needs the fingerprint, not
+     * the key — and a key in an API response is one more place it can be
+     * confused for a credential. `id` never leaves the server either.
+     *
+     * @param  array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    public static function device(array $row, bool $online = false, bool $includeAudit = false): array
+    {
+        $capabilities = $row['capabilities'] ?? [];
+        if (is_string($capabilities)) {
+            $capabilities = json_decode($capabilities, true) ?: [];
+        }
+
+        $fingerprint = $row['public_key_fingerprint'] ?? null;
+
+        $resource = [
+            'uuid'             => (string) $row['uuid'],
+            'deviceName'       => (string) $row['device_name'],
+            'deviceType'       => (string) $row['device_type'],
+            'companyId'        => $row['company_id'] !== null ? (int) $row['company_id'] : null,
+            'operatingSystem'  => $row['operating_system'] ?? null,
+            'osVersion'        => $row['os_version'] ?? null,
+            'architecture'     => $row['architecture'] ?? null,
+            'hostname'         => $row['hostname'] ?? null,
+            'agentVersion'     => $row['agent_version'] ?? null,
+            'status'           => (string) $row['status'],
+            'online'           => $online,
+            'presenceState'    => (string) ($row['presence_state'] ?? 'OFFLINE'),
+            'capabilities'     => $capabilities,
+            'keyAlgorithm'     => (string) ($row['key_algorithm'] ?? 'ED25519'),
+            'keyFingerprint'   => is_string($fingerprint) && $fingerprint !== ''
+                ? \App\Domain\Device\DeviceSignature::displayFingerprint($fingerprint)
+                : null,
+            'ownerName'        => $row['owner_name'] ?? null,
+            'enrolledByName'   => $row['enrolled_by_name'] ?? null,
+            'unattendedAccessEnabled' => self::bool($row['unattended_access_enabled'] ?? false),
+            'unattendedEnabledAt'     => Clock::iso($row['unattended_enabled_at'] ?? null),
+            'unattendedLastUsedAt'    => Clock::iso($row['unattended_last_used_at'] ?? null),
+            'lastSeenAt'       => Clock::iso($row['last_seen_at'] ?? null),
+            'lastAuthenticatedAt' => Clock::iso($row['last_authenticated_at'] ?? null),
+            'revokedAt'        => Clock::iso($row['revoked_at'] ?? null),
+            'createdAt'        => Clock::iso($row['created_at'] ?? null),
+        ];
+
+        if ($includeAudit) {
+            $resource['audit'] = ['lastIp' => $row['last_ip'] ?? null];
+        }
+
+        return $resource;
     }
 
     public static function bool(mixed $value): bool

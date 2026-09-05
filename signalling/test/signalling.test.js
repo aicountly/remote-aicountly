@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 
-import { TokenError, verifySignallingToken } from '../src/token.js';
+import { DEVICE_ROOM_PREFIX, TokenError, verifySignallingToken } from '../src/token.js';
 import { Rooms } from '../src/rooms.js';
 
 const SECRET = 'test-signalling-secret';
@@ -111,6 +111,49 @@ describe('verifySignallingToken', () => {
     assert.throws(
       () => verifySignallingToken(mintToken({ aud: 'somewhere-else' }), SECRET),
       (error) => error.code === 'BAD_AUDIENCE',
+    );
+  });
+
+  it('treats a token with no kind claim as a session token', () => {
+    const claims = verifySignallingToken(mintToken(), SECRET);
+
+    // Every token minted before the claim existed keeps working.
+    assert.equal(claims.kind, 'session');
+  });
+
+  it('accepts a device presence token for its own device room', () => {
+    const device = `${DEVICE_ROOM_PREFIX}11111111-2222-4333-8444-555555555555`;
+
+    const claims = verifySignallingToken(
+      mintToken({ knd: 'device', room: device, sub: 'device-sub-0001' }),
+      SECRET,
+    );
+
+    assert.equal(claims.kind, 'device');
+    assert.equal(claims.room, device);
+  });
+
+  it('refuses a device token that names a session room', () => {
+    assert.throws(
+      () => verifySignallingToken(mintToken({ knd: 'device' }), SECRET),
+      (error) => error instanceof TokenError && error.code === 'BAD_ROOM',
+    );
+  });
+
+  it('refuses a session token that names a device room', () => {
+    assert.throws(
+      () => verifySignallingToken(
+        mintToken({ room: `${DEVICE_ROOM_PREFIX}11111111-2222-4333-8444-555555555555` }),
+        SECRET,
+      ),
+      (error) => error instanceof TokenError && error.code === 'BAD_ROOM',
+    );
+  });
+
+  it('refuses an unrecognised connection kind rather than defaulting one', () => {
+    assert.throws(
+      () => verifySignallingToken(mintToken({ knd: 'admin' }), SECRET),
+      (error) => error instanceof TokenError && error.code === 'BAD_KIND',
     );
   });
 
@@ -319,6 +362,69 @@ describe('signalling server', () => {
     assert.equal((await error).code, 'UNSUPPORTED_TYPE');
 
     ws.close();
+  });
+
+  it('relays an invitation inside a device presence room', async () => {
+    const room = `${DEVICE_ROOM_PREFIX}aaaaaaaa-1111-4222-8333-444444444444`;
+
+    const agent = await connect(mintToken({ knd: 'device', room, sub: 'agent-uuid-000001', role: 'DEVICE' }));
+    await nextMessage(agent, (m) => m.type === 'joined');
+
+    const controller = await connect(mintToken({ knd: 'device', room, sub: 'invite-uuid-00001', role: 'CONTROLLER' }));
+    await nextMessage(controller, (m) => m.type === 'joined');
+
+    const invited = nextMessage(agent, (m) => m.type === 'device-invite');
+
+    controller.send(JSON.stringify({
+      type: 'device-invite',
+      payload: { sessionUuid: '77777777-8888-4999-8aaa-bbbbbbbbbbbb' },
+    }));
+
+    const invite = await invited;
+    assert.equal(invite.payload.sessionUuid, '77777777-8888-4999-8aaa-bbbbbbbbbbbb');
+
+    agent.close();
+    controller.close();
+  });
+
+  it('refuses SDP inside a device presence room', async () => {
+    const room = `${DEVICE_ROOM_PREFIX}bbbbbbbb-1111-4222-8333-444444444444`;
+
+    const agent = await connect(mintToken({ knd: 'device', room, sub: 'agent-uuid-000002', role: 'DEVICE' }));
+    await nextMessage(agent, (m) => m.type === 'joined');
+
+    const error = nextMessage(agent, (m) => m.type === 'error');
+
+    // A presence credential must not be usable to push media negotiation.
+    agent.send(JSON.stringify({ type: 'offer', to: 'agent-uuid-000002', payload: { sdp: 'v=0 nope' } }));
+
+    assert.equal((await error).code, 'UNSUPPORTED_IN_DEVICE_ROOM');
+
+    agent.close();
+  });
+
+  it('keeps one device presence room out of another', async () => {
+    const first = `${DEVICE_ROOM_PREFIX}cccccccc-1111-4222-8333-444444444444`;
+    const second = `${DEVICE_ROOM_PREFIX}dddddddd-1111-4222-8333-444444444444`;
+
+    const mine = await connect(mintToken({ knd: 'device', room: first, sub: 'mine-uuid-0000001', role: 'DEVICE' }));
+    const joined = await nextMessage(mine, (m) => m.type === 'joined');
+    assert.equal(joined.peers.length, 0);
+
+    const theirs = await connect(mintToken({ knd: 'device', room: second, sub: 'their-uuid-000001', role: 'DEVICE' }));
+    await nextMessage(theirs, (m) => m.type === 'joined');
+
+    // Broadcasting in one device's room must not reach another's, and there is
+    // no message a client can send that names a room at all.
+    theirs.send(JSON.stringify({ type: 'device-invite', payload: { sessionUuid: 'should-not-arrive' } }));
+
+    await assert.rejects(
+      () => nextMessage(mine, (m) => m.type === 'device-invite'),
+      /timed out/,
+    );
+
+    mine.close();
+    theirs.close();
   });
 
   it('tells the room when a peer leaves', async () => {
