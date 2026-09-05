@@ -1448,3 +1448,160 @@
     text-align: left;
   }
 }
+
+/* --- Registered computers (§52) ------------------------------------------- */
+
+.notice--row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.bullets {
+  margin: var(--space-3) 0 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.device-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.device {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--space-4);
+  align-items: start;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+/* A removed computer stays listed — an audit trail with rows missing from it
+   is worse than one showing what was taken away. */
+.device--revoked {
+  opacity: 0.62;
+}
+
+.device__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+}
+
+.device__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.device__name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-weight: 600;
+}
+
+.device__presence {
+  flex: none;
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  background: var(--neutral-soft);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+.device__presence--online {
+  background: var(--aicountly-green-soft);
+  color: var(--aicountly-green-darker);
+}
+
+.device__meta {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.device__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+}
+
+.device__facts dt {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.device__facts dd {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.device__fingerprint {
+  font-size: var(--text-xs);
+  word-break: break-all;
+}
+
+.device__unattended {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+/* Unattended access is the one state on this page worth a colour of its own:
+   it is the difference between a machine that asks and one that does not. */
+.device__unattended--on {
+  color: var(--warning);
+}
+
+.device__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.device__blocked {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  max-width: 18ch;
+}
+
+@media (max-width: 720px) {
+  .device {
+    grid-template-columns: auto 1fr;
+  }
+
+  .device__actions {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .device__blocked {
+    max-width: none;
+  }
+}

@@ -4,8 +4,10 @@ import { Mic, MonitorUp, Send, ShieldCheck, X } from 'lucide-react'
 import StatusBadge from '../../components/ui/StatusBadge'
 import InvitePanel from './InvitePanel'
 import FilesPanel from './FilesPanel'
-import type { EngineSnapshot } from '../../services/webrtc/RemoteSessionEngine'
-import type { ChatMessage, SessionDetail } from '../../types/remote'
+import ControlPanel from './ControlPanel'
+import type { ControlPhase } from './ControlPanel'
+import type { EnginePeer, EngineSnapshot } from '../../services/webrtc/RemoteSessionEngine'
+import type { ChatMessage, SessionControlState, SessionDetail } from '../../types/remote'
 import { describeShareMode, describeSurface, formatTime } from '../../utils/format'
 
 /**
@@ -16,7 +18,7 @@ import { describeShareMode, describeSurface, formatTime } from '../../utils/form
  * instead of covering the corner somebody is trying to point at.
  */
 
-type Panel = 'participants' | 'chat' | 'files' | 'invite' | 'details' | 'security'
+type Panel = 'participants' | 'chat' | 'files' | 'control' | 'invite' | 'details' | 'security'
 
 interface FileTransferProps {
   canSend: boolean
@@ -29,6 +31,19 @@ interface FileTransferProps {
   onDismiss: (uuid: string) => void
 }
 
+/** Everything the control panel needs, resolved once by the room. */
+interface RemoteControlProps {
+  phase: ControlPhase
+  control: SessionControlState | null
+  host: EnginePeer | null
+  isHost: boolean
+  busy: boolean
+  onRequest: () => void
+  onStop: () => void
+  onGrant: (participantUuid: string, allowClipboard: boolean) => void
+  onDeny: (participantUuid: string) => void
+}
+
 interface Props {
   panel: Panel
   session: SessionDetail
@@ -37,6 +52,7 @@ interface Props {
   canChat: boolean
   canInviteExternal: boolean
   files: FileTransferProps
+  control: RemoteControlProps
   onClose: () => void
   onSendChat: (body: string) => Promise<void>
   onApprove: (participantUuid: string) => Promise<void>
@@ -47,6 +63,7 @@ const TITLES: Record<Panel, string> = {
   participants: 'Participants',
   chat: 'Chat',
   files: 'Files',
+  control: 'Remote control',
   invite: 'Invite someone',
   details: 'Session details',
   security: 'Security',
@@ -60,6 +77,7 @@ export default function SessionSidePanel({
   canChat,
   canInviteExternal,
   files,
+  control,
   onClose,
   onSendChat,
   onApprove,
@@ -96,6 +114,8 @@ export default function SessionSidePanel({
           />
         ) : null}
 
+        {panel === 'control' ? <RemoteControlPanel session={session} control={control} /> : null}
+
         {panel === 'invite' ? (
           <InvitePanel session={session} canInviteExternal={canInviteExternal} />
         ) : null}
@@ -105,6 +125,46 @@ export default function SessionSidePanel({
         {panel === 'security' ? <SecurityPanel session={session} live={live} /> : null}
       </div>
     </aside>
+  )
+}
+
+/**
+ * The control panel, with the host participant looked up by uuid.
+ *
+ * `ControlPanel` takes both the negotiated peer and the session record for the
+ * same participant: the peer is what proves the machine can be controlled, the
+ * record is what gives it a name.
+ */
+function RemoteControlPanel({
+  session,
+  control,
+}: {
+  session: SessionDetail
+  control: RemoteControlProps
+}) {
+  const [allowClipboard, setAllowClipboard] = useState(false)
+
+  const hostParticipant =
+    session.participants.find(
+      (participant) => participant.uuid === control.control?.controllableHostUuid,
+    ) ?? null
+
+  return (
+    <ControlPanel
+      phase={control.phase}
+      control={control.control}
+      host={control.host}
+      pending={control.control?.pendingRequests ?? []}
+      isHost={control.isHost}
+      hostParticipant={hostParticipant}
+      onRequest={control.onRequest}
+      onStop={control.onStop}
+      onGrant={control.onGrant}
+      onDeny={control.onDeny}
+      allowClipboard={allowClipboard}
+      onAllowClipboardChange={setAllowClipboard}
+      busy={control.busy}
+    />
   )
 }
 

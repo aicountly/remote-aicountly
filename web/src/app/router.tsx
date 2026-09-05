@@ -22,6 +22,7 @@ const JoinSession = lazy(() => import('../features/sessions/JoinSessionPage'))
 const SessionsList = lazy(() => import('../features/sessions/SessionsPage'))
 const SessionDetail = lazy(() => import('../features/sessions/SessionDetailPage'))
 const SupportRequests = lazy(() => import('../features/support/SupportPage'))
+const Devices = lazy(() => import('../features/devices/DevicesPage'))
 const SessionRoom = lazy(() => import('../features/room/SessionRoomPage'))
 const GuestJoin = lazy(() => import('../features/sessions/GuestJoinPage'))
 const AdminPolicy = lazy(() => import('../features/admin/PolicyPage'))
@@ -46,6 +47,7 @@ export const router = createBrowserRouter([
       { path: 'sessions', element: page(<SessionsList />) },
       { path: 'sessions/:uuid', element: page(<SessionDetail />) },
       { path: 'support', element: page(<SupportRequests />) },
+      { path: 'devices', element: page(<Devices />) },
       { path: 'admin/policy', element: page(<AdminPolicy />) },
       { path: 'admin/permissions', element: page(<AdminPermissions />) },
       { path: 'admin/roles', element: page(<AdminRolePermissions />) },

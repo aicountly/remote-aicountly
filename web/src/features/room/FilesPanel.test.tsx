@@ -41,6 +41,7 @@ function peer(overrides: Partial<EnginePeer> = {}): EnginePeer {
     capabilities: {},
     connectionState: 'connected',
     dataChannelReady: true,
+    controlChannelReady: false,
     ...overrides,
   }
 }
