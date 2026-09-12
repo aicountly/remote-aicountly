@@ -160,12 +160,13 @@ jobs:
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         run: |
           if (-not $env:AICOUNTLY_SIGN_METHOD) {
-            throw @'
-This channel publishes a signed build, and no signing method is configured.
-
-Set the variable AICOUNTLY_SIGN_METHOD (and its companions) on the
-windows-release environment. See docs/desktop/WINDOWS_RELEASE.md.
-'@
+            $missingSigningMessage = @(
+              'This channel publishes a signed build, and no signing method is configured.',
+              '',
+              'Set the variable AICOUNTLY_SIGN_METHOD (and its companions) on the',
+              'windows-release environment. See docs/desktop/WINDOWS_RELEASE.md.'
+            ) -join "`n"
+            throw $missingSigningMessage
           }
 
           $target = 'target/x86_64-pc-windows-msvc/release'
@@ -214,18 +215,19 @@ windows-release environment. See docs/desktop/WINDOWS_RELEASE.md.
           if ('${{ inputs.channel }}' -eq 'sandbox') {
             # Travels with the artifact, so an unsigned build cannot be handed
             # to somebody as though it were a release.
-            @"
-UNSIGNED DEVELOPMENT BUILD
-==========================
-
-Built from ${{ github.sha }} on the sandbox channel.
-
-These installers are NOT signed. Windows SmartScreen will warn about them and
-that warning is correct — nothing here vouches for who produced them.
-
-Do not distribute them to customers, and do not describe them as a release.
-Signed builds come from the beta and production channels.
-"@ | Set-Content -Path release/UNSIGNED-DEVELOPMENT-BUILD.txt -Encoding utf8
+            $unsignedNotice = @(
+              'UNSIGNED DEVELOPMENT BUILD',
+              '==========================',
+              '',
+              "Built from ${{ github.sha }} on the sandbox channel.",
+              '',
+              'These installers are NOT signed. Windows SmartScreen will warn about them and',
+              'that warning is correct — nothing here vouches for who produced them.',
+              '',
+              'Do not distribute them to customers, and do not describe them as a release.',
+              'Signed builds come from the beta and production channels.'
+            ) -join "`n"
+            $unsignedNotice | Set-Content -Path release/UNSIGNED-DEVELOPMENT-BUILD.txt -Encoding utf8
           }
 
       - name: Upload
