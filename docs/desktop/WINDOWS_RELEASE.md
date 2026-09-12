@@ -187,9 +187,11 @@ which is exactly why it is off rather than "on and hoping".
 
 Genuinely blocking, and none of it is something code can decide:
 
-- [ ] **A publisher name.** `bundle.publisher` and `bundle.copyright` are empty
-      because there is no authoritative legal entity name anywhere in this
-      repository. They must match the code-signing certificate's subject.
+- [ ] **Confirm the publisher against the certificate.** `bundle.publisher` is
+      `Aicountly Interactive Services Private Limited` and `bundle.copyright`
+      matches. When the certificate is issued, check its subject `O=` field
+      reads exactly that; if the CA normalised the name, change
+      `tauri.conf.json` to match the certificate, not the reverse.
 - [ ] **A code-signing identity** — a Trusted Signing account, or an OV/EV
       certificate. Needs an organisation to be validated, which takes days to
       weeks.

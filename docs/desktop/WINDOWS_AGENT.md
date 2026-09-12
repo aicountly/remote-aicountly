@@ -34,12 +34,17 @@ There is **no interactive service**. See
 
 ### Publisher metadata
 
-`bundle.publisher` and `bundle.copyright` in `tauri.conf.json` are **empty**,
-and deliberately: there is no authoritative legal publisher name anywhere in
-this repository, and inventing one would put a false entity in the file
-properties of a signed binary. They must be filled in before a production
-release, and they should match the subject of the code-signing certificate —
-see [WINDOWS_RELEASE.md](WINDOWS_RELEASE.md).
+`bundle.publisher` in `tauri.conf.json` is **Aicountly Interactive Services Private Limited**, and
+`bundle.copyright` matches it. They were left empty until the entity was
+confirmed rather than guessed, because a wrong name in the file properties of a
+signed binary is worse than a blank one.
+
+Windows shows the publisher in the installer's UAC prompt, in the executable's
+file properties and in Add/Remove Programs, and compares it against the
+certificate. **It must stay identical to the `O=` field of the code-signing
+certificate's subject** — if the CA issues the certificate under a different
+form of the name, change this to whatever the certificate says rather than the
+other way round. See [WINDOWS_RELEASE.md](WINDOWS_RELEASE.md).
 
 ## Screen capture
 
