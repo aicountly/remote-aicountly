@@ -1,0 +1,52 @@
+[package]
+name = "aicountly-remote-service"
+description = "AICOUNTLY Remote Service — the Windows service that owns machine lifecycle, device presence and the named-pipe IPC channel."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+# The name Windows sees, and the one the installer registers.
+name = "AicountlyRemoteService"
+path = "src/main.rs"
+
+[lib]
+# The IPC protocol and the service's own logic are a library so they can be
+# tested on any host. Only `main.rs` and the `windows` calls need a Windows
+# runner, which is what keeps the untestable surface small.
+name = "aicountly_remote_service"
+path = "src/lib.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio.workspace = true
+remote-core.workspace = true
+remote-security.workspace = true
+remote-protocol.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# Only the features the service actually uses. Pulling all of `windows` would
+# add minutes to every build and a great deal of surface nothing calls.
+windows-service = "0.8"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Shutdown",
+    "Win32_System_SystemInformation",
+    "Win32_System_Memory",
+] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

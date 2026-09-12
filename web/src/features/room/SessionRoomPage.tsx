@@ -10,6 +10,7 @@ import {
   MicOff,
   MonitorUp,
   MousePointer2,
+  MousePointerClick,
   Paperclip,
   Pause,
   Pencil,
@@ -27,6 +28,7 @@ import type { AnnotationTool } from './SessionStage'
 import SessionStage from './SessionStage'
 import SessionSidePanel from './SessionSidePanel'
 import ConsentDialog from './ConsentDialog'
+import { controlPhase } from './ControlPanel'
 import SessionEnded from './SessionEnded'
 import ConnectionIndicator from './ConnectionIndicator'
 import RestrictionNotice from '../../components/ui/RestrictionNotice'
@@ -59,14 +61,28 @@ export default function SessionRoomPage() {
 
   const isGuest = Boolean(getGuestToken())
 
-  const { session, loading, error, ended, messages, live, shareIntent, actions } = useRemoteSession({
+  const {
+    session,
+    loading,
+    error,
+    ended,
+    messages,
+    live,
+    shareIntent,
+    control,
+    controlBusy,
+    controlNotice,
+    controllableHost,
+    isControlling,
+    actions,
+  } = useRemoteSession({
     sessionUuid: uuid,
     policy,
     guestParticipantUuid: isGuest ? readGuestParticipantUuid() : null,
   })
 
   const [panel, setPanel] = useState<
-    'participants' | 'chat' | 'files' | 'invite' | 'details' | 'security' | null
+    'participants' | 'chat' | 'files' | 'control' | 'invite' | 'details' | 'security' | null
   >('participants')
   const [annotationTool, setAnnotationTool] = useState<AnnotationTool>('none')
   const [pointerOn, setPointerOn] = useState(false)
@@ -163,6 +179,38 @@ export default function SessionRoomPage() {
   const canInviteExternal =
     canInvite && session.capabilities.externalGuest && can(PERMISSIONS.EXTERNAL_INVITE)
 
+  // Remote control (§18, §19, §51). Three separate facts, in this order:
+  //
+  //   1. is there a machine here that *can* be controlled — from the peer's
+  //      negotiated capabilities, never from its client type;
+  //   2. does the organisation allow it — the server's effective policy;
+  //   3. may this person ask, or answer.
+  //
+  // A guest is excluded outright: control belongs to somebody with an
+  // AICOUNTLY identity, an organisation and an audit trail behind them, and the
+  // API refuses a guest token for every one of these routes.
+  const hasControllableHost = controllableHost !== null
+  const controlAllowedByPolicy = control?.allowRemoteControl === true
+  const canRequestControl = !isGuest && can(PERMISSIONS.CONTROL_REQUEST)
+  const canAnswerControl = !isGuest && session.isHost && can(PERMISSIONS.CONTROL_ACCEPT)
+  const pendingControl = control?.pendingRequests.length ?? 0
+
+  const phase = controlPhase({
+    hasControllableHost,
+    allowedByPolicy: controlAllowedByPolicy,
+    hasPermission: canRequestControl,
+    controlState: me?.controlState ?? null,
+    isControlling,
+  })
+
+  // The toolbar entry appears when there is something real behind it: a machine
+  // this person may ask to control, or a request this person may answer.
+  // Never otherwise — §19's rule that a browser host offers no control button.
+  const showControlTool =
+    !isGuest &&
+    controlAllowedByPolicy &&
+    ((hasControllableHost && canRequestControl) || (canAnswerControl && pendingControl > 0))
+
   const waiting = session.waiting ?? []
 
   return (
@@ -249,6 +297,49 @@ export default function SessionRoomPage() {
         </div>
       ) : null}
 
+      {/* The persistent control indicator (§18). It is on screen for as long as
+          input is flowing, it names the machine, and it carries the stop
+          control — which works locally and does not need the other end to
+          agree. There is no way to run a control session without it. */}
+      {isControlling ? (
+        <div className="room__control-banner" role="status">
+          <span className="room__control-dot" aria-hidden="true" />
+          <span>
+            <strong>You’re controlling</strong>
+            {controllableHost?.name ? ` ${controllableHost.name}` : ' this computer'}
+            {control?.clipboardEnabled ? ' · clipboard shared' : ''}
+          </span>
+          <button
+            type="button"
+            className="btn btn--danger btn--sm"
+            onClick={() => void actions.stopControl()}
+            disabled={controlBusy}
+          >
+            <StopCircle size={15} aria-hidden="true" />
+            Stop controlling
+          </button>
+        </div>
+      ) : control?.controllerUuid && control.controllerUuid !== me?.uuid ? (
+        <div className="room__control-banner room__control-banner--observed" role="status">
+          <span className="room__control-dot" aria-hidden="true" />
+          <span>
+            <strong>{control.controllerName ?? 'Someone'}</strong> is controlling this computer
+            {control.clipboardEnabled ? ' · clipboard shared' : ''}
+          </span>
+          {canAnswerControl ? (
+            <button
+              type="button"
+              className="btn btn--danger btn--sm"
+              onClick={() => void actions.stopControl(control.controllerUuid ?? undefined)}
+              disabled={controlBusy}
+            >
+              <StopCircle size={15} aria-hidden="true" />
+              Stop control
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
       {session.status === 'PAUSED' ? (
         <div className="room__notice" role="status">
           This session is paused. Nothing is being shared.
@@ -310,6 +401,13 @@ export default function SessionRoomPage() {
           onPointerMove={actions.sendPointer}
           onAnnotation={actions.sendAnnotation}
           authorName={me?.displayName ?? 'Participant'}
+          controlling={isControlling}
+          onControlPointer={actions.sendControlPointer}
+          onControlButton={actions.sendControlButton}
+          onControlScroll={actions.sendControlScroll}
+          onControlKey={actions.sendControlKey}
+          onControlClipboard={actions.sendControlClipboard}
+          clipboardShared={control?.clipboardEnabled === true}
         />
 
         {panel ? (
@@ -329,6 +427,18 @@ export default function SessionRoomPage() {
               onDecline: actions.declineTransfer,
               onCancel: actions.cancelTransfer,
               onDismiss: actions.dismissTransfer,
+            }}
+            control={{
+              phase,
+              control,
+              host: controllableHost,
+              isHost: canAnswerControl,
+              busy: controlBusy,
+              onRequest: () => void actions.askForControl(),
+              onStop: () => void actions.stopControl(),
+              onGrant: (participantUuid, allowClipboard) =>
+                void actions.allowControl(participantUuid, allowClipboard),
+              onDeny: (participantUuid) => void actions.refuseControl(participantUuid),
             }}
             onClose={() => setPanel(null)}
             onSendChat={actions.sendChat}
@@ -441,6 +551,17 @@ export default function SessionRoomPage() {
             />
           ) : null}
 
+          {showControlTool ? (
+            <ToolbarButton
+              icon={<MousePointerClick size={18} />}
+              label={isControlling ? 'Controlling' : 'Control'}
+              active={panel === 'control'}
+              tone={isControlling ? 'danger' : 'default'}
+              badge={pendingControl || undefined}
+              onClick={() => setPanel((current) => (current === 'control' ? null : 'control'))}
+            />
+          ) : null}
+
           {canInvite ? (
             <ToolbarButton
               icon={<UserPlus size={18} />}
@@ -474,6 +595,19 @@ export default function SessionRoomPage() {
         onCancel={actions.cancelShare}
         onChangeMode={(mode) => actions.beginShare(mode)}
       />
+
+      {controlNotice ? (
+        <div className="room__notice room__notice--control" role="status">
+          <span>{controlNotice}</span>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm room__ghost"
+            onClick={actions.dismissControlNotice}
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
 
       {shareIntent.phase === 'error' ? (
         <div className="room__error-toast" role="alert">

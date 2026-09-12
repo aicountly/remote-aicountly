@@ -33,6 +33,16 @@ final class CompanyPolicyDefaults
         'allow_aicountly_support',
         'allow_recording',
         'recording_requires_consent',
+        // --- Desktop agent switches (docs/DESKTOP_AGENT.md) ---------------
+        // OFF in every preset, OPEN included. A preset is a starting point for
+        // an organisation that has not thought about it yet, and "has not
+        // thought about it" is never a reason to hand out control of a
+        // Windows desktop. An administrator turns these on deliberately, which
+        // moves the record to CUSTOM and says so.
+        'allow_remote_control',
+        'allow_unattended_access',
+        'allow_clipboard_sync',
+        'allow_device_reboot',
     ];
 
     /**
@@ -61,6 +71,10 @@ final class CompanyPolicyDefaults
                 'allow_aicountly_support'      => false,
                 'allow_recording'              => false,
                 'recording_requires_consent'   => true,
+                'allow_remote_control'         => false,
+                'allow_unattended_access'      => false,
+                'allow_clipboard_sync'         => false,
+                'allow_device_reboot'          => false,
                 'max_session_duration_minutes' => 30,
                 'guest_link_expiry_minutes'    => 5,
             ],
@@ -83,6 +97,10 @@ final class CompanyPolicyDefaults
                 'allow_aicountly_support'      => true,
                 'allow_recording'              => false,
                 'recording_requires_consent'   => true,
+                'allow_remote_control'         => false,
+                'allow_unattended_access'      => false,
+                'allow_clipboard_sync'         => false,
+                'allow_device_reboot'          => false,
                 'max_session_duration_minutes' => 45,
                 'guest_link_expiry_minutes'    => 5,
             ],
@@ -103,6 +121,10 @@ final class CompanyPolicyDefaults
                 'allow_aicountly_support'      => true,
                 'allow_recording'              => false,
                 'recording_requires_consent'   => true,
+                'allow_remote_control'         => false,
+                'allow_unattended_access'      => false,
+                'allow_clipboard_sync'         => false,
+                'allow_device_reboot'          => false,
                 'max_session_duration_minutes' => 240,
                 'guest_link_expiry_minutes'    => 30,
             ],
@@ -125,6 +147,10 @@ final class CompanyPolicyDefaults
                 'allow_aicountly_support'      => true,
                 'allow_recording'              => false,
                 'recording_requires_consent'   => true,
+                'allow_remote_control'         => false,
+                'allow_unattended_access'      => false,
+                'allow_clipboard_sync'         => false,
+                'allow_device_reboot'          => false,
                 'max_session_duration_minutes' => 60,
                 'guest_link_expiry_minutes'    => 10,
             ],
@@ -158,6 +184,12 @@ final class CompanyPolicyDefaults
             'allow_aicountly_support'      => true,
             'allow_recording'              => false,
             'recording_requires_consent'   => true,
+            // Personal scope has no organisation to govern a desktop agent, so
+            // it governs none: a device is always enrolled into a company.
+            'allow_remote_control'         => false,
+            'allow_unattended_access'      => false,
+            'allow_clipboard_sync'         => false,
+            'allow_device_reboot'          => false,
             'max_session_duration_minutes' => 60,
             'guest_link_expiry_minutes'    => 10,
         ];

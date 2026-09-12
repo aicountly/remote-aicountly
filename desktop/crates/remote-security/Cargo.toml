@@ -1,0 +1,24 @@
+[package]
+name = "remote-security"
+description = "Device identity for AICOUNTLY Remote: the Ed25519 keypair, the canonical challenge, and the secure-storage abstraction."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Exposes `InMemoryStorage` outside this crate's own tests. Enabled by the
+# desktop crate's dev-dependencies and by nothing that ships.
+test-support = []
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ed25519-dalek.workspace = true
+rand.workspace = true
+sha2.workspace = true
+base64.workspace = true
+hex.workspace = true
+zeroize = "1.8"

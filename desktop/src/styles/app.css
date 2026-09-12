@@ -1,0 +1,433 @@
+/**
+ * The desktop window.
+ *
+ * One column, generous spacing, and the session banner above everything else.
+ * This is an application somebody opens because they want to know whether
+ * anyone is connected to their computer, and the answer to that question is
+ * the first thing on screen.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  /* A desktop window, not a web page: selecting the chrome is never wanted. */
+  user-select: none;
+  cursor: default;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+/* --- Header --------------------------------------------------------------- */
+
+.app__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.app__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-weight: 650;
+  font-size: var(--text-md);
+  letter-spacing: -0.01em;
+}
+
+.app__brand-mark {
+  color: var(--aicountly-green);
+  display: inline-flex;
+}
+
+.app__version {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+}
+
+.app__nav {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.app__nav-item {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease);
+}
+
+.app__nav-item:hover {
+  background: var(--bg-muted);
+}
+
+.app__nav-item--active {
+  background: var(--aicountly-green-soft);
+  color: var(--aicountly-green-darker);
+  font-weight: 600;
+}
+
+.app__main {
+  flex: 1;
+  padding: var(--space-5);
+  max-width: 900px;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* --- The session banner --------------------------------------------------- */
+
+/**
+ * The most important element in the product.
+ *
+ * It is green, it is at the top, it says who is connected, and it carries both
+ * stop controls. There is no state in which a session is running and this is
+ * not on screen — `activeSession()` derives from the status rather than being
+ * a separate flag, so there is nothing to forget to set.
+ */
+.session-banner {
+  background: var(--aicountly-green);
+  color: var(--text-inverse);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-5);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.session-banner--unattended {
+  background: var(--warning);
+}
+
+.session-banner__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 700;
+  font-size: var(--text-md);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.session-banner__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse 2s var(--ease) infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.session-banner__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-3);
+}
+
+.session-banner__fact-label {
+  font-size: var(--text-xs);
+  opacity: 0.85;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.session-banner__fact-value {
+  font-weight: 600;
+}
+
+.session-banner__actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* --- Cards ---------------------------------------------------------------- */
+
+.card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-sm);
+}
+
+.card__title {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-lg);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.card__subtitle {
+  margin: 0 0 var(--space-4);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.card__rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.row__label {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.row__value {
+  font-weight: 600;
+  text-align: right;
+}
+
+.row__value--mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  user-select: text;
+}
+
+/* --- Status pills --------------------------------------------------------- */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0.15rem var(--space-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.pill--ready {
+  background: var(--aicountly-green-soft);
+  color: var(--aicountly-green-darker);
+  border-color: var(--aicountly-green-border);
+}
+
+.pill--attention {
+  background: var(--warning-soft);
+  color: var(--warning);
+  border-color: var(--warning-border);
+}
+
+.pill--danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: var(--danger-border);
+}
+
+.pill--neutral {
+  background: var(--neutral-soft);
+  color: var(--text-secondary);
+  border-color: var(--neutral-border);
+}
+
+.pill--info {
+  background: var(--info-soft);
+  color: var(--info);
+  border-color: var(--info-border);
+}
+
+/* --- Buttons -------------------------------------------------------------- */
+
+.btn {
+  appearance: none;
+  font: inherit;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  transition:
+    background var(--duration-fast) var(--ease),
+    border-color var(--duration-fast) var(--ease);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn--primary {
+  background: var(--aicountly-green);
+  color: var(--text-inverse);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: var(--aicountly-green-dark);
+}
+
+.btn--secondary {
+  background: var(--bg-surface);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.btn--secondary:hover:not(:disabled) {
+  background: var(--bg-muted);
+}
+
+.btn--danger {
+  background: var(--danger);
+  color: var(--text-inverse);
+}
+
+.btn--inverse {
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--text-inverse);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.btn--inverse:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.26);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--aicountly-green-dark);
+  outline-offset: 2px;
+}
+
+/* --- Notices -------------------------------------------------------------- */
+
+.notice {
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  border: 1px solid;
+  font-size: var(--text-sm);
+}
+
+.notice--warning {
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+  color: var(--warning);
+}
+
+.notice--danger {
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+
+.notice--info {
+  background: var(--info-soft);
+  border-color: var(--info-border);
+  color: var(--info);
+}
+
+.notice__title {
+  font-weight: 700;
+  margin: 0 0 var(--space-2);
+}
+
+.notice p {
+  margin: 0 0 var(--space-2);
+}
+
+.notice p:last-child {
+  margin-bottom: 0;
+}
+
+/* --- Forms ---------------------------------------------------------------- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.field__label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.field__hint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.field input[type='text'],
+.field input[type='url'],
+.field input[type='number'],
+.field select {
+  font: inherit;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  user-select: text;
+}
+
+.field--inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.empty {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  padding: var(--space-4) 0;
+  text-align: center;
+}

@@ -8,9 +8,14 @@ use App\Domain\Audit\AuditService;
 use App\Domain\Auth\IdentityResolver;
 use App\Domain\Auth\PortalClient;
 use App\Domain\Auth\SourceContextVerifier;
+use App\Domain\Device\DeviceAuthenticationService;
+use App\Domain\Device\DevicePresenceService;
+use App\Domain\Device\DeviceService;
+use App\Domain\Device\DeviceSessionService;
 use App\Domain\Directory\PlatformDirectory;
 use App\Domain\Policy\EffectivePolicyResolver;
 use App\Domain\Session\ChatService;
+use App\Domain\Session\ControlService;
 use App\Domain\Session\FileTransferService;
 use App\Domain\Session\InvitationService;
 use App\Domain\Session\JoinService;
@@ -176,6 +181,81 @@ class Services extends BaseService
             db_connect(),
             static::auditService(),
             static::participantService(),
+            static::remoteConfig(),
+        );
+    }
+
+    public static function controlService(bool $getShared = true): ControlService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('controlService');
+        }
+
+        return new ControlService(db_connect(), static::participantService(), static::auditService());
+    }
+
+    // ----------------------------------------------------------------- devices
+
+    public static function deviceService(bool $getShared = true): DeviceService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('deviceService');
+        }
+
+        return new DeviceService(
+            db_connect(),
+            static::policyResolver(),
+            static::auditService(),
+            static::remoteConfig(),
+        );
+    }
+
+    public static function deviceAuthenticationService(bool $getShared = true): DeviceAuthenticationService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('deviceAuthenticationService');
+        }
+
+        return new DeviceAuthenticationService(
+            db_connect(),
+            static::deviceService(),
+            static::auditService(),
+            static::remoteConfig(),
+        );
+    }
+
+    public static function deviceSessionService(bool $getShared = true): DeviceSessionService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('deviceSessionService');
+        }
+
+        return new DeviceSessionService(
+            db_connect(),
+            static::deviceService(),
+            static::sessionService(),
+            static::participantService(),
+            static::controlService(),
+            static::policyResolver(),
+            static::auditService(),
+            static::remoteConfig(),
+        );
+    }
+
+    public static function devicePresenceService(bool $getShared = true): DevicePresenceService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('devicePresenceService');
+        }
+
+        return new DevicePresenceService(
+            db_connect(),
+            static::deviceService(),
+            static::sessionService(),
+            static::policyResolver(),
+            static::signallingTokenService(),
+            static::iceConfigService(),
+            static::auditService(),
             static::remoteConfig(),
         );
     }

@@ -4,6 +4,7 @@ namespace Config;
 
 use App\Filters\ApiAuthFilter;
 use App\Filters\CorsFilter;
+use App\Filters\DeviceAuthFilter;
 use App\Filters\RateLimitFilter;
 use App\Filters\SecurityHeadersFilter;
 use App\Filters\SourceContextFilter;
@@ -42,6 +43,7 @@ class Filters extends BaseFilters
 
         // AICOUNTLY Remote
         'api-auth'        => ApiAuthFilter::class,
+        'device-auth'     => DeviceAuthFilter::class,
         'remote-context'  => SourceContextFilter::class,
         'rate-limit'      => RateLimitFilter::class,
         'remote-cors'     => CorsFilter::class,

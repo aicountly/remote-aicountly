@@ -77,6 +77,33 @@ final class EventType
 
     public const SIGNALLING_TOKEN_ISSUED = 'SIGNALLING_TOKEN_ISSUED';
 
+    // --- Desktop agents (docs/DESKTOP_AGENT.md) ----------------------------
+    //
+    // The same two rules apply as everywhere else, and they bite harder here:
+    // a clipboard event records *that* the clipboard was synchronised and its
+    // byte count, never its contents; an input event is not recorded at all,
+    // because a keystroke log is a password log.
+    public const CONTROL_REQUESTED = 'CONTROL_REQUESTED';
+    public const CONTROL_GRANTED   = 'CONTROL_GRANTED';
+    public const CONTROL_DENIED    = 'CONTROL_DENIED';
+    public const CONTROL_REVOKED   = 'CONTROL_REVOKED';
+
+    public const CLIPBOARD_SYNCED = 'CLIPBOARD_SYNCED';
+
+    public const DEVICE_ENROLLED = 'DEVICE_ENROLLED';
+    public const DEVICE_REVOKED  = 'DEVICE_REVOKED';
+    public const DEVICE_UPDATED  = 'DEVICE_UPDATED';
+
+    /** A signature, a nonce or a revoked device that did not check out (§60). */
+    public const DEVICE_AUTH_FAILED     = 'DEVICE_AUTH_FAILED';
+    public const DEVICE_AUTHENTICATED   = 'DEVICE_AUTHENTICATED';
+
+    public const UNATTENDED_ACCESS_ENABLED  = 'UNATTENDED_ACCESS_ENABLED';
+    public const UNATTENDED_ACCESS_DISABLED = 'UNATTENDED_ACCESS_DISABLED';
+    public const UNATTENDED_SESSION_STARTED = 'UNATTENDED_SESSION_STARTED';
+
+    public const DEVICE_REBOOT_REQUESTED = 'DEVICE_REBOOT_REQUESTED';
+
     /**
      * Which sharing surface the browser reported, as an event name (§27).
      */

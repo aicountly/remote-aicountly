@@ -20,6 +20,14 @@ const MAX_TOKEN_LIFETIME_SECONDS = 600;
 /** Tolerated clock difference between the API host and this one. */
 const CLOCK_SKEW_SECONDS = 30;
 
+/**
+ * Rooms belonging to a device rather than to a session.
+ *
+ * Mirrors `App\Domain\Device\DevicePresenceService::ROOM_PREFIX`. A session
+ * room is a bare session uuid, so the prefix cannot collide with one.
+ */
+export const DEVICE_ROOM_PREFIX = 'device-';
+
 export class TokenError extends Error {
   constructor(code, message) {
     super(message);
@@ -118,8 +126,32 @@ export function verifySignallingToken(token, secret) {
     throw new TokenError('BAD_SUBJECT', 'Token names no participant');
   }
 
+  // What the connection *is*. A session room carries SDP, ICE and the
+  // collaboration channel; a device's presence room carries a heartbeat and an
+  // invitation to join a session, and nothing else. Keeping them apart here —
+  // rather than only in the API that mints the token — is what stops a device
+  // presence credential being replayed to push an offer at somebody.
+  //
+  // Absent means 'session', so every token minted before this claim existed
+  // keeps working. An unrecognised value is refused rather than defaulted:
+  // guessing at a kind is how a room ends up relaying what it should not.
+  const kind = claims.knd ?? 'session';
+  if (kind !== 'session' && kind !== 'device') {
+    throw new TokenError('BAD_KIND', 'Token names no usable connection kind');
+  }
+
+  // Belt and braces on the two the API is supposed to keep in step: a device
+  // room is named after its device, and nothing else may claim to be one.
+  if (kind === 'device' && !claims.room.startsWith(DEVICE_ROOM_PREFIX)) {
+    throw new TokenError('BAD_ROOM', 'A device token must name a device room');
+  }
+  if (kind === 'session' && claims.room.startsWith(DEVICE_ROOM_PREFIX)) {
+    throw new TokenError('BAD_ROOM', 'A session token cannot name a device room');
+  }
+
   return {
     room: claims.room,
+    kind,
     participantUuid: claims.sub,
     role: typeof claims.role === 'string' ? claims.role : 'VIEWER',
     name: typeof claims.name === 'string' ? claims.name.slice(0, 120) : 'Participant',

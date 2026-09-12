@@ -44,6 +44,7 @@ abstract class RemoteTestCase extends CIUnitTestCase
         'remote_sessions',
         'remote_support_requests',
         'remote_context_tokens',
+        'remote_device_challenges',
         'remote_devices',
         'remote_user_permissions',
         'remote_role_permissions',
@@ -95,7 +96,9 @@ abstract class RemoteTestCase extends CIUnitTestCase
         // resolved earlier in the test keeps the previous secret.
         foreach ([
             'policyResolver', 'sessionService', 'joinService', 'invitationService',
-            'fileTransferService',
+            'fileTransferService', 'controlService',
+            'deviceService', 'deviceAuthenticationService', 'deviceSessionService',
+            'devicePresenceService',
             'supportRequestService', 'signallingTokenService', 'iceConfigService',
             'sourceContextVerifier', 'platformDirectory', 'portalClient',
         ] as $service) {
@@ -204,6 +207,112 @@ abstract class RemoteTestCase extends CIUnitTestCase
         ], $values);
 
         $this->db->table('remote_entitlements')->insert(array_merge(['company_id' => $companyId], $columns));
+    }
+
+    // --------------------------------------------------------------- devices
+
+    /**
+     * An Ed25519 keypair, as the desktop agent would generate one locally.
+     *
+     * The test holds both halves because it has to *be* the agent; nothing in
+     * the product ever does. `publicKey` is base64 of the raw 32 bytes, which
+     * is the one form `DeviceSignature` accepts.
+     *
+     * @return array{publicKey: string, secretKey: string}
+     */
+    protected function makeDeviceKeypair(): array
+    {
+        $pair = sodium_crypto_sign_keypair();
+
+        return [
+            'publicKey' => base64_encode(sodium_crypto_sign_publickey($pair)),
+            'secretKey' => sodium_crypto_sign_secretkey($pair),
+        ];
+    }
+
+    /**
+     * Sign a challenge exactly as `remote-security`'s `sign_challenge()` does
+     * in the agent — over the canonical payload, never over JSON.
+     */
+    protected function signChallenge(string $secretKey, string $deviceUuid, string $nonce, int $issuedAt): string
+    {
+        return base64_encode(sodium_crypto_sign_detached(
+            \App\Domain\Device\DeviceSignature::challengePayload($deviceUuid, $nonce, $issuedAt),
+            $secretKey,
+        ));
+    }
+
+    /**
+     * A device enrolled through the real service, so every test exercises the
+     * same permission, uniqueness and audit path the API does.
+     *
+     * @param  array<string, mixed> $input
+     * @return array{device: array<string, mixed>, publicKey: string, secretKey: string}
+     */
+    protected function enrolDevice(RemoteIdentity $identity, int $companyId, array $input = []): array
+    {
+        $keys   = $this->makeDeviceKeypair();
+        $device = Services::deviceService()->enrol($identity, $companyId, array_merge([
+            'deviceName'      => 'Test Workstation',
+            'publicKey'       => $keys['publicKey'],
+            'operatingSystem' => 'Windows',
+            'osVersion'       => '11 24H2',
+            'architecture'    => 'x86_64',
+            'hostname'        => 'WS-TEST-01',
+            'agentVersion'    => '1.0.0',
+            'capabilities'    => \App\Domain\Session\ClientCapabilities::desktopAgent(),
+        ], $input));
+
+        return ['device' => $device, 'publicKey' => $keys['publicKey'], 'secretKey' => $keys['secretKey']];
+    }
+
+    /**
+     * A company whose plan and policy permit the desktop capabilities.
+     *
+     * Everything desktop defaults OFF, in the entitlement and in the policy, so
+     * a test that wants remote control has to say so — which is the point.
+     *
+     * @param array<string, bool> $policy
+     */
+    protected function makeDesktopCompany(
+        int $companyId,
+        string $name = 'Desktop Company',
+        array $policy = [],
+        bool $unattendedEntitlement = true,
+    ): int {
+        $switches = array_merge([
+            'allow_remote_control'    => true,
+            'allow_unattended_access' => true,
+            'allow_clipboard_sync'    => true,
+            'allow_device_reboot'     => true,
+        ], $policy);
+
+        // Unattended access and reboot depend on remote control, and the table
+        // says so with a CHECK. A test that switches control off is asking for
+        // the whole group off, not for a row the database will refuse.
+        if ($switches['allow_remote_control'] === false) {
+            $switches['allow_unattended_access'] = false;
+            $switches['allow_clipboard_sync']    = false;
+            $switches['allow_device_reboot']     = false;
+        }
+
+        $this->makeCompany($companyId, $name, $switches);
+
+        $this->setEntitlement($companyId, [
+            'desktop_devices'   => true,
+            'unattended_access' => $unattendedEntitlement,
+        ]);
+
+        return $companyId;
+    }
+
+    /** Pretend the agent reported in just now, so the device counts as online. */
+    protected function markDeviceOnline(string $deviceUuid): void
+    {
+        $this->db->table('remote_devices')->where('uuid', $deviceUuid)->update([
+            'presence_state' => 'ONLINE',
+            'last_seen_at'   => \App\Domain\Support\Clock::now(),
+        ]);
     }
 
     // -------------------------------------------------------------- sessions

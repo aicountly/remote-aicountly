@@ -27,6 +27,9 @@ import type {
   ShareMode,
   SignallingCredentials,
   SupportRequest,
+  DeviceListing,
+  RemoteDevice,
+  SessionControlState,
 } from '../../types/remote'
 
 // --- Bootstrap and policy ---------------------------------------------------
@@ -288,6 +291,160 @@ export function abortFileTransfer(
     method: 'POST',
     body: { status, errorCode },
   })
+}
+
+// --- Remote control (docs/DESKTOP_AGENT.md) ---------------------------------
+//
+// Every one of these is refused by the API unless the organisation permits
+// remote control, this person holds the permission, and — for a grant — the
+// caller is the host. The browser gates its buttons on the same answer so a
+// disabled control is never a surprise, but the API is what enforces it.
+
+export function fetchControlState(sessionUuid: string): Promise<SessionControlState> {
+  return apiFetch<SessionControlState>(`/sessions/${sessionUuid}/control`)
+}
+
+/** Ask the person at the machine for control of it. */
+export function requestControl(sessionUuid: string): Promise<{
+  participant: Participant
+  control: SessionControlState
+}> {
+  return apiFetch(`/sessions/${sessionUuid}/control/request`, { method: 'POST' })
+}
+
+/**
+ * The host granting control.
+ *
+ * `allowClipboard` is separate on purpose: control and clipboard are different
+ * exposures, and starting to control a machine must not silently start copying
+ * whatever is on its clipboard.
+ */
+export function grantControl(
+  sessionUuid: string,
+  participantUuid: string,
+  allowClipboard = false,
+): Promise<{ participant: Participant; control: SessionControlState }> {
+  return apiFetch(`/sessions/${sessionUuid}/control/grant`, {
+    method: 'POST',
+    body: { participantUuid, allowClipboard },
+  })
+}
+
+export function denyControl(
+  sessionUuid: string,
+  participantUuid: string,
+): Promise<{ participant: Participant; control: SessionControlState }> {
+  return apiFetch(`/sessions/${sessionUuid}/control/deny`, {
+    method: 'POST',
+    body: { participantUuid },
+  })
+}
+
+/**
+ * Stop control. Either side, no permission required.
+ *
+ * The agent's own gate is what actually stops input reaching the machine, and
+ * it does so locally and immediately; this is how the *server* and the other
+ * participant find out.
+ */
+export function revokeControl(
+  sessionUuid: string,
+  participantUuid?: string,
+): Promise<{ participant: Participant; control: SessionControlState }> {
+  return apiFetch(`/sessions/${sessionUuid}/control/revoke`, {
+    method: 'POST',
+    body: participantUuid ? { participantUuid } : {},
+  })
+}
+
+export function setClipboardSharing(
+  sessionUuid: string,
+  participantUuid: string,
+  enabled: boolean,
+): Promise<{ participant: Participant; control: SessionControlState }> {
+  return apiFetch(`/sessions/${sessionUuid}/control/clipboard`, {
+    method: 'POST',
+    body: { participantUuid, enabled },
+  })
+}
+
+// --- Devices (§52) ----------------------------------------------------------
+
+export function fetchDevices(companyId: number): Promise<DeviceListing> {
+  return apiFetch<DeviceListing>(`/devices?companyId=${companyId}`)
+}
+
+export function fetchDevice(uuid: string): Promise<{
+  device: RemoteDevice
+  effectiveCapabilities: Record<string, boolean>
+  sessions: RemoteSession[]
+}> {
+  return apiFetch(`/devices/${uuid}`)
+}
+
+export function renameDevice(uuid: string, deviceName: string): Promise<{ device: RemoteDevice }> {
+  return apiFetch(`/devices/${uuid}`, { method: 'PATCH', body: { deviceName } })
+}
+
+export function setDeviceStatus(
+  uuid: string,
+  status: 'ACTIVE' | 'SUSPENDED',
+): Promise<{ device: RemoteDevice }> {
+  return apiFetch(`/devices/${uuid}`, { method: 'PATCH', body: { status } })
+}
+
+/** Revoke a device. Server-side, immediate, and not undone by reinstalling. */
+export function revokeDevice(uuid: string, reason?: string): Promise<{ device: RemoteDevice }> {
+  return apiFetch(`/devices/${uuid}/revoke`, { method: 'POST', body: { reason } })
+}
+
+/**
+ * Turn unattended access on for a device.
+ *
+ * `confirm` is not ceremony: the API refuses without it, because a request
+ * without it is a request that skipped the screen carrying the warning.
+ */
+export function enableUnattendedAccess(uuid: string): Promise<{ device: RemoteDevice }> {
+  return apiFetch(`/devices/${uuid}/unattended/enable`, {
+    method: 'POST',
+    body: { confirm: true },
+  })
+}
+
+export function disableUnattendedAccess(uuid: string): Promise<{ device: RemoteDevice }> {
+  return apiFetch(`/devices/${uuid}/unattended/disable`, { method: 'POST' })
+}
+
+/**
+ * Connect to a device with nobody at it.
+ *
+ * Creates an ordinary Remote session — same policy snapshot, same expiry, same
+ * participants, same audit trail — plus a `UNATTENDED_SESSION_STARTED` event
+ * and a short-lived token the browser uses to tell the agent to join now
+ * rather than waiting for its next poll.
+ */
+export function connectToDevice(
+  uuid: string,
+  issueSummary?: string,
+): Promise<{
+  session: SessionDetail
+  device: RemoteDevice
+  participant: Participant | null
+  host: Participant | null
+  deviceInvite: { token: string; url: string; room: string; expiresAt: string; sessionUuid: string }
+}> {
+  return apiFetch(`/devices/${uuid}/connect`, {
+    method: 'POST',
+    body: issueSummary ? { issueSummary } : {},
+  })
+}
+
+/** Ask a device to restart. Separately authorised — see the API. */
+export function rebootDevice(
+  uuid: string,
+  sessionUuid: string,
+): Promise<{ accepted: boolean; command: { type: string; sessionUuid: string } }> {
+  return apiFetch(`/devices/${uuid}/reboot`, { method: 'POST', body: { sessionUuid } })
 }
 
 // --- Invitations ------------------------------------------------------------

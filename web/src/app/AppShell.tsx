@@ -11,6 +11,7 @@ import {
   Link2,
   LogOut,
   Menu,
+  MonitorSmartphone,
   MonitorUp,
   ScrollText,
   Settings,
@@ -83,6 +84,14 @@ export default function AppShell() {
       ? [{ to: '/support', label: 'Support requests', icon: LifeBuoy }]
       : []),
     { to: '/sessions', label: 'Sessions', icon: History },
+    // Only for somebody who has a reason to see it: registering, managing or
+    // connecting to a machine. A person with none of the three is not shown a
+    // page that would be empty of anything they could do (§52).
+    ...(can(PERMISSIONS.DEVICE_MANAGE) ||
+    can(PERMISSIONS.DEVICE_ENROL) ||
+    can(PERMISSIONS.UNATTENDED_ACCESS)
+      ? [{ to: '/devices', label: 'Computers', icon: MonitorSmartphone }]
+      : []),
     ...(showAdministration
       ? [
           { to: '/admin/policy', label: 'Remote policy', icon: ShieldCheck },

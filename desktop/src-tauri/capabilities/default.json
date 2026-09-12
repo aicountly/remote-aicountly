@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the AICOUNTLY Remote window may call. An allowlist: a permission that is not named here is not reachable from the web layer, whatever the Rust side exposes.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "core:window:allow-unminimize",
+    "core:event:default",
+    "dialog:allow-message",
+    "dialog:allow-confirm",
+    "updater:default"
+  ]
+}

@@ -1052,3 +1052,161 @@
     transition: none;
   }
 }
+
+/* --- Remote control ------------------------------------------------------- */
+/*
+ * The control banner is deliberately louder than the sharing one. Sharing
+ * shows somebody your screen; control lets them use your computer, and the
+ * interface should not treat those as the same weight of thing.
+ */
+
+.room__control-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: none;
+  padding: var(--space-3) var(--space-4);
+  background: rgba(217, 45, 32, 0.16);
+  border-bottom: 1px solid rgba(217, 45, 32, 0.36);
+  color: #ffd9d4;
+  font-size: var(--text-sm);
+}
+
+.room__control-banner > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+
+.room__control-dot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 50%;
+  background: #ff8073;
+  animation: pulse 1.6s var(--ease) infinite;
+}
+
+/* Seen by the person whose machine it is, rather than by the controller. */
+.room__control-banner--observed {
+  background: rgba(240, 184, 73, 0.16);
+  border-bottom-color: rgba(240, 184, 73, 0.36);
+  color: #ffe7bd;
+}
+
+.room__control-banner--observed .room__control-dot {
+  background: #f0b849;
+}
+
+.room__notice--control {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  text-align: left;
+}
+
+/* While control is live the stage is a control surface: the cursor says so,
+   and the focus ring is kept because the keyboard goes through it. */
+.stage__surface--controlling {
+  cursor: crosshair;
+}
+
+.stage__surface--controlling:focus-visible {
+  outline: 2px solid var(--aicountly-green);
+  outline-offset: -2px;
+}
+
+/* --- Control panel -------------------------------------------------------- */
+
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.control__heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-stage);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.control__empty {
+  margin: 0;
+  color: var(--text-stage-muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.control__hint {
+  display: block;
+  color: var(--text-stage-muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+/*
+ * A control request is the highest-stakes thing this panel ever shows, so it
+ * is a card rather than a line, and Allow is never the default focus.
+ */
+.control__request {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid rgba(240, 184, 73, 0.4);
+  border-radius: var(--radius-md);
+  background: rgba(240, 184, 73, 0.1);
+}
+
+.control__request-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: #ffe7bd;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.control__request-body {
+  margin: 0;
+  color: var(--text-stage-muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.control__option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  color: var(--text-stage);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.control__option input {
+  margin-top: 3px;
+  accent-color: var(--aicountly-green);
+}
+
+.control__active {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid rgba(217, 45, 32, 0.4);
+  border-radius: var(--radius-md);
+  background: rgba(217, 45, 32, 0.12);
+  color: #ffd9d4;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.control__active strong {
+  display: block;
+}

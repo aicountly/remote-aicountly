@@ -33,6 +33,12 @@ function policy(overrides: Partial<EffectivePolicy> = {}): EffectivePolicy {
     allowInternalSessions: true,
     allowAicountlySupport: true,
     allowRecording: false,
+    // Desktop capabilities, all off — which is what a browser-only fixture
+    // should be, and what every preset produces.
+    allowRemoteControl: false,
+    allowUnattendedAccess: false,
+    allowClipboardSync: false,
+    allowDeviceReboot: false,
     recordingRequiresConsent: true,
     maxSessionDurationMinutes: 60,
     guestLinkExpiryMinutes: 10,

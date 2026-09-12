@@ -3,23 +3,35 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   approveParticipant,
   declareShareIntent,
+  denyControl,
   denyParticipant,
   endSession,
+  fetchControlState,
   fetchMessages,
   fetchSession,
+  grantControl,
   leaveSession,
   pauseSession,
   postMessage,
   reportContextMismatch,
+  requestControl,
   requestJoin,
   resumeSession,
+  revokeControl,
 } from '../../services/api/remote'
 import { RemoteApiError } from '../../services/api/client'
 import { RemoteSessionEngine } from '../../services/webrtc/RemoteSessionEngine'
 import type { AnnotationShape, EngineSnapshot } from '../../services/webrtc/RemoteSessionEngine'
 import { readCaptureHandle, requestMicrophone, requestScreenShare } from '../../services/webrtc/screenCapture'
 import { RemoteCaptureError } from '../../services/webrtc/screenCapture'
-import type { ChatMessage, EffectivePolicy, SessionDetail, ShareMode } from '../../types/remote'
+import type {
+  ChatMessage,
+  EffectivePolicy,
+  SessionControlState,
+  SessionDetail,
+  ShareMode,
+} from '../../types/remote'
+import type { PointerPosition as ControlPoint } from '../../services/webrtc/remoteControl'
 
 /**
  * The live session, as a hook.
@@ -40,6 +52,17 @@ const SESSION_POLL_MS = 10_000
 
 /** Slower once nothing is pending — most sessions sit in this state. */
 const SESSION_POLL_IDLE_MS = 25_000
+
+/**
+ * How often control state is re-read while somebody is waiting on an answer.
+ *
+ * Faster than the session poll because both ends of a control request are
+ * watching a screen for it: the person who asked, and the person deciding.
+ */
+const CONTROL_POLL_ACTIVE_MS = 4_000
+
+/** And slower when nothing is outstanding, which is nearly always. */
+const CONTROL_POLL_IDLE_MS = 15_000
 
 export type ShareIntentState =
   | { phase: 'idle' }
@@ -122,6 +145,50 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     return () => clearInterval(interval)
   }, [reload, hasPending, ended])
 
+  // --- Remote control state (§18, §51) -------------------------------------
+  //
+  // Read from the server rather than inferred, because the answer is the
+  // server's: the negotiated capability of the host, the organisation's policy,
+  // this person's permission and the host's decision are four different facts
+  // and the browser owns none of them. What the browser owns is showing them.
+
+  const [control, setControl] = useState<SessionControlState | null>(null)
+  const [controlBusy, setControlBusy] = useState(false)
+  const [controlNotice, setControlNotice] = useState<string | null>(null)
+
+  // A guest holds no AICOUNTLY permission and the control endpoints refuse a
+  // guest token, so asking would be a 401 on every poll. Guests see the room
+  // without a control panel, which is exactly what they are entitled to.
+  const isGuestParticipant = Boolean(guestParticipantUuid)
+
+  const refreshControl = useCallback(async () => {
+    if (isGuestParticipant) return
+
+    try {
+      const state = await fetchControlState(sessionUuid)
+
+      if (mountedRef.current) setControl(state)
+    } catch {
+      /* the room does not fail because control state could not be read */
+    }
+  }, [sessionUuid, isGuestParticipant])
+
+  const controlOutstanding =
+    (control?.pendingRequests.length ?? 0) > 0 || session?.me?.controlState === 'REQUESTED'
+
+  useEffect(() => {
+    if (isGuestParticipant || ended) return
+
+    void refreshControl()
+
+    const interval = setInterval(
+      () => void refreshControl(),
+      controlOutstanding ? CONTROL_POLL_ACTIVE_MS : CONTROL_POLL_IDLE_MS,
+    )
+
+    return () => clearInterval(interval)
+  }, [refreshControl, isGuestParticipant, ended, controlOutstanding])
+
   // --- Engine --------------------------------------------------------------
 
   const myParticipantUuid = guestParticipantUuid ?? session?.me?.uuid ?? null
@@ -154,6 +221,16 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
       onSessionEnded: () => {
         if (mountedRef.current) setEnded(true)
       },
+      // The agent has *already* stopped accepting input by the time this
+      // arrives — its gate is local. This is the browser catching up: stop
+      // sending, say why, and re-read the state the server now holds.
+      onControlEnded: (reason) => {
+        if (!mountedRef.current) return
+
+        setControlNotice(controlEndedMessage(reason))
+        void refreshControl()
+        void reload()
+      },
     })
 
     engineRef.current = engine
@@ -164,7 +241,7 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
       engine.dispose()
       engineRef.current = null
     }
-  }, [myParticipantUuid, myStatus, session, sessionUuid, reload])
+  }, [myParticipantUuid, myStatus, session, sessionUuid, reload, refreshControl])
 
   // Stop capture if this component ever unmounts while sharing. Belt and
   // braces over the effect cleanup above, because a leaked screen capture is
@@ -406,6 +483,138 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     engineRef.current?.dismissTransfer(transferUuid)
   }, [])
 
+  // --- Remote control actions (§18) ----------------------------------------
+
+  /**
+   * The peer whose machine can be controlled, from **negotiated capabilities**.
+   *
+   * Not `clientType`, not a name, not a guess: a peer that reported
+   * `remote_control: true` in its capability declaration. A browser reports
+   * false, so this is null for a browser-to-browser session and the room has
+   * nothing to offer — which is §51 holding all the way out to the button.
+   *
+   * The declaration is only ever an upper bound. The server intersects it with
+   * the entitlement and the policy before anything is granted, so a peer that
+   * lied about its capabilities gets a request the server refuses.
+   */
+  const controllableHost = useMemo(
+    () => live?.peers.find((peer) => peer.capabilities.remote_control === true) ?? null,
+    [live?.peers],
+  )
+
+  const hostPeerUuid = controllableHost?.participantUuid ?? null
+  const controlChannelReady = controllableHost?.controlChannelReady ?? false
+  const myControlState = session?.me?.controlState ?? null
+
+  // Input flows only while the server says GRANTED *and* the channel is open.
+  // Anything else — denied, revoked, never asked, the peer gone — stops it,
+  // locally and without waiting for a round trip.
+  useEffect(() => {
+    const engine = engineRef.current
+    if (!engine) return
+
+    if (myControlState === 'GRANTED' && hostPeerUuid && controlChannelReady) {
+      if (!engine.controlling) engine.startControlling(hostPeerUuid)
+
+      return
+    }
+
+    if (engine.controlling) engine.stopControlling()
+  }, [myControlState, hostPeerUuid, controlChannelReady])
+
+  /** Run one control call, keeping the returned state and surfacing refusals. */
+  const runControl = useCallback(
+    async (call: () => Promise<{ control: SessionControlState }>) => {
+      setControlBusy(true)
+      setControlNotice(null)
+
+      try {
+        const result = await call()
+
+        if (mountedRef.current) setControl(result.control)
+
+        await reload()
+      } catch (err) {
+        if (mountedRef.current) {
+          setControlNotice(
+            err instanceof RemoteApiError
+              ? err.message
+              : 'That could not be done. Try again in a moment.',
+          )
+        }
+      } finally {
+        if (mountedRef.current) setControlBusy(false)
+      }
+    },
+    [reload],
+  )
+
+  const askForControl = useCallback(
+    () => runControl(() => requestControl(sessionUuid)),
+    [runControl, sessionUuid],
+  )
+
+  const allowControl = useCallback(
+    (participantUuid: string, allowClipboard: boolean) =>
+      runControl(() => grantControl(sessionUuid, participantUuid, allowClipboard)),
+    [runControl, sessionUuid],
+  )
+
+  const refuseControl = useCallback(
+    (participantUuid: string) => runControl(() => denyControl(sessionUuid, participantUuid)),
+    [runControl, sessionUuid],
+  )
+
+  /**
+   * Stop control.
+   *
+   * The engine is stopped **first and unconditionally**. Whoever pressed this
+   * is entitled to have it take effect before the network is consulted, and if
+   * the network is the reason they pressed it, waiting would be the worst
+   * possible behaviour (§18).
+   */
+  const stopControl = useCallback(
+    (participantUuid?: string) => {
+      engineRef.current?.stopControlling()
+
+      return runControl(() => revokeControl(sessionUuid, participantUuid))
+    },
+    [runControl, sessionUuid],
+  )
+
+  // Thin pass-throughs for the stage's input capture. Each one is a no-op
+  // unless `startControlling()` has been called, so a stray event during a
+  // revoked session sends nothing.
+  const sendControlPointer = useCallback((position: ControlPoint, force = false) => {
+    engineRef.current?.sendControlPointer(position, force)
+  }, [])
+
+  const sendControlButton = useCallback(
+    (button: number, pressed: boolean, position?: ControlPoint, double = false) => {
+      engineRef.current?.sendControlButton(button, pressed, position, double)
+    },
+    [],
+  )
+
+  const sendControlScroll = useCallback(
+    (deltaX: number, deltaY: number, position?: ControlPoint) => {
+      engineRef.current?.sendControlScroll(deltaX, deltaY, position)
+    },
+    [],
+  )
+
+  const sendControlKey = useCallback(
+    (event: KeyboardEvent, pressed: boolean) => engineRef.current?.sendControlKey(event, pressed) ?? false,
+    [],
+  )
+
+  const sendControlClipboard = useCallback(
+    (text: string) => engineRef.current?.sendControlClipboard(text) ?? false,
+    [],
+  )
+
+  const dismissControlNotice = useCallback(() => setControlNotice(null), [])
+
   // --- Collaboration -------------------------------------------------------
 
   const sendPointer = useCallback((x: number, y: number) => {
@@ -435,6 +644,12 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     live,
     shareIntent,
     elapsedSeconds,
+    control,
+    controlBusy,
+    controlNotice,
+    controllableHost,
+    /** Whether input is being sent right now — the persistent indicator (§18). */
+    isControlling: live?.controllingPeerId !== null && live?.controllingPeerId !== undefined,
     actions: {
       reload,
       beginShare,
@@ -458,8 +673,38 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
       leave,
       pause,
       resume,
+      refreshControl,
+      askForControl,
+      allowControl,
+      refuseControl,
+      stopControl,
+      dismissControlNotice,
+      sendControlPointer,
+      sendControlButton,
+      sendControlScroll,
+      sendControlKey,
+      sendControlClipboard,
     },
   }
+}
+
+/**
+ * The agent's `control_ended` reason, in words a person can act on.
+ *
+ * The reasons come from `remote_protocol` and are deliberately few. Anything
+ * unrecognised falls through to the plain truth — control stopped — rather
+ * than to the raw token, which would mean nothing to whoever is reading it.
+ */
+function controlEndedMessage(reason: string): string {
+  return (
+    {
+      stopped_locally: 'The person at the computer stopped remote control.',
+      revoked_by_server: 'Remote control was stopped.',
+      session_ended: 'The session ended, so remote control stopped with it.',
+      connection_lost: 'The connection to that computer was lost, so remote control stopped.',
+      shutting_down: 'That computer is restarting, so remote control stopped.',
+    }[reason] ?? 'Remote control stopped.'
+  )
 }
 
 /**

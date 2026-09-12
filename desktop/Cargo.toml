@@ -1,0 +1,81 @@
+# ---------------------------------------------------------------------------
+# AICOUNTLY Remote — desktop workspace.
+#
+# One workspace for every desktop target. The split between `crates/` and
+# `src-tauri/src/platform/` is the whole design:
+#
+#   crates/*                 portable. Compiles and is tested on any host, and
+#                            contains everything that is not inherently
+#                            operating-system specific — the wire protocol, the
+#                            device identity, the agent state machine, the
+#                            WebRTC abstraction.
+#   src-tauri/src/platform/  the only place a native API is called. Each
+#                            platform implements the traits in `remote-device`;
+#                            macOS returns `Unsupported` until it is written,
+#                            rather than pretending.
+#
+# The consequence is that `cargo test -p remote-protocol -p remote-security
+# -p remote-core -p remote-device -p remote-webrtc` runs the real logic on
+# Linux CI, and only the thin native layer needs a Windows runner.
+# ---------------------------------------------------------------------------
+[workspace]
+resolver = "2"
+members = [
+    "crates/remote-protocol",
+    "crates/remote-security",
+    "crates/remote-device",
+    "crates/remote-core",
+    "crates/remote-webrtc",
+    "src-tauri",
+    "agents/windows-service",
+]
+
+[workspace.package]
+# The single authoritative desktop version. Everything else derives from it:
+# the Tauri bundle, the installer metadata, the update manifest, the value the
+# agent reports into `remote_devices.agent_version`, and the string in the
+# About panel. Bumping it here is the only edit a release needs.
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.82"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+# Versions are pinned to a minor line and resolved exactly by Cargo.lock, which
+# is committed. A remote-control agent is not a place to discover that a
+# transitive dependency changed under you between two builds of the same tag.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net"] }
+ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
+rand = "0.10.2"
+sha2 = "0.11.0"
+base64 = "0.23.1"
+hex = "0.4.3"
+uuid = { version = "1.19", features = ["v4", "serde"] }
+time = { version = "0.3", features = ["formatting", "parsing"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "webpki-roots", "charset", "http2"] }
+# The signalling socket. WSS only — the same relay the browser uses, with the
+# same two-minute token, and no second protocol of its own.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+
+remote-protocol = { path = "crates/remote-protocol" }
+remote-security = { path = "crates/remote-security" }
+remote-device = { path = "crates/remote-device" }
+remote-core = { path = "crates/remote-core" }
+remote-webrtc = { path = "crates/remote-webrtc" }
+
+[profile.release]
+# A remote-control agent ships as a signed binary a customer's antivirus will
+# look at. Smaller, with no debug symbols and a panic that aborts rather than
+# unwinding through FFI into Windows.
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

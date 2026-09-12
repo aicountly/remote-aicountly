@@ -66,10 +66,54 @@ export interface Participant {
   microphoneEnabled: boolean;
   connectionState: ConnectionState;
   capabilities: ParticipantCapabilities;
+  /**
+   * Set when this participant *is* a registered machine rather than a person.
+   *
+   * The UI still renders from `capabilities`, never from this — §51's rule
+   * holds. What this is for is saying "AICOUNTLY Remote for Windows on WS-01"
+   * instead of a person's name in the participant list.
+   */
+  deviceUuid: string | null;
+  controlState: ControlState;
+  clipboardEnabled: boolean;
+  controlRequestedAt: string | null;
+  controlGrantedAt: string | null;
   requestedAt: string | null;
   joinedAt: string | null;
   leftAt: string | null;
   audit?: { ip: string | null; userAgent: string | null; email: string | null };
+}
+
+/**
+ * Where a control grant stands, for one participant.
+ *
+ * `NONE` is not "denied" and `REVOKED` is not "denied" either: the three are
+ * different things a person will ask about, and collapsing them would make the
+ * session screen unable to say which happened.
+ */
+export type ControlState = 'NONE' | 'REQUESTED' | 'GRANTED' | 'DENIED' | 'REVOKED';
+
+/** What `GET /sessions/{uuid}/control` answers. */
+export interface SessionControlState {
+  /**
+   * The participant whose machine can be controlled, if any.
+   *
+   * Null for a browser-to-browser session, because a browser reports
+   * `remote_control: false` and there is nothing to control.
+   */
+  controllableHostUuid: string | null;
+  controllerUuid: string | null;
+  controllerName: string | null;
+  clipboardEnabled: boolean;
+  pendingRequests: Array<{
+    participantUuid: string;
+    displayName: string;
+    requestedAt: string | null;
+  }>;
+  allowRemoteControl: boolean;
+  allowClipboardSync: boolean;
+  allowDeviceReboot: boolean;
+  restrictions: string[];
 }
 
 export interface SessionCapabilities {
@@ -166,6 +210,17 @@ export interface EffectivePolicy {
   allowAicountlySupport: boolean;
   allowRecording: boolean;
   recordingRequiresConsent: boolean;
+  /**
+   * Desktop agent capabilities (docs/DESKTOP_AGENT.md).
+   *
+   * All four are already the intersection of the company switch, the plan
+   * entitlement and remote control itself, and all four are false for a
+   * browser-only organisation and in PERSONAL scope.
+   */
+  allowRemoteControl: boolean;
+  allowUnattendedAccess: boolean;
+  allowClipboardSync: boolean;
+  allowDeviceReboot: boolean;
   maxSessionDurationMinutes: number;
   guestLinkExpiryMinutes: number;
   allowedShareModes: ShareMode[];
@@ -295,6 +350,57 @@ export interface FileTransfer {
   createdAt: string | null;
 }
 
+/**
+ * A registered device (§52).
+ *
+ * What is deliberately absent: the public key. An administrator comparing a
+ * device with what its agent shows needs the fingerprint, not the key.
+ */
+export interface RemoteDevice {
+  uuid: string;
+  deviceName: string;
+  deviceType: 'DESKTOP' | 'LAPTOP' | 'SERVER' | 'MOBILE';
+  companyId: number | null;
+  operatingSystem: string | null;
+  osVersion: string | null;
+  architecture: string | null;
+  hostname: string | null;
+  agentVersion: string | null;
+  status: 'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'REVOKED';
+  /** Reachable right now — the stored state *and* a recent heartbeat. */
+  online: boolean;
+  presenceState: 'ONLINE' | 'OFFLINE';
+  capabilities: ParticipantCapabilities;
+  keyAlgorithm: string;
+  /** Grouped for a person to compare with what the agent displays. */
+  keyFingerprint: string | null;
+  ownerName: string | null;
+  enrolledByName: string | null;
+  unattendedAccessEnabled: boolean;
+  unattendedEnabledAt: string | null;
+  unattendedLastUsedAt: string | null;
+  lastSeenAt: string | null;
+  lastAuthenticatedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string | null;
+  audit?: { lastIp: string | null };
+}
+
+/** What `GET /devices` answers, and what the caller may do with it. */
+export interface DeviceListing {
+  devices: RemoteDevice[];
+  canEnrol: boolean;
+  canManage: boolean;
+  canConnectUnattended: boolean;
+  policy: {
+    allowRemoteControl: boolean;
+    allowUnattendedAccess: boolean;
+    allowClipboardSync: boolean;
+    allowDeviceReboot: boolean;
+    restrictions: string[];
+  };
+}
+
 export type SupportRequestStatus =
   | 'PENDING'
   | 'ACCEPTED'
@@ -409,6 +515,13 @@ export const PERMISSIONS = {
   AUDIT_VIEW: 'remote.audit.view',
   POLICY_VIEW: 'remote.policy.view',
   POLICY_MANAGE: 'remote.policy.manage',
+  // Desktop agents. Every one defaults off, and the capability mask is applied
+  // after every role and user grant — see EffectivePolicyResolver.
+  CONTROL_REQUEST: 'remote.control.request',
+  CONTROL_ACCEPT: 'remote.control.accept',
+  DEVICE_ENROL: 'remote.device.enrol',
+  DEVICE_MANAGE: 'remote.device.manage',
+  UNATTENDED_ACCESS: 'remote.unattended.access',
 } as const;
 
 export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

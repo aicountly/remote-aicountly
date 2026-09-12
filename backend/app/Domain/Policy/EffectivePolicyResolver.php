@@ -127,6 +127,41 @@ class EffectivePolicyResolver
         $allowInternalSessions = $remoteEnabled && (bool) $policyRow['allow_internal_sessions'];
         $allowAicountlySupport = $remoteEnabled && (bool) $policyRow['allow_aicountly_support'];
 
+        // --- Desktop agent capabilities -------------------------------------
+        //
+        // Each is the conjunction of the company switch, the plan entitlement
+        // and — for the three that follow it — remote control itself, because
+        // clipboard synchronisation, unattended access and reboot are all
+        // things you do *while controlling a machine*. An organisation that has
+        // not permitted control has not permitted any of them, whatever the
+        // individual switch says, and the restrictions list explains which
+        // half said no so the UI does not have to guess (§39).
+        //
+        // A desktop capability is never available in PERSONAL scope: a device
+        // is enrolled into a company, and there is no company here to govern
+        // it. This is also why the whole group is off for a personal session
+        // rather than falling back to a permissive default.
+        $desktopEntitled = $companyId !== null
+            && $this->config->featureDesktopAgent
+            && (bool) $entitlement['desktop_devices'];
+
+        $allowRemoteControl = $remoteEnabled
+            && $desktopEntitled
+            && (bool) $policyRow['allow_remote_control'];
+        if ($remoteEnabled && (bool) $policyRow['allow_remote_control'] && ! $allowRemoteControl) {
+            $restrictions[] = 'REMOTE_CONTROL_NOT_ENTITLED';
+        }
+
+        $allowUnattendedAccess = $allowRemoteControl
+            && (bool) $policyRow['allow_unattended_access']
+            && (bool) $entitlement['unattended_access'];
+        if ($allowRemoteControl && (bool) $policyRow['allow_unattended_access'] && ! $allowUnattendedAccess) {
+            $restrictions[] = 'UNATTENDED_ACCESS_NOT_ENTITLED';
+        }
+
+        $allowClipboardSync = $allowRemoteControl && (bool) $policyRow['allow_clipboard_sync'];
+        $allowDeviceReboot  = $allowRemoteControl && (bool) $policyRow['allow_device_reboot'];
+
         // The entitlement's duration cap is a ceiling on the company's own, not
         // a replacement: whichever is shorter is what applies.
         $maxDuration = (int) $policyRow['max_session_duration_minutes'];
@@ -155,6 +190,14 @@ class EffectivePolicyResolver
             PermissionCatalog::SUPPORT_REQUEST    => $allowAicountlySupport,
             PermissionCatalog::RECORDING_START    => $allowRecording,
             PermissionCatalog::AUDIT_VIEW         => (bool) $entitlement['advanced_audit'],
+            // Desktop. Applied in the same pass and for the same reason: a
+            // per-user ALLOW written against remote.control.request must not
+            // survive an organisation that has switched remote control off.
+            PermissionCatalog::CONTROL_REQUEST    => $allowRemoteControl,
+            PermissionCatalog::CONTROL_ACCEPT     => $allowRemoteControl,
+            PermissionCatalog::DEVICE_ENROL       => $desktopEntitled && $remoteEnabled,
+            PermissionCatalog::DEVICE_MANAGE      => $desktopEntitled && $remoteEnabled,
+            PermissionCatalog::UNATTENDED_ACCESS  => $allowUnattendedAccess,
         ];
 
         foreach ($capabilityMask as $permission => $capable) {
@@ -175,6 +218,14 @@ class EffectivePolicyResolver
                 PermissionCatalog::POLICY_MANAGE,
                 PermissionCatalog::SESSION_HISTORY_COMPANY,
                 PermissionCatalog::AUDIT_VIEW,
+                // A device is enrolled into a company. There is no such thing
+                // as a personal-scope device, so there is nothing to enrol,
+                // manage, control or reach unattended here.
+                PermissionCatalog::DEVICE_ENROL,
+                PermissionCatalog::DEVICE_MANAGE,
+                PermissionCatalog::CONTROL_REQUEST,
+                PermissionCatalog::CONTROL_ACCEPT,
+                PermissionCatalog::UNATTENDED_ACCESS,
             ] as $companyOnly) {
                 $granted[$companyOnly] = false;
             }
@@ -205,6 +256,10 @@ class EffectivePolicyResolver
             $allowAicountlySupport,
             $allowRecording,
             (bool) $policyRow['recording_requires_consent'],
+            $allowRemoteControl,
+            $allowUnattendedAccess,
+            $allowClipboardSync,
+            $allowDeviceReboot,
             $maxDuration,
             (int) $policyRow['guest_link_expiry_minutes'],
             $granted,

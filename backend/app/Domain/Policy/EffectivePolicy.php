@@ -39,6 +39,16 @@ final class EffectivePolicy
         public readonly bool $allowAicountlySupport,
         public readonly bool $allowRecording,
         public readonly bool $recordingRequiresConsent,
+        /**
+         * Desktop agent capabilities (docs/DESKTOP_AGENT.md). All four are
+         * false for a browser-only organisation and false in PERSONAL scope,
+         * and all four are already the intersection of the company switch, the
+         * plan entitlement and remote control itself.
+         */
+        public readonly bool $allowRemoteControl,
+        public readonly bool $allowUnattendedAccess,
+        public readonly bool $allowClipboardSync,
+        public readonly bool $allowDeviceReboot,
         public readonly int $maxSessionDurationMinutes,
         public readonly int $guestLinkExpiryMinutes,
         public readonly array $permissions,
@@ -88,6 +98,30 @@ final class EffectivePolicy
         };
     }
 
+    /**
+     * The capability ceiling a desktop agent participant may declare in this
+     * scope (§51).
+     *
+     * The agent's own JSON declaration is an *upper bound* on what the software
+     * can do; this is the upper bound on what the organisation permits. The
+     * participant ends up with the intersection, which is why an agent cannot
+     * grant itself anything by editing its capability file.
+     *
+     * @return array<string, bool>
+     */
+    public function desktopCapabilityCeiling(): array
+    {
+        return [
+            'screen_share'      => $this->allowedShareModes() !== [],
+            'screen_view'       => $this->can(PermissionCatalog::SCREEN_VIEW),
+            'remote_control'    => $this->allowRemoteControl,
+            'unattended_access' => $this->allowUnattendedAccess,
+            'file_transfer'     => $this->allowFileTransfer,
+            'clipboard_sync'    => $this->allowClipboardSync,
+            'reboot'            => $this->allowDeviceReboot,
+        ];
+    }
+
     /** @return list<string> */
     public function allowedShareModes(): array
     {
@@ -120,6 +154,10 @@ final class EffectivePolicy
             'allowAicountlySupport'    => $this->allowAicountlySupport,
             'allowRecording'           => $this->allowRecording,
             'recordingRequiresConsent' => $this->recordingRequiresConsent,
+            'allowRemoteControl'       => $this->allowRemoteControl,
+            'allowUnattendedAccess'    => $this->allowUnattendedAccess,
+            'allowClipboardSync'       => $this->allowClipboardSync,
+            'allowDeviceReboot'        => $this->allowDeviceReboot,
             'maxSessionDurationMinutes' => $this->maxSessionDurationMinutes,
             'guestLinkExpiryMinutes'   => $this->guestLinkExpiryMinutes,
             'allowedShareModes'        => $this->allowedShareModes(),

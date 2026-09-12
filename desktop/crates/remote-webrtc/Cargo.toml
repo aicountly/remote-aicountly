@@ -1,0 +1,52 @@
+[package]
+name = "remote-webrtc"
+description = "The WebRTC seam for AICOUNTLY Remote: one trait the agent talks to, one implementation behind it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# The real implementation, on by default for the agent. CI's portable job can
+# build the abstraction without pulling the whole media stack, which is what
+# keeps a Linux type-check to seconds rather than minutes.
+default = ["webrtc-rs"]
+webrtc-rs = ["dep:webrtc", "dep:rtc", "dep:async-trait", "dep:bytes"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+remote-protocol.workspace = true
+remote-device.workspace = true
+
+# webrtc-rs. Chosen after checking the alternatives:
+#   * actively maintained, with releases through 2026;
+#   * pure Rust, so it cross-compiles to Windows x86_64 and arm64 and to macOS
+#     without a C toolchain or a vendored libwebrtc;
+#   * no open security advisories at the pinned version (`cargo audit` runs in
+#     CI, so this stays visible rather than being a claim in a comment);
+#   * implements the parts this product needs — DTLS-SRTP, ICE with TURN, data
+#     channels — and interoperates with browser WebRTC, which is the only
+#     interoperability requirement there is.
+# It is behind this crate's trait so replacing it later is a change here and
+# nowhere else.
+webrtc = { version = "0.20.5", optional = true }
+# The Sans-I/O protocol core webrtc-rs is built on. A direct dependency because
+# the media and codec types (`Sample`, `RTCRtpCodec`, `MediaStreamTrack`) are
+# re-exported from it rather than wrapped, so a caller that constructs a track
+# names them — as webrtc-rs's own documentation does. Pinned to the same
+# version as `webrtc`, which is what its releases are built against.
+rtc = { version = "0.20.5", optional = true }
+# webrtc-rs's event handler is an `#[async_trait]` trait, so implementing it
+# needs the same attribute macro.
+async-trait = { version = "0.1", optional = true }
+# The data channel's send API takes a `BytesMut`; the same version webrtc-rs
+# itself resolves, so the two are the same type rather than two of them.
+bytes = { version = "1", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

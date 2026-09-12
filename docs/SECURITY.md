@@ -1,8 +1,12 @@
 # Security model
 
-Remote lets one person watch another person's screen. That is the whole
-product, and it is why everything below is a requirement rather than a
-nice-to-have.
+Remote lets one person watch another person's screen, and — on a Windows
+machine running the desktop agent — use it. That is the whole product, and it
+is why everything below is a requirement rather than a nice-to-have.
+
+This document covers the product as a whole. The desktop agent's own model,
+including the five checks a keystroke has to pass and the things Windows will
+not let it do, is [desktop/SECURITY.md](desktop/SECURITY.md).
 
 ## What Remote guarantees
 
@@ -25,6 +29,18 @@ nice-to-have.
   resolved per company on every request.
 * **Screen content is never stored.** Not a frame, not a screenshot, not a
   thumbnail. The stream is peer-to-peer and ephemeral.
+* **No input reaches a machine without a grant, and stopping needs nothing.**
+  Remote control is refused unless the host's negotiated capabilities, the
+  plan, the company policy, both people's permissions and the person at the
+  machine all agree. The agent's gate is **local**: pressing Stop control drops
+  the next message with no network round trip, no permission check and no
+  cooperation from the other end.
+* **Unattended access is never a remembered approval.** Its own entitlement,
+  policy switch, permission and per-device setting, off by default, audited on
+  every connection, and switchable off from the machine itself.
+* **A machine cannot grant itself anything.** A device declares its
+  capabilities at enrolment and the server intersects that declaration with the
+  plan and the policy on every read. The declaration is an upper bound.
 * **No file arrives without being accepted.** A transfer is registered with the
   API before it is announced, and the sender starts only once the recipient's
   `accept` call has succeeded. The receiving browser has allocated nothing to
@@ -37,8 +53,17 @@ nice-to-have.
   relay operator. WebRTC media is encrypted in transit (DTLS-SRTP), and a TURN
   relay forwards without decrypting, but AICOUNTLY operates the signalling
   service and the TURN server.
-* It **cannot control a computer**. Browser V1 shares and views. Annotations
-  are overlays and change nothing on the sharer's machine.
+* **A browser cannot be controlled.** The browser client shares and views;
+  annotations are overlays and change nothing on the sharer's machine. Control
+  requires AICOUNTLY Remote for Windows at the other end, and the interface
+  says so rather than offering a button that would be refused.
+* **A UAC prompt cannot be answered remotely**, and no setting is changed to
+  make it possible. The Windows Secure Desktop is a boundary the agent detects
+  and does not cross — see
+  [desktop/WINDOWS_AGENT.md](desktop/WINDOWS_AGENT.md).
+* It **does not protect a machine an attacker already runs code on**. The
+  device key protects the machine's *identity*; somebody who can read the key
+  file can already read the screen.
 * It **cannot verify the sharing surface in every browser**. Firefox and Safari
   do not report `displaySurface`. Remote proceeds under the mode already
   authorised and records `verified: false` rather than implying a check it
@@ -62,6 +87,15 @@ Remote issues no credential of its own. AICOUNTLY's portal owns identity.
 | `ses_key` | ~15 min | **memory only** | `Authorization: Bearer` on the API |
 | Guest token | until the session ends | `sessionStorage` | one participant, one session |
 | Signalling token | 2 minutes | memory only | one room |
+| Device credential | minutes | **memory only, on the machine** | one enrolled device, scoped |
+
+A **device** is not a person and never holds a person's credential. It proves
+possession of an Ed25519 private key that never leaves the machine, over a
+canonical domain-separated payload with a single-use nonce, and receives a
+short-lived scoped credential in return. There is no permanent bearer token
+that is a machine's identity, and revocation takes effect on the device's next
+request rather than at its next renewal. See
+[desktop/DEVICE_ENROLMENT.md](desktop/DEVICE_ENROLMENT.md).
 
 `ses_key` never reaches `localStorage` or `sessionStorage` — it lives in a
 module variable and dies with the page.
@@ -208,6 +242,8 @@ check-then-act in PHP:
 | Two technicians accept one support request | `UPDATE … WHERE status = 'PENDING'` |
 | One invitation link opened twice | `UPDATE … WHERE used_count < max_uses` |
 | Two hosts approve the same participant | `UPDATE … WHERE status = 'REQUESTED'` |
+| One challenge nonce verified twice | `UPDATE … WHERE consumed_at IS NULL`, affected rows checked |
+| Two viewers granted control at once | `UPDATE … WHERE control_state = 'REQUESTED'`, plus a controller check |
 | Two launches with one context token | `UNIQUE (jti)` |
 | Two simultaneous session transitions | `UPDATE … WHERE status = <the one validated>` |
 

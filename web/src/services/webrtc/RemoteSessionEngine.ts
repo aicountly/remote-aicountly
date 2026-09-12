@@ -34,6 +34,17 @@ import { RemotePeerConnection } from './RemotePeerConnection'
 import type { PeerConnectionQuality } from './RemotePeerConnection'
 import { FileReceiver, FileSender, chunkCount, decodeChunk, safeFileName } from './fileTransfer'
 import type { TransferView } from './fileTransfer'
+import {
+  ControlSender,
+  controlKeyFrom,
+  decodeControlEnvelope,
+  modifiersFrom,
+  mouseButtonName,
+} from './remoteControl'
+// Aliased: this module already has a `PointerPosition`, and it is a different
+// thing — the annotation pointer carries a name and a colour, the control one
+// is a bare coordinate on the shared surface.
+import type { ControlKey, PointerPosition as ControlPoint } from './remoteControl'
 import type { ChatMessage } from '../../types/remote'
 
 /** What the UI shows, in words a person understands (§49). */
@@ -69,6 +80,13 @@ export interface EnginePeer {
   capabilities: Record<string, boolean>
   connectionState: RTCPeerConnectionState | 'new'
   dataChannelReady: boolean
+  /**
+   * Whether the control channel to this peer is open.
+   *
+   * Not the same question as "may I control it" — that is policy, and the API
+   * answers it. This is only whether the wire exists.
+   */
+  controlChannelReady: boolean
 }
 
 export interface EngineSnapshot {
@@ -86,6 +104,15 @@ export interface EngineSnapshot {
   /** Live file transfers, both directions, newest first (§36). */
   transfers: TransferView[]
   relayAvailable: boolean
+  /**
+   * The peer this browser is currently sending input to, if any.
+   *
+   * Set by `startControlling()` after the API has recorded the grant, cleared
+   * by `stopControlling()`. Nothing is sent while it is null, which is this
+   * side's half of "no grant, no input" — the agent's gate is the half that
+   * counts.
+   */
+  controllingPeerId: string | null
   lastError: string | null
 }
 
@@ -98,6 +125,10 @@ interface EngineOptions {
   /** The peer stopped or started sharing; the session view reacts. */
   onPeerShareState: (peerId: string, sharing: boolean) => void
   onSessionEnded: () => void
+  /** The agent said control has ended, and why. */
+  onControlEnded?: (reason: string) => void
+  /** The agent described its displays; the viewer maps clicks against them. */
+  onMonitorLayout?: (monitors: unknown[], activeMonitorId: number) => void
 }
 
 /** Pointer moves are throttled rather than sent per mousemove (§65). */
@@ -147,6 +178,13 @@ function percentOf(bytes: number, total: number): number {
   return total > 0 ? Math.min(100, Math.round((bytes / total) * 100)) : 0
 }
 
+/** Whether two protocol keys are the same key. */
+function sameKey(a: ControlKey, b: ControlKey): boolean {
+  if (a.k !== b.k) return false
+
+  return 'c' in a && 'c' in b ? a.c === b.c : true
+}
+
 export class RemoteSessionEngine {
   private signalling: RemoteSignallingClient | null = null
   private peers = new Map<string, { connection: RemotePeerConnection; info: EnginePeer }>()
@@ -164,6 +202,12 @@ export class RemoteSessionEngine {
   private transfers = new Map<string, TransferRecord>()
   private nextSlot = 1
 
+  /** The control sender for the peer being controlled, if any. */
+  private control: { peerId: string; sender: ControlSender } | null = null
+
+  /** Keys this browser has pressed and not released on the remote machine. */
+  private heldKeys: ControlKey[] = []
+
   private snapshot: EngineSnapshot = {
     connection: 'idle',
     signalling: 'idle',
@@ -177,6 +221,7 @@ export class RemoteSessionEngine {
     annotations: [],
     transfers: [],
     relayAvailable: false,
+    controllingPeerId: null,
     lastError: null,
   }
 
@@ -506,6 +551,154 @@ export class RemoteSessionEngine {
     this.publishTransfers()
   }
 
+  // ------------------------------------------------------- remote control
+
+  /**
+   * The participant whose machine can be controlled, if any.
+   *
+   * **Decided from negotiated capabilities, never from `clientType`.** A
+   * browser peer reports `remote_control: false`, so this returns null for a
+   * browser-to-browser session and the toolbar has nothing to offer — which is
+   * the rule the whole desktop story rests on (§51).
+   */
+  controllableHost(): EnginePeer | null {
+    for (const { info } of this.peers.values()) {
+      if (info.capabilities.remote_control === true) return info
+    }
+
+    return null
+  }
+
+  /**
+   * Begin sending input to a peer.
+   *
+   * Called **after** `POST /control/request` has been granted, never instead
+   * of it. The agent runs every message through its own gate and drops
+   * anything it was not granted, so calling this without a grant achieves
+   * nothing — but the browser not offering it in the first place is what stops
+   * a person clicking a button that would silently do nothing.
+   */
+  startControlling(peerId: string): boolean {
+    const entry = this.peers.get(peerId)
+
+    if (!entry?.connection.controlChannelReady) return false
+
+    this.control = {
+      peerId,
+      sender: new ControlSender(this.options.sessionUuid, this.options.participantUuid, (bytes) =>
+        entry.connection.sendControl(bytes),
+      ),
+    }
+
+    this.patch({ controllingPeerId: peerId })
+
+    return true
+  }
+
+  /**
+   * Stop sending input.
+   *
+   * Local and unconditional. The API call that records it is separate, and
+   * this does not wait for it: if the network is the reason control is being
+   * stopped, waiting would be the worst possible behaviour.
+   */
+  stopControlling(): void {
+    // Release anything still held, so a machine is not left with a modifier
+    // down because the controller closed the tab mid-chord. Best effort —
+    // the agent releases everything on its side too, for exactly this case.
+    if (this.control) {
+      for (const key of this.heldKeys) {
+        this.control.sender.key(key, false, { ctrl: false, alt: false, shift: false, meta: false })
+      }
+    }
+
+    this.heldKeys = []
+    this.control = null
+
+    this.patch({ controllingPeerId: null })
+  }
+
+  /** Whether input is currently being sent. */
+  get controlling(): boolean {
+    return this.control !== null
+  }
+
+  /** Move the remote pointer. Throttled; `force` is for a move-and-click. */
+  sendControlPointer(position: ControlPoint, force = false): void {
+    this.control?.sender.movePointer(position, force)
+  }
+
+  /** Press or release a remote mouse button. */
+  sendControlButton(
+    button: number,
+    pressed: boolean,
+    position?: ControlPoint,
+    double = false,
+  ): void {
+    const name = mouseButtonName(button)
+    if (!name) return
+
+    this.control?.sender.button(name, pressed, position, double)
+  }
+
+  /** Scroll the remote screen. */
+  sendControlScroll(deltaX: number, deltaY: number, position?: ControlPoint): void {
+    this.control?.sender.scroll(deltaX, deltaY, position)
+  }
+
+  /**
+   * Press or release a remote key.
+   *
+   * Held keys are tracked so `stopControlling()` can release them. Without it,
+   * a controller whose tab closed mid-chord leaves Ctrl down on somebody
+   * else's machine — which reads, to the person sitting there, as a broken
+   * keyboard.
+   */
+  sendControlKey(event: KeyboardEvent, pressed: boolean): boolean {
+    if (!this.control) return false
+
+    const key = controlKeyFrom(event)
+    if (!key) return false
+
+    if (pressed) {
+      if (!this.heldKeys.some((held) => sameKey(held, key))) this.heldKeys.push(key)
+    } else {
+      this.heldKeys = this.heldKeys.filter((held) => !sameKey(held, key))
+    }
+
+    return this.control.sender.key(key, pressed, modifiersFrom(event))
+  }
+
+  /** Push this browser's clipboard text to the machine being controlled. */
+  sendControlClipboard(text: string): boolean {
+    return this.control?.sender.clipboard(text) ?? false
+  }
+
+  /**
+   * A control message from the agent.
+   *
+   * The agent sends few: the monitor layout, and `control_ended` when the
+   * person at the machine presses Stop. The second is the one that matters —
+   * the agent has *already* stopped accepting input by the time it arrives, so
+   * this is the browser catching up rather than the browser deciding.
+   */
+  private handleControlMessage(peerId: string, message: ArrayBuffer): void {
+    const envelope = decodeControlEnvelope(message)
+
+    if (!envelope || envelope.s !== this.options.sessionUuid) return
+
+    if (envelope.m.type === 'control_ended' && this.control?.peerId === peerId) {
+      this.stopControlling()
+      this.patch({ lastError: null })
+
+      this.options.onControlEnded?.(envelope.m.reason)
+    }
+
+    if (envelope.m.type === 'monitor_layout') {
+      this.options.onMonitorLayout?.(envelope.m.monitors, envelope.m.active_monitor_id)
+    }
+  }
+
   // ---------------------------------------------------------- lifecycle
 
   /**
@@ -522,6 +715,10 @@ export class RemoteSessionEngine {
     if (this.qualityTimer) clearInterval(this.qualityTimer)
     this.presenceTimer = null
     this.qualityTimer = null
+
+    // Before anything else: stop sending input and release whatever is held.
+    // A leaked modifier on somebody else's keyboard outlives this tab.
+    this.stopControlling()
 
     for (const stream of [this.localStream, this.microphoneStream]) {
       for (const track of stream?.getTracks() ?? []) {
@@ -739,11 +936,16 @@ export class RemoteSessionEngine {
       },
       onDataMessage: (payload) => this.handleDataMessage(peerId, payload),
       onBinaryMessage: (message) => this.handleBinaryMessage(peerId, message),
+      onControlMessage: (message) => this.handleControlMessage(peerId, message),
       onStateChange: (state) => this.handlePeerState(peerId, state),
       onDataChannelOpen: () => {
         const entry = this.peers.get(peerId)
         if (entry) {
-          entry.info = { ...entry.info, dataChannelReady: true }
+          entry.info = {
+            ...entry.info,
+            dataChannelReady: true,
+            controlChannelReady: entry.connection.controlChannelReady,
+          }
           this.publishPeers()
         }
       },
@@ -758,6 +960,7 @@ export class RemoteSessionEngine {
         capabilities: {},
         connectionState: 'new' as const,
         dataChannelReady: false,
+        controlChannelReady: false,
       },
     }
 
@@ -794,6 +997,11 @@ export class RemoteSessionEngine {
 
     entry.connection.dispose()
     this.peers.delete(peerId)
+
+    // The machine being controlled has gone. Nothing more will be delivered,
+    // and continuing to believe we are controlling it would leave the toolbar
+    // showing a Stop button for a session that is over.
+    if (this.control?.peerId === peerId) this.stopControlling()
 
     // A transfer with somebody who has left is not going to finish. Say so
     // rather than leaving a progress bar frozen at 40% forever.

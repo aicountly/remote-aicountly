@@ -353,7 +353,7 @@ class ParticipantService
      */
     public function castRow(array $row): array
     {
-        foreach (['is_host', 'is_sharing', 'microphone_enabled'] as $column) {
+        foreach (['is_host', 'is_sharing', 'microphone_enabled', 'clipboard_enabled'] as $column) {
             if (array_key_exists($column, $row)) {
                 $row[$column] = Presenter::bool($row[$column]);
             }
@@ -373,12 +373,24 @@ class ParticipantService
             ->getResultArray());
     }
 
-    /** @return array<string, mixed>|null */
+    /**
+     * This person's own participant row in a session.
+     *
+     * Device participants are excluded deliberately. A DESKTOP_AGENT
+     * participant carries its enrolled owner in `user_id` — the table requires
+     * a person for anything that is not a guest — but it is the *machine*, not
+     * them. Without this filter, somebody connecting to their own computer
+     * would find the computer when they looked for themselves, and the session
+     * screen would show them as the thing being controlled.
+     *
+     * @return array<string, mixed>|null
+     */
     public function findByUser(int $sessionId, int $userId): ?array
     {
         $row = $this->db->table('remote_participants')
             ->where('session_id', $sessionId)
             ->where('user_id', $userId)
+            ->where('device_id', null)
             ->get()
             ->getRowArray();
 
