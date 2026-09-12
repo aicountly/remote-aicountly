@@ -103,7 +103,12 @@ try {
     Write-Host ''
     Write-Host 'Building the application and installers...' -ForegroundColor Cyan
 
-    $tauriArgs = @('run', 'tauri', 'build', '--target', $Target)
+    # '--' after the script name stops npm from swallowing '--target'
+    # as its own (node-gyp-era) config flag instead of forwarding it to
+    # the tauri CLI — without it, npm silently drops '--target' and
+    # leaves the bare triple as an unrecognised positional argument that
+    # reaches `cargo build` and fails.
+    $tauriArgs = @('run', 'tauri', '--', 'build', '--target', $Target)
     if ($Configuration -eq 'debug') { $tauriArgs += '--debug' }
 
     & npm @tauriArgs
