@@ -170,7 +170,16 @@ jobs:
           }
 
           $target = 'target/x86_64-pc-windows-msvc/release'
-          pwsh -File scripts/windows/sign.ps1 -Path `
+
+          # '&' runs the script in THIS PowerShell session rather than
+          # spawning a nested pwsh.exe. That distinction matters here: an
+          # external process only receives a flat argv array, so PowerShell
+          # would have to serialise the comma-separated -Path list into
+          # separate command-line tokens, and the script's own parameter
+          # binder would only pick up the first one — exactly the failure
+          # `-Path "a", "b"` produced against verify.ps1 below. Staying in
+          # this session keeps the array an array.
+          & 'scripts/windows/sign.ps1' -Path `
             "$target/AicountlyRemote.exe", `
             "$target/AicountlyRemoteService.exe", `
             "$target/bundle/nsis/*.exe", `
@@ -189,7 +198,10 @@ jobs:
           $target = 'target/x86_64-pc-windows-msvc/release'
           $allowUnsigned = '${{ inputs.channel }}' -eq 'sandbox'
 
-          pwsh -File scripts/windows/verify.ps1 `
+          # See the comment on the Sign step: '&' keeps this in the current
+          # session so the comma-separated -Path list stays one array
+          # instead of being flattened into a bare argv for a new process.
+          & 'scripts/windows/verify.ps1' `
             -Path "$target/bundle/nsis/*.exe", "$target/bundle/msi/*.msi" `
             -AllowUnsigned:$allowUnsigned
 
