@@ -5,19 +5,14 @@ import { DeviceCard } from '../features/device/DeviceCard'
 import { RegisterDevice } from '../features/device/RegisterDevice'
 import { RecentSessions } from '../features/home/RecentSessions'
 import { PermissionsCard } from '../features/permissions/PermissionsCard'
+import { ControlRequest } from '../features/session/ControlRequest'
 import { SessionBanner } from '../features/session/SessionBanner'
 import { SettingsPage } from '../features/settings/SettingsPage'
 import { UnattendedCard } from '../features/unattended/UnattendedCard'
 import * as api from '../services/api'
+import * as portal from '../services/portal'
 import * as bridge from '../services/tauri'
-import type {
-  About,
-  AgentCapabilities,
-  AgentConfig,
-  AgentState,
-  CompanyOption,
-  PermissionSummary,
-} from '../types/agent'
+import type { About, AgentConfig, AgentState, CompanyOption, PermissionSummary } from '../types/agent'
 import { activeSession, isEnrolled } from '../types/agent'
 
 type Screen = 'home' | 'unattended' | 'settings' | 'register'
@@ -37,13 +32,9 @@ export default function App() {
   const [config, setConfig] = useState<AgentConfig | null>(null)
   const [about, setAbout] = useState<About | null>(null)
   const [companies, setCompanies] = useState<CompanyOption[]>([])
-  // What the organisation permits. Read from the device's own row, which the
-  // agent fetches with its device credential — the window never asks the API
-  // for a policy of its own, because the *device's* policy is what governs a
-  // session on this machine, not the signed-in person's.
-  const [allowed] = useState<AgentCapabilities | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [shareClipboard, setShareClipboard] = useState(false)
 
   const refresh = useCallback(async () => {
     const [next, perms] = await Promise.all([bridge.getState(), bridge.getPermissions()])
@@ -87,6 +78,13 @@ export default function App() {
   // administrator — arrives this way.
   const session = state ? activeSession(state) : null
 
+  // What the organisation permits. Read from the device's own row, which the
+  // agent fetches with its device credential and pushes here — the window
+  // never asks the API for a policy of its own, because the *device's*
+  // policy is what governs a session on this machine, not the signed-in
+  // person's.
+  const allowed = state?.allowedCapabilities ?? null
+
   useEffect(() => {
     if (!session) return
 
@@ -127,17 +125,54 @@ export default function App() {
 
   const endSession = useCallback(() => run(() => bridge.endSession()), [run])
 
+  const grantControl = useCallback(
+    () =>
+      run(async () => {
+        const requesterUuid = session?.control.requesterUuid
+
+        // Nobody to grant to — the request must have been withdrawn or
+        // already answered elsewhere while this was on screen.
+        if (!requesterUuid) throw new Error('That request is no longer waiting.')
+
+        setState(await bridge.grantControl(requesterUuid, shareClipboard))
+        setShareClipboard(false)
+      }),
+    [run, session, shareClipboard],
+  )
+
+  const denyControl = useCallback(
+    () =>
+      run(async () => {
+        setState(await bridge.denyControl())
+        setShareClipboard(false)
+      }),
+    [run],
+  )
+
   const register = useCallback(
     (companyId: number, deviceName: string) =>
       run(async () => {
         if (!config) throw new Error('Settings are not loaded yet.')
 
         const material = await bridge.createDeviceKey()
-        await api.enrolDevice(config.apiBaseUrl, companyId, deviceName, material)
+        const { device } = await api.enrolDevice(config.apiBaseUrl, companyId, deviceName, material)
+
+        // The server call above already created the device row; without this
+        // second call the window would keep showing "Not registered" and the
+        // connection loop would never attempt to authenticate, even though
+        // registration just succeeded.
+        setState(
+          await bridge.confirmEnrolment({
+            deviceUuid: device.uuid,
+            companyId,
+            companyName: companies.find((company) => company.companyId === companyId)?.name ?? null,
+            deviceName: device.deviceName,
+          }),
+        )
 
         setScreen('home')
       }),
-    [run, config],
+    [run, config, companies],
   )
 
   const unregister = useCallback(
@@ -221,6 +256,24 @@ export default function App() {
           busy={busy}
         />
 
+        {/*
+         * Also above everything, on every screen: a pending request is a
+         * decision waiting on the person at this machine, and it must not be
+         * hideable by being on the wrong tab when it arrives.
+         */}
+        {session && session.control.state === 'requested' ? (
+          <ControlRequest
+            session={session}
+            requesterName={session.control.requesterName || session.connectedName || 'Someone'}
+            clipboardAllowedByPolicy={allowed?.clipboard_sync ?? false}
+            shareClipboard={shareClipboard}
+            onShareClipboardChange={setShareClipboard}
+            onAllow={grantControl}
+            onDeny={denyControl}
+            busy={busy}
+          />
+        ) : null}
+
         {about && !about.supported ? (
           <div className="notice notice--warning">
             <p className="notice__title">Not supported on this operating system</p>
@@ -265,9 +318,18 @@ export default function App() {
               state={state}
               onRegister={() =>
                 void run(async () => {
-                  if (config && api.hasSessionKey()) {
-                    setCompanies(await api.fetchCompanies(config.apiBaseUrl))
+                  if (!config) throw new Error('Settings are not loaded yet.')
+
+                  // A machine cannot hold a portal session — a person has to
+                  // sign in, in the system browser, to authorise registering
+                  // this one. Skipped once a sign-in from earlier in this run
+                  // is still good.
+                  if (!api.hasSessionKey()) {
+                    const authToken = await bridge.beginSignIn()
+                    await portal.signInWithAuthToken(config.apiBaseUrl, authToken)
                   }
+
+                  setCompanies(await api.fetchCompanies(config.apiBaseUrl))
                   setScreen('register')
                 })
               }

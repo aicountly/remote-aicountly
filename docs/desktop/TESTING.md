@@ -6,23 +6,23 @@ what is not covered at all.
 ## The numbers
 
 ```bash
-cd desktop    && cargo test --workspace   # 299 — protocol, gate, identity, state, session, service
-cd desktop    && npm test                 #  12 — the agent's own interface
+cd desktop    && cargo test --workspace   # 320 — protocol, gate, identity, state, session, service
+cd desktop    && npm test                 #  18 — the agent's own interface
 cd backend    && vendor/bin/phpunit       # 211 — devices, policy, control, unattended
 cd web        && npm test                 # 104 — capability gating, control input, devices
 cd signalling && npm test                 #  27 — tokens, rooms, device rooms, live relay
 ```
 
-**653 automated tests.** The split by crate:
+**680 automated tests.** The split by crate:
 
 | | |
 |---|---|
 | `remote-protocol` | 58 — the wire format, the gate, clipboard bounds, monitors |
-| `remote-core` | 52 — configuration, the API client, signalling, backoff, the state machine |
-| `aicountly-remote-desktop` | 102 — the agent, its commands, the connection loop, the session, the platform layer's arithmetic |
+| `remote-core` | 56 — configuration, the API client, signalling, backoff, the state machine |
+| `aicountly-remote-desktop` | 118 — the agent, its commands, the loopback sign-in listener, the connection loop, the session, the platform layer's arithmetic |
 | `aicountly-remote-service` | 29 — the IPC protocol, the pipe ACL, the service's decisions |
 | `remote-device` | 21 — capture profiles, capability declaration |
-| `remote-security` | 20 — keys, the canonical payload, storage |
+| `remote-security` | 21 — keys, the canonical payload, storage, the enrolment record |
 | `remote-webrtc` | 17 — peer connection, data channels, a real SDP negotiation |
 
 ## Why so much of it runs on Linux

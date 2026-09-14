@@ -238,11 +238,16 @@ fn decode_exact<const N: usize>(value: &str) -> Option<[u8; N]> {
 /// and the device credential lives in memory for its few minutes. This
 /// structure can be written to an ordinary configuration file, and is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EnrolmentRecord {
     /// The device's uuid, as issued by the API.
     pub device_uuid: String,
     /// The company it was enrolled into.
     pub company_id: i64,
+    /// Its name, for the "Organisation" row. The API's device resource
+    /// carries only the id, so this is the name shown at enrolment time —
+    /// not re-fetched afterwards, because nothing currently reads it back.
+    pub company_name: Option<String>,
     /// What it was called at enrolment.
     pub device_name: String,
     /// Fingerprint of the public key, so the agent can show what an
@@ -253,6 +258,130 @@ pub struct EnrolmentRecord {
     /// When, as an ISO-8601 UTC string.
     pub enrolled_at: String,
 }
+
+impl EnrolmentRecord {
+    /// Parse an enrolment document.
+    pub fn from_json(json: &str) -> Result<Self, EnrolmentRecordError> {
+        serde_json::from_str(json).map_err(|error| EnrolmentRecordError(error.to_string()))
+    }
+
+    /// Serialise for writing back.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".into())
+    }
+
+    /// Read the machine's enrolment record, if it has one.
+    ///
+    /// A missing file means this machine has never registered, or was
+    /// unregistered — not an error. A corrupt one is read the same way: an
+    /// agent that refused to start over a damaged file would be an agent
+    /// somebody has to visit the machine to fix, and the key it would
+    /// otherwise still be able to authenticate with is not held hostage to a
+    /// JSON typo.
+    #[must_use]
+    pub fn load() -> Option<Self> {
+        let path = enrolment_path()?;
+        let text = std::fs::read_to_string(path).ok()?;
+
+        Self::from_json(&text).ok()
+    }
+
+    /// Write the record back, creating the directory if needed.
+    ///
+    /// Written atomically — to a temporary file in the same directory, then
+    /// renamed — the same way [`crate`]'s sibling `AgentConfig` is, so a
+    /// machine that loses power mid-write is not left with half a record.
+    pub fn save(&self) -> Result<(), EnrolmentRecordError> {
+        let path = enrolment_path().ok_or_else(|| {
+            EnrolmentRecordError(
+                "the enrolment record's location could not be determined on this machine".into(),
+            )
+        })?;
+
+        let directory = path.parent().ok_or_else(|| {
+            EnrolmentRecordError("the enrolment record's path has no parent directory".into())
+        })?;
+
+        std::fs::create_dir_all(directory).map_err(|error| {
+            EnrolmentRecordError(format!(
+                "the enrolment record could not be written: {error}"
+            ))
+        })?;
+
+        let temporary = directory.join("enrolment.json.new");
+
+        std::fs::write(&temporary, self.to_json()).map_err(|error| {
+            EnrolmentRecordError(format!(
+                "the enrolment record could not be written: {error}"
+            ))
+        })?;
+
+        std::fs::rename(&temporary, &path).map_err(|error| {
+            let _ = std::fs::remove_file(&temporary);
+
+            EnrolmentRecordError(format!(
+                "the enrolment record could not be written: {error}"
+            ))
+        })
+    }
+
+    /// Remove the record — the local half of unregistering.
+    ///
+    /// A missing file is not an error: unregistering twice, or on a machine
+    /// where the record never wrote, both mean there is nothing to remove.
+    pub fn forget() -> Result<(), EnrolmentRecordError> {
+        let Some(path) = enrolment_path() else {
+            return Ok(());
+        };
+
+        match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(EnrolmentRecordError(format!(
+                "the enrolment record could not be removed: {error}"
+            ))),
+        }
+    }
+}
+
+/// Where the enrolment record lives.
+///
+/// Machine-wide, matching `AgentConfig`'s own path exactly — the service and
+/// the tray application must agree on what this machine is enrolled as, and a
+/// per-user path would give a machine as many enrolments as it has accounts.
+/// A sibling file to `config.json`, never inside it: `AgentConfig` holds a URL
+/// and some numbers, and adding a device identity to that file would be the
+/// one field it exists to never have.
+#[must_use]
+fn enrolment_path() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("ProgramData").map(|root| {
+            std::path::PathBuf::from(root)
+                .join("AICOUNTLY")
+                .join("Remote")
+                .join("enrolment.json")
+        })
+    }
+
+    #[cfg(not(windows))]
+    {
+        // Only used by developers running the agent's portable half on a
+        // workstation; the shipped product is Windows.
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
+            })
+            .map(|root| root.join("aicountly-remote").join("enrolment.json"))
+    }
+}
+
+/// Why the enrolment record could not be read or written.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct EnrolmentRecordError(String);
 
 /// Everything that can go wrong with a device key.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -445,18 +574,26 @@ mod tests {
         assert!(verify_challenge(&url_safe, UUID, &nonce(), 1, &signature));
     }
 
+    fn enrolment_record() -> EnrolmentRecord {
+        EnrolmentRecord {
+            device_uuid: UUID.into(),
+            company_id: 481,
+            company_name: Some("Northwind".into()),
+            device_name: "WS-01".into(),
+            key_fingerprint: "AAAA BBBB CCCC DDDD".into(),
+            api_base_url: "https://remote.aicountly.com/api".into(),
+            enrolled_at: "2026-02-10T09:00:00Z".into(),
+        }
+    }
+
     /// The record the agent writes to disk beside the key must contain no
     /// secret at all, because it is written to an ordinary file.
     #[test]
     fn the_enrolment_record_carries_no_secret() {
         let keys = DeviceKeypair::generate();
         let record = EnrolmentRecord {
-            device_uuid: UUID.into(),
-            company_id: 481,
-            device_name: "WS-01".into(),
             key_fingerprint: keys.fingerprint(),
-            api_base_url: "https://remote.aicountly.com/api".into(),
-            enrolled_at: "2026-02-10T09:00:00Z".into(),
+            ..enrolment_record()
         };
 
         let json = serde_json::to_string(&record).unwrap();
@@ -469,5 +606,48 @@ mod tests {
             serde_json::from_str::<EnrolmentRecord>(&json).unwrap(),
             record
         );
+    }
+
+    /// The whole reason this type has a `save`/`load` at all: without it, an
+    /// enrolment the server already accepted is forgotten the moment the
+    /// agent restarts, and the window is stuck saying "Not registered"
+    /// forever even though the device row — and the key that authenticates
+    /// it — both still exist.
+    #[test]
+    fn a_saved_record_survives_being_read_back_after_a_restart() {
+        // Redirected to a directory of this test's own, so it does not depend
+        // on — or disturb — whatever this machine has actually enrolled.
+        let root = std::env::temp_dir().join(format!(
+            "aicountly-remote-enrolment-test-{}",
+            std::process::id()
+        ));
+        std::env::set_var("XDG_CONFIG_HOME", &root);
+        std::env::set_var("ProgramData", &root);
+
+        assert!(EnrolmentRecord::load().is_none());
+
+        let record = enrolment_record();
+        record.save().expect("writes");
+
+        assert_eq!(EnrolmentRecord::load(), Some(record));
+
+        // Saving again — the shape of a person re-registering — replaces
+        // rather than appending, the same way `AgentConfig::save` does.
+        let renamed = EnrolmentRecord {
+            device_name: "WS-02".into(),
+            ..enrolment_record()
+        };
+        renamed.save().expect("writes");
+
+        assert_eq!(EnrolmentRecord::load(), Some(renamed));
+
+        // Unregistering removes it, and removing it twice is not an error —
+        // a person can click "Unregister" on a machine that already forgot.
+        EnrolmentRecord::forget().expect("removes");
+        EnrolmentRecord::forget().expect("removing twice is not an error");
+
+        assert!(EnrolmentRecord::load().is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

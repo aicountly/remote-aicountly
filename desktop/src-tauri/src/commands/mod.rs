@@ -12,7 +12,8 @@ use std::sync::Arc;
 
 use remote_core::AgentConfig;
 use remote_device::PermissionSummary;
-use serde::Serialize;
+use remote_security::EnrolmentRecord;
+use serde::{Deserialize, Serialize};
 
 use crate::{ipc, platform, Agent};
 
@@ -68,6 +69,24 @@ pub fn save_configuration(
     Ok(agent.config())
 }
 
+/// Sign in through the AICOUNTLY portal, for the one call that needs it.
+///
+/// A machine cannot hold a portal session, so this is a *person* proving they
+/// may register this one — opens the portal in the system browser and waits
+/// on a loopback port for it to answer. See `crate::signin` for the mechanism
+/// and why it is the window's job rather than the API client's.
+///
+/// What comes back is the raw `auth_token`. Exchanging it for a `ses_key` is
+/// the window's own call, mirroring `web/src/auth/portal.ts`'s relay-then-
+/// direct fallback — duplicating that policy here would be a second
+/// implementation of it to keep in sync.
+#[tauri::command]
+pub async fn begin_sign_in(agent: tauri::State<'_, Arc<Agent>>) -> Result<String, String> {
+    crate::signin::sign_in(&agent.config().portal_url)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// Register this machine.
 ///
 /// The keypair is generated here and the private half goes straight into the
@@ -112,6 +131,60 @@ pub struct EnrolmentMaterial {
     /// What the software can do, already constrained by what the machine
     /// permits. The server intersects it with policy on top.
     pub capabilities: remote_device::AgentCapabilities,
+}
+
+/// What the window reports back once the server has accepted this machine's
+/// enrolment.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnrolmentConfirmation {
+    /// The uuid the API issued.
+    pub device_uuid: String,
+    /// Which organisation.
+    pub company_id: i64,
+    /// Its name, for the "Organisation" row. The API's device resource
+    /// carries only the id, so the window supplies the name it already
+    /// showed in the registration form.
+    pub company_name: Option<String>,
+    /// What the person named this machine.
+    pub device_name: String,
+}
+
+/// Record that the server accepted this machine's enrolment.
+///
+/// `enrol_device` already created the keypair, and the window's own call to
+/// `POST /devices/enrol` already succeeded — a device row exists on the
+/// server whether or not this call is ever made. What this brings into line
+/// is the **running agent**: without it, `AgentState.deviceUuid` stays `None`
+/// forever, the window keeps showing "Not registered", and the connection
+/// loop's `let Some(device_uuid) = state.device_uuid.clone() else { continue }`
+/// never lets it attempt to authenticate — even though the key this call
+/// fingerprints is already sitting in secure storage.
+///
+/// The fingerprint shown is computed fresh from the key this machine actually
+/// stored, never taken from anything the caller claims, so what a person
+/// compares against the console can never drift from what is real.
+#[tauri::command]
+pub fn confirm_enrolment(
+    agent: tauri::State<'_, Arc<Agent>>,
+    confirmation: EnrolmentConfirmation,
+) -> Result<remote_core::AgentState, String> {
+    let key_fingerprint = agent
+        .device_key()
+        .map_err(|error| error.to_string())?
+        .display_fingerprint();
+
+    let record = EnrolmentRecord {
+        device_uuid: confirmation.device_uuid,
+        company_id: confirmation.company_id,
+        company_name: confirmation.company_name,
+        device_name: confirmation.device_name,
+        key_fingerprint,
+        api_base_url: agent.config().api_base_url,
+        enrolled_at: now_iso(),
+    };
+
+    Ok(agent.record_enrolment(&record))
 }
 
 /// Remove this machine's device key.
@@ -247,6 +320,12 @@ pub fn about(agent: tauri::State<'_, Arc<Agent>>) -> About {
         key_storage: platform::secure_storage().describe().to_owned(),
         service: ipc::service_status(),
     }
+}
+
+fn now_iso() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

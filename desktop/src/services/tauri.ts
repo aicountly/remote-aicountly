@@ -16,6 +16,7 @@ import type {
   About,
   AgentConfig,
   AgentState,
+  EnrolmentConfirmation,
   EnrolmentMaterial,
   PermissionSummary,
 } from '../types/agent'
@@ -37,6 +38,18 @@ export function saveConfiguration(config: AgentConfig): Promise<AgentConfig> {
 }
 
 /**
+ * Open the AICOUNTLY portal and wait for a person to sign in.
+ *
+ * A native capability: opening the system browser and listening on a
+ * loopback port for its answer are both things only the Rust side can do.
+ * What comes back is the raw `auth_token` — exchanging it for a `ses_key` is
+ * `services/portal.ts#signInWithAuthToken`'s job, not this bridge's.
+ */
+export function beginSignIn(): Promise<string> {
+  return invoke<string>('begin_sign_in')
+}
+
+/**
  * Generate this machine's device keypair.
  *
  * What comes back is the **public** half plus the machine's description. The
@@ -45,6 +58,18 @@ export function saveConfiguration(config: AgentConfig): Promise<AgentConfig> {
  */
 export function createDeviceKey(): Promise<EnrolmentMaterial> {
   return invoke<EnrolmentMaterial>('enrol_device')
+}
+
+/**
+ * Tell the Rust side the server accepted this machine's enrolment.
+ *
+ * Without this call the window keeps showing "Not registered" and the
+ * connection loop never attempts to authenticate — even though the server
+ * call just before this one succeeded and the key is already in secure
+ * storage. See `confirm_enrolment` on the Rust side.
+ */
+export function confirmEnrolment(confirmation: EnrolmentConfirmation): Promise<AgentState> {
+  return invoke<AgentState>('confirm_enrolment', { confirmation })
 }
 
 export function unregisterDevice(): Promise<AgentState> {

@@ -24,6 +24,7 @@ function state(unattended: Partial<AgentState['unattended']> = {}): AgentState {
       allowedByPolicy: true,
       ...unattended,
     },
+    allowedCapabilities: null,
     agentVersion: '1.0.0',
     recentSessions: [],
   }

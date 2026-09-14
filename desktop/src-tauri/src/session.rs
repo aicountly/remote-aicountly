@@ -188,6 +188,8 @@ where
         control: remote_core::ControlSummary {
             state: ControlStateView::None,
             clipboard: false,
+            requester_uuid: None,
+            requester_name: None,
         },
     }));
 
@@ -274,6 +276,8 @@ where
         match tokio::time::timeout(PUMP_INTERVAL, socket.next()).await {
             Ok(Ok(Some(signal))) => {
                 match handle_signal(
+                    agent,
+                    sink,
                     &mut peer,
                     &mut socket,
                     signal,
@@ -377,7 +381,10 @@ enum Continue {
     Stop(Ended),
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_signal<P: PeerSession>(
+    agent: &Arc<Agent>,
+    sink: &StateSink,
     peer: &mut P,
     socket: &mut SignallingSocket,
     signal: Signal,
@@ -386,12 +393,21 @@ async fn handle_signal<P: PeerSession>(
 ) -> Continue {
     match signal {
         // We are the newcomer. Whoever is already here offers to us, so there
-        // is nothing to do but note who to trickle candidates to.
+        // is nothing to do but note who to trickle candidates to — and, if
+        // the room said who they are, put their name where the session
+        // banner and the consent dialog read it from.
         Signal::Joined { peers, .. } => {
-            *peer_uuid = peers
+            let identified = peers
                 .into_iter()
-                .map(|entry| entry.participant_uuid)
-                .find(|uuid| uuid != self_uuid);
+                .find(|entry| entry.participant_uuid != self_uuid);
+
+            if let Some(entry) = &identified {
+                if !entry.display_name.is_empty() {
+                    sink(agent.peer_connected(&entry.display_name));
+                }
+            }
+
+            *peer_uuid = identified.map(|entry| entry.participant_uuid);
         }
 
         // We were here first, so we offer.
@@ -401,6 +417,10 @@ async fn handle_signal<P: PeerSession>(
             }
 
             *peer_uuid = Some(arrived.participant_uuid.clone());
+
+            if !arrived.display_name.is_empty() {
+                sink(agent.peer_connected(&arrived.display_name));
+            }
 
             match peer.create_offer().await {
                 Ok(offer) => {
@@ -467,8 +487,9 @@ async fn handle_signal<P: PeerSession>(
 fn adopt_control(agent: &Arc<Agent>, sink: &StateSink, view: &remote_core::SessionControlView) {
     if let Some(waiting) = view.pending_requests.first() {
         // The API said somebody is waiting. That is the only thing that raises
-        // a consent dialog on this machine.
-        sink(agent.control_requested(&waiting.participant_uuid));
+        // a consent dialog on this machine, and their name travels with it —
+        // the dialog has no other way to say who it is asking about.
+        sink(agent.control_requested(&waiting.participant_uuid, &waiting.display_name));
 
         return;
     }

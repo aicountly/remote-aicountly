@@ -46,8 +46,41 @@ cannot become a leak.
 ### 2. Signing in
 
 The person signs in through the AICOUNTLY portal exactly as they would for any
-other AICOUNTLY SaaS. The `ses_key` lives in a module variable in the agent's
-window and dies with it: no `localStorage`, no file, no keychain.
+other AICOUNTLY SaaS — but a native window cannot receive a redirect the way a
+browser tab can, so the desktop agent uses the loopback pattern RFC 8252
+describes for exactly this shape of application (`src-tauri/src/signin.rs`):
+
+```text
+  bind 127.0.0.1:0                ──open──▶  {portal}/login/authentication_jump/remote
+  accept one request        ◀───redirect───  ?returnUrl=http://127.0.0.1:{port}/auth/callback
+  read `auth_token`, answer 200
+```
+
+`begin_sign_in` (a Tauri command) binds an OS-assigned loopback port, opens
+the portal in the **system** browser — never an embedded webview, so the
+portal's own session cookies and any password manager apply normally — and
+waits, bounded to five minutes, for the one request that matters. A stray
+connection on the same port (a favicon fetch, a local probe) is answered and
+ignored rather than ending the wait; only the callback path does, whether it
+carries a token or `auth_error`.
+
+The literal `127.0.0.1` is deliberate, never `localhost`: no DNS step, and no
+ambiguity with a resolver that prefers `::1`.
+
+What crosses back into Rust is the raw `auth_token`. Exchanging it for a
+`ses_key` — `POST /global/seskey`, this product's relay first and the portal
+directly if the relay is missing or broken — is the window's own call
+(`services/portal.ts`), mirroring `web/src/auth/portal.ts`'s exact fallback
+rather than a second implementation of the same policy in Rust. The `ses_key`
+lives in a module variable in the agent's window and dies with it: no
+`localStorage`, no file, no keychain.
+
+This is the one part of enrolment that depends on something outside this
+repository: the portal has to accept a `returnUrl` whose host is a loopback
+address with a port chosen at runtime, which is exactly what RFC 8252 asks an
+authorization server to accept for a native app and not require pre-
+registering — but it is the portal's behaviour to confirm, not this codebase's
+to guarantee.
 
 ### 3. Enrolment
 

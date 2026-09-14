@@ -293,6 +293,8 @@ mod tests {
             control: remote_core::ControlSummary {
                 state: ControlStateView::None,
                 clipboard: false,
+                requester_uuid: None,
+                requester_name: None,
             },
         }
     }
@@ -353,6 +355,8 @@ mod tests {
         let controlled = idle.apply(AgentEvent::ControlChanged {
             state: ControlStateView::Granted,
             clipboard: false,
+            requester_uuid: None,
+            requester_name: None,
         });
 
         assert!(has_action(&controlled, ids::STOP_CONTROL));
@@ -423,6 +427,8 @@ mod tests {
             .apply(AgentEvent::ControlChanged {
                 state: ControlStateView::Granted,
                 clipboard: false,
+                requester_uuid: None,
+                requester_name: None,
             });
 
         let tooltip = tooltip(&state);

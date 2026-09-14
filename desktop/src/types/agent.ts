@@ -17,6 +17,10 @@ export type ControlStateView = 'none' | 'requested' | 'granted' | 'denied' | 're
 export interface ControlSummary {
   state: ControlStateView
   clipboard: boolean
+  /** Who is asking, while `state` is `'requested'`. Cleared once answered. */
+  requesterUuid: string | null
+  /** Their name, as the consent dialog shows it. */
+  requesterName: string | null
 }
 
 export interface SessionSummary {
@@ -63,6 +67,11 @@ export interface AgentState {
   /** The public key fingerprint, to compare with what the console shows. */
   keyFingerprint: string | null
   unattended: UnattendedState
+  /**
+   * What the organisation currently allows, from the device's own row —
+   * `null` until the first successful poll, never guessed at in the meantime.
+   */
+  allowedCapabilities: AgentCapabilities | null
   agentVersion: string
   recentSessions: SessionSummary[]
 }
@@ -130,6 +139,18 @@ export interface EnrolmentMaterial {
   architecture: string
   agentVersion: string
   capabilities: AgentCapabilities
+}
+
+/**
+ * What the window reports back once the server has accepted this machine's
+ * enrolment — everything `confirm_enrolment` needs to bring the running agent
+ * into line with what `POST /devices/enrol` already did.
+ */
+export interface EnrolmentConfirmation {
+  deviceUuid: string
+  companyId: number
+  companyName: string | null
+  deviceName: string
 }
 
 /** A registered device, as the API renders it. */
