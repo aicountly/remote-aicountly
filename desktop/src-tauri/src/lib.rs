@@ -73,6 +73,7 @@ pub fn run() {
             commands::get_configuration,
             commands::save_configuration,
             commands::enrol_device,
+            commands::confirm_enrolment,
             commands::unregister_device,
             commands::enable_unattended,
             commands::disable_unattended,

@@ -66,20 +66,37 @@ impl Agent {
         }
     }
 
-    /// A new agent on this machine's stored configuration.
+    /// A new agent on this machine's stored configuration and enrolment.
     ///
-    /// Read from the machine-wide file the service also reads, so the two
-    /// halves of the agent cannot end up pointing at different deployments. A
-    /// missing or unreadable file gives the default, which points at
-    /// production: an agent that refused to start because somebody edited a
-    /// JSON file would be an agent needing a visit to the machine, and that is
-    /// the one thing a remote-support tool must not need.
+    /// The configuration is read from the machine-wide file the service also
+    /// reads, so the two halves of the agent cannot end up pointing at
+    /// different deployments. A missing or unreadable file gives the default,
+    /// which points at production: an agent that refused to start because
+    /// somebody edited a JSON file would be an agent needing a visit to the
+    /// machine, and that is the one thing a remote-support tool must not need.
+    ///
+    /// The enrolment record is read the same way, and for the same reason a
+    /// missing one is not treated as an error: a machine that was never
+    /// registered has none, and this is simply what `NotEnrolled` looks like.
+    /// Without this, `device_uuid` would stay `None` on every restart — the
+    /// connection loop would never even attempt to authenticate with a key
+    /// that is still sitting in secure storage, and the window would say "Not
+    /// registered" for a device the server has no reason to disagree with.
     #[must_use]
     pub fn load() -> Self {
         let agent = Self::new();
 
         if let Ok(mut held) = agent.config.lock() {
             *held = AgentConfig::load();
+        }
+
+        if let Some(record) = EnrolmentRecord::load() {
+            agent.apply(AgentEvent::Enrolled {
+                device_uuid: record.device_uuid,
+                device_name: record.device_name,
+                company_name: record.company_name,
+                key_fingerprint: record.key_fingerprint,
+            });
         }
 
         agent
@@ -228,18 +245,50 @@ impl Agent {
     /// The local half of unregistering. The server-side revocation is a
     /// separate call, and both happen — a key left on a machine whose device
     /// row was revoked is a key that authenticates nothing but is still there.
+    ///
+    /// The enrolment record goes with it. Leaving it behind would mean the
+    /// next restart's [`Agent::load`] reads a record naming a key that no
+    /// longer exists — a machine that believes it is still enrolled and
+    /// cannot prove it, which is a stranger state than simply being
+    /// unenrolled.
     pub fn forget_device_key(&self) -> Result<(), AgentError> {
         platform::secure_storage()
             .delete(DEVICE_KEY_ENTRY, StorageScope::LocalMachine)
-            .map_err(|error| AgentError::Key(KeyError::Storage(error)))
+            .map_err(|error| AgentError::Key(KeyError::Storage(error)))?;
+
+        // The key is what actually authenticates; losing only the record
+        // would leave that stranger state. Reported rather than propagated:
+        // the key is already gone, which is the half that matters, and a
+        // person who just unregistered should not be told it failed because
+        // a leftover file could not be deleted.
+        if let Err(error) = EnrolmentRecord::forget() {
+            tracing::warn!(%error, "the enrolment record could not be removed from disk");
+        }
+
+        Ok(())
     }
 
-    /// Record the enrolment locally.
+    /// Record the enrolment: the running agent's state, and a durable copy so
+    /// a restart does not forget it.
+    ///
+    /// Written the same way [`AgentConfig`] is — atomically, no secret in it —
+    /// and a write that fails is reported rather than propagated: the server
+    /// has already accepted this enrolment and the key already exists in
+    /// secure storage, so failing the whole operation over a file the agent
+    /// can simply try to write again next time would discard a real success
+    /// over a cosmetic one. Losing the file only costs "since when" on the
+    /// next restart; [`Agent::load`] still has nothing to read, so the person
+    /// would need to register again — reported so that failure is at least
+    /// visible to whoever reads the log.
     pub fn record_enrolment(&self, record: &EnrolmentRecord) -> AgentState {
+        if let Err(error) = record.save() {
+            tracing::warn!(%error, "the enrolment record could not be written to disk");
+        }
+
         self.apply(AgentEvent::Enrolled {
             device_uuid: record.device_uuid.clone(),
             device_name: record.device_name.clone(),
-            company_name: None,
+            company_name: record.company_name.clone(),
             key_fingerprint: record.key_fingerprint.clone(),
         })
     }
@@ -323,7 +372,7 @@ impl Agent {
     }
 
     /// Somebody has asked for control.
-    pub fn control_requested(&self, participant_uuid: &str) -> AgentState {
+    pub fn control_requested(&self, participant_uuid: &str, display_name: &str) -> AgentState {
         if let Ok(mut gate) = self.gate.lock() {
             if let Some(gate) = gate.as_mut() {
                 gate.request(participant_uuid);
@@ -333,6 +382,12 @@ impl Agent {
         self.apply(AgentEvent::ControlChanged {
             state: ControlStateView::Requested,
             clipboard: false,
+            requester_uuid: Some(participant_uuid.to_owned()),
+            // Empty rather than absent when the API sent no name: the dialog
+            // falls back to who is connected rather than showing nothing.
+            requester_name: Some(display_name)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned),
         })
     }
 
@@ -358,6 +413,8 @@ impl Agent {
         self.apply(AgentEvent::ControlChanged {
             state: ControlStateView::Granted,
             clipboard,
+            requester_uuid: None,
+            requester_name: None,
         })
     }
 
@@ -378,6 +435,8 @@ impl Agent {
         self.apply(AgentEvent::ControlChanged {
             state: ControlStateView::Denied,
             clipboard: false,
+            requester_uuid: None,
+            requester_name: None,
         })
     }
 
@@ -409,6 +468,8 @@ impl Agent {
         self.apply(AgentEvent::ControlChanged {
             state: ControlStateView::Revoked,
             clipboard: false,
+            requester_uuid: None,
+            requester_name: None,
         })
     }
 
@@ -443,12 +504,28 @@ impl Agent {
         self.apply(AgentEvent::ControlChanged {
             state: state.into(),
             clipboard,
+            requester_uuid: None,
+            requester_name: None,
+        })
+    }
+
+    /// The peer identified itself over signalling — who is actually in the
+    /// room, as opposed to who a data-channel message merely claims to be.
+    pub fn peer_connected(&self, display_name: &str) -> AgentState {
+        self.apply(AgentEvent::PeerConnected {
+            display_name: display_name.to_owned(),
         })
     }
 
     /// Unattended access changed, here or in the console.
     pub fn set_unattended(&self, unattended: UnattendedState) -> AgentState {
         self.apply(AgentEvent::UnattendedChanged(unattended))
+    }
+
+    /// What the organisation currently allows, as `GET /devices/me` last
+    /// reported it.
+    pub fn set_allowed_capabilities(&self, capabilities: AgentCapabilities) -> AgentState {
+        self.apply(AgentEvent::CapabilitiesChanged(capabilities))
     }
 
     /// An administrator revoked this device.
@@ -612,8 +689,31 @@ mod tests {
             control: remote_core::ControlSummary {
                 state: ControlStateView::None,
                 clipboard: false,
+                requester_uuid: None,
+                requester_name: None,
             },
         }
+    }
+
+    /// A fresh agent, enrolled and authenticated.
+    ///
+    /// `begin_session`, `peer_connected` and `set_allowed_capabilities` are
+    /// only ever called, in practice, from a connection loop that reached
+    /// them by authenticating first — and the state machine's own rule is
+    /// that nothing happens on a device that was never enrolled. A bare
+    /// `Agent::new()` is the wrong fixture for exercising any of them.
+    fn enrolled_agent() -> Agent {
+        let agent = Agent::new();
+
+        agent.apply(AgentEvent::Enrolled {
+            device_uuid: "device-uuid".into(),
+            device_name: "WS-01".into(),
+            company_name: Some("Northwind".into()),
+            key_fingerprint: "AAAA BBBB".into(),
+        });
+        agent.apply(AgentEvent::Authenticated);
+
+        agent
     }
 
     fn pointer(sequence: u64) -> Vec<u8> {
@@ -660,7 +760,7 @@ mod tests {
             Err(GateError::NotGranted)
         );
 
-        agent.control_requested(CONTROLLER);
+        agent.control_requested(CONTROLLER, "Sam in support");
         assert_eq!(
             agent.handle_control(&pointer(1)),
             Err(GateError::NotGranted)
@@ -673,7 +773,7 @@ mod tests {
     fn stopping_control_takes_effect_immediately_and_locally() {
         let agent = Agent::new();
         agent.begin_session(summary());
-        agent.control_requested(CONTROLLER);
+        agent.control_requested(CONTROLLER, "Sam in support");
         agent.grant_control(CONTROLLER, false);
 
         // Past the gate. What the platform does with it depends on the host.
@@ -900,5 +1000,72 @@ mod tests {
             assert!(!declared.remote_control);
             assert!(!declared.unattended_access);
         }
+    }
+
+    /// The consent dialog cannot be built without knowing who to grant to —
+    /// this is the data it renders from, and a decision must not leave a
+    /// stale name behind for the next request to be misread against.
+    #[test]
+    fn a_control_request_exposes_who_is_asking_and_a_decision_clears_it() {
+        let agent = enrolled_agent();
+        agent.begin_session(summary());
+
+        let state = agent.control_requested(CONTROLLER, "Sam in support");
+        let control = state.active_session().unwrap().control.clone();
+
+        assert_eq!(control.state, ControlStateView::Requested);
+        assert_eq!(control.requester_uuid.as_deref(), Some(CONTROLLER));
+        assert_eq!(control.requester_name.as_deref(), Some("Sam in support"));
+
+        let state = agent.grant_control(CONTROLLER, false);
+        let control = state.active_session().unwrap().control.clone();
+
+        assert!(control.requester_uuid.is_none());
+        assert!(control.requester_name.is_none());
+    }
+
+    /// An API that sends no name must not make the dialog print a blank
+    /// where a person's name belongs.
+    #[test]
+    fn a_request_with_no_name_carries_none_rather_than_an_empty_string() {
+        let agent = enrolled_agent();
+        agent.begin_session(summary());
+
+        let state = agent.control_requested(CONTROLLER, "");
+        let control = state.active_session().unwrap().control.clone();
+
+        assert!(control.requester_name.is_none());
+    }
+
+    /// The session banner's "Connected person" is blank until somebody is
+    /// actually known to be in the room — this is what fills it in.
+    #[test]
+    fn the_peer_identifying_itself_sets_the_connected_name() {
+        let agent = enrolled_agent();
+        agent.begin_session(SessionSummary {
+            connected_name: String::new(),
+            ..summary()
+        });
+
+        let state = agent.peer_connected("Sam in support");
+
+        assert_eq!(
+            state.active_session().unwrap().connected_name,
+            "Sam in support"
+        );
+    }
+
+    /// The Permissions panel's "your organisation" column has nowhere else to
+    /// read this from.
+    #[test]
+    fn the_organisations_capabilities_are_recorded_once_the_api_reports_them() {
+        let agent = enrolled_agent();
+
+        assert!(agent.state().allowed_capabilities.is_none());
+
+        let allowed = AgentCapabilities::windows();
+        let state = agent.set_allowed_capabilities(allowed);
+
+        assert_eq!(state.allowed_capabilities, Some(allowed));
     }
 }

@@ -313,6 +313,16 @@ async fn connected<F>(
                     })),
                 );
 
+                // What this machine may currently do — the declaration
+                // intersected with the organisation's ceiling, as the server
+                // computed it. The Permissions panel's "your organisation"
+                // column has no other source, and this keeps it current
+                // without anybody restarting anything.
+                emit(
+                    sink,
+                    agent.apply(AgentEvent::CapabilitiesChanged(description.capabilities)),
+                );
+
                 // Somebody is waiting. Host one at a time — two sessions on
                 // one desktop is not a feature, and deciding whose input wins
                 // is not a decision anybody should have to make afterwards.

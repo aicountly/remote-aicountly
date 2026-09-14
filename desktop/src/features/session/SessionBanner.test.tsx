@@ -18,7 +18,7 @@ function session(overrides: Partial<SessionSummary> = {}): SessionSummary {
     companyName: 'Northwind',
     startedAt: new Date(Date.now() - 65_000).toISOString(),
     unattended: false,
-    control: { state: 'none', clipboard: false },
+    control: { state: 'none', clipboard: false, requesterUuid: null, requesterName: null },
     ...overrides,
   }
 }
@@ -31,6 +31,7 @@ function state(status: AgentState['status']): AgentState {
     companyName: 'Northwind',
     keyFingerprint: 'AAAA BBBB',
     unattended: { enabled: false, enabledAt: null, lastUsedAt: null, allowedByPolicy: true },
+    allowedCapabilities: null,
     agentVersion: '1.0.0',
     recentSessions: [],
   }
@@ -92,7 +93,9 @@ describe('SessionBanner', () => {
       <SessionBanner
         state={state({
           status: 'in_session',
-          ...session({ control: { state: 'granted', clipboard: false } }),
+          ...session({
+            control: { state: 'granted', clipboard: false, requesterUuid: null, requesterName: null },
+          }),
         })}
         onStopControl={onStopControl}
         onEndSession={vi.fn()}
@@ -110,7 +113,9 @@ describe('SessionBanner', () => {
       <SessionBanner
         state={state({
           status: 'in_session',
-          ...session({ control: { state: 'granted', clipboard: true } }),
+          ...session({
+            control: { state: 'granted', clipboard: true, requesterUuid: null, requesterName: null },
+          }),
         })}
         onStopControl={vi.fn()}
         onEndSession={vi.fn()}

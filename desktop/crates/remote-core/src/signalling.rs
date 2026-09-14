@@ -55,7 +55,14 @@ pub struct Peer {
     #[serde(default)]
     pub role: String,
     /// What to show beside the pointer.
-    #[serde(default)]
+    ///
+    /// The wire key is `name`, not `displayName` — `signalling/src/server.js`'s
+    /// `describe()` sends `{ participantUuid, role, name, capabilities, kind }`,
+    /// the same shape `web/` reads `peer.name` from. This is the one field on
+    /// this struct that does not follow the blanket `camelCase` rule above, and
+    /// it is named explicitly rather than left to it, so a future field never
+    /// silently drifts the same way this one had.
+    #[serde(default, rename = "name")]
     pub display_name: String,
     /// What the peer says it can do. **An upper bound, never a grant.**
     #[serde(default)]
@@ -410,10 +417,12 @@ mod tests {
 
     #[test]
     fn the_relays_messages_parse() {
+        // The exact shape `signalling/src/server.js`'s `describe()` sends —
+        // `name`, not `displayName`, and a `kind` this build does not read.
         let joined = parse(
             r#"{"type":"joined","participantUuid":"me","peers":[
-                 {"participantUuid":"them","role":"VIEWER","displayName":"Sam",
-                  "capabilities":{"remote_control":false}}]}"#,
+                 {"participantUuid":"them","role":"VIEWER","name":"Sam",
+                  "capabilities":{"remote_control":false},"kind":"session"}]}"#,
         )
         .expect("parses");
 
@@ -447,6 +456,30 @@ mod tests {
             Signal::SessionEnded { .. }
         ));
         assert!(matches!(parse(r#"{"type":"pong"}"#).unwrap(), Signal::Pong));
+    }
+
+    /// `Peer::display_name` reads the wire key `name`. A `displayName` key —
+    /// what the blanket `camelCase` rule on this struct would otherwise
+    /// produce, and what this field silently parsed as empty against before —
+    /// must not be revived by a future edit.
+    #[test]
+    fn a_peers_name_is_read_from_the_wire_key_the_relay_actually_sends() {
+        let peer: Peer = serde_json::from_str(
+            r#"{"participantUuid":"them","role":"VIEWER","name":"Sam","capabilities":{}}"#,
+        )
+        .expect("parses");
+
+        assert_eq!(peer.display_name, "Sam");
+
+        // The relay's own field name, sent by mistake, must not be accepted as
+        // a substitute — a struct that took either would hide exactly this bug
+        // the next time one of the two field names changed.
+        let mistaken: Peer = serde_json::from_str(
+            r#"{"participantUuid":"them","role":"VIEWER","displayName":"Sam","capabilities":{}}"#,
+        )
+        .expect("parses");
+
+        assert_eq!(mistaken.display_name, "");
     }
 
     /// A relay that grows a message type must not drop the agent's connection.

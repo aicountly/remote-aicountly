@@ -15,6 +15,7 @@
 //! from the status, not stored beside it, so no code path can set one without
 //! the other.
 
+use remote_device::AgentCapabilities;
 use remote_protocol::ControlState;
 use serde::{Deserialize, Serialize};
 
@@ -76,13 +77,22 @@ pub struct SessionSummary {
 }
 
 /// Control, for the interface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ControlSummary {
     /// Nobody has asked / asked / granted / refused / withdrawn.
     pub state: ControlStateView,
     /// Whether the clipboard is being synchronised.
     pub clipboard: bool,
+    /// Who is asking, while `state` is `Requested`.
+    ///
+    /// This is what a grant is made out to — the window cannot answer a
+    /// request it has no participant uuid for. Cleared the moment the
+    /// request is answered one way or the other, so a stale value cannot be
+    /// granted control of a later, different request.
+    pub requester_uuid: Option<String>,
+    /// Their name, as the consent dialog shows it.
+    pub requester_name: Option<String>,
 }
 
 /// [`ControlState`], in a form that crosses the Tauri boundary.
@@ -146,6 +156,13 @@ pub struct AgentState {
     pub key_fingerprint: Option<String>,
     /// Unattended access.
     pub unattended: UnattendedState,
+    /// What the organisation currently allows, as `GET /devices/me` last
+    /// reported it — the declaration intersected with the company's policy.
+    ///
+    /// `None` until the first successful poll. The Permissions panel's "your
+    /// organisation" column renders from this, and stays blank rather than
+    /// guessing until the server has actually said something.
+    pub allowed_capabilities: Option<AgentCapabilities>,
     /// This build's version.
     pub agent_version: String,
     /// The last few sessions, for the home screen.
@@ -163,6 +180,7 @@ impl AgentState {
             company_name: None,
             key_fingerprint: None,
             unattended: UnattendedState::default(),
+            allowed_capabilities: None,
             agent_version: agent_version.into(),
             recent_sessions: Vec::new(),
         }
@@ -293,18 +311,43 @@ impl AgentState {
 
             (_, AgentEvent::SessionStarted(session)) => AgentStatus::InSession(session),
 
-            (AgentStatus::InSession(session), AgentEvent::ControlChanged { state, clipboard }) => {
-                AgentStatus::InSession(SessionSummary {
-                    control: ControlSummary {
-                        state,
-                        clipboard: clipboard && state == ControlStateView::Granted,
-                    },
-                    ..session
-                })
-            }
+            (
+                AgentStatus::InSession(session),
+                AgentEvent::ControlChanged {
+                    state,
+                    clipboard,
+                    requester_uuid,
+                    requester_name,
+                },
+            ) => AgentStatus::InSession(SessionSummary {
+                control: ControlSummary {
+                    state,
+                    clipboard: clipboard && state == ControlStateView::Granted,
+                    requester_uuid,
+                    requester_name,
+                },
+                ..session
+            }),
             // A control change with no session is not a state; ignore it
             // rather than inventing a session to hang it on.
             (status, AgentEvent::ControlChanged { .. }) => status,
+
+            // The peer identified itself over signalling — who is actually in
+            // the room. Set once, from the room, never from a data-channel
+            // message a peer could forge.
+            (AgentStatus::InSession(session), AgentEvent::PeerConnected { display_name }) => {
+                AgentStatus::InSession(SessionSummary {
+                    connected_name: display_name,
+                    ..session
+                })
+            }
+            (status, AgentEvent::PeerConnected { .. }) => status,
+
+            (status, AgentEvent::CapabilitiesChanged(capabilities)) => {
+                self.allowed_capabilities = Some(capabilities);
+
+                status
+            }
 
             (AgentStatus::InSession(session), AgentEvent::SessionEnded) => {
                 self.recent_sessions.insert(0, session);
@@ -367,9 +410,21 @@ pub enum AgentEvent {
         state: ControlStateView,
         /// Whether the clipboard is being synchronised.
         clipboard: bool,
+        /// Who is asking, while `state` is `Requested` — `None` otherwise.
+        requester_uuid: Option<String>,
+        /// Their name, as the consent dialog shows it.
+        requester_name: Option<String>,
+    },
+    /// The peer in the room said who they are.
+    PeerConnected {
+        /// What to show beside the pointer, and in the session banner.
+        display_name: String,
     },
     /// Unattended access was switched on or off, here or in the console.
     UnattendedChanged(UnattendedState),
+    /// What the organisation currently allows changed — a fresh read of
+    /// `GET /devices/me`, not necessarily a different value.
+    CapabilitiesChanged(AgentCapabilities),
     /// An administrator revoked this device.
     Revoked,
 }
@@ -389,7 +444,21 @@ mod tests {
             control: ControlSummary {
                 state: ControlStateView::None,
                 clipboard: false,
+                requester_uuid: None,
+                requester_name: None,
             },
+        }
+    }
+
+    /// The common case in these tests: a state change nobody is mid-request
+    /// for. `a_pending_request_carries_who_is_asking_and_a_decision_clears_it`
+    /// below is the one that cares about the other two fields.
+    fn control_changed(state: ControlStateView, clipboard: bool) -> AgentEvent {
+        AgentEvent::ControlChanged {
+            state,
+            clipboard,
+            requester_uuid: None,
+            requester_name: None,
         }
     }
 
@@ -434,10 +503,7 @@ mod tests {
         let state = enrolled()
             .apply(AgentEvent::Authenticated)
             .apply(AgentEvent::SessionStarted(session(false)))
-            .apply(AgentEvent::ControlChanged {
-                state: ControlStateView::Granted,
-                clipboard: true,
-            });
+            .apply(control_changed(ControlStateView::Granted, true));
 
         assert!(state.is_being_controlled());
         assert!(state.tray_summary().contains("controlling"));
@@ -450,17 +516,87 @@ mod tests {
         let state = enrolled()
             .apply(AgentEvent::Authenticated)
             .apply(AgentEvent::SessionStarted(session(false)))
-            .apply(AgentEvent::ControlChanged {
-                state: ControlStateView::Granted,
-                clipboard: true,
-            })
-            .apply(AgentEvent::ControlChanged {
-                state: ControlStateView::Revoked,
-                clipboard: true,
-            });
+            .apply(control_changed(ControlStateView::Granted, true))
+            .apply(control_changed(ControlStateView::Revoked, true));
 
         assert!(!state.is_being_controlled());
         assert!(!state.active_session().unwrap().control.clipboard);
+    }
+
+    /// The property the consent dialog depends on: a request names who is
+    /// asking, and answering it — either way — clears that name rather than
+    /// leaving it to be misread against a later request.
+    #[test]
+    fn a_pending_request_carries_who_is_asking_and_a_decision_clears_it() {
+        let state = enrolled()
+            .apply(AgentEvent::Authenticated)
+            .apply(AgentEvent::SessionStarted(session(false)))
+            .apply(AgentEvent::ControlChanged {
+                state: ControlStateView::Requested,
+                clipboard: false,
+                requester_uuid: Some("participant-uuid".into()),
+                requester_name: Some("Sam in support".into()),
+            });
+
+        let control = state.active_session().unwrap().control.clone();
+        assert_eq!(control.state, ControlStateView::Requested);
+        assert_eq!(control.requester_uuid.as_deref(), Some("participant-uuid"));
+        assert_eq!(control.requester_name.as_deref(), Some("Sam in support"));
+
+        let granted = state.apply(control_changed(ControlStateView::Granted, false));
+        let control = granted.active_session().unwrap().control.clone();
+        assert!(control.requester_uuid.is_none());
+        assert!(control.requester_name.is_none());
+    }
+
+    /// The peer's name comes from the room it joined, never from a message it
+    /// could send itself over the control channel.
+    #[test]
+    fn a_peer_identifying_itself_sets_the_connected_name() {
+        let state = enrolled()
+            .apply(AgentEvent::Authenticated)
+            .apply(AgentEvent::SessionStarted(SessionSummary {
+                connected_name: String::new(),
+                ..session(false)
+            }));
+
+        assert_eq!(state.active_session().unwrap().connected_name, "");
+
+        let state = state.apply(AgentEvent::PeerConnected {
+            display_name: "Sam in support".into(),
+        });
+
+        assert_eq!(
+            state.active_session().unwrap().connected_name,
+            "Sam in support"
+        );
+    }
+
+    /// A poll result is recorded even when nothing changed, and a session
+    /// merely finishing must not erase what the last poll said.
+    #[test]
+    fn capabilities_the_organisation_allows_are_recorded_once_learned() {
+        let allowed = AgentCapabilities {
+            screen_share: true,
+            screen_view: true,
+            remote_control: false,
+            unattended_access: false,
+            file_transfer: true,
+            clipboard_sync: false,
+            reboot: false,
+        };
+
+        let state = enrolled()
+            .apply(AgentEvent::Authenticated)
+            .apply(AgentEvent::CapabilitiesChanged(allowed));
+
+        assert_eq!(state.allowed_capabilities, Some(allowed));
+
+        let state = state
+            .apply(AgentEvent::SessionStarted(session(false)))
+            .apply(AgentEvent::SessionEnded);
+
+        assert_eq!(state.allowed_capabilities, Some(allowed));
     }
 
     #[test]
@@ -543,10 +679,7 @@ mod tests {
     fn a_control_change_with_no_session_changes_nothing() {
         let state = enrolled()
             .apply(AgentEvent::Authenticated)
-            .apply(AgentEvent::ControlChanged {
-                state: ControlStateView::Granted,
-                clipboard: true,
-            });
+            .apply(control_changed(ControlStateView::Granted, true));
 
         assert_eq!(state.status, AgentStatus::Online);
         assert!(!state.is_being_controlled());

@@ -16,6 +16,7 @@ import type {
   About,
   AgentConfig,
   AgentState,
+  EnrolmentConfirmation,
   EnrolmentMaterial,
   PermissionSummary,
 } from '../types/agent'
@@ -45,6 +46,18 @@ export function saveConfiguration(config: AgentConfig): Promise<AgentConfig> {
  */
 export function createDeviceKey(): Promise<EnrolmentMaterial> {
   return invoke<EnrolmentMaterial>('enrol_device')
+}
+
+/**
+ * Tell the Rust side the server accepted this machine's enrolment.
+ *
+ * Without this call the window keeps showing "Not registered" and the
+ * connection loop never attempts to authenticate — even though the server
+ * call just before this one succeeded and the key is already in secure
+ * storage. See `confirm_enrolment` on the Rust side.
+ */
+export function confirmEnrolment(confirmation: EnrolmentConfirmation): Promise<AgentState> {
+  return invoke<AgentState>('confirm_enrolment', { confirmation })
 }
 
 export function unregisterDevice(): Promise<AgentState> {
