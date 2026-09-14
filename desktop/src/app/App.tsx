@@ -10,6 +10,7 @@ import { SessionBanner } from '../features/session/SessionBanner'
 import { SettingsPage } from '../features/settings/SettingsPage'
 import { UnattendedCard } from '../features/unattended/UnattendedCard'
 import * as api from '../services/api'
+import * as portal from '../services/portal'
 import * as bridge from '../services/tauri'
 import type { About, AgentConfig, AgentState, CompanyOption, PermissionSummary } from '../types/agent'
 import { activeSession, isEnrolled } from '../types/agent'
@@ -317,9 +318,18 @@ export default function App() {
               state={state}
               onRegister={() =>
                 void run(async () => {
-                  if (config && api.hasSessionKey()) {
-                    setCompanies(await api.fetchCompanies(config.apiBaseUrl))
+                  if (!config) throw new Error('Settings are not loaded yet.')
+
+                  // A machine cannot hold a portal session — a person has to
+                  // sign in, in the system browser, to authorise registering
+                  // this one. Skipped once a sign-in from earlier in this run
+                  // is still good.
+                  if (!api.hasSessionKey()) {
+                    const authToken = await bridge.beginSignIn()
+                    await portal.signInWithAuthToken(config.apiBaseUrl, authToken)
                   }
+
+                  setCompanies(await api.fetchCompanies(config.apiBaseUrl))
                   setScreen('register')
                 })
               }
