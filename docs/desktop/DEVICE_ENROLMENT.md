@@ -12,15 +12,17 @@ identity the server issued once, to a person who was signed in at the time.
 
 ```text
   1  the agent generates a keypair          the private half goes to DPAPI
-  2  a person signs in through the portal   ses_key, in memory, for seconds
-  3  the agent enrols the PUBLIC key        POST /devices/enrol
-  4  the agent proves possession            challenge → signature → credential
-  5  from then on, only step 4              the ses_key is never used again
+  2  the agent starts a device-code sign-in  a short code, and a long secret
+  3  a person confirms it in their browser   their own, already-working sign-in
+  4  the agent polls and is handed a device  the server enrolled it on confirm
+  5  the agent proves possession             challenge → signature → credential
+  6  from then on, only step 5               this window never held a credential
 ```
 
-Step 2 is the only moment a user credential is involved, and it is used for
-exactly one call. That is what makes a stolen copy of an agent installation
-useless: without the machine's own key store, it cannot pass step 4.
+No step in this ever puts a portal credential into the agent's window. That is
+what makes a stolen copy of an agent installation useless: without the
+machine's own key store, it cannot pass step 5, and it was never capable of
+minting a step 5 credential for itself out of anything it was handed earlier.
 
 ## Step by step
 
@@ -43,70 +45,59 @@ never logged, and never crosses the IPC channel. `DeviceKeypair`'s `Debug`
 implementation prints the fingerprint and nothing else, so a stray `{:?}`
 cannot become a leak.
 
-### 2. Signing in
+### 2. Signing in, and enrolling — device-code sign-in
 
-The person signs in through the AICOUNTLY portal exactly as they would for any
-other AICOUNTLY SaaS — but a native window cannot receive a redirect the way a
-browser tab can, so the desktop agent uses the loopback pattern RFC 8252
-describes for exactly this shape of application (`src-tauri/src/signin.rs`):
+A native window cannot receive a portal redirect the way a browser tab can.
+The first version of this tried anyway, with the loopback pattern RFC 8252
+describes for exactly this shape of application: bind `127.0.0.1:0`, open the
+portal in the system browser, wait for it to redirect back. It worked when the
+portal showed its login form, and silently failed to complete when the person
+already had a live portal session — the portal does not honour a `returnUrl`
+on a loopback address for its own silent-SSO fast path, which is a portal
+behaviour outside this repository, not something this codebase could fix or
+guarantee.
+
+**Device-code sign-in replaces it**, and depends on nothing outside this
+repository: it reuses `web/`'s own sign-in, which already works in both
+cases, because it is an ordinary browser-to-browser redirect rather than a
+loopback one.
 
 ```text
-  bind 127.0.0.1:0                ──open──▶  {portal}/login/authentication_jump/remote
-  accept one request        ◀───redirect───  ?returnUrl=http://127.0.0.1:{port}/auth/callback
-  read `auth_token`, answer 200
+  POST /v1/remote/desktop-signin/start    { publicKey, deviceName, … }   agent, unauthenticated
+       → { userCode, deviceCode, verificationUriComplete, expiresAt }
+
+  agent opens verificationUriComplete in the system browser
+
+  the person, already able to sign in to the web app the ordinary way,
+  confirms the code and chooses which organisation this machine belongs to
+
+  POST /v1/remote/desktop-signin/poll     { deviceCode }                 agent, unauthenticated
+       → { status: pending | denied | expired | confirmed, device? }
 ```
 
-`begin_sign_in` (a Tauri command) binds an OS-assigned loopback port, opens
-the portal in the **system** browser — never an embedded webview, so the
-portal's own session cookies and any password manager apply normally — and
-waits, bounded to five minutes, for the one request that matters. A stray
-connection on the same port (a favicon fetch, a local probe) is answered and
-ignored rather than ending the wait; only the callback path does, whether it
-carries a token or `auth_error`.
+Two codes, two audiences, and the split is the whole security model:
 
-The literal `127.0.0.1` is deliberate, never `localhost`: no DNS step, and no
-ambiguity with a resolver that prefers `::1`.
+* **`userCode`** is short (`ABCD-1234`) and shown on the machine's own
+  screen, so a person can match it against the confirmation page. Someone who
+  only saw it over a shoulder can open that page but cannot act as the agent.
+* **`deviceCode`** is a 32-byte secret the agent holds and never displays. It
+  is what `poll` is called with, and answering it is the proof — the same
+  shape of guarantee a device-auth challenge nonce gives (§4 below), reused
+  here for a sign-in that has no key to sign with yet.
 
-What crosses back into Rust is the raw `auth_token`. Exchanging it for a
-`ses_key` — `POST /global/seskey`, this product's relay first and the portal
-directly if the relay is missing or broken — is the window's own call
-(`services/portal.ts`), mirroring `web/src/auth/portal.ts`'s exact fallback
-rather than a second implementation of the same policy in Rust. The `ses_key`
-lives in a module variable in the agent's window and dies with it: no
-`localStorage`, no file, no keychain.
+`start` carries the enrolment request the agent already has at that moment —
+its public key, its name, its declared capabilities — captured once, so
+neither the browser confirmation nor the later poll needs to ask the agent for
+anything further. The confirming browser supplies the other half: who is
+confirming, and which company. The **server** joins the two the moment `poll`
+observes the code confirmed, spending it exactly once (a guarded
+`UPDATE … WHERE status = 'CONFIRMED'`, the same pattern a device-auth nonce is
+spent with) and enrolling the device in the same call — `DeviceService::enrol`,
+unchanged, so every check below still applies:
 
-This is the one part of enrolment that depends on something outside this
-repository: the portal has to accept a `returnUrl` whose host is a loopback
-address with a port chosen at runtime, which is exactly what RFC 8252 asks an
-authorization server to accept for a native app and not require pre-
-registering — but it is the portal's behaviour to confirm, not this codebase's
-to guarantee.
-
-### 3. Enrolment
-
-```http
-POST /v1/remote/devices/enrol
-Authorization: Bearer <ses_key>
-
-{
-  "companyId": 481,
-  "deviceName": "Priya's laptop",
-  "publicKey": "<base64, 32 bytes>",
-  "deviceType": "DESKTOP",
-  "operatingSystem": "Windows",
-  "osVersion": "11 24H2",
-  "architecture": "x86_64",
-  "hostname": "WS-01",
-  "agentVersion": "1.0.0",
-  "capabilities": { "remote_control": true, ... }
-}
-```
-
-The server checks, in this order:
-
-1. the caller is a member of that company;
+1. the confirming person is a member of that company;
 2. the plan includes `desktop_devices`;
-3. the caller holds `remote.device.enrol`;
+3. the confirming person holds `remote.device.enrol`;
 4. the public key is well formed, 32 bytes, and not all-zero;
 5. the key's fingerprint is not already enrolled anywhere
    (`remote_devices_fingerprint_uniq`).
@@ -117,7 +108,20 @@ organisation that forbids it is a machine that will be refused control — the
 declaration is an upper bound, never a grant.
 
 `DEVICE_ENROLLED` is written to the audit trail with who did it, from where,
-and the key fingerprint. Never the key.
+and the key fingerprint. Never the key. Confirming and declining the code are
+their own audit events too — `DESKTOP_SIGNIN_CONFIRMED`,
+`DESKTOP_SIGNIN_DENIED` — recorded against the person in the browser, since
+that is where the human decision was actually made.
+
+**No portal credential ever reaches this window.** Not the long-lived
+`auth_token`, not a `ses_key` — `poll`'s successful answer is an already-
+enrolled device, not a credential to enrol one with. That closes off more than
+the loopback failure: it also means an action that genuinely needs a person's
+own credential — turning unattended access *on*, today — cannot be
+self-served from this window at all any more, only from the web console.
+Turning it *off*, and unregistering, already have (or are meant to have) a
+path through the machine's own device credential instead of a person's; see
+`services/api.ts`'s header comment for where that still needs finishing.
 
 ### 4. Proving possession
 
@@ -204,7 +208,8 @@ active for a machine whose key was deleted is a row somebody has to clean up.
 **The device key, the configuration and the enrolment record are deleted.**
 `NSIS_HOOK_POSTUNINSTALL` removes `%ProgramData%\AICOUNTLY\Remote\device-signing-key.key`,
 `config.json` and `enrolment.json` — the last of these is what makes
-`device_uuid` survive an ordinary restart (see "Signing in" above); leaving it
+`device_uuid` survive an ordinary restart (see "Signing in, and enrolling"
+above); leaving it
 behind would mean the next install's `Agent::load` believed it was still this
 machine, with a key that had just been deleted.
 

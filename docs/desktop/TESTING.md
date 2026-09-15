@@ -6,20 +6,20 @@ what is not covered at all.
 ## The numbers
 
 ```bash
-cd desktop    && cargo test --workspace   # 320 — protocol, gate, identity, state, session, service
-cd desktop    && npm test                 #  18 — the agent's own interface
-cd backend    && vendor/bin/phpunit       # 211 — devices, policy, control, unattended
-cd web        && npm test                 # 104 — capability gating, control input, devices
+cd desktop    && cargo test --workspace   # 309 — protocol, gate, identity, state, session, service
+cd desktop    && npm test                 #  23 — the agent's own interface
+cd backend    && vendor/bin/phpunit       # 228 — devices, policy, control, unattended, desktop sign-in
+cd web        && npm test                 # 115 — capability gating, control input, devices, desktop sign-in
 cd signalling && npm test                 #  27 — tokens, rooms, device rooms, live relay
 ```
 
-**680 automated tests.** The split by crate:
+**702 automated tests.** The split by crate:
 
 | | |
 |---|---|
 | `remote-protocol` | 58 — the wire format, the gate, clipboard bounds, monitors |
 | `remote-core` | 56 — configuration, the API client, signalling, backoff, the state machine |
-| `aicountly-remote-desktop` | 118 — the agent, its commands, the loopback sign-in listener, the connection loop, the session, the platform layer's arithmetic |
+| `aicountly-remote-desktop` | 107 — the agent, its commands, the connection loop, the session, the platform layer's arithmetic |
 | `aicountly-remote-service` | 29 — the IPC protocol, the pipe ACL, the service's decisions |
 | `remote-device` | 21 — capture profiles, capability declaration |
 | `remote-security` | 21 — keys, the canonical payload, storage, the enrolment record |

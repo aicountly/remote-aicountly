@@ -5,11 +5,15 @@ import App from './App.tsx'
 import { AuthProvider } from './auth/AuthProvider.tsx'
 import { router } from './app/router'
 import { initAnalytics, trackPageView } from './utils/analytics'
+import { stashDesktopSignInReturnPath } from './features/desktop/returnPath'
 
 import './styles/tokens.css'
 import './styles/base.css'
 import './styles/app.css'
 import './styles/room.css'
+
+// Before AuthProvider's redirect effect can ever run — see returnPath.ts.
+stashDesktopSignInReturnPath(window.location)
 
 // Page-view tracking via the router instance's subscription API: this fires
 // on every navigation regardless of route nesting, including /room/:uuid and

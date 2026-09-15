@@ -664,6 +664,22 @@ class DeviceService
         return $row === null ? null : $this->castRow($row);
     }
 
+    /**
+     * The device a key fingerprint belongs to, platform-wide — the same
+     * lookup {@see enrol()} uses to recognise a key that is already enrolled.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function findByFingerprint(string $fingerprint): ?array
+    {
+        $row = $this->db->table('remote_devices')
+            ->where('public_key_fingerprint', $fingerprint)
+            ->get()
+            ->getRowArray();
+
+        return $row === null ? null : $this->castRow($row);
+    }
+
     /** @return array<string, mixed> */
     public function findByUuidOrFail(string $uuid): array
     {

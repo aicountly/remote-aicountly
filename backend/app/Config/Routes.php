@@ -179,6 +179,25 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
         'filter' => 'rate-limit:device-verify,20,60',
     ]);
 
+    // --- Desktop-agent sign-in (docs/desktop/DEVICE_ENROLMENT.md) ----------
+    //
+    // `start` and `poll` are the agent, with no credential of any kind yet —
+    // unauthenticated by design, proven instead by the long `deviceCode` each
+    // returns, exactly like devices/auth/challenge below. `confirm` and `deny`
+    // are the browser, already signed in, so they are ordinary api-auth.
+    $routes->post('desktop-signin/start', 'DesktopSignInController::start', [
+        'filter' => 'rate-limit:desktop-signin-start,10,60',
+    ]);
+    $routes->post('desktop-signin/poll', 'DesktopSignInController::poll', [
+        'filter' => 'rate-limit:desktop-signin-poll,90,60',
+    ]);
+    $routes->post('desktop-signin/confirm', 'DesktopSignInController::confirm', [
+        'filter' => ['api-auth', 'rate-limit:desktop-signin-confirm,20,60'],
+    ]);
+    $routes->post('desktop-signin/deny', 'DesktopSignInController::deny', [
+        'filter' => ['api-auth', 'rate-limit:desktop-signin-confirm,20,60'],
+    ]);
+
     $routes->get('devices/(:segment)', 'DeviceController::show/$1', ['filter' => 'api-auth']);
     $routes->patch('devices/(:segment)', 'DeviceController::update/$1', ['filter' => 'api-auth']);
     $routes->post('devices/(:segment)/revoke', 'DeviceController::revoke/$1', ['filter' => 'api-auth']);

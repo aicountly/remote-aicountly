@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { Brand } from '../components/Brand'
 import { DeviceCard } from '../features/device/DeviceCard'
-import { RegisterDevice } from '../features/device/RegisterDevice'
+import { DesktopSignInPending } from '../features/device/DesktopSignInPending'
 import { RecentSessions } from '../features/home/RecentSessions'
 import { PermissionsCard } from '../features/permissions/PermissionsCard'
 import { ControlRequest } from '../features/session/ControlRequest'
@@ -10,9 +10,8 @@ import { SessionBanner } from '../features/session/SessionBanner'
 import { SettingsPage } from '../features/settings/SettingsPage'
 import { UnattendedCard } from '../features/unattended/UnattendedCard'
 import * as api from '../services/api'
-import * as portal from '../services/portal'
 import * as bridge from '../services/tauri'
-import type { About, AgentConfig, AgentState, CompanyOption, PermissionSummary } from '../types/agent'
+import type { About, AgentConfig, AgentState, DesktopSignInStart, PermissionSummary } from '../types/agent'
 import { activeSession, isEnrolled } from '../types/agent'
 
 type Screen = 'home' | 'unattended' | 'settings' | 'register'
@@ -31,7 +30,9 @@ export default function App() {
   const [permissions, setPermissions] = useState<PermissionSummary | null>(null)
   const [config, setConfig] = useState<AgentConfig | null>(null)
   const [about, setAbout] = useState<About | null>(null)
-  const [companies, setCompanies] = useState<CompanyOption[]>([])
+  const [signIn, setSignIn] = useState<{ start: DesktopSignInStart; outcome: 'pending' | 'denied' | 'expired' } | null>(
+    null,
+  )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [shareClipboard, setShareClipboard] = useState(false)
@@ -149,31 +150,92 @@ export default function App() {
     [run],
   )
 
-  const register = useCallback(
-    (companyId: number, deviceName: string) =>
+  // Device-code sign-in (docs/desktop/DEVICE_ENROLMENT.md): this window
+  // creates the keypair and starts the code, a browser tab — already capable
+  // of the AICOUNTLY portal's ordinary, working sign-in — confirms it, and
+  // the server enrols the device the moment it does. This window never holds
+  // a portal credential of any kind; it only shows the code and polls.
+  const beginRegistration = useCallback(
+    () =>
       run(async () => {
         if (!config) throw new Error('Settings are not loaded yet.')
 
         const material = await bridge.createDeviceKey()
-        const { device } = await api.enrolDevice(config.apiBaseUrl, companyId, deviceName, material)
+        const start = await api.startDesktopSignIn(config.apiBaseUrl, material)
 
-        // The server call above already created the device row; without this
-        // second call the window would keep showing "Not registered" and the
-        // connection loop would never attempt to authenticate, even though
-        // registration just succeeded.
-        setState(
-          await bridge.confirmEnrolment({
-            deviceUuid: device.uuid,
-            companyId,
-            companyName: companies.find((company) => company.companyId === companyId)?.name ?? null,
-            deviceName: device.deviceName,
-          }),
-        )
+        await bridge.openUrl(start.verificationUriComplete)
 
-        setScreen('home')
+        setSignIn({ start, outcome: 'pending' })
+        setScreen('register')
       }),
-    [run, config, companies],
+    [run, config],
   )
+
+  const cancelSignIn = useCallback(() => {
+    setSignIn(null)
+    setScreen('home')
+  }, [])
+
+  // Polls while a sign-in is outstanding. A network hiccup on one tick must
+  // not end the wait — the next tick simply tries again, right up until the
+  // code itself expires, which the server is the authority on.
+  useEffect(() => {
+    if (!signIn || signIn.outcome !== 'pending' || !config) return undefined
+
+    const { start } = signIn
+    let cancelled = false
+
+    const timer = setInterval(() => {
+      void (async () => {
+        let outcome: Awaited<ReturnType<typeof api.pollDesktopSignIn>>
+        try {
+          outcome = await api.pollDesktopSignIn(config.apiBaseUrl, start.deviceCode)
+        } catch {
+          return
+        }
+        if (cancelled) return
+
+        if (outcome.status === 'confirmed') {
+          if (outcome.device.companyId === null) {
+            setError('AICOUNTLY Remote did not say which organisation this device belongs to.')
+            return
+          }
+
+          try {
+            // The server call already created and enrolled the device;
+            // without this the window would keep showing "Not registered"
+            // and the connection loop would never attempt to authenticate,
+            // even though registration just succeeded. The poll that got us
+            // here already spent the sign-in code, so a failure here is safe
+            // to retry: the next tick's poll replays the same confirmed
+            // device rather than needing a fresh code.
+            const next = await bridge.confirmEnrolment({
+              deviceUuid: outcome.device.uuid,
+              companyId: outcome.device.companyId,
+              companyName: outcome.companyName,
+              deviceName: outcome.device.deviceName,
+            })
+            if (cancelled) return
+
+            setState(next)
+            setSignIn(null)
+            setScreen('home')
+          } catch (caught) {
+            if (!cancelled) {
+              setError(caught instanceof Error ? caught.message : 'Registration succeeded but could not be recorded here.')
+            }
+          }
+        } else if (outcome.status === 'denied' || outcome.status === 'expired') {
+          setSignIn((current) => (current ? { ...current, outcome: outcome.status } : current))
+        }
+      })()
+    }, Math.max(1, start.intervalSeconds) * 1000)
+
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [signIn, config])
 
   const unregister = useCallback(
     () =>
@@ -184,7 +246,13 @@ export default function App() {
         // because a key removed from a machine whose device row is still
         // active would leave a device an administrator can see and nobody can
         // reach — and the reverse leaves a key that authenticates nothing.
-        if (uuid && config && api.hasSessionKey()) {
+        //
+        // In practice this call always refuses: this window has no way to
+        // obtain a portal credential any more, see services/api.ts. Left in
+        // place — rather than skipped outright — so it starts working on its
+        // own the day that revocation moves onto the device's own credential,
+        // the way disabling unattended access already has on the server.
+        if (uuid && config) {
           await api.revokeDevice(config.apiBaseUrl, uuid).catch(() => undefined)
         }
 
@@ -214,8 +282,6 @@ export default function App() {
       }),
     [run, config, state],
   )
-
-  const defaultDeviceName = useMemo(() => state?.deviceName ?? '', [state])
 
   if (!state || !permissions) {
     return (
@@ -287,14 +353,13 @@ export default function App() {
 
         {error ? <div className="notice notice--danger">{error}</div> : null}
 
-        {screen === 'register' ? (
-          <RegisterDevice
-            companies={companies}
-            defaultName={defaultDeviceName}
-            onRegister={register}
-            onCancel={() => setScreen('home')}
+        {screen === 'register' && signIn ? (
+          <DesktopSignInPending
+            start={signIn.start}
+            outcome={signIn.outcome}
+            onCancel={cancelSignIn}
+            onRetry={() => void beginRegistration()}
             busy={busy}
-            error={error}
           />
         ) : screen === 'unattended' ? (
           <UnattendedCard
@@ -316,23 +381,7 @@ export default function App() {
           <>
             <DeviceCard
               state={state}
-              onRegister={() =>
-                void run(async () => {
-                  if (!config) throw new Error('Settings are not loaded yet.')
-
-                  // A machine cannot hold a portal session — a person has to
-                  // sign in, in the system browser, to authorise registering
-                  // this one. Skipped once a sign-in from earlier in this run
-                  // is still good.
-                  if (!api.hasSessionKey()) {
-                    const authToken = await bridge.beginSignIn()
-                    await portal.signInWithAuthToken(config.apiBaseUrl, authToken)
-                  }
-
-                  setCompanies(await api.fetchCompanies(config.apiBaseUrl))
-                  setScreen('register')
-                })
-              }
+              onRegister={() => void beginRegistration()}
               onUnregister={unregister}
               busy={busy}
             />

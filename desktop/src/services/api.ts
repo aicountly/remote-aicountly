@@ -1,30 +1,28 @@
 /**
  * The Remote API, as the desktop agent calls it.
  *
- * Two credentials, and they are never confused:
+ * Registration used to need a portal **`ses_key`** for its one enrolment
+ * call. It no longer does: device-code sign-in (`startDesktopSignIn`,
+ * `pollDesktopSignIn`, docs/desktop/DEVICE_ENROLMENT.md) enrols the machine
+ * itself, server-side, once a person confirms the code in their own browser
+ * — so this window never handles a portal credential of any kind, matching
+ * the **device credential** the Rust side obtains by proving possession of
+ * the private key, which likewise never crosses into this window.
  *
- *   * a portal **`ses_key`**, held in memory only while a person is signing in
- *     to register this machine, and used for exactly one call — enrolment;
- *   * a **device credential**, which the Rust side obtains by proving
- *     possession of the private key and which never comes into this window at
- *     all.
- *
- * Neither is ever written to disk. The `ses_key` lives in a module variable
- * and dies with the window, exactly as it does in `web/src/auth/tokens.ts`.
+ * `sessionKey` below is accordingly never set by anything any more, which
+ * means `enableUnattended`, `disableUnattended` and the best-effort revoke in
+ * `unregisterDevice`'s caller always refuse with `UNAUTHENTICATED` — a known
+ * gap, not a bug introduced here: those three calls have always needed a
+ * person's credential this window no longer has a way to obtain. Use the
+ * AICOUNTLY Remote web console for them until they are moved onto the device
+ * credential the way `POST /devices/me/unattended/disable` already is
+ * designed to be.
  */
 
-import type { CompanyOption, DeviceResource, EnrolmentMaterial } from '../types/agent'
+import type { DeviceResource, DesktopSignInOutcome, DesktopSignInStart, EnrolmentMaterial } from '../types/agent'
 
-/** The portal session key. Memory only; never `localStorage`. */
-let sessionKey: string | null = null
-
-export function setSessionKey(key: string | null): void {
-  sessionKey = key
-}
-
-export function hasSessionKey(): boolean {
-  return sessionKey !== null
-}
+/** The portal session key. Memory only; never `localStorage`. Never set by anything any more — see above. */
+const sessionKey: string | null = null
 
 export class RemoteApiError extends Error {
   readonly code: string
@@ -42,23 +40,29 @@ interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
   body?: unknown
   signal?: AbortSignal
+  /** False for the two device-code calls, which carry their own proof instead of a credential. */
+  auth?: boolean
 }
 
 async function request<T>(baseUrl: string, path: string, options: RequestOptions = {}): Promise<T> {
-  if (!sessionKey) {
+  const auth = options.auth ?? true
+
+  if (auth && !sessionKey) {
     throw new RemoteApiError('UNAUTHENTICATED', 'Sign in to AICOUNTLY to continue.', 401)
   }
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  }
+  if (auth) headers.Authorization = `Bearer ${sessionKey}`
 
   let response: Response
 
   try {
     response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/remote${path}`, {
       method: options.method ?? 'GET',
-      headers: {
-        Authorization: `Bearer ${sessionKey}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
+      headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       signal: options.signal,
     })
@@ -85,51 +89,17 @@ async function request<T>(baseUrl: string, path: string, options: RequestOptions
   return payload?.data as T
 }
 
-/** The organisations this person may register a device into. */
-export async function fetchCompanies(baseUrl: string): Promise<CompanyOption[]> {
-  const bootstrap = await request<{
-    companies: Array<{ companyId: number; name: string }>
-  }>(baseUrl, '/bootstrap')
-
-  // Whether each one permits enrolment is a per-company answer, so it is asked
-  // per company rather than inferred from the bootstrap's active scope.
-  const options = await Promise.all(
-    bootstrap.companies.map(async (company) => {
-      try {
-        const devices = await request<{ canEnrol: boolean }>(
-          baseUrl,
-          `/devices?companyId=${company.companyId}&limit=1`,
-        )
-
-        return { ...company, canEnrol: devices.canEnrol }
-      } catch {
-        // A company whose policy could not be read is one this person cannot
-        // register into as far as we know, which is the safe reading.
-        return { ...company, canEnrol: false }
-      }
-    }),
-  )
-
-  return options
-}
-
 /**
- * Register this machine.
- *
- * The body carries the **public** key the Rust side generated. The private
- * half never leaves the machine and never enters this window.
+ * Start a device-code sign-in. Unauthenticated: this window holds no
+ * credential of any kind at this point, which is the entire reason this
+ * exists rather than the machine somehow acquiring a portal session itself.
  */
-export function enrolDevice(
-  baseUrl: string,
-  companyId: number,
-  deviceName: string,
-  material: EnrolmentMaterial,
-): Promise<{ device: DeviceResource }> {
-  return request<{ device: DeviceResource }>(baseUrl, '/devices/enrol', {
+export function startDesktopSignIn(baseUrl: string, material: EnrolmentMaterial): Promise<DesktopSignInStart> {
+  return request<DesktopSignInStart>(baseUrl, '/desktop-signin/start', {
     method: 'POST',
+    auth: false,
     body: {
-      companyId,
-      deviceName,
+      deviceName: material.hostName,
       publicKey: material.publicKey,
       deviceType: 'DESKTOP',
       operatingSystem: material.operatingSystem,
@@ -139,6 +109,19 @@ export function enrolDevice(
       agentVersion: material.agentVersion,
       capabilities: material.capabilities,
     },
+  })
+}
+
+/**
+ * Poll for an outcome. `deviceCode` is the proof — nobody who only saw the
+ * short code this screen displays can call this, because they were never
+ * given it.
+ */
+export function pollDesktopSignIn(baseUrl: string, deviceCode: string): Promise<DesktopSignInOutcome> {
+  return request<DesktopSignInOutcome>(baseUrl, '/desktop-signin/poll', {
+    method: 'POST',
+    auth: false,
+    body: { deviceCode },
   })
 }
 
@@ -179,8 +162,8 @@ export function revokeDevice(baseUrl: string, deviceUuid: string): Promise<{ dev
  *
  * A control decision is made by the *machine*, and the machine reports it with
  * its own device credential from the Rust side — see
- * `Agent::report_control_decision`. Reporting it from here would need the
- * portal `ses_key`, which exists only for the few seconds somebody is
- * registering this computer, so a grant made an hour later would be a call
- * that could only ever be refused.
+ * `Agent::report_control_decision`. Reporting it from here would need a
+ * portal `ses_key`, and this window does not have a way to obtain one at all
+ * any more, so a grant made from here would be a call that could only ever
+ * be refused.
  */

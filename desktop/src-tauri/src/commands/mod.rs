@@ -69,24 +69,6 @@ pub fn save_configuration(
     Ok(agent.config())
 }
 
-/// Sign in through the AICOUNTLY portal, for the one call that needs it.
-///
-/// A machine cannot hold a portal session, so this is a *person* proving they
-/// may register this one — opens the portal in the system browser and waits
-/// on a loopback port for it to answer. See `crate::signin` for the mechanism
-/// and why it is the window's job rather than the API client's.
-///
-/// What comes back is the raw `auth_token`. Exchanging it for a `ses_key` is
-/// the window's own call, mirroring `web/src/auth/portal.ts`'s relay-then-
-/// direct fallback — duplicating that policy here would be a second
-/// implementation of it to keep in sync.
-#[tauri::command]
-pub async fn begin_sign_in(agent: tauri::State<'_, Arc<Agent>>) -> Result<String, String> {
-    crate::signin::sign_in(&agent.config().portal_url)
-        .await
-        .map_err(|error| error.to_string())
-}
-
 /// Register this machine.
 ///
 /// The keypair is generated here and the private half goes straight into the
@@ -293,12 +275,27 @@ pub fn is_permitted_url(url: &str, config: &AgentConfig) -> bool {
         return false;
     }
 
+    // `api_base_url` is the API under `/api`; the device-code sign-in page
+    // (docs/desktop/DEVICE_ENROLMENT.md) that the agent opens to be confirmed
+    // is the *application* on the same host, one level up. Deriving it rather
+    // than adding a fourth config field keeps there being exactly one place —
+    // `api_base_url` — that says which deployment this agent talks to.
+    let app_origin = config
+        .api_base_url
+        .trim_end_matches('/')
+        .strip_suffix("/api")
+        .map(str::to_owned);
+
     // Compared as origins with an explicit boundary, so
     // `https://my.aicountly.com.attacker.example` does not match
     // `https://my.aicountly.com`.
-    let permitted = [config.portal_url.as_str(), config.api_base_url.as_str()];
+    let permitted = [
+        Some(config.portal_url.clone()),
+        Some(config.api_base_url.clone()),
+        app_origin,
+    ];
 
-    permitted.iter().any(|origin| {
+    permitted.iter().flatten().any(|origin| {
         let origin = origin.trim_end_matches('/');
 
         url == origin
@@ -347,6 +344,17 @@ mod tests {
         ));
         assert!(is_permitted_url(
             "https://remote.aicountly.com/api/v1/remote/devices",
+            &config()
+        ));
+    }
+
+    /// The page a device-code sign-in opens to be confirmed
+    /// (docs/desktop/DEVICE_ENROLMENT.md) is the application itself, one
+    /// level up from `api_base_url`'s `/api` — not under it.
+    #[test]
+    fn the_device_signin_page_on_the_same_host_is_opened() {
+        assert!(is_permitted_url(
+            "https://remote.aicountly.com/desktop-signin?code=ABCD-1234",
             &config()
         ));
     }
