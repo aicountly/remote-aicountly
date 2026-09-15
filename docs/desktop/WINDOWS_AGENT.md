@@ -205,6 +205,43 @@ the machine could replace a device identity in.
 Uninstalling removes all of it, including the key — see
 [DEVICE_ENROLMENT.md](DEVICE_ENROLMENT.md#uninstalling).
 
+### The icon looking stale after an upgrade
+
+Every icon Windows shows — the desktop shortcut, the Start Menu entry, the
+Programs and Features list, the taskbar while the app is not running — is
+read from `AICOUNTLY Remote.exe` itself, at install time or on demand.
+Nothing in this installer hard-codes a separate icon reference anywhere;
+`installers/windows/hooks.nsh`'s `NSIS_HOOK_POSTINSTALL` also tells Explorer
+to drop its cached bitmaps once the install finishes, so a **first** install
+picks the new icon up immediately.
+
+An **upgrade** — installing a new build over an existing one, at the same
+`$INSTDIR` — is the case that can still show the old icon. Windows Explorer
+caches an icon bitmap per file path, and does not reliably notice that the
+`.exe` at that path now has different icon resources baked in; this is a
+known limitation of Explorer's icon cache, not particular to this installer
+(the same report exists against Tauri's own NSIS template:
+[tauri-apps/tauri#8453](https://github.com/tauri-apps/tauri/issues/8453)),
+and it can persist across an ordinary uninstall, reinstall and reboot,
+because the reinstall lands at the same path the stale bitmap is keyed to.
+
+The window's own title bar and taskbar icon *while the app is running* are
+unaffected — Windows reads those live from the running process, not from the
+cache — so "the icon is right once I open it, wrong everywhere else" is this,
+not a build problem.
+
+To force it on a machine already stuck on the old one:
+
+1. Uninstall AICOUNTLY Remote and delete any leftover desktop shortcut.
+2. Close Explorer and clear its icon cache:
+   ```powershell
+   taskkill /f /im explorer.exe
+   Remove-Item "$env:LocalAppData\Microsoft\Windows\Explorer\iconcache_*.db" -Force -ErrorAction SilentlyContinue
+   Remove-Item "$env:LocalAppData\IconCache.db" -Force -ErrorAction SilentlyContinue
+   start explorer.exe
+   ```
+3. Reinstall.
+
 ## Diagnostics
 
 ```powershell
