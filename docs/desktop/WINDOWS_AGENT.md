@@ -242,6 +242,54 @@ To force it on a machine already stuck on the old one:
    ```
 3. Reinstall.
 
+### Programs and Features showing the wrong icon specifically
+
+This is a **different cache** from the one above, and the fix above does not
+reliably reach it.
+
+The Explorer views — desktop, Start Menu, taskbar — are shell namespace
+views, and `NSIS_HOOK_POSTINSTALL`'s `SHChangeNotify` call nudges exactly
+those. **Programs and Features** (`appwiz.cpl`, "Apps & Features" in
+Settings) is a separate Control Panel applet: it reads `DisplayIcon` from
+the uninstall registry key and extracts an icon from that file into its own
+list view, and multiple independent reports — from the NSIS project's own
+forums and an unrelated Electron installer bug with the identical symptom —
+agree that the standard `SHChangeNotify(SHCNE_ASSOCCHANGED, ...)` "refresh
+shell icons" trick **does not** make it redraw, in some cases not even
+after a reboot. This is a Windows/NSIS-ecosystem-wide limitation, not
+something specific to this installer.
+
+`DisplayIcon` itself is not the problem: Tauri's generated `installer.nsi`
+writes it as `"$INSTDIR\AICOUNTLY Remote.exe"` — the same file, the same
+icon resource, that the taskbar and window title bar read live and get
+right. What's stale is Programs and Features' own cached extraction from
+an *earlier* icon at that same path, and nothing this installer runs at
+install time is able to force it to re-extract.
+
+A machine that has only ever had the current icon installed on it should
+never hit this — there is nothing stale to be showing. It shows up on a
+development machine specifically because the same path,
+`$INSTDIR\AICOUNTLY Remote.exe`, has carried several different icons
+across repeated test installs in a single session; a customer's first
+install has no prior cache entry to collide with.
+
+To force it on a machine already stuck on the old one, uninstalling and
+clearing the icon cache (above) is necessary but was not, by itself,
+sufficient in testing. Add a full **restart**, not just killing and
+restarting `explorer.exe`:
+
+1. Uninstall AICOUNTLY Remote.
+2. Clear the icon cache as above.
+3. Restart the machine.
+4. Reinstall.
+
+Separately, `installerIcon` and `uninstallerIcon` in `tauri.conf.json`'s
+`nsis` block are both set to the real icon now — the installer `.exe` and
+`$INSTDIR\uninstall.exe` carry it too. That is a real, independent gap this
+closes (the uninstaller previously fell back to NSIS's own default icon),
+not a fix for the Programs and Features cache above; the two were found and
+fixed together but are unrelated.
+
 ## Diagnostics
 
 ```powershell
