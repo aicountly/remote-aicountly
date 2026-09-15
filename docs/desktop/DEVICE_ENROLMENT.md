@@ -201,9 +201,12 @@ active for a machine whose key was deleted is a row somebody has to clean up.
 
 ## Uninstalling
 
-**The device key and the configuration are deleted.** `NSIS_HOOK_POSTUNINSTALL`
-removes `%ProgramData%\AICOUNTLY\Remote\device-signing-key.key` and
-`config.json`.
+**The device key, the configuration and the enrolment record are deleted.**
+`NSIS_HOOK_POSTUNINSTALL` removes `%ProgramData%\AICOUNTLY\Remote\device-signing-key.key`,
+`config.json` and `enrolment.json` — the last of these is what makes
+`device_uuid` survive an ordinary restart (see "Signing in" above); leaving it
+behind would mean the next install's `Agent::load` believed it was still this
+machine, with a key that had just been deleted.
 
 This is a decision rather than a default. Uninstalling a remote-support agent
 is somebody saying *this machine should no longer be reachable*, and leaving a
