@@ -68,6 +68,7 @@
         "languages": ["English"],
         "displayLanguageSelector": false,
         "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
         "installerHooks": "../installers/windows/hooks.nsh"
       }
     }
