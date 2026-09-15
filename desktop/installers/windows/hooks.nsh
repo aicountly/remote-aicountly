@@ -33,6 +33,11 @@
 !define AICOUNTLY_APP_EXE "AICOUNTLY Remote.exe"
 !define AICOUNTLY_RUN_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
 
+; For the icon-cache refresh at the end of NSIS_HOOK_POSTINSTALL — see the
+; comment there for why this exists and what it does not fix.
+!define SHCNE_ASSOCCHANGED 0x08000000
+!define SHCNF_IDLIST       0x0000
+
 !macro NSIS_HOOK_PREINSTALL
   ; An upgrade must not write over a running service's binary. Stopping it
   ; first turns "file in use, reboot required" into an ordinary install.
@@ -106,6 +111,24 @@
   ; see in Task Manager's Startup tab and turn off.
   ; ---------------------------------------------------------------------
   WriteRegStr HKLM "${AICOUNTLY_RUN_KEY}" "AICOUNTLY Remote" '"$INSTDIR\${AICOUNTLY_APP_EXE}" --background'
+
+  ; ---------------------------------------------------------------------
+  ; Tell Explorer the shortcuts and registry entries it just read are worth
+  ; re-reading now, not next reboot.
+  ;
+  ; Every icon reference Tauri's own NSIS template writes — DisplayIcon in
+  ; the uninstall key, the desktop and Start Menu shortcuts — names
+  ; "${AICOUNTLY_APP_EXE}" with no baked-in icon index, so Windows is meant
+  ; to read the icon out of that binary each time it draws one. In practice
+  ; Explorer caches the bitmap per file path and does not always notice a
+  ; rebuilt binary at the *same* path has a different one — this nudges it
+  ; to. It reliably fixes a first install. It is not guaranteed to fix an
+  ; upgrade that overwrote an already-cached path: that is a documented
+  ; Explorer limitation (see e.g. tauri-apps/tauri#8453), not something an
+  ; installer can force from here. A machine stuck on the old icon needs its
+  ; icon cache cleared by hand — see docs/desktop/WINDOWS_AGENT.md.
+  ; ---------------------------------------------------------------------
+  System::Call 'shell32.dll::SHChangeNotify(i ${SHCNE_ASSOCCHANGED}, i ${SHCNF_IDLIST}, i 0, i 0)'
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
