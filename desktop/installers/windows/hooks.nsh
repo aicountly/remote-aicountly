@@ -35,8 +35,17 @@
 
 ; For the icon-cache refresh at the end of NSIS_HOOK_POSTINSTALL — see the
 ; comment there for why this exists and what it does not fix.
-!define SHCNE_ASSOCCHANGED 0x08000000
-!define SHCNF_IDLIST       0x0000
+;
+; Guarded rather than a plain !define: Tauri's own installer.nsi unconditionally
+; !includes FileAssociation.nsh ahead of this file (to support the unrelated
+; fileAssociations config option, which this app does not use), and that header
+; already defines SHCNE_ASSOCCHANGED with this same value for its own
+; SHChangeNotify call. A plain !define here collides with it —
+; `!define: "SHCNE_ASSOCCHANGED" already defined!` — and fails the whole
+; build. /ifndef is the same guard utils.nsh (also Tauri's) uses for exactly
+; this reason.
+!define /ifndef SHCNE_ASSOCCHANGED 0x08000000
+!define /ifndef SHCNF_IDLIST       0x0000
 
 !macro NSIS_HOOK_PREINSTALL
   ; An upgrade must not write over a running service's binary. Stopping it
