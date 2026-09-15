@@ -1,20 +1,24 @@
 # Icons
 
-**These are placeholders, not AICOUNTLY brand assets.**
+The real AICOUNTLY Remote application icon, not a placeholder.
 
-They are flat `#25b003` squares — the brand green from
-`web/src/styles/tokens.css` — and nothing else. No AICOUNTLY mark was drawn
-for them, for the same reason `docs/BRANDING.md` gives for the web app: the
-real logo is not in this repository, and inventing one would be inventing it.
+`source.png` (1254×1254, provided directly rather than drawn here) is the
+master. Every other file is generated from it with the Tauri CLI's own icon
+command, run from `desktop/`:
 
-The installer and the tray need *some* icon to build, so these exist. Replace
-every one of them with the real artwork before a build is given to a customer:
+```
+npx tauri icon src-tauri/icons/source.png -o <some staging directory>
+```
+
+That command also produces macOS, iOS, Android and Windows-Store assets this
+project does not use (Tauri targets Windows only — see `tauri.conf.json`'s
+`bundle.targets`); only the five files below were copied out of its output.
+Regenerate this way — rather than by hand — if `source.png` is ever replaced,
+so every size stays a clean resample of the same master rather than a resize
+of a resize.
 
 | File | Used by |
 |---|---|
 | `icon.ico` | the installer, the executable, the Windows taskbar |
 | `32x32.png`, `128x128.png`, `128x128@2x.png` | the Tauri bundle |
-| `tray.png` | the system tray, at 16–32px |
-
-A release built with these will look unfinished. That is deliberate — it is
-more honest than a mark somebody invented, and it is impossible to miss.
+| `tray.png` | the system tray. A copy of `32x32.png` — the README this replaced put the tray between 16 and 32px, and 32 is what Tauri's own generator produces at that end of the range. |
