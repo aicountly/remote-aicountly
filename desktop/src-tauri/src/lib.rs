@@ -26,7 +26,6 @@ pub mod ipc;
 pub mod platform;
 pub mod runtime;
 pub mod session;
-pub mod signin;
 pub mod tray;
 
 pub use agent::{Agent, AgentError};
@@ -73,7 +72,6 @@ pub fn run() {
             commands::get_permissions,
             commands::get_configuration,
             commands::save_configuration,
-            commands::begin_sign_in,
             commands::enrol_device,
             commands::confirm_enrolment,
             commands::unregister_device,

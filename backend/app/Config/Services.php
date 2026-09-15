@@ -12,6 +12,7 @@ use App\Domain\Device\DeviceAuthenticationService;
 use App\Domain\Device\DevicePresenceService;
 use App\Domain\Device\DeviceService;
 use App\Domain\Device\DeviceSessionService;
+use App\Domain\Device\DesktopSignInService;
 use App\Domain\Directory\PlatformDirectory;
 use App\Domain\Policy\EffectivePolicyResolver;
 use App\Domain\Session\ChatService;
@@ -219,6 +220,21 @@ class Services extends BaseService
         return new DeviceAuthenticationService(
             db_connect(),
             static::deviceService(),
+            static::auditService(),
+            static::remoteConfig(),
+        );
+    }
+
+    public static function desktopSignInService(bool $getShared = true): DesktopSignInService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('desktopSignInService');
+        }
+
+        return new DesktopSignInService(
+            db_connect(),
+            static::deviceService(),
+            static::policyResolver(),
             static::auditService(),
             static::remoteConfig(),
         );

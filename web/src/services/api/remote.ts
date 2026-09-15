@@ -614,3 +614,21 @@ export function fetchAuditTrail(
 
   return apiFetchWithMeta<AuditEntry[]>(`/company/${companyId}/audit?${params.toString()}`)
 }
+
+// --- Desktop-agent sign-in (docs/desktop/DEVICE_ENROLMENT.md) --------------
+//
+// The browser half of device-code sign-in: confirming or declining the code a
+// desktop agent is showing, on this person's own already-authenticated
+// session. `start` and `poll` are the agent's own calls, made straight from
+// the desktop app without a portal credential — this window never makes them.
+
+export function confirmDesktopSignIn(
+  userCode: string,
+  companyId: number,
+): Promise<{ status: 'confirmed'; deviceLabel: string | null }> {
+  return apiFetch('/desktop-signin/confirm', { method: 'POST', body: { userCode, companyId } })
+}
+
+export function denyDesktopSignIn(userCode: string): Promise<{ status: 'denied' }> {
+  return apiFetch('/desktop-signin/deny', { method: 'POST', body: { userCode } })
+}

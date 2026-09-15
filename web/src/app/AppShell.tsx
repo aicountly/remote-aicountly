@@ -26,6 +26,7 @@ import { useRemote } from './RemoteProvider'
 import { PERMISSIONS } from '../types/remote'
 import AicountlyLogo from '../components/brand/AicountlyLogo'
 import { AppLauncher } from '../components/AppLauncher'
+import { consumeDesktopSignInReturnPath } from '../features/desktop/returnPath'
 
 /**
  * The application frame: AICOUNTLY header, organisation switcher, navigation.
@@ -45,6 +46,21 @@ export default function AppShell() {
   const [scopeMenuOpen, setScopeMenuOpen] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const scopeRef = useRef<HTMLDivElement>(null)
+
+  // AppShell mounts once per authenticated app session (it is not remounted by
+  // ordinary navigation), which is exactly when a stashed desktop-signin deep
+  // link — written by main.tsx before AuthProvider could bounce this tab to
+  // the portal and back, see returnPath.ts — needs to be acted on. A no-op on
+  // every visit that never went through main.tsx's stash.
+  useEffect(() => {
+    const stashed = consumeDesktopSignInReturnPath()
+
+    if (stashed && stashed !== window.location.pathname + window.location.search) {
+      navigate(stashed, { replace: true })
+    }
+    // Intentionally once: this consumes a value written before this component
+    // ever mounted, not one that changes across the component's lifetime.
+  }, [])
 
   // Close the organisation menu on an outside click or Escape — a dropdown that
   // only closes by selecting something is a trap for keyboard users.

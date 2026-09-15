@@ -30,6 +30,7 @@ const AdminPermissions = lazy(() => import('../features/admin/PermissionsPage'))
 const AdminRolePermissions = lazy(() => import('../features/admin/RolePermissionsPage'))
 const AdminAudit = lazy(() => import('../features/admin/AuditPage'))
 const SettingsPage = lazy(() => import('../features/settings/SettingsPage'))
+const DesktopSignIn = lazy(() => import('../features/desktop/DesktopSignInPage'))
 const NotFound = lazy(() => import('../features/misc/NotFoundPage'))
 
 function page(element: React.ReactNode) {
@@ -53,6 +54,7 @@ export const router = createBrowserRouter([
       { path: 'admin/roles', element: page(<AdminRolePermissions />) },
       { path: 'admin/audit', element: page(<AdminAudit />) },
       { path: 'settings', element: page(<SettingsPage />) },
+      { path: 'desktop-signin', element: page(<DesktopSignIn />) },
       { path: '*', element: page(<NotFound />) },
     ],
   },

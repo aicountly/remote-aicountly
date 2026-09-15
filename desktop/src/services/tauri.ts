@@ -38,18 +38,6 @@ export function saveConfiguration(config: AgentConfig): Promise<AgentConfig> {
 }
 
 /**
- * Open the AICOUNTLY portal and wait for a person to sign in.
- *
- * A native capability: opening the system browser and listening on a
- * loopback port for its answer are both things only the Rust side can do.
- * What comes back is the raw `auth_token` — exchanging it for a `ses_key` is
- * `services/portal.ts#signInWithAuthToken`'s job, not this bridge's.
- */
-export function beginSignIn(): Promise<string> {
-  return invoke<string>('begin_sign_in')
-}
-
-/**
  * Generate this machine's device keypair.
  *
  * What comes back is the **public** half plus the machine's description. The

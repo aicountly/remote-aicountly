@@ -20,6 +20,16 @@
 # configured. A job that cannot reach that environment cannot sign, which is
 # the point: the protection is GitHub's, not a check inside a script.
 #
+# NSIS only, deliberately. tauri.conf.json used to also build an MSI, but
+# installers/windows/hooks.nsh — the service registration, the data
+# directory's ACLs, the Run key, and the uninstall cleanup that removes the
+# device key and config — is NSIS-specific; WiX has no equivalent wired up.
+# An MSI built from the same config installed the binaries and nothing else:
+# no service, no cleanup on uninstall. Shipping it alongside the NSIS
+# installer meant two working-looking installers where only one actually
+# worked, which is how somebody ends up with two Control Panel entries and a
+# machine an uninstall never actually cleaned up.
+#
 # What this workflow will not do
 # ------------------------------
 #   * It will not sign with a self-signed certificate. `sign.ps1` refuses one.
@@ -182,8 +192,7 @@ jobs:
           & 'scripts/windows/sign.ps1' -Path `
             "$target/AicountlyRemote.exe", `
             "$target/AicountlyRemoteService.exe", `
-            "$target/bundle/nsis/*.exe", `
-            "$target/bundle/msi/*.msi"
+            "$target/bundle/nsis/*.exe"
 
           "signed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
@@ -202,7 +211,7 @@ jobs:
           # session so the comma-separated -Path list stays one array
           # instead of being flattened into a bare argv for a new process.
           & 'scripts/windows/verify.ps1' `
-            -Path "$target/bundle/nsis/*.exe", "$target/bundle/msi/*.msi" `
+            -Path "$target/bundle/nsis/*.exe" `
             -AllowUnsigned:$allowUnsigned
 
       - name: Collect artifacts
@@ -213,7 +222,6 @@ jobs:
           New-Item -ItemType Directory -Force -Path release | Out-Null
 
           Get-ChildItem "$target/bundle/nsis/*.exe" | Copy-Item -Destination release
-          Get-ChildItem "$target/bundle/msi/*.msi" | Copy-Item -Destination release
 
           # Checksums, so somebody who downloaded an installer from anywhere
           # can tell whether it is the one this run produced.

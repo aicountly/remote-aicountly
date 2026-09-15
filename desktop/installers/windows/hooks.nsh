@@ -154,6 +154,13 @@
   Delete "${AICOUNTLY_DATA_DIR}\device-signing-key.key"
   Delete "${AICOUNTLY_DATA_DIR}\config.json"
   Delete "${AICOUNTLY_DATA_DIR}\config.json.new"
+  ; The enrolment record — device uuid, company, key fingerprint; never the
+  ; key itself — persisted so a restart does not forget it. Written by
+  ; `remote_security::EnrolmentRecord::save`; same reasoning as the two files
+  ; above, and the temporary file its atomic write can leave behind if the
+  ; machine lost power mid-write.
+  Delete "${AICOUNTLY_DATA_DIR}\enrolment.json"
+  Delete "${AICOUNTLY_DATA_DIR}\enrolment.json.new"
   RMDir "${AICOUNTLY_DATA_DIR}"
   RMDir "$COMMONPROGRAMDATA\AICOUNTLY"
 !macroend

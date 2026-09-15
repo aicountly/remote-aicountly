@@ -130,6 +130,19 @@ class Remote extends BaseConfig
     /** Where the agent's signed update manifest lives. Empty disables updates. */
     public string $desktopUpdateFeedUrl = '';
 
+    /**
+     * How long a device-code sign-in stays open (docs/desktop/DEVICE_ENROLMENT.md).
+     *
+     * Long enough for someone to notice the agent's window, open a browser and
+     * sign in — this is a person acting, not a machine retrying — but short
+     * enough that a code shown on a screen and never acted on is not usable
+     * much later by whoever next reads that screen.
+     */
+    public int $desktopSignInCodeTtlSeconds = 600;
+
+    /** Advisory: how often the agent should poll. Server-controlled so it can be tuned without a release. */
+    public int $desktopSignInPollIntervalSeconds = 2;
+
     // -----------------------------------------------------------------------
     // ICE (§20). Never hardcode a credential — these come from .env.
     // -----------------------------------------------------------------------
@@ -243,6 +256,8 @@ class Remote extends BaseConfig
         $this->clipboardMaxBytes             = $this->envInt('remote.clipboardMaxBytes', $this->clipboardMaxBytes);
         $this->desktopMinimumAgentVersion    = $this->envString('remote.desktopMinimumAgentVersion', $this->desktopMinimumAgentVersion);
         $this->desktopUpdateFeedUrl          = rtrim($this->envString('remote.desktopUpdateFeedUrl', ''), '/');
+        $this->desktopSignInCodeTtlSeconds   = $this->envInt('remote.desktopSignInCodeTtl', $this->desktopSignInCodeTtlSeconds);
+        $this->desktopSignInPollIntervalSeconds = $this->envInt('remote.desktopSignInPollInterval', $this->desktopSignInPollIntervalSeconds);
 
         $stun = $this->envList('remote.stunUrls');
         if ($stun !== []) {

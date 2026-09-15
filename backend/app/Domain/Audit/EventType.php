@@ -104,6 +104,10 @@ final class EventType
 
     public const DEVICE_REBOOT_REQUESTED = 'DEVICE_REBOOT_REQUESTED';
 
+    /** A person, in their browser, confirming or declining a desktop agent's sign-in code. */
+    public const DESKTOP_SIGNIN_CONFIRMED = 'DESKTOP_SIGNIN_CONFIRMED';
+    public const DESKTOP_SIGNIN_DENIED    = 'DESKTOP_SIGNIN_DENIED';
+
     /**
      * Which sharing surface the browser reported, as an event name (§27).
      */

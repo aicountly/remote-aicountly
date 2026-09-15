@@ -166,12 +166,29 @@ export interface DeviceResource {
   capabilities: AgentCapabilities
 }
 
-/** An organisation this person may register a device into. */
-export interface CompanyOption {
-  companyId: number
-  name: string
-  canEnrol: boolean
+/**
+ * What starting a device-code sign-in returns (docs/desktop/DEVICE_ENROLMENT.md).
+ *
+ * `userCode` is shown on this screen for a person to match against the
+ * confirmation page. `deviceCode` is not shown anywhere — it is the secret
+ * this window polls with, and answering the poll is what proves this is the
+ * process that started the sign-in.
+ */
+export interface DesktopSignInStart {
+  userCode: string
+  deviceCode: string
+  verificationUri: string
+  verificationUriComplete: string
+  expiresAt: string
+  intervalSeconds: number
 }
+
+/** What one poll of a device-code sign-in reports. */
+export type DesktopSignInOutcome =
+  | { status: 'pending' }
+  | { status: 'denied' }
+  | { status: 'expired' }
+  | { status: 'confirmed'; device: DeviceResource; companyName: string | null }
 
 /** Whether a session is running, derived from the status rather than stored. */
 export function activeSession(state: AgentState): SessionSummary | null {

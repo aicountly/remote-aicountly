@@ -117,7 +117,7 @@ try {
     # ----------------------------------------------------------------- the report
     $bundle = Join-Path $desktopRoot "target/$Target/$Configuration/bundle"
     $artifacts = @()
-    foreach ($pattern in @('nsis/*.exe', 'msi/*.msi')) {
+    foreach ($pattern in @('nsis/*.exe')) {
         $artifacts += Get-ChildItem (Join-Path $bundle $pattern) -ErrorAction SilentlyContinue
     }
 

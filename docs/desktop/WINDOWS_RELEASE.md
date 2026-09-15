@@ -46,8 +46,16 @@ Output:
 
 ```
 desktop/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-desktop/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
 ```
+
+**NSIS only.** `installers/windows/hooks.nsh` — the service registration, the
+data directory's ACLs, the sign-in Run key, and the uninstall cleanup that
+removes the device key and config — is NSIS-specific, and WiX has no
+equivalent wired up. An MSI built from the same `tauri.conf.json` installed
+the binaries and nothing else: no service, no cleanup on uninstall. Building
+one target that actually works beats building two where only one does — see
+[DEVICE_ENROLMENT.md](DEVICE_ENROLMENT.md#uninstalling) for what the
+uninstall is supposed to guarantee.
 
 The script signs nothing. That is deliberate: it means it can be run on any
 machine, including one that has no business holding a signing credential.

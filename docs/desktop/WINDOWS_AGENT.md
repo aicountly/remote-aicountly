@@ -193,6 +193,7 @@ report to that vendor. It is not an exclusion the customer is asked to add.
 | `%ProgramFiles%\AICOUNTLY Remote\` | both executables |
 | `%ProgramData%\AICOUNTLY\Remote\device-signing-key.key` | the DPAPI blob |
 | `%ProgramData%\AICOUNTLY\Remote\config.json` | the endpoint and some numbers; nothing secret |
+| `%ProgramData%\AICOUNTLY\Remote\enrolment.json` | device uuid, company, key fingerprint — never the key; see DEVICE_ENROLMENT.md |
 | `HKLM\…\CurrentVersion\Run\AICOUNTLY Remote` | the tray application at sign-in |
 | `HKLM\SYSTEM\CurrentControlSet\Services\AicountlyRemoteService` | the service, written by the SCM |
 

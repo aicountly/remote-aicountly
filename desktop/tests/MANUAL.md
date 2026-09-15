@@ -43,14 +43,17 @@ Record the build under test — the version, the commit and whether it is signed
 | # | Do | Expect |
 |---|---|---|
 | 2.1 | Open the agent | "This computer is not registered", and a button to do it |
-| 2.2 | Register → sign in through the portal | The portal, in the person's own browser |
-| 2.3 | Pick a company, name the machine, register | It succeeds and shows a key fingerprint |
-| 2.4 | Compare the fingerprint with the Computers page | **Identical**, character for character |
+| 2.2 | Register | A browser tab opens to AICOUNTLY Remote's sign-in page; the agent shows a short code and waits |
+| 2.3 | In the browser: sign in if needed, check the code matches, pick a company, confirm | The agent picks it up on its own within a few seconds — no code to type, nothing else to do at the machine |
+| 2.4 | Compare the fingerprint the agent now shows with the Computers page | **Identical**, character for character |
 | 2.5 | `dir C:\ProgramData\AICOUNTLY\Remote` | `device-signing-key.key` exists |
 | 2.6 | `type` that file | Binary, and DPAPI-protected. Not a readable key |
 | 2.7 | Search the whole disk for the base64 public key | Found only in the agent's own memory and the API response; **not** in a log, a `.env`, the registry, or any file it wrote |
 | 2.8 | Restart the machine, wait, reload the Computers page | The device shows **Online** without anybody signing in to the agent |
 | 2.9 | Try to register a *second* machine with the same key file copied across | Refused — the fingerprint is unique |
+| 2.10 | Register again, but decline the code in the browser instead of confirming | The agent says the sign-in was declined and offers to try again |
+| 2.11 | Register again, close the browser tab, and wait past the code's expiry (see `Config\Remote::$desktopSignInCodeTtlSeconds`) without confirming | The agent says the code expired and offers to start again |
+| 2.12 | Already signed in to AICOUNTLY in the default browser before clicking Register | The browser tab still opens and still needs the code confirmed — this is the case the old loopback sign-in silently failed on; it must not silently fail here |
 
 ## 3. Presence and policy
 
