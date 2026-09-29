@@ -15,16 +15,7 @@
 name: Desktop CI
 
 on:
-  push:
-    branches: ['**']
-    paths:
-      - 'desktop/**'
-      - '.github/workflows/desktop-ci.yml'
-  pull_request:
-    paths:
-      - 'desktop/**'
-      - '.github/workflows/desktop-ci.yml'
-
+  workflow_dispatch:
 permissions:
   contents: read
 
