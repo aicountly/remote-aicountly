@@ -6,7 +6,8 @@
 # backend change wait for a Windows runner.
 #
 # It does NOT deploy, publish or sign anything. Releases are release-windows.yml,
-# manually, with a protected environment.
+# manually, with a protected environment — and that workflow calls this one first
+# (workflow_call), so a release cannot be built from a commit whose checks are red.
 #
 # Path-filtered, so a change to web/ or backend/ does not spend a Windows
 # runner. The workflow file itself is in the filter — a change to how the agent
@@ -15,12 +16,25 @@
 name: Desktop CI
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop-ci.yml'
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop-ci.yml'
   workflow_dispatch:
+  workflow_call:
+
 permissions:
   contents: read
 
+# event_name keeps a run called from the release workflow out of the group a push to
+# the same branch uses, so neither cancels the other.
 concurrency:
-  group: desktop-ci-${{ github.ref }}
+  group: desktop-ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:

@@ -24,7 +24,15 @@ permissions:
   contents: read
 
 jobs:
+  # Gate: the full test-and-lint suite runs first, on this exact commit, by calling
+  # ci.yml as a reusable workflow. The deploy job `needs:` it, so a red suite
+  # blocks the deploy. The suite only tests and lints; it never deploys or reaches a live host.
+  verify:
+    name: Verify (full CI suite)
+    uses: ./.github/workflows/ci.yml
+
   deploy:
+    needs: verify
     name: Build and deploy to Sandbox
     runs-on: ubuntu-latest
     timeout-minutes: 15
