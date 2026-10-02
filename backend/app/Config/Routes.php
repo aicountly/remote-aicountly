@@ -80,7 +80,7 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
 
     // --- Participants ------------------------------------------------------
     $routes->post('sessions/(:segment)/join-request', 'ParticipantController::requestJoin/$1', [
-        'filter' => ['api-auth', 'rate-limit:join,20,60'],
+        'filter' => ['api-auth', 'remote-context', 'rate-limit:join,20,60'],
     ]);
     $routes->post('sessions/(:segment)/participants/(:segment)/approve', 'ParticipantController::approve/$1/$2', ['filter' => 'api-auth']);
     $routes->post('sessions/(:segment)/participants/(:segment)/deny', 'ParticipantController::deny/$1/$2', ['filter' => 'api-auth']);

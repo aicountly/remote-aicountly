@@ -13,6 +13,8 @@ use App\Domain\Device\DevicePresenceService;
 use App\Domain\Device\DeviceService;
 use App\Domain\Device\DeviceSessionService;
 use App\Domain\Device\DesktopSignInService;
+use App\Domain\Directory\ManageClient;
+use App\Domain\Directory\MembershipVerifier;
 use App\Domain\Directory\PlatformDirectory;
 use App\Domain\Policy\EffectivePolicyResolver;
 use App\Domain\Session\ChatService;
@@ -94,7 +96,7 @@ class Services extends BaseService
             return static::getSharedInstance('policyResolver');
         }
 
-        return new EffectivePolicyResolver(db_connect(), static::remoteConfig());
+        return new EffectivePolicyResolver(db_connect(), static::remoteConfig(), static::membershipVerifier());
     }
 
     public static function participantService(bool $getShared = true): ParticipantService
@@ -300,7 +302,27 @@ class Services extends BaseService
             return static::getSharedInstance('platformDirectory');
         }
 
-        return new PlatformDirectory(db_connect(), static::remoteConfig());
+        return new PlatformDirectory(db_connect(), static::remoteConfig(), static::membershipVerifier());
+    }
+
+    /** Aicountly Manage, asked with the caller's own session who belongs to a company. */
+    public static function manageClient(bool $getShared = true): ManageClient
+    {
+        if ($getShared) {
+            return static::getSharedInstance('manageClient');
+        }
+
+        return new ManageClient(static::remoteConfig());
+    }
+
+    /** Keeps Remote's company membership confirmed against Manage (G28#4). */
+    public static function membershipVerifier(bool $getShared = true): MembershipVerifier
+    {
+        if ($getShared) {
+            return static::getSharedInstance('membershipVerifier');
+        }
+
+        return new MembershipVerifier(db_connect(), static::remoteConfig(), static::manageClient(), static::requestContext());
     }
 
     /**

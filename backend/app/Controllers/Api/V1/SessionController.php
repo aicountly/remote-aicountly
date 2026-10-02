@@ -9,6 +9,7 @@ use App\Domain\Audit\EventType;
 use App\Domain\Policy\PermissionCatalog;
 use App\Domain\Support\ApiException;
 use App\Domain\Support\Presenter;
+use App\Domain\Session\SessionService;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
 
@@ -60,9 +61,17 @@ class SessionController extends BaseApiController
     /** `GET /sessions/{uuid}` */
     public function show(string $uuid): ResponseInterface
     {
-        $session = $this->resolveSession($uuid);
+        // The waiting room polls this to learn whether it has been admitted, so a
+        // person awaiting admission may call it — and is shown the preview, not the
+        // session: no transcript, no people, no company (G28#2).
+        $session = $this->sessionForCaller($uuid, true);
 
-        return $this->ok($this->detail($session));
+        $guest = $this->context()->guest();
+        $level = $guest !== null
+            ? Services::sessionService()->levelForParticipant(Services::participantService()->findByUuidOrFail($guest->participantUuid))
+            : Services::sessionService()->accessLevel($session, $this->identity());
+
+        return $this->ok($level === SessionService::ACCESS_FULL ? $this->detail($session) : $this->preview($session));
     }
 
     /**
@@ -269,6 +278,32 @@ class SessionController extends BaseApiController
     }
 
     /**
+     * What someone still waiting to be admitted is shown: that the session
+     * exists, who is hosting it, and where their own request stands. The shape
+     * is the full session's so the room renders, with everything that belongs
+     * to the people inside left empty.
+     *
+     * @param  array<string, mixed> $session
+     * @return array<string, mixed>
+     */
+    private function preview(array $session): array
+    {
+        $participants = Services::participantService();
+        $guest        = $this->context()->guest();
+
+        $me = $guest !== null
+            ? $participants->findByUuid($guest->participantUuid)
+            : $participants->findByUser((int) $session['id'], $this->identity()->id);
+
+        $resource                 = Presenter::sessionPreview($session);
+        $resource['participants'] = [];
+        $resource['isHost']       = false;
+        $resource['me']           = $me !== null ? Presenter::participant($me) : null;
+
+        return $resource;
+    }
+
+    /**
      * The session as the app renders it: the row, who is in it, what is
      * pending, and the invitations the host issued.
      *
@@ -328,23 +363,14 @@ class SessionController extends BaseApiController
     }
 
     /**
-     * Load a session this caller may act in — signed-in user or guest.
+     * Load a session this caller may act in — signed-in user or guest. The gate
+     * is the base controller's: admitted participants only (G28#2).
      *
      * @return array<string, mixed>
      */
     private function resolveSession(string $uuid): array
     {
-        $guest = $this->context()->guest();
-
-        if ($guest !== null) {
-            // A guest token names exactly one session, and this is where that
-            // is enforced: presenting it against any other uuid is a 404.
-            $guest->assertSession($uuid);
-
-            return Services::sessionService()->findByUuidOrFail($uuid);
-        }
-
-        return Services::sessionService()->findForUser($uuid, $this->identity());
+        return $this->sessionForCaller($uuid);
     }
 
     /**

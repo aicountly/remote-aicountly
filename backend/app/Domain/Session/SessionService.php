@@ -6,6 +6,7 @@ namespace App\Domain\Session;
 
 use App\Domain\Audit\AuditService;
 use App\Domain\Audit\EventType;
+use App\Domain\Auth\GuestPrincipal;
 use App\Domain\Auth\RemoteIdentity;
 use App\Domain\Auth\SourceContext;
 use App\Domain\Policy\EffectivePolicy;
@@ -184,17 +185,43 @@ class SessionService
         }
     }
 
+    /** Everything about the session: transcript, files, people, company. */
+    public const ACCESS_FULL = 'FULL';
+
+    /**
+     * In the waiting room: may see that their request is pending, and nothing
+     * else (G28#2).
+     */
+    public const ACCESS_PREVIEW = 'PREVIEW';
+
+    /** Was declined, or removed: told so, and shown nothing. */
+    public const ACCESS_REFUSED = 'REFUSED';
+
+    public const ACCESS_NONE = 'NONE';
+
+    /** Participant statuses that have been admitted at some point. */
+    private const ADMITTED_STATUSES = ['APPROVED', 'JOINED', 'LEFT'];
+
     /**
      * Load a session the caller is entitled to see, or 404.
      *
      * "Entitled" is deliberately narrow (§77, §78): being a member of the
-     * company is not enough — you must be a participant, own the session, or
-     * hold `remote.session.history.company` for that exact company. A caller
-     * who fails every test gets 404, not 403, so session ids cannot be probed.
+     * company is not enough — you must be an *admitted* participant, own the
+     * session, or hold `remote.session.history.company` for that exact company.
+     * A caller who fails every test gets 404, not 403, so session ids cannot be
+     * probed.
+     *
+     * Being a participant row is not being admitted (G28#2): someone still in the
+     * waiting room, declined, or removed has a row too, and used to read the
+     * transcript, the people and the company's details through it. Such a caller
+     * is refused here. The one exception is the waiting room itself
+     * (`$allowPreview`: its status poll and the participant's own actions), which
+     * a person *awaiting* admission may call and which projects only what they
+     * need; a declined or removed person is told so and gets nothing.
      *
      * @return array<string, mixed>
      */
-    public function findForUser(string $uuid, RemoteIdentity $identity): array
+    public function findForUser(string $uuid, RemoteIdentity $identity, bool $allowPreview = false): array
     {
         if (! Ids::isUuid($uuid)) {
             throw ApiException::notFound('That Remote session could not be found.');
@@ -205,39 +232,106 @@ class SessionService
             throw ApiException::notFound('That Remote session could not be found.');
         }
 
-        if ($this->canAccess($session, $identity)) {
+        return $this->admit($session, $this->accessLevel($session, $identity), $allowPreview, $this->participants->findByUser((int) $session['id'], $identity->id));
+    }
+
+    /**
+     * The same gate for someone holding a guest token, which names one session
+     * and one participant row and nothing more.
+     *
+     * @return array<string, mixed>
+     */
+    public function findForGuest(GuestPrincipal $guest, string $uuid, bool $allowPreview = false): array
+    {
+        $guest->assertSession($uuid);
+
+        $session     = $this->findByUuidOrFail($uuid);
+        $participant = $this->participants->findByUuid($guest->participantUuid);
+
+        if ($participant === null || (int) $participant['session_id'] !== (int) $session['id']) {
+            throw ApiException::notFound('That Remote session could not be found.');
+        }
+
+        return $this->admit($session, $this->levelForParticipant($participant), $allowPreview, $participant);
+    }
+
+    /**
+     * @param  array<string, mixed>      $session
+     * @param  array<string, mixed>|null $participant
+     * @return array<string, mixed>
+     */
+    private function admit(array $session, string $level, bool $allowPreview, ?array $participant): array
+    {
+        if ($level === self::ACCESS_FULL || ($level === self::ACCESS_PREVIEW && $allowPreview)) {
             return $session;
+        }
+
+        if ($level === self::ACCESS_PREVIEW) {
+            throw ApiException::forbidden('AWAITING_APPROVAL', 'The host has not admitted you to this session yet.');
+        }
+
+        if ($level === self::ACCESS_REFUSED) {
+            throw (string) ($participant['status'] ?? '') === 'DENIED'
+                ? ApiException::forbidden('JOIN_DENIED', 'The host declined your request to join this session.')
+                : ApiException::forbidden('NOT_ADMITTED', 'You are no longer part of this Remote session.');
         }
 
         throw ApiException::notFound('That Remote session could not be found.');
     }
 
-    /** @param array<string, mixed> $session */
-    public function canAccess(array $session, RemoteIdentity $identity): bool
+    /**
+     * How much of the session this signed-in person may see.
+     *
+     * @param  array<string, mixed> $session
+     * @return self::ACCESS_*
+     */
+    public function accessLevel(array $session, RemoteIdentity $identity): string
     {
         if ((int) $session['owner_user_id'] === $identity->id
             || (int) $session['initiator_user_id'] === $identity->id) {
-            return true;
+            return self::ACCESS_FULL;
         }
 
-        if ($this->participants->findByUser((int) $session['id'], $identity->id) !== null) {
-            return true;
+        $participant = $this->participants->findByUser((int) $session['id'], $identity->id);
+        if ($participant !== null && $this->levelForParticipant($participant) === self::ACCESS_FULL) {
+            return self::ACCESS_FULL;
         }
 
         $companyId = $session['company_id'] !== null ? (int) $session['company_id'] : null;
-        if ($companyId === null) {
-            return false; // A personal session belongs to exactly one person.
+        if ($companyId !== null) {
+            // Company-wide visibility is a permission, resolved for that company —
+            // never for whichever company the caller happens to be looking at.
+            try {
+                if ($this->policies->resolve($identity, 'COMPANY', $companyId)->can(PermissionCatalog::SESSION_HISTORY_COMPANY)) {
+                    return self::ACCESS_FULL;
+                }
+            } catch (ApiException) {
+                // Not a member (any longer): the permission cannot apply.
+            }
         }
 
-        // Company-wide visibility is a permission, resolved for that company —
-        // never for whichever company the caller happens to be looking at.
-        try {
-            $policy = $this->policies->resolve($identity, 'COMPANY', $companyId);
-        } catch (ApiException) {
-            return false;
+        return $participant !== null ? $this->levelForParticipant($participant) : self::ACCESS_NONE;
+    }
+
+    /**
+     * @param  array<string, mixed> $participant
+     * @return self::ACCESS_*
+     */
+    public function levelForParticipant(array $participant): string
+    {
+        $status = (string) $participant['status'];
+
+        if (in_array($status, self::ADMITTED_STATUSES, true)) {
+            return self::ACCESS_FULL;
         }
 
-        return $policy->can(PermissionCatalog::SESSION_HISTORY_COMPANY);
+        return $status === 'REQUESTED' ? self::ACCESS_PREVIEW : self::ACCESS_REFUSED;
+    }
+
+    /** @param array<string, mixed> $session */
+    public function canAccess(array $session, RemoteIdentity $identity): bool
+    {
+        return $this->accessLevel($session, $identity) === self::ACCESS_FULL;
     }
 
     /** @return array<string, mixed>|null */
@@ -605,7 +699,7 @@ class SessionService
         $builder->groupStart()
             ->where('s.owner_user_id', $identity->id)
             ->orWhere('s.initiator_user_id', $identity->id)
-            ->orWhere('s.id IN (SELECT session_id FROM remote_participants WHERE user_id = ' . (int) $identity->id . ')', null, false);
+            ->orWhere("s.id IN (SELECT session_id FROM remote_participants WHERE user_id = " . (int) $identity->id . " AND status IN ('APPROVED', 'JOINED', 'LEFT'))", null, false);
 
         if ($companyWide !== []) {
             $builder->orWhereIn('s.company_id', $companyWide);
@@ -667,7 +761,7 @@ class SessionService
             $builder = $this->db->table('remote_sessions s');
             $builder->groupStart()
                 ->where('s.owner_user_id', $identity->id)
-                ->orWhere('s.id IN (SELECT session_id FROM remote_participants WHERE user_id = ' . (int) $identity->id . ')', null, false);
+                ->orWhere("s.id IN (SELECT session_id FROM remote_participants WHERE user_id = " . (int) $identity->id . " AND status IN ('APPROVED', 'JOINED', 'LEFT'))", null, false);
             if ($companyWideIds !== []) {
                 $builder->orWhereIn('s.company_id', $companyWideIds);
             }

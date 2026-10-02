@@ -157,6 +157,16 @@ class AdminController extends BaseApiController
         $limit    = min(max((int) ($this->request->getGet('limit') ?? 25), 1), 100);
         $offset   = max((int) ($this->request->getGet('offset') ?? 0), 0);
 
+        // Take the company's people back to what Manage says (G28#4, G28#1):
+        // anyone Remote still lists but Manage no longer does is removed, and
+        // names and e-mails Remote lacked are learned from the same answer.
+        // Done with this administrator's own session; if Manage cannot be
+        // asked the list is simply what Remote last confirmed.
+        $sesKey = $this->context()->sesKey();
+        if ($sesKey !== null) {
+            Services::membershipVerifier()->reconcileCompany($id, $sesKey);
+        }
+
         $builder = $db->table('remote_user_company_access a')
             ->select('a.user_id, a.role_key, a.is_company_admin, i.platform_uuid, i.display_name, i.email')
             ->join('remote_identities i', 'i.id = a.user_id')
@@ -182,7 +192,13 @@ class AdminController extends BaseApiController
                 continue;
             }
 
-            $effective = $resolver->resolve($identity, 'COMPANY', $id);
+            try {
+                $effective = $resolver->resolve($identity, 'COMPANY', $id);
+            } catch (ApiException) {
+                // Their last confirmation from Manage is too old to rely on and they
+                // cannot be asked for it from here: not shown as a member until it is.
+                continue;
+            }
 
             $overrides = $db->table('remote_user_permissions')
                 ->select('permission, effect')

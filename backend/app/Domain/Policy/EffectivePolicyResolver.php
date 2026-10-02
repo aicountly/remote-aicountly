@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Domain\Policy;
 
 use App\Domain\Auth\RemoteIdentity;
+use App\Domain\Directory\MembershipVerifier;
 use App\Domain\Support\ApiException;
 use CodeIgniter\Database\BaseConnection;
 use Config\Remote as RemoteConfig;
@@ -44,6 +45,7 @@ class EffectivePolicyResolver
     public function __construct(
         private readonly BaseConnection $db,
         private readonly RemoteConfig $config,
+        private readonly ?MembershipVerifier $membershipVerifier = null,
     ) {
     }
 
@@ -363,11 +365,19 @@ class EffectivePolicyResolver
         return $builder->orderBy('company_id ASC NULLS FIRST', '', false)->get()->getResultArray();
     }
 
-    /** @return array<string, mixed>|null */
+    /**
+     * The person's standing in the company, or null if they have none.
+     *
+     * A stored row is a projection, not the fact: it is relied on only while
+     * Aicountly Manage has confirmed it recently, and a row Manage disowns is
+     * removed here (G28#4, {@see MembershipVerifier}).
+     *
+     * @return array<string, mixed>|null
+     */
     public function membership(int $userId, int $companyId): ?array
     {
         $row = $this->db->table('remote_user_company_access')
-            ->select('user_id, company_id, branch_id, financial_year_id, role_key, is_company_admin')
+            ->select('user_id, company_id, branch_id, financial_year_id, role_key, is_company_admin, verified_at')
             ->where('user_id', $userId)
             ->where('company_id', $companyId)
             ->get()
@@ -375,6 +385,13 @@ class EffectivePolicyResolver
 
         if ($row === null) {
             return null;
+        }
+
+        if ($this->membershipVerifier !== null) {
+            $row = $this->membershipVerifier->confirm($row);
+            if ($row === null) {
+                return null;
+            }
         }
 
         $row['is_company_admin'] = $this->truthy($row['is_company_admin']);

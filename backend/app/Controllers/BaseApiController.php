@@ -34,6 +34,27 @@ abstract class BaseApiController extends Controller
     }
 
     /**
+     * The session this caller may read — signed in or holding a guest token.
+     *
+     * One gate for every session route (G28#2): a participant row is not
+     * admission, so someone still waiting for the host, declined, or removed
+     * does not get the transcript, the people or the company through it.
+     * `$allowPreview` is for the few routes that exist for a person awaiting
+     * admission; see {@see \App\Domain\Session\SessionService::findForUser()}.
+     *
+     * @return array<string, mixed>
+     */
+    protected function sessionForCaller(string $uuid, bool $allowPreview = false): array
+    {
+        $guest    = $this->context()->guest();
+        $sessions = Services::sessionService();
+
+        return $guest !== null
+            ? $sessions->findForGuest($guest, $uuid, $allowPreview)
+            : $sessions->findForUser($uuid, $this->identity(), $allowPreview);
+    }
+
+    /**
      * The effective policy for a scope the caller asked about.
      *
      * Note the argument order: the scope comes from the *route or the verified

@@ -88,6 +88,10 @@ abstract class RemoteTestCase extends CIUnitTestCase
     protected function configureRemote(callable $mutate): RemoteConfig
     {
         $config = new RemoteConfig();
+        // There is no Manage to ask under PHPUnit, so membership enforcement
+        // starts off, and a test that is about it opts in (and supplies a
+        // FakeManageClient) — the same arrangement as the Auditor's company guard.
+        $config->membershipEnforcement = false;
         $mutate($config);
 
         Services::injectMock('remoteConfig', $config);
@@ -101,6 +105,7 @@ abstract class RemoteTestCase extends CIUnitTestCase
             'devicePresenceService',
             'supportRequestService', 'signallingTokenService', 'iceConfigService',
             'sourceContextVerifier', 'platformDirectory', 'portalClient',
+            'membershipVerifier', 'manageClient',
         ] as $service) {
             Services::injectMock($service, null);
         }
@@ -162,8 +167,8 @@ abstract class RemoteTestCase extends CIUnitTestCase
         bool $isAdmin = false,
     ): void {
         $this->db->query(
-            'INSERT INTO remote_user_company_access (user_id, company_id, role_key, is_company_admin, source, synced_at, created_at, updated_at)
-             VALUES (?, ?, ?, ?, \'SEED\', NOW(), NOW(), NOW())
+            'INSERT INTO remote_user_company_access (user_id, company_id, role_key, is_company_admin, source, synced_at, verified_at, created_at, updated_at)
+             VALUES (?, ?, ?, ?, \'SEED\', NOW(), NOW(), NOW(), NOW())
              ON CONFLICT (user_id, company_id) DO UPDATE SET role_key = EXCLUDED.role_key, is_company_admin = EXCLUDED.is_company_admin',
             [$identity->id, $companyId, $roleKey, $isAdmin],
         );

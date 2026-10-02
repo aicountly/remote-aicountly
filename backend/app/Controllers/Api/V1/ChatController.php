@@ -52,20 +52,6 @@ class ChatController extends BaseApiController
         return $this->created(Presenter::message($message));
     }
 
-    /** @return array<string, mixed> */
-    private function sessionForCaller(string $uuid): array
-    {
-        $guest = $this->context()->guest();
-
-        if ($guest !== null) {
-            $guest->assertSession($uuid);
-
-            return Services::sessionService()->findByUuidOrFail($uuid);
-        }
-
-        return Services::sessionService()->findForUser($uuid, $this->identity());
-    }
-
     /**
      * Chat is for people *in* the session. Someone who can see it through
      * company-wide history is a reader of the record, not a participant, and

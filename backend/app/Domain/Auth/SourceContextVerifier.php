@@ -31,8 +31,13 @@ use Throwable;
  *   5. `exp` is in the future and `iat` is not, within a small clock skew;
  *   6. the token is younger than `contextMaxAgeSeconds` whatever it claims;
  *   7. `product` is on the allowlist;
- *   8. `jti` has not been used before — enforced by a unique index, so two
- *      simultaneous redemptions cannot both win.
+ *   8. the token is bound to the person presenting it: its `sub` is the
+ *      caller's platform uuid (G28#6), so a token that leaks is useless to
+ *      anyone but the person it was minted for;
+ *   9. a token minted for one room (`room`) is accepted only for that room;
+ *  10. `jti` has not been used before — enforced by a unique index, so two
+ *      simultaneous redemptions cannot both win. Checks 8 and 9 come first, so
+ *      a stranger who presents someone else's token cannot burn it.
  */
 class SourceContextVerifier
 {
@@ -53,10 +58,16 @@ class SourceContextVerifier
     /**
      * Verify a token and consume its `jti`.
      *
+     * `$caller` is the signed-in person presenting it and `$room` the session
+     * the request is about, if any. Every request path passes the caller
+     * (`SourceContextFilter`); only the unit tests of the token format itself
+     * omit it.
+     *
      * @throws ApiException when the token is missing, malformed, expired,
-     *                      replayed, or issued for something other than Remote.
+     *                      replayed, issued for something other than Remote,
+     *                      or minted for someone or somewhere else.
      */
-    public function verify(string $token): SourceContext
+    public function verify(string $token, ?RemoteIdentity $caller = null, ?string $room = null): SourceContext
     {
         if (! $this->isEnabled()) {
             throw ApiException::forbidden(
@@ -110,6 +121,17 @@ class SourceContextVerifier
             throw $this->rejected('CONTEXT_JTI_MISSING');
         }
 
+        // Bound to its person and its room *before* it is spent (G28#6): the
+        // subject was read and never compared, so anyone holding a leaked token
+        // could present it and be recorded as working in someone else's company.
+        if ($caller !== null && ! hash_equals($subject, $caller->uuid)) {
+            throw $this->rejected('CONTEXT_SUBJECT_MISMATCH');
+        }
+        $tokenRoom = $this->nullableString($claims['room'] ?? null, 64);
+        if ($tokenRoom !== null && ($room === null || ! hash_equals(strtolower($tokenRoom), strtolower($room)))) {
+            throw $this->rejected('CONTEXT_ROOM_MISMATCH');
+        }
+
         $this->consumeJti($jti, $subject, $claims, $product, $exp);
 
         return new SourceContext(
@@ -125,6 +147,7 @@ class SourceContextVerifier
             $this->nullableString($claims['issue_summary'] ?? null, 2000),
             $this->nullableString($claims['source_reference'] ?? null, 120),
             $jti,
+            $tokenRoom,
         );
     }
 

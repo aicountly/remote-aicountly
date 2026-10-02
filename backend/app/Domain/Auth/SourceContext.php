@@ -27,6 +27,7 @@ final class SourceContext
         public readonly ?string $issueSummary,
         public readonly ?string $sourceReference,
         public readonly string $jti,
+        public readonly ?string $room = null,
     ) {
     }
 
