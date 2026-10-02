@@ -220,6 +220,28 @@ class Remote extends BaseConfig
     public int $directoryCacheSeconds = 900;
 
     /**
+     * Aicountly Manage — the authority on who belongs to a company (G28#4).
+     *
+     * Remote's own `remote_user_company_access` rows are a projection, and a
+     * projection that is only ever added to keeps a person who has left a
+     * company inside its sessions for ever. With this on, the caller's own
+     * `ses_key` is used to ask Manage whether the company is still theirs, and
+     * a "no" removes the row. It cannot be turned off in production.
+     */
+    public string $manageBase = 'https://manage.aicountly.com';
+    public bool $membershipEnforcement = true;
+
+    /** Seconds a positive Manage answer is trusted before the caller is asked about again. */
+    public int $membershipVerifySeconds = 300;
+
+    /**
+     * How old the last confirmation may be and still be honoured when Manage
+     * cannot be asked (an outage) or no session of the person's is in hand (a
+     * device acting for its owner). Past it the answer is "not confirmed".
+     */
+    public int $membershipGraceSeconds = 86400;
+
+    /**
      * User ids allowed to act as AICOUNTLY support technicians. Empty means
      * support acceptance is driven purely by the `remote.support.accept`
      * permission, which is the normal production arrangement.
@@ -286,6 +308,14 @@ class Remote extends BaseConfig
         $this->directoryBase   = rtrim($this->envString('remote.directoryBase', ''), '/');
         $this->directoryToken  = $this->envString('remote.directoryToken', '');
         $this->directoryCacheSeconds = $this->envInt('remote.directoryCacheSeconds', $this->directoryCacheSeconds);
+
+        $this->manageBase              = rtrim($this->envString('remote.manageBase', $this->manageBase), '/');
+        $this->membershipVerifySeconds = $this->envInt('remote.membershipVerifySeconds', $this->membershipVerifySeconds);
+        $this->membershipGraceSeconds  = $this->envInt('remote.membershipGraceSeconds', $this->membershipGraceSeconds);
+        // Production honesty: the switch exists for a development machine with no Manage
+        // to ask, and is ignored where it matters.
+        $this->membershipEnforcement = (defined('ENVIRONMENT') && ENVIRONMENT === 'production')
+            || $this->envBool('remote.membershipEnforcement', $this->membershipEnforcement);
 
         $this->supportTechnicianUserIds = array_values(array_filter(
             array_map('intval', $this->envList('remote.supportTechnicianUserIds')),

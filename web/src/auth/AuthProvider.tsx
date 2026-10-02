@@ -3,7 +3,6 @@ import type { ReactNode } from 'react'
 
 import {
   AuthError,
-  CALLBACK_PATH,
   clearCallbackFromUrl,
   clearLogoutFlag,
   clearRedirectGuard,
@@ -13,8 +12,12 @@ import {
   readAuthCallback,
   redirectToPortalLoginForm,
   redirectToPortalSso,
+  URL_TOKEN_FALLBACK,
+  dropStrayCredentials,
+  exchangeAuthCode,
 } from './portal'
-import { clearAllTokens, getAuthToken, setAuthToken } from './tokens'
+import { consumeState } from './callbackState'
+import { clearAllTokens, commitAuthToken, discardStagedAuthToken, getAuthToken, stageAuthToken } from './tokens'
 
 /**
  * `loading` covers both "starting up" and "leaving for the portal" — in the
@@ -44,6 +47,8 @@ function hasGuestToken(): boolean {
 
 interface AuthState {
   status: AuthStatus
+  /** The sign-in service could not be reached; nothing was signed out, and retry() asks again. */
+  unavailable?: boolean
   /** Why the user is looking at the signed-out screen, when it was not a plain sign-out. */
   message: string | null
 }
@@ -51,6 +56,8 @@ interface AuthState {
 interface AuthContextValue extends AuthState {
   signIn: () => void
   signOut: () => void
+  /** Ask the sign-in service again after an outage (the session was kept). */
+  retry: () => void
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -58,6 +65,21 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 const PORTAL_ERROR_MESSAGES: Record<string, string> = {
   access_denied: 'The portal declined the sign-in request.',
   redirect_loop: 'Sign-in kept looping. Clear this site’s data, then try again.',
+}
+
+export const UNAVAILABLE_MESSAGE =
+  'The AICOUNTLY sign-in service is temporarily unavailable. You are still signed in — try again in a moment.'
+
+/**
+ * A sign-in that did not complete. A 4xx from the portal is a definite answer
+ * (spent or expired link) and is explained; anything else — a timeout, the
+ * network, a 5xx — is an outage, and says so.
+ */
+function failedSignIn(err: unknown): AuthState {
+  const definite = err instanceof AuthError && err.status >= 400 && err.status < 500 && err.status !== 429 && err.status !== 408
+  return definite
+    ? { status: 'signed-out', message: (err as AuthError).message }
+    : { status: 'signed-out', message: UNAVAILABLE_MESSAGE, unavailable: true }
 }
 
 function describePortalError(code: string): string {
@@ -83,27 +105,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const settle = setState
 
     async function boot() {
-      const { authToken, authError } = readAuthCallback()
-      const onCallbackPath = window.location.pathname === CALLBACK_PATH
+      const callback = readAuthCallback()
 
-      if (authError) {
+      // Credentials never stay in the address bar (history, analytics, screenshots).
+      // One on any page but the callback is a forged or stray link: dropped, not stored.
+      if (callback.hasCredential || callback.authError || callback.onCallbackPath) {
         clearCallbackFromUrl()
-        clearAllTokens()
-        settle({ status: 'signed-out', message: describePortalError(authError) })
+      } else {
+        dropStrayCredentials()
+      }
+
+      // Only a sign-in this tab started is accepted: the nonce must come back with it (I-17).
+      const verified = (callback.hasCredential || callback.authError !== null) && consumeState([callback.cbState, callback.state])
+
+      if (callback.authError && verified) {
+        // The portal declined a sign-in this tab asked for. No session is touched:
+        // an error in an address is not a reason to sign anyone out (I-16).
+        settle({ status: 'signed-out', message: describePortalError(callback.authError) })
         return
       }
 
-      if (authToken) {
-        // A token in the URL is the end of a sign-in, so both the sign-out flag
-        // and the loop counter from that attempt are stale now.
-        setAuthToken(authToken)
-        clearLogoutFlag()
-        clearRedirectGuard()
-      }
-
-      // Leave neither the token nor the bare callback path in the address bar.
-      if (authToken || onCallbackPath) {
-        clearCallbackFromUrl()
+      // The one-time code is redeemed for the token, which is held in memory and
+      // reaches localStorage and the shared cookie only once the portal accepts it.
+      let staged = false
+      if (callback.hasCredential && verified) {
+        try {
+          const token = callback.code ? await exchangeAuthCode(callback.code) : URL_TOKEN_FALLBACK ? callback.authToken : null
+          if (!token) throw new AuthError('This sign-in link is no longer supported. Sign in again.', 400)
+          stageAuthToken(token)
+          staged = true
+        } catch (err) {
+          settle(failedSignIn(err))
+          return
+        }
       }
 
       if (!getAuthToken()) {
@@ -131,8 +165,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       try {
         await ensureSesKey()
+        if (staged) {
+          // The portal accepted the token: now it may reach localStorage and the shared cookie.
+          commitAuthToken()
+          clearLogoutFlag()
+          clearRedirectGuard()
+        }
         settle({ status: 'authenticated', message: null })
       } catch (err) {
+        if (staged) {
+          // Nothing stored was touched; the refused token is simply dropped.
+          discardStagedAuthToken()
+          settle(failedSignIn(err))
+          return
+        }
         // 401 means the stored auth_token is spent. Anything else — the portal
         // being down, a timeout — must not silently discard a good token, so it
         // is reported instead of bounced.
@@ -143,10 +189,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
           return
         }
-        settle({
-          status: 'signed-out',
-          message: err instanceof Error ? err.message : 'Could not reach the sign-in service.',
-        })
+        // The portal could not answer (down, slow, 5xx): the session is kept, and the
+        // person is told the service is unavailable and can retry (I-16, spec 3.8).
+        settle({ status: 'signed-out', message: UNAVAILABLE_MESSAGE, unavailable: true })
       }
     }
 
@@ -155,6 +200,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value: AuthContextValue = {
     ...state,
+    retry: () => window.location.reload(),
     signIn: () => {
       clearLogoutFlag()
       clearRedirectGuard()

@@ -50,6 +50,52 @@ final class SourceContextVerifierTest extends RemoteTestCase
         }
     }
 
+    public function testATokenMintedForSomeoneElseIsRejectedBeforeItIsSpent(): void
+    {
+        $owner    = $this->makeIdentity('Owner');
+        $stranger = $this->makeIdentity('Stranger');
+        $token    = $this->token(['sub' => $owner->uuid]);
+
+        try {
+            Services::sourceContextVerifier()->verify($token, $stranger);
+            $this->fail('A token is for the person it names.');
+        } catch (ApiException $e) {
+            $this->assertSame('CONTEXT_SUBJECT_MISMATCH', $e->details()['reason']);
+        }
+
+        // The stranger did not burn it: its owner can still redeem it.
+        $context = Services::sourceContextVerifier()->verify($token, $owner);
+        $this->assertSame($owner->uuid, $context->subjectUuid);
+    }
+
+    public function testATokenForOneRoomIsAcceptedForThatRoomOnly(): void
+    {
+        $person = $this->makeIdentity('Person');
+        $room   = '6f1b6b0c-0000-4000-8000-000000000001';
+        $token  = $this->token(['sub' => $person->uuid, 'room' => $room]);
+
+        foreach ([null, '6f1b6b0c-0000-4000-8000-000000000002'] as $elsewhere) {
+            try {
+                Services::sourceContextVerifier()->verify($token, $person, $elsewhere);
+                $this->fail('A room-bound token must not work anywhere else.');
+            } catch (ApiException $e) {
+                $this->assertSame('CONTEXT_ROOM_MISMATCH', $e->details()['reason']);
+            }
+        }
+
+        $context = Services::sourceContextVerifier()->verify($token, $person, strtoupper($room));
+        $this->assertSame($room, $context->room);
+    }
+
+    public function testATokenWithoutARoomWorksForAnyRoute(): void
+    {
+        $person = $this->makeIdentity('Person');
+
+        $context = Services::sourceContextVerifier()->verify($this->token(['sub' => $person->uuid]), $person, null);
+
+        $this->assertNull($context->room);
+    }
+
     public function testATamperedPayloadIsRejected(): void
     {
         // The exact attack the signature exists to stop: change the company id

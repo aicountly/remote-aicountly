@@ -31,6 +31,9 @@ class PortalRelayController extends Controller
         'seskey',
         'seskey/refresh',
         'refresh_authtoken',
+        // The one-time sign-in code redemption (I-17): the portal's CORS list is
+        // static, so the browser reaches `POST /api/auth/exchange` through here.
+        'auth/exchange',
     ];
 
     public function relay(string ...$segments): ResponseInterface

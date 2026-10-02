@@ -10,6 +10,8 @@
  * credential (gtag.js reads the URL itself).
  */
 
+import { analyticsSafePath } from '../auth/callbackState'
+
 declare global {
   interface Window {
     dataLayer: unknown[]
@@ -47,13 +49,34 @@ export function sanitizePagePath(pathname = '/'): string {
   return path.replace(INVITATION_ROUTE, '/join/:token').replace(UUID_SEGMENT, '/:id')
 }
 
+/**
+ * Route shape for analytics. Remote carries two secrets in the path itself: the
+ * invitation link (`/join/<secret>`, which is a credential to enter a room) and
+ * the session ids a host shares. Neither is measured; the route's pattern is.
+ * Covers ids that are not UUIDs, which sanitizePagePath() does not recognise (I-17).
+ */
+export function routePattern(path: string, idPlaceholder = ':uuid'): string {
+  return path
+    .replace(/^\/join\/[^/?#]+/, '/join/:token')
+    .replace(/^\/room\/[^/?#]+/, `/room/${idPlaceholder}`)
+    .replace(/^\/sessions\/(?!history(?:[/?#]|$))[^/?#]+/, `/sessions/${idPlaceholder}`)
+}
+
+/**
+ * What GA is told about a route: no sign-in token, one-time code or nonce, no
+ * query, and no invitation, room or session id (I-17, G06-01, G28#8).
+ */
+function reportedPath(path: string): string {
+  return sanitizePagePath(routePattern(analyticsSafePath(path), ':id'))
+}
+
 /** A referrer reduced to another site's origin, or to this site's sanitised path. */
 export function sanitizeReferrer(referrer = ''): string {
   if (!referrer) return ''
   try {
     const url = new URL(referrer)
     if (url.origin !== window.location.origin) return `${url.protocol}//${url.host}/`
-    return `${url.origin}${sanitizePagePath(url.pathname)}`
+    return `${url.origin}${sanitizePagePath(routePattern(url.pathname, ':id'))}`
   } catch {
     return String(referrer).split(/[?#]/)[0]
   }
@@ -100,13 +123,13 @@ export function initAnalytics(): void {
   window.gtag('js', new Date())
   window.gtag('config', GA4_ID, {
     send_page_view: false,
-    ...pageContext(sanitizePagePath(window.location.pathname)),
+    ...pageContext(reportedPath(window.location.pathname)),
   })
 }
 
 export function trackPageView(path: string, title?: string): void {
   if (!GA4_ID || typeof window === 'undefined') return
-  const pagePath = sanitizePagePath(path)
+  const pagePath = reportedPath(path)
   if (isUntrackedRoute(pagePath)) return
   initAnalytics()
   if (!initialized) return

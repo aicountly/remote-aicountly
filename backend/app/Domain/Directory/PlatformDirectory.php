@@ -32,6 +32,7 @@ class PlatformDirectory
     public function __construct(
         private readonly BaseConnection $db,
         private readonly RemoteConfig $config,
+        private readonly ?MembershipVerifier $membership = null,
     ) {
     }
 
@@ -45,13 +46,21 @@ class PlatformDirectory
     {
         $this->refreshFromDirectory($identity);
 
-        $rows = $this->db->table('remote_user_company_access a')
+        // Manage is the authority (G28#4): confirm what Remote holds for this
+        // person against it, which removes a company they have left, and show
+        // only what has been confirmed recently enough to rely on.
+        $this->membership?->reconcileUser($identity);
+
+        $builder = $this->db->table('remote_user_company_access a')
             ->select('a.company_id, a.branch_id, a.financial_year_id, a.role_key, a.is_company_admin, d.name')
             ->join('remote_company_directory d', 'd.company_id = a.company_id', 'left')
-            ->where('a.user_id', $identity->id)
-            ->orderBy('d.name', 'ASC')
-            ->get()
-            ->getResultArray();
+            ->where('a.user_id', $identity->id);
+
+        if ($this->membership?->enforcing()) {
+            $builder->where('a.verified_at >=', gmdate('Y-m-d H:i:sO', time() - $this->config->membershipGraceSeconds));
+        }
+
+        $rows = $builder->orderBy('d.name', 'ASC')->get()->getResultArray();
 
         return array_map(fn (array $row) => [
             'companyId'       => (int) $row['company_id'],
@@ -66,9 +75,13 @@ class PlatformDirectory
     /**
      * Record what a verified context token just told us (§6C).
      *
-     * This is what makes a company usable in Remote without a directory API:
-     * launching once from AICOUNTLY Books with signed context is enough for
-     * that company to appear, with its branch and financial year attached.
+     * The token is bound to the person who presents it (SourceContextVerifier),
+     * and is a *hint*: it names the company the person is working in, but only
+     * Aicountly Manage can say they still belong to it, so the row it leaves
+     * carries no confirmation (`verified_at` is untouched) and is relied on only
+     * once {@see MembershipVerifier} has asked Manage. Launching once from
+     * AICOUNTLY Books is enough for the company to be offered, with its branch
+     * and financial year attached.
      */
     public function rememberFromContext(RemoteIdentity $identity, SourceContext $context): void
     {
@@ -122,7 +135,8 @@ class PlatformDirectory
      * A failure here is not an error the user should see: the projection simply
      * stays as it was. Remote must not stop working because a directory service
      * is slow, and it must not *grant* anything it could not confirm either —
-     * so nothing is removed on a failed refresh, only added on a successful one.
+     * so nothing is changed on a failed refresh; a successful one adds what the
+     * directory lists and removes what it no longer lists.
      */
     private function refreshFromDirectory(RemoteIdentity $identity): void
     {
@@ -151,6 +165,7 @@ class PlatformDirectory
             return;
         }
 
+        $listed = [];
         foreach ($companies as $company) {
             if (! is_array($company)) {
                 continue;
@@ -160,16 +175,18 @@ class PlatformDirectory
             if ($companyId <= 0) {
                 continue;
             }
+            $listed[] = $companyId;
 
             $this->ensureCompanyRow($companyId, isset($company['name']) ? (string) $company['name'] : null);
 
             $this->db->query(
                 <<<'SQL'
                     INSERT INTO remote_user_company_access
-                        (user_id, company_id, branch_id, financial_year_id, role_key, is_company_admin, source, synced_at, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, 'PORTAL', NOW(), NOW(), NOW())
+                        (user_id, company_id, branch_id, financial_year_id, role_key, is_company_admin, source, synced_at, verified_at, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, 'PORTAL', NOW(), NOW(), NOW(), NOW())
                     ON CONFLICT (user_id, company_id) DO UPDATE
                         SET role_key         = EXCLUDED.role_key,
+                            verified_at      = NOW(),
                             is_company_admin = EXCLUDED.is_company_admin,
                             branch_id        = COALESCE(EXCLUDED.branch_id, remote_user_company_access.branch_id),
                             financial_year_id = COALESCE(EXCLUDED.financial_year_id, remote_user_company_access.financial_year_id),
@@ -186,6 +203,20 @@ class PlatformDirectory
                     (bool) ($company['is_admin'] ?? $company['is_company_admin'] ?? false),
                 ],
             );
+        }
+
+        // A successful answer is the whole list: a company the directory put
+        // there earlier and no longer lists has been taken away (G28#4).
+        $held = $this->db->table('remote_user_company_access')
+            ->select('company_id')
+            ->where('user_id', $identity->id)
+            ->where('source', 'PORTAL')
+            ->get()
+            ->getResultArray();
+        foreach ($held as $row) {
+            if (! in_array((int) $row['company_id'], $listed, true)) {
+                $this->membership?->forget($identity->id, (int) $row['company_id']);
+            }
         }
     }
 

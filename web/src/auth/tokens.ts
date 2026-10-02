@@ -50,6 +50,26 @@ export function setAuthToken(token: string | null): void {
 }
 
 /**
+ * Hold a token from a sign-in in memory only — not localStorage, and above all not
+ * the cookie every AICOUNTLY product trusts — until the portal has accepted it
+ * (commitAuthToken). A token the portal refuses is dropped with
+ * discardStagedAuthToken and never reaches anything another product reads.
+ */
+export function stageAuthToken(token: string | null): void {
+  authToken = token || null
+}
+
+/** Persist the staged token (localStorage and the shared cookie). */
+export function commitAuthToken(): void {
+  if (authToken) setAuthToken(authToken)
+}
+
+/** Forget a staged token the portal did not accept; what is stored is untouched. */
+export function discardStagedAuthToken(): void {
+  authToken = null
+}
+
+/**
  * Memory → localStorage → shared cookie. The cookie is the cross-product hop:
  * finding a token there means the user signed in on another AICOUNTLY product,
  * so it is promoted into localStorage for this origin.

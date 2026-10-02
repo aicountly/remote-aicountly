@@ -21,6 +21,8 @@ import {
 } from './hostnames'
 import { clearAllTokens, getAuthToken, getSesKey, saveSession } from './tokens'
 import { getApiBaseUrl } from '../config'
+import { buildPortalUrl, cleanedUrl, hasCredentialParams, issueState, parseAuthCallback } from './callbackState'
+import type { ParsedCallback } from './callbackState'
 
 /** Portal convention for "come back here afterwards". */
 const RETURN_PARAM = 'returnUrl'
@@ -72,37 +74,29 @@ function markLogoutInProgress(): void {
 // Callback
 // ---------------------------------------------------------------------------
 
-export interface AuthCallback {
-  authToken: string | null
-  /** Error code the portal reported instead of a token, if any. */
-  authError: string | null
+export type AuthCallback = ParsedCallback
+
+/**
+ * Accept the one-time code the portal hands back (response_type=code) — and, only
+ * while the portal may still send one, a bare auth_token — but ONLY on the
+ * callback route (the parser reads nothing elsewhere). Set
+ * VITE_AUTH_URL_TOKEN_FALLBACK=0 once every portal path returns a code.
+ */
+export const URL_TOKEN_FALLBACK: boolean = (import.meta.env?.VITE_AUTH_URL_TOKEN_FALLBACK ?? '1') !== '0'
+
+/** The portal's answer, read from the address — the callback route only. */
+export function readAuthCallback(): AuthCallback {
+  return parseAuthCallback(window.location, CALLBACK_PATH)
 }
 
 /**
- * Read the portal's answer out of the current URL.
- *
- * The query string is the documented shape. The hash is also checked because
- * portals that were configured for a HashRouter product can land the token
- * there, and dropping it would look like a silent login failure.
+ * A credential on a page that is not the callback is a forged link, or a stray
+ * one: it is removed from the address (history, analytics, screenshots) and never
+ * stored. Everything else in the address is kept.
  */
-export function readAuthCallback(): AuthCallback {
-  const fromSearch = new URLSearchParams(window.location.search)
-  const searchToken = fromSearch.get('auth_token')
-  if (searchToken) {
-    return { authToken: searchToken, authError: null }
-  }
-
-  const hash = window.location.hash || ''
-  const queryIndex = hash.indexOf('?')
-  if (queryIndex !== -1) {
-    const fromHash = new URLSearchParams(hash.slice(queryIndex + 1))
-    const hashToken = fromHash.get('auth_token')
-    if (hashToken) {
-      return { authToken: hashToken, authError: fromHash.get('auth_error') }
-    }
-  }
-
-  return { authToken: null, authError: fromSearch.get('auth_error') }
+export function dropStrayCredentials(): void {
+  if (!hasCredentialParams(window.location)) return
+  window.history.replaceState(window.history.state, '', cleanedUrl(window.location))
 }
 
 /**
@@ -183,10 +177,11 @@ export function redirectToPortalSso(): boolean {
 
   const portal = resolveLoginPortalOrigin()
   const productKey = resolveProductKeyFromHost()
-  const returnUrl = encodeURIComponent(buildCallbackUrl())
 
+  // This app's own round trip: a fresh nonce that must come back with the answer,
+  // and a one-time code in return — never the long-lived token in a URL (I-17).
   window.location.replace(
-    `${portal}/login/authentication_jump/${productKey}?${RETURN_PARAM}=${returnUrl}`,
+    buildPortalUrl(`${portal}/login/authentication_jump/${productKey}`, RETURN_PARAM, buildCallbackUrl(), issueState()),
   )
   return true
 }
@@ -202,8 +197,9 @@ export function redirectToPortalLoginForm(): void {
   if (isLogoutInProgress()) return
 
   const portal = resolveLoginPortalOrigin()
-  const returnUrl = encodeURIComponent(buildCallbackUrl())
-  window.location.replace(`${portal}/?${RETURN_PARAM}=${returnUrl}&prompt=login`)
+  window.location.replace(
+    buildPortalUrl(`${portal}/`, RETURN_PARAM, buildCallbackUrl(), issueState(), { prompt: 'login' }),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -295,6 +291,31 @@ async function requestSesKey(path: string): Promise<string> {
 
   saveSession(key, data.expires_in ?? data.expiresIn ?? 900)
   return key
+}
+
+/**
+ * Redeem the portal's one-time hand-off code for the auth_token (single use,
+ * bound to this app's callback origin). Goes through this product's same-origin
+ * relay like /seskey does. A 4xx means the code is spent or expired; anything
+ * else means the portal could not answer, and the caller keeps what it has.
+ */
+export async function exchangeAuthCode(code: string): Promise<string> {
+  const res = await fetchPortalAuth('/auth/exchange', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code, redirect_uri: buildCallbackUrl() }),
+    cache: 'no-store',
+    credentials: 'omit',
+  })
+  const body = (await res.json().catch(() => null)) as { aic_auth_token?: string; data?: { aic_auth_token?: string } } | null
+  const token = body?.aic_auth_token ?? body?.data?.aic_auth_token
+  if (!res.ok || typeof token !== 'string' || token === '') {
+    throw new AuthError(
+      res.status === 400 ? 'This sign-in link has expired or was already used. Sign in again.' : `Sign-in could not be completed (HTTP ${res.status}).`,
+      res.status,
+    )
+  }
+  return token
 }
 
 let mintInFlight: Promise<string> | null = null

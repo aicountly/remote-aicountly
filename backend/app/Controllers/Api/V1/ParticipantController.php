@@ -74,7 +74,7 @@ class ParticipantController extends BaseApiController
      */
     public function markJoined(string $uuid, string $participantUuid): ResponseInterface
     {
-        $session = $this->sessionForCaller($uuid);
+        $session = $this->ownSession($uuid);
         $this->assertIsSelf($session, $participantUuid);
 
         $participant = Services::participantService()->markJoined($session, $participantUuid);
@@ -88,7 +88,7 @@ class ParticipantController extends BaseApiController
     /** `POST /sessions/{uuid}/participants/{participantUuid}/leave` */
     public function leave(string $uuid, string $participantUuid): ResponseInterface
     {
-        $session = $this->sessionForCaller($uuid);
+        $session = $this->ownSession($uuid);
         $this->assertIsSelf($session, $participantUuid);
 
         Services::participantService()->leave($session, $participantUuid);
@@ -105,7 +105,7 @@ class ParticipantController extends BaseApiController
      */
     public function presence(string $uuid, string $participantUuid): ResponseInterface
     {
-        $session = $this->sessionForCaller($uuid);
+        $session = $this->ownSession($uuid);
         $this->assertIsSelf($session, $participantUuid);
 
         $participants = Services::participantService();
@@ -157,19 +157,14 @@ class ParticipantController extends BaseApiController
     }
 
     /**
+     * The participant's own routes (`joined`, `leave`, …) are reachable while
+     * still waiting for admission; each acts on the caller's own row only.
+     *
      * @return array<string, mixed>
      */
-    private function sessionForCaller(string $uuid): array
+    private function ownSession(string $uuid): array
     {
-        $guest = $this->context()->guest();
-
-        if ($guest !== null) {
-            $guest->assertSession($uuid);
-
-            return Services::sessionService()->findByUuidOrFail($uuid);
-        }
-
-        return Services::sessionService()->findForUser($uuid, $this->identity());
+        return $this->sessionForCaller($uuid, true);
     }
 
     /**

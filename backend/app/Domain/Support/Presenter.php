@@ -42,6 +42,55 @@ final class Presenter
     }
 
     /**
+     * The session as someone still waiting to be admitted may see it (G28#2):
+     * the same shape, with the company, the brief, the capabilities and every
+     * timestamp but the expiry withheld.
+     *
+     * @param  array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    public static function sessionPreview(array $row): array
+    {
+        return [
+            'uuid'            => (string) $row['uuid'],
+            'displayId'       => (string) $row['display_id'],
+            'sessionCode'     => null,
+            'scopeType'       => (string) $row['scope_type'],
+            'companyId'       => null,
+            'companyName'     => null,
+            'branchId'        => null,
+            'financialYearId' => null,
+            'sessionType'     => (string) $row['session_type'],
+            'status'          => (string) $row['status'],
+            'requestedShareMode'   => (string) $row['requested_share_mode'],
+            'actualDisplaySurface' => null,
+            'sourceProduct'      => null,
+            'sourceProductLabel' => null,
+            'sourceRoute'        => null,
+            'supportTicketId'    => null,
+            'issueSummary'       => null,
+            'ownerName'          => $row['owner_name'] ?? null,
+            'capabilities'    => [
+                'audio'         => false,
+                'systemAudio'   => false,
+                'chat'          => false,
+                'annotation'    => false,
+                'fileTransfer'  => false,
+                'recording'     => false,
+                'externalGuest' => false,
+            ],
+            'maxDurationMinutes' => (int) $row['max_duration_minutes'],
+            'startedAt'  => null,
+            'endedAt'    => null,
+            'expiresAt'  => Clock::iso($row['expires_at'] ?? null),
+            'createdAt'  => null,
+            'durationSeconds' => null,
+            'endReason'  => null,
+            'restricted' => true,
+        ];
+    }
+
+    /**
      * @param  array<string, mixed> $row
      * @return array<string, mixed>
      */

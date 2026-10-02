@@ -80,20 +80,86 @@ class PortalClient
         ];
     }
 
+    public const SESSION_VALID       = 'valid';
+    public const SESSION_INVALID     = 'invalid';
+    public const SESSION_UNAVAILABLE = 'unavailable';
+
     /**
-     * Validate a Bearer `ses_key`.
-     *
-     * The portal answers with `status: 1` and the caller's identity when the key
-     * is live. Anything else — a transport failure included — counts as *not*
-     * authenticated, so a portal outage denies access rather than granting it.
+     * Validate a Bearer `ses_key`: the identity when the portal confirmed it,
+     * null otherwise. A caller that answers a request uses {@see checkSesKey()},
+     * so an outage is reported as such rather than as a dead session.
      *
      * @return array<string, mixed>|null
      */
     public function validateSesKey(string $sesKey): ?array
     {
+        $check = $this->checkSesKey($sesKey);
+
+        return $check['state'] === self::SESSION_VALID ? $check['payload'] : null;
+    }
+
+    /**
+     * Ask the portal about a `ses_key`, keeping "no" apart from "no answer"
+     * (spec 3.8, I-16). my.aicountly's validatesession answers 200
+     * `{status: 1, uuid_aictly, ses_key}` for a live key and 401 `{status: 0}`
+     * for a dead one. Only that refusal (or a 403, or `status: 0`) makes the key
+     * invalid; a timeout, network error, 5xx, 404/429 or a body that is not the
+     * portal's JSON is an outage. Access is denied either way — an unreachable
+     * portal is never "signed in" — but only a refusal tells the browser its
+     * sign-in is gone.
+     *
+     * @return array{state: string, payload: array<string, mixed>|null}
+     */
+    public function checkSesKey(string $sesKey): array
+    {
         $result = $this->forward('POST', 'validatesession', [
             'Authorization: Bearer ' . $sesKey,
             'Content-Type: application/json',
+        ], '');
+
+        return self::classifySessionAnswer($result['status'], $result['body']);
+    }
+
+    /**
+     * The decision behind {@see checkSesKey()}, on a raw portal answer.
+     *
+     * @return array{state: string, payload: array<string, mixed>|null}
+     */
+    public static function classifySessionAnswer(int $status, string $body): array
+    {
+        if ($status === 401 || $status === 403) {
+            return ['state' => self::SESSION_INVALID, 'payload' => null];
+        }
+        if ($status !== 200 || trim($body) === '') {
+            return ['state' => self::SESSION_UNAVAILABLE, 'payload' => null];
+        }
+
+        $data = json_decode($body, true);
+        if (! is_array($data) || ! array_key_exists('status', $data)) {
+            return ['state' => self::SESSION_UNAVAILABLE, 'payload' => null];
+        }
+        if ((int) $data['status'] !== 1) {
+            return ['state' => self::SESSION_INVALID, 'payload' => null];
+        }
+
+        return ['state' => self::SESSION_VALID, 'payload' => $data];
+    }
+
+    /**
+     * The signed-in person's own name and e-mail, from `GET /api/userprofile`.
+     *
+     * validatesession proves who the caller is but carries neither (G28#1), so
+     * this is where the name shown to a host deciding who may watch a screen
+     * comes from. Null when the portal cannot answer: the caller keeps whatever
+     * snapshot it has, and a missing name never blocks the work.
+     *
+     * @return array{name: string, email: ?string}|null
+     */
+    public function userProfile(string $sesKey): ?array
+    {
+        $result = $this->forward('GET', 'userprofile', [
+            'Authorization: Bearer ' . $sesKey,
+            'Accept: application/json',
         ], '');
 
         if ($result['status'] !== 200 || $result['body'] === '') {
@@ -101,10 +167,21 @@ class PortalClient
         }
 
         $data = json_decode($result['body'], true);
-        if (! is_array($data) || (int) ($data['status'] ?? 0) !== 1) {
+        $row  = is_array($data) ? ($data['data'] ?? $data) : null;
+        if (! is_array($row)) {
             return null;
         }
 
-        return $data;
+        $name = trim((string) ($row['display_name'] ?? $row['full_name'] ?? $row['user_name'] ?? $row['name'] ?? ''));
+        if ($name === '') {
+            $name = trim(((string) ($row['user_firstname'] ?? '')) . ' ' . ((string) ($row['user_lastname'] ?? '')));
+        }
+        $email = trim((string) ($row['email'] ?? $row['user_regdemail'] ?? $row['reg_email'] ?? ''));
+
+        if ($name === '' && $email === '') {
+            return null;
+        }
+
+        return ['name' => $name, 'email' => filter_var($email, FILTER_VALIDATE_EMAIL) !== false ? $email : null];
     }
 }

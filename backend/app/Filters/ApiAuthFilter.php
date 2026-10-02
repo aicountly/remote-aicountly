@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Filters;
 
 use App\Domain\Auth\GuestPrincipal;
+use App\Domain\Auth\PortalUnavailableException;
 use CodeIgniter\Filters\FilterInterface;
 use CodeIgniter\HTTP\RequestInterface;
 use CodeIgniter\HTTP\ResponseInterface;
@@ -68,7 +69,17 @@ class ApiAuthFilter implements FilterInterface
             return null;
         }
 
-        $identity = Services::identityResolver()->resolveFromSesKey($token);
+        try {
+            $identity = Services::identityResolver()->resolveFromSesKey($token);
+        } catch (PortalUnavailableException) {
+            if (in_array('optional', $modes, true)) {
+                // An endpoint that merely welcomes someone signed in (a guest opening an
+                // invitation link) carries on anonymously while the portal cannot answer.
+                return null;
+            }
+
+            return $this->unavailable();
+        }
 
         if ($identity === null) {
             if (in_array('optional', $modes, true)) {
@@ -82,6 +93,7 @@ class ApiAuthFilter implements FilterInterface
         }
 
         $context->setIdentity($identity);
+        $context->setSesKey($token);
 
         return null;
     }
@@ -111,6 +123,24 @@ class ApiAuthFilter implements FilterInterface
         }
 
         return trim($matches[1]);
+    }
+
+    /**
+     * The portal could not be asked: not a dead session (I-16). 503 with
+     * Retry-After, so the browser keeps its sign-in and retries.
+     */
+    private function unavailable(): ResponseInterface
+    {
+        return SecurityHeadersFilter::apply(
+            service('response')
+                ->setStatusCode(503)
+                ->setHeader('Retry-After', '30')
+                ->setJSON(['error' => [
+                    'code'    => 'AUTH_UNAVAILABLE',
+                    'message' => 'The AICOUNTLY sign-in service did not answer, so your session could not be checked. You are still signed in; please retry in a moment.',
+                    'details' => ['retryable' => true],
+                ]]),
+        );
     }
 
     private function unauthenticated(string $message): ResponseInterface

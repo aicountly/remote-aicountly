@@ -42,15 +42,20 @@ class IdentityResolver
             return $this->hydrate($cached);
         }
 
-        $payload = $this->portal->validateSesKey($sesKey);
-        if ($payload === null) {
+        $check = $this->portal->checkSesKey($sesKey);
+        if ($check['state'] === PortalClient::SESSION_UNAVAILABLE) {
+            // Not "signed out": the portal could not say (I-16). Nothing is cached.
+            throw new PortalUnavailableException();
+        }
+        if ($check['state'] !== PortalClient::SESSION_VALID || $check['payload'] === null) {
             return null;
         }
 
-        $identity = $this->projectFromPortalPayload($payload);
+        $identity = $this->projectFromPortalPayload($check['payload']);
         if ($identity === null) {
             return null;
         }
+        $identity = $this->enrichFromProfile($sesKey, $identity);
 
         $this->cache?->save($cacheKey, [
             'id'              => $identity->id,
@@ -62,6 +67,41 @@ class IdentityResolver
         ], self::CACHE_TTL_SECONDS);
 
         return $identity;
+    }
+
+    /** What an identity is called until the portal has told us its name. */
+    public const FALLBACK_NAME = 'AICOUNTLY user';
+
+    private const PROFILE_FRESH_SECONDS = 21600;  // refresh the name and e-mail snapshot every six hours
+    private const PROFILE_RETRY_SECONDS = 120;    // after a failed lookup, do not ask again for two minutes
+
+    /**
+     * validatesession carries no name or e-mail (G28#1), so every participant was
+     * 'AICOUNTLY user' and a host could not tell who was asking to watch their
+     * screen. Fetch them from the portal with the caller's own session, as a
+     * refreshable snapshot; a failure keeps what is stored.
+     */
+    private function enrichFromProfile(string $sesKey, RemoteIdentity $identity): RemoteIdentity
+    {
+        $marker  = 'remote_profile_' . hash('sha256', $identity->uuid);
+        $missing = $identity->displayName === self::FALLBACK_NAME || $identity->email === null;
+        if (! $missing && $this->cache?->get($marker) !== null) {
+            return $identity;
+        }
+        if ($missing && $this->cache?->get($marker . '_retry') !== null) {
+            return $identity;
+        }
+
+        $profile = $this->portal->userProfile($sesKey);
+        if ($profile === null) {
+            $this->cache?->save($marker . '_retry', 1, self::PROFILE_RETRY_SECONDS);
+
+            return $identity;
+        }
+
+        $this->cache?->save($marker, 1, self::PROFILE_FRESH_SECONDS);
+
+        return $this->upsert($identity->uuid, null, $profile['name'], $profile['email']);
     }
 
     /**
@@ -176,7 +216,7 @@ class IdentityResolver
         return new RemoteIdentity(
             (int) $data['id'],
             (string) $data['uuid'],
-            $name !== '' ? $name : 'AICOUNTLY user',
+            $name !== '' ? $name : self::FALLBACK_NAME,
             isset($data['email']) && $data['email'] !== null ? (string) $data['email'] : null,
             (bool) ($data['isSupportAgent'] ?? false),
             (bool) ($data['isPlatformAdmin'] ?? false),

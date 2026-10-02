@@ -90,6 +90,17 @@ const PRESENTATION: Record<string, Presentation> = {
   INVITATION_REVOKED: { title: 'This invitation was withdrawn', tone: 'error' },
   JOIN_DENIED: { title: 'The host declined your request', tone: 'error' },
   AWAITING_APPROVAL: { title: 'Waiting for the host to admit you', tone: 'error' },
+  NOT_ADMITTED: { title: 'You are no longer part of this session', tone: 'error' },
+  AUTH_UNAVAILABLE: {
+    title: 'AICOUNTLY sign-in is temporarily unavailable',
+    alternatives: ['You are still signed in', 'Try again in a moment'],
+    tone: 'error',
+  },
+  MEMBERSHIP_UNAVAILABLE: {
+    title: 'We could not confirm your access to this organisation',
+    alternatives: ['Try again in a moment'],
+    tone: 'error',
+  },
   JOIN_CODE_INVALID: { title: 'That session code is not valid', tone: 'error' },
   NOT_FOUND: { title: 'That Remote session could not be found', tone: 'error' },
   RATE_LIMITED: {

@@ -37,16 +37,14 @@ class SignallingController extends BaseApiController
         $participants = Services::participantService();
 
         if ($guest !== null) {
-            $guest->assertSession($uuid);
-            $session     = Services::sessionService()->findByUuidOrFail($uuid);
+            // `allowPreview`: a person awaiting admission is answered below with
+            // AWAITING_APPROVAL and their participant status, which is how the
+            // waiting room learns it is still waiting.
+            $session     = Services::sessionService()->findForGuest($guest, $uuid, true);
             $participant = $participants->findByUuidOrFail($guest->participantUuid);
-
-            if ((int) $participant['session_id'] !== (int) $session['id']) {
-                throw ApiException::notFound('That Remote session could not be found.');
-            }
         } else {
             $identity    = $this->identity();
-            $session     = Services::sessionService()->findForUser($uuid, $identity);
+            $session     = Services::sessionService()->findForUser($uuid, $identity, true);
             $participant = $participants->findByUser((int) $session['id'], $identity->id);
 
             if ($participant === null) {

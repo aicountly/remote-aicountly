@@ -33,10 +33,25 @@ class SourceContextFilter implements FilterInterface
             return null;
         }
 
-        $context = Services::requestContext();
+        $context  = Services::requestContext();
+        $identity = $context->identityOrNull();
+
+        // A launch token is for a person (G28#6). Without a signed-in caller there
+        // is nobody to bind it to, so it is not read at all: the routes that take
+        // one all sit behind `api-auth`, which has already run.
+        if ($identity === null) {
+            return SecurityHeadersFilter::apply(
+                service('response')
+                    ->setStatusCode(401)
+                    ->setJSON(['error' => [
+                        'code'    => 'UNAUTHENTICATED',
+                        'message' => 'Sign in to AICOUNTLY to continue.',
+                    ]]),
+            );
+        }
 
         try {
-            $verified = Services::sourceContextVerifier()->verify($token);
+            $verified = Services::sourceContextVerifier()->verify($token, $identity, $this->roomOf($request));
         } catch (ApiException $e) {
             return SecurityHeadersFilter::apply(
                 service('response')
@@ -56,12 +71,25 @@ class SourceContextFilter implements FilterInterface
         // an AICOUNTLY product has just asserted, over a signature, that this
         // person is working in this company. Record it so the company is
         // selectable afterwards without a directory API.
-        $identity = $context->identityOrNull();
-        if ($identity !== null && $verified->companyId !== null) {
+        if ($verified->companyId !== null) {
             Services::platformDirectory()->rememberFromContext($identity, $verified);
         }
 
         return null;
+    }
+
+    /**
+     * The session a request is about, when its path names one
+     * (`sessions/{uuid}/…`); null on a route that creates or lists.
+     */
+    private function roomOf(RequestInterface $request): ?string
+    {
+        $segments = $request->getUri()->getSegments();
+        $at       = array_search('sessions', $segments, true);
+
+        return $at !== false && isset($segments[$at + 1]) && $segments[$at + 1] !== 'history'
+            ? $segments[$at + 1]
+            : null;
     }
 
     public function after(RequestInterface $request, ResponseInterface $response, $arguments = null)
