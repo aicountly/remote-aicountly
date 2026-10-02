@@ -122,7 +122,11 @@ the digest is SHA-256.
 
 ## The release workflow
 
-`.github/workflows/release-windows.yml`. **`workflow_dispatch` only.**
+`.github/workflows/release-windows.yml`. **`workflow_dispatch` only.** Its first
+job calls `desktop-ci.yml` (formatting, Clippy and tests on Linux and Windows,
+the interface's tests and build, advisories) on the commit being released; the
+build job `needs:` it, so a red suite stops the release before anything is
+signed.
 
 | Input | |
 |---|---|

@@ -120,10 +120,13 @@ cd desktop    && npm test                #  12 — the agent's own interface
 ```
 
 The backend suite runs against a real PostgreSQL and applies the migrations
-itself. `.github/workflows/ci.yml` runs the first three on every push and
-verifies that the migrations roll back cleanly;
+itself. `.github/workflows/ci.yml` runs the first three on every pull request
+and every push to `main` and verifies that the migrations roll back cleanly;
 `.github/workflows/desktop-ci.yml` runs the desktop workspace on Linux **and**
-on a Windows runner, with `cargo audit` and `npm audit`.
+on a Windows runner, with `cargo audit` and `npm audit`, for changes under
+`desktop/`. Neither deploys. The manual deploys call `ci.yml` first and the
+manual Windows release calls `desktop-ci.yml` first; the shipping job `needs:`
+it, so a red suite stops the deploy or release.
 
 What is **not** covered — no native Windows call has been executed on a
 Windows machine — is set out in

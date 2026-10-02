@@ -10,7 +10,10 @@ Three pieces deploy separately, because they are genuinely different things:
 
 Deployment is **manual only** — **Actions → pick a workflow → Run workflow**.
 Nothing deploys on push or merge. `.github/workflows/ci.yml` runs the tests on
-every push but never deploys.
+every pull request and every push to `main` but never deploys. Both deploy
+workflows run that full suite first: their first job calls `ci.yml` on the
+commit being deployed and the deploy job `needs:` it, so a red suite stops the
+deploy.
 
 | Workflow | Target |
 |---|---|

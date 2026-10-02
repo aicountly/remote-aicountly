@@ -1,8 +1,10 @@
 # ---------------------------------------------------------------------------
 # Continuous integration for AICOUNTLY Remote.
 #
-# Runs on every push and pull request. It does NOT deploy — deployment stays
-# manual, through the two workflow_dispatch workflows.
+# Runs on every pull request and every push to main, and on demand. It does NOT
+# deploy — deployment stays manual, through the two workflow_dispatch workflows,
+# and each of them calls this workflow first (workflow_call) so a red suite
+# blocks the deploy.
 #
 # Three independent jobs so a frontend type error does not hide a backend test
 # failure, and so the slowest job (the backend, which needs a real PostgreSQL)
@@ -11,12 +13,19 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
+  workflow_call:
+
 permissions:
   contents: read
 
+# event_name keeps a run called from a deploy out of the group a push to the same
+# branch uses, so neither cancels the other.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

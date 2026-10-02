@@ -68,7 +68,15 @@ permissions:
   contents: read
 
 jobs:
+  # Gate: the full test-and-lint suite runs first, on this exact commit, by calling
+  # desktop-ci.yml as a reusable workflow. The deploy job `needs:` it, so a red suite
+  # blocks the deploy. The suite only tests and lints; it never deploys or reaches a live host.
+  verify:
+    name: Verify (Desktop CI)
+    uses: ./.github/workflows/desktop-ci.yml
+
   build:
+    needs: verify
     name: Build ${{ inputs.version }} (${{ inputs.channel }})
     runs-on: windows-latest
     timeout-minutes: 60
