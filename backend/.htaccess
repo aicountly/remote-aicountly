@@ -47,6 +47,11 @@ Options -Indexes
 # fetchable over HTTP at https://remote.aicountly.com/api/.env.
 RedirectMatch 404 /\.(?!well-known)
 
+# PHP's error_log at any depth: api/error_log is rewritten into public/, and
+# public/error_log (where PHP writes next to the front controller) is a real
+# file, so CodeIgniter's own rules would serve it.
+RedirectMatch 404 (^|/)error_log$
+
 # Belt and braces for hosts that ignore the per-directory files: nothing with
 # these extensions is ever meant to be served from the API.
 <FilesMatch "\.(env|log|lock|neon|dist|md|sql|sh|bak)$">
