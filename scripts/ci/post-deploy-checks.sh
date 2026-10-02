@@ -66,6 +66,17 @@ else
   check page "Remote web (${target})" "${base}/" '<title>AICOUNTLY Remote</title>'
 fi
 
+# Must never be served: what the deploy leaves under the document root that is a secret, a log,
+# SQL, tests, scripts or dependency manifests. Read-only GETs of the first 64 KB, never of a .php
+# file under tests/, bin/ or scripts/ (a GET would run it); a failure logs the status, type and
+# size of what was served, never its content. /.git/HEAD may instead get the SPA's own page.
+for path in /api/.env /api/error_log /api/public/error_log /api/tests/README.md \
+  /api/composer.json /api/vendor/composer/installed.json /api/writable/; do
+  check absent "Remote ${path} must not be served (${target})" "${base}${path}"
+done
+check absent "Remote /.git/HEAD must not be served (${target})" "${base}/.git/HEAD" \
+  '<title>AICOUNTLY Remote</title>'
+
 if [ "$failed" -gt 0 ]; then
   echo "${failed} post-deploy check(s) failed for Remote ${target}."
   exit 1
