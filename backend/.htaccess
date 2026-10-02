@@ -52,3 +52,10 @@ RedirectMatch 404 /\.(?!well-known)
 <FilesMatch "\.(env|log|lock|neon|dist|md|sql|sh|bak)$">
   Require all denied
 </FilesMatch>
+
+# PHP and cPanel write `error_log` and `php_errorlog` into the directory a
+# script failed in. They have no extension, so the rule above misses them, and
+# they carry request URLs and stack traces.
+<FilesMatch "^(error_log|php_errorlog)$">
+  Require all denied
+</FilesMatch>

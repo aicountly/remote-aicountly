@@ -5,6 +5,8 @@
  * Flow backend: GA4_PROPERTY_ID_SAAS_REMOTE (numeric property ID).
  */
 
+import { analyticsSafePath } from '../auth/callbackState'
+
 declare global {
   interface Window {
     dataLayer: unknown[]
@@ -37,7 +39,24 @@ export function initAnalytics(): void {
     window.dataLayer.push(args)
   }
   window.gtag('js', new Date())
-  window.gtag('config', GA4_ID, { send_page_view: false })
+  // The address bar may hold a sign-in credential at this moment: GA4 is told the
+  // route only, never `location.href`, whatever it measures automatically (I-17).
+  window.gtag('config', GA4_ID, {
+    send_page_view: false,
+    page_location: window.location.origin + analyticsSafePath(window.location.pathname),
+  })
+}
+
+/**
+ * Route shape for analytics. Remote carries two secrets in the path itself: the
+ * invitation link (`/join/<secret>`, which is a credential to enter a room) and
+ * the session ids a host shares. Neither is measured; the route's pattern is.
+ */
+export function routePattern(path: string): string {
+  return path
+    .replace(/^\/join\/[^/?#]+/, '/join/:token')
+    .replace(/^\/room\/[^/?#]+/, '/room/:uuid')
+    .replace(/^\/sessions\/(?!history(?:[/?#]|$))[^/?#]+/, '/sessions/:uuid')
 }
 
 export function trackPageView(path: string, title?: string): void {
@@ -46,9 +65,12 @@ export function trackPageView(path: string, title?: string): void {
   // `send_page_view: false` is set (above), gtag.js suppresses page_view on
   // every subsequent config call for this measurement ID too, so re-calling
   // config here silently sends nothing. See Google's SPA tracking guide.
+  // Never a sign-in token, one-time code or nonce (I-17, G06-01): the callback
+  // route is reported without its query, and no secret on any other route.
+  const safe = routePattern(analyticsSafePath(path))
   window.gtag('event', 'page_view', {
-    page_location: window.location.origin + path,
-    page_path: path,
+    page_location: window.location.origin + safe,
+    page_path: safe,
     ...(title ? { page_title: title } : {}),
   })
 }

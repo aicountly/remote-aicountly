@@ -31,6 +31,18 @@ final class RequestContext
     private ?GuestPrincipal $guest = null;
     private ?SourceContext $sourceContext = null;
     private ?DevicePrincipal $device = null;
+    private ?string $sesKey = null;
+
+    /** The caller's own portal session, for asking Aicountly Manage on their behalf (never stored or logged). */
+    public function setSesKey(?string $sesKey): void
+    {
+        $this->sesKey = $sesKey;
+    }
+
+    public function sesKey(): ?string
+    {
+        return $this->sesKey;
+    }
 
     public function setIdentity(?RemoteIdentity $identity): void
     {

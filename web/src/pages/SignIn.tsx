@@ -12,7 +12,7 @@ import AicountlyLogo, { RemoteMark } from '../components/brand/AicountlyLogo'
  * an AICOUNTLY user — so this screen only points at it.
  */
 export default function SignIn() {
-  const { message, signIn } = useAuth()
+  const { message, signIn, unavailable, retry } = useAuth()
 
   return (
     <main className="guest-page">
@@ -30,7 +30,17 @@ export default function SignIn() {
           {message ?? 'You have been signed out.'}
         </p>
 
-        <button type="button" className="btn btn--primary btn--lg btn--block" onClick={signIn}>
+        {unavailable ? (
+          <button type="button" className="btn btn--primary btn--lg btn--block" onClick={retry}>
+            Try again
+          </button>
+        ) : null}
+
+        <button
+          type="button"
+          className={unavailable ? 'btn btn--ghost btn--lg btn--block' : 'btn btn--primary btn--lg btn--block'}
+          onClick={signIn}
+        >
           Sign in with AICOUNTLY
         </button>
 

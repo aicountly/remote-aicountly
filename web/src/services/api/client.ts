@@ -135,6 +135,25 @@ async function authorization(anonymous: boolean): Promise<string | null> {
 }
 
 /**
+ * What a failed attempt to get a session key means to the person (I-16).
+ *
+ * Only the portal's refusal (401/403) says their sign-in is over. A portal that
+ * timed out, was unreachable or answered 5xx has said nothing about it, so the
+ * person is told the service is unavailable, keeps their session, and can retry.
+ */
+function authFailure(error: AuthError): RemoteApiError {
+  if (error.status === 401 || error.status === 403) {
+    return new RemoteApiError('UNAUTHENTICATED', 'Your session has expired. Sign in again.', 401)
+  }
+  return new RemoteApiError(
+    'AUTH_UNAVAILABLE',
+    'The AICOUNTLY sign-in service is temporarily unavailable. You are still signed in — try again in a moment.',
+    503,
+    { retryable: true },
+  )
+}
+
+/**
  * Call the Remote API and unwrap `{ data }`.
  *
  * @throws {RemoteApiError} for every failure, including a network one — so a
@@ -156,7 +175,7 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
     // A failure to mint a session key is an authentication failure, not a
     // failure of whatever the caller was trying to do.
     if (error instanceof AuthError) {
-      throw new RemoteApiError('UNAUTHENTICATED', 'Your session has expired. Sign in again.', 401)
+      throw authFailure(error)
     }
     throw error
   }
@@ -234,8 +253,13 @@ export async function apiFetchWithMeta<T>(
   const headers: Record<string, string> = { Accept: 'application/json' }
   if (body !== undefined) headers['Content-Type'] = 'application/json'
 
-  const auth = await authorization(anonymous)
-  if (auth) headers.Authorization = auth
+  try {
+    const auth = await authorization(anonymous)
+    if (auth) headers.Authorization = auth
+  } catch (error) {
+    if (error instanceof AuthError) throw authFailure(error)
+    throw error
+  }
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)

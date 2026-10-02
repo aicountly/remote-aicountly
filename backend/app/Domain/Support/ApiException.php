@@ -43,10 +43,13 @@ class ApiException extends RuntimeException implements ResponsableInterface
             $payload['details'] = $this->details;
         }
 
-        return service('response')
+        $response = service('response')
             ->setStatusCode($this->status)
             ->setHeader('Cache-Control', 'no-store')
             ->setJSON(['error' => $payload]);
+
+        // A dependency that could not answer is worth retrying, and says when.
+        return $this->status === 503 ? $response->setHeader('Retry-After', '30') : $response;
     }
 
     /** @param array<string, mixed> $details */

@@ -1,9 +1,6 @@
 import { AICOUNTLY_APPS, CURRENT_APP_ID } from '../config/aicountlyApps'
 import type { AicountlyAppDef } from '../config/aicountlyApps'
-import { getAuthToken } from '../auth/tokens'
-import { isSandboxHost, PORTAL_LOGIN_PRODUCTION, PORTAL_LOGIN_SANDBOX } from '../auth/hostnames'
-
-const LOGIN_RETURN_PARAM = 'returnUrl'
+import { isSandboxHost } from '../auth/hostnames'
 
 /** Resolve which catalog entry matches the current SPA host. */
 export function resolveCurrentAppId(hostname: string = window.location.hostname): string {
@@ -179,32 +176,21 @@ export function buildAuthCallbackUrl(app: AicountlyAppDef, sandbox: boolean = is
 
 export interface LaunchOptions {
   sandbox?: boolean
-  authToken?: string | null
   newTab?: boolean
 }
 
 /**
- * SSO launch URL — prefers local auth_token when present; otherwise portal
- * authentication_jump on sandbox (*.gh.aicountly.com) or my.aicountly.com (production).
+ * Where a tile opens: the product's own address, and nothing else.
+ *
+ * It used to append the long-lived auth_token (`…/auth/callback?auth_token=`),
+ * which put the credential in the DOM, the history, the destination's access
+ * logs and — through its callback — analytics (I-17, G27#13, G28#7). The shared
+ * `.aicountly.com` cookie already carries a signed-in person to the destination;
+ * one with no cookie goes through the portal round trip that destination starts
+ * for itself, which returns at once while the portal session is live.
  */
 export function buildAppLaunchUrl(app: AicountlyAppDef, options: LaunchOptions = {}): string {
-  const sandbox = options.sandbox ?? isSandboxHost()
-
-  if (!app.jumpKey) {
-    return resolveAppOrigin(app, sandbox)
-  }
-
-  const callbackUrl = buildAuthCallbackUrl(app, sandbox)
-  const authToken = options.authToken ?? getAuthToken()
-
-  if (authToken) {
-    const sep = callbackUrl.includes('?') ? '&' : '?'
-    return `${callbackUrl}${sep}auth_token=${encodeURIComponent(authToken)}`
-  }
-
-  const portal = sandbox ? PORTAL_LOGIN_SANDBOX : PORTAL_LOGIN_PRODUCTION
-  const params = new URLSearchParams({ [LOGIN_RETURN_PARAM]: callbackUrl })
-  return `${portal}/login/authentication_jump/${app.jumpKey}?${params.toString()}`
+  return resolveAppOrigin(app, options.sandbox ?? isSandboxHost())
 }
 
 export function launchApp(app: AicountlyAppDef | null | undefined, options: LaunchOptions = {}): void {
