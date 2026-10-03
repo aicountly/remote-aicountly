@@ -15,8 +15,11 @@ import {
   URL_TOKEN_FALLBACK,
   dropStrayCredentials,
   exchangeAuthCode,
+  exchangeSsoCode,
+  allowSsoRetry,
+  SSO_RETRY_DELAY_MS,
 } from './portal'
-import { consumeState } from './callbackState'
+import { callbackAction, verifyCallback } from './callbackState'
 import { clearAllTokens, commitAuthToken, discardStagedAuthToken, getAuthToken, stageAuthToken } from './tokens'
 
 /**
@@ -70,6 +73,10 @@ const PORTAL_ERROR_MESSAGES: Record<string, string> = {
 export const UNAVAILABLE_MESSAGE =
   'The AICOUNTLY sign-in service is temporarily unavailable. You are still signed in — try again in a moment.'
 
+/** The portal could not issue a one-time sign-in code (`sso_error`). */
+export const SIGN_IN_RETRYING_MESSAGE = 'The AICOUNTLY sign-in service is temporarily unavailable. Trying again…'
+export const SIGN_IN_UNAVAILABLE_MESSAGE = 'The AICOUNTLY sign-in service is temporarily unavailable. Try again in a moment.'
+
 /**
  * A sign-in that did not complete. A 4xx from the portal is a definite answer
  * (spent or expired link) and is explained; anything else — a timeout, the
@@ -116,25 +123,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       // Only a sign-in this tab started is accepted: the nonce must come back with it (I-17).
-      const verified = (callback.hasCredential || callback.authError !== null) && consumeState([callback.cbState, callback.state])
+      // A launcher's hand-off (empty state, no cb_state) is never used: the app starts its own.
+      const action = callbackAction(callback, verifyCallback(callback), URL_TOKEN_FALLBACK)
 
-      if (callback.authError && verified) {
+      if (action.kind === 'portal-error') {
         // The portal declined a sign-in this tab asked for. No session is touched:
         // an error in an address is not a reason to sign anyone out (I-16).
-        settle({ status: 'signed-out', message: describePortalError(callback.authError) })
+        settle({ status: 'signed-out', message: describePortalError(action.error) })
+        return
+      }
+
+      if (action.kind === 'retry-later') {
+        // The portal could not issue a one-time code (sso_error). Say so, and start
+        // again shortly — a bounded number of times, then leave it to Retry.
+        if (!allowSsoRetry()) {
+          settle({ status: 'signed-out', message: SIGN_IN_UNAVAILABLE_MESSAGE, unavailable: true })
+          return
+        }
+        settle({ status: 'signed-out', message: SIGN_IN_RETRYING_MESSAGE, unavailable: true })
+        setTimeout(() => {
+          if (!redirectToPortalSso()) settle({ status: 'signed-out', message: SIGN_IN_UNAVAILABLE_MESSAGE, unavailable: true })
+        }, SSO_RETRY_DELAY_MS)
         return
       }
 
       // The one-time code is redeemed for the token, which is held in memory and
       // reaches localStorage and the shared cookie only once the portal accepts it.
       let staged = false
-      if (callback.hasCredential && verified) {
+      if (action.kind === 'exchange-sso' || action.kind === 'exchange-code' || action.kind === 'token') {
         try {
-          const token = callback.code ? await exchangeAuthCode(callback.code) : URL_TOKEN_FALLBACK ? callback.authToken : null
+          const token =
+            action.kind === 'exchange-sso' ? await exchangeSsoCode(action.ssoCode, action.cbState)
+              : action.kind === 'exchange-code' ? await exchangeAuthCode(action.code)
+                : action.authToken
           if (!token) throw new AuthError('This sign-in link is no longer supported. Sign in again.', 400)
           stageAuthToken(token)
           staged = true
         } catch (err) {
+          // A refused sso_code is spent: start again with a fresh nonce (bounded, loop-guarded).
+          if (action.kind === 'exchange-sso' && err instanceof AuthError && err.status === 401 && allowSsoRetry() && redirectToPortalSso()) return
           settle(failedSignIn(err))
           return
         }

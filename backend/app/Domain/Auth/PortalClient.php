@@ -34,8 +34,11 @@ class PortalClient
     /**
      * Forward one request to the portal and return its raw answer.
      *
+     * Only the headers given are sent — never an Origin of this host's own, which
+     * the portal's sso/exchange would refuse (and burn the code over).
+     *
      * @param  array<int, string> $headers
-     * @return array{status: int, body: string, contentType: string}
+     * @return array{status: int, body: string, contentType: string, retryAfter: string}
      */
     public function forward(string $method, string $path, array $headers, string $body): array
     {
@@ -43,9 +46,11 @@ class PortalClient
 
         $ch = curl_init($url);
         if ($ch === false) {
-            return ['status' => 504, 'body' => '', 'contentType' => 'application/json'];
+            return ['status' => 504, 'body' => '', 'contentType' => 'application/json', 'retryAfter' => ''];
         }
 
+        // The portal's Retry-After (sso/exchange 503 auth_unavailable), passed through.
+        $retryAfter = '';
         $options = [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_CUSTOMREQUEST  => strtoupper($method),
@@ -53,6 +58,13 @@ class PortalClient
             CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT_SECONDS,
             CURLOPT_TIMEOUT        => self::REQUEST_TIMEOUT_SECONDS,
             CURLOPT_HEADER         => false,
+            CURLOPT_HEADERFUNCTION => static function ($ch, string $line) use (&$retryAfter): int {
+                if (preg_match('/^Retry-After:\s*(\d{1,5})\s*$/i', $line, $m) === 1) {
+                    $retryAfter = $m[1];
+                }
+
+                return strlen($line);
+            },
         ];
 
         // Set the body even when it is empty: a bodiless CURLOPT_CUSTOMREQUEST
@@ -70,13 +82,14 @@ class PortalClient
         curl_close($ch);
 
         if ($failed || $status === 0) {
-            return ['status' => 504, 'body' => '', 'contentType' => 'application/json'];
+            return ['status' => 504, 'body' => '', 'contentType' => 'application/json', 'retryAfter' => ''];
         }
 
         return [
             'status'      => $status,
             'body'        => (string) $response,
             'contentType' => $contentType !== '' ? $contentType : 'application/json',
+            'retryAfter'  => $retryAfter,
         ];
     }
 

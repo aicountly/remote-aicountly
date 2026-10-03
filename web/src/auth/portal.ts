@@ -21,7 +21,7 @@ import {
 } from './hostnames'
 import { clearAllTokens, getAuthToken, getSesKey, saveSession } from './tokens'
 import { getApiBaseUrl } from '../config'
-import { buildPortalUrl, cleanedUrl, hasCredentialParams, issueState, parseAuthCallback } from './callbackState'
+import { buildPortalUrl, cleanedUrl, exchangeRedirectUri, hasCredentialParams, issueState, parseAuthCallback } from './callbackState'
 import type { ParsedCallback } from './callbackState'
 
 /** Portal convention for "come back here afterwards". */
@@ -77,12 +77,13 @@ function markLogoutInProgress(): void {
 export type AuthCallback = ParsedCallback
 
 /**
- * Accept the one-time code the portal hands back (response_type=code) — and, only
- * while the portal may still send one, a bare auth_token — but ONLY on the
- * callback route (the parser reads nothing elsewhere). Set
- * VITE_AUTH_URL_TOKEN_FALLBACK=0 once every portal path returns a code.
+ * Accept a bare auth_token in the callback URL (the portal's pre-code hand-off).
+ * Off: the portal answers this app's own sign-in with a one-time `sso_code`, and
+ * hands the token in the URL only when it could not store a code — which is
+ * treated like `sso_error` (sign-in starts again shortly). Set
+ * VITE_AUTH_URL_TOKEN_FALLBACK=1 at build time only to accept that token again.
  */
-export const URL_TOKEN_FALLBACK: boolean = (import.meta.env?.VITE_AUTH_URL_TOKEN_FALLBACK ?? '1') !== '0'
+export const URL_TOKEN_FALLBACK: boolean = (import.meta.env?.VITE_AUTH_URL_TOKEN_FALLBACK ?? '0') === '1'
 
 /** The portal's answer, read from the address — the callback route only. */
 export function readAuthCallback(): AuthCallback {
@@ -159,8 +160,31 @@ function allowRedirect(): boolean {
 export function clearRedirectGuard(): void {
   try {
     sessionStorage.removeItem(REDIRECT_GUARD_KEY)
+    sessionStorage.removeItem(SSO_RETRY_KEY)
   } catch {
     /* ignore */
+  }
+}
+
+/** Automatic restarts after the portal could not issue a one-time code, or refused one (401). */
+const SSO_RETRY_KEY = `${REDIRECT_GUARD_KEY}:ssoRetries`
+const SSO_RETRY_MAX = 2
+/** How long to wait before starting sign-in again after `sso_error`. */
+export const SSO_RETRY_DELAY_MS = 5_000
+
+/**
+ * True while another automatic restart is allowed after `sso_error` or a refused
+ * `sso_code`. The redirect guard alone does not bound this: restarts five seconds
+ * apart never put three jumps inside its window. Reset by a completed sign-in or
+ * an explicit "Sign in".
+ */
+export function allowSsoRetry(): boolean {
+  try {
+    const count = Number(sessionStorage.getItem(SSO_RETRY_KEY) || '0') + 1
+    sessionStorage.setItem(SSO_RETRY_KEY, String(count))
+    return count <= SSO_RETRY_MAX
+  } catch {
+    return false
   }
 }
 
@@ -316,6 +340,49 @@ export async function exchangeAuthCode(code: string): Promise<string> {
     )
   }
   return token
+}
+
+/** Longest wait honoured from the portal's Retry-After before the one retry. */
+const SSO_EXCHANGE_RETRY_MAX_MS = 10_000
+
+/**
+ * Redeem the portal's one-time `sso_code` for the auth_token at
+ * `POST /api/sso/exchange` (registry products; contract:
+ * my-aicountly-com docs/contracts/insights/README.md). Goes through this product's
+ * same-origin relay like /seskey does; the relay sends no Origin of its own.
+ *
+ * `redirect_uri` is byte for byte the returnUrl this app sent, `?cb_state=`
+ * included. 200 → `auth_token`. 401 `invalid_grant` → the code is spent: the caller
+ * starts sign-in again. 503 `auth_unavailable` (retryable) → the code was not spent:
+ * asked once more after Retry-After. Anything else is an error to show.
+ */
+export async function exchangeSsoCode(ssoCode: string, cbState: string | null): Promise<string> {
+  const request = () => fetchPortalAuth('/sso/exchange', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sso_code: ssoCode,
+      redirect_uri: exchangeRedirectUri(buildCallbackUrl(), cbState),
+      product: resolveProductKeyFromHost(),
+    }),
+    cache: 'no-store',
+    credentials: 'omit',
+  })
+  type Answer = { status?: number; auth_token?: string; error?: string; retryable?: boolean } | null
+  let res = await request()
+  let body = (await res.json().catch(() => null)) as Answer
+  if (res.status === 503 && body?.retryable === true) {
+    const seconds = Number(res.headers.get('Retry-After'))
+    const wait = Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds * 1000, SSO_EXCHANGE_RETRY_MAX_MS) : 5_000
+    await new Promise((resolve) => setTimeout(resolve, wait))
+    res = await request()
+    body = (await res.json().catch(() => null)) as Answer
+  }
+  const token = body?.auth_token
+  if (res.ok && typeof token === 'string' && token !== '') return token
+  if (res.status === 401) throw new AuthError('This sign-in link has expired or was already used. Sign in again.', 401)
+  if (res.status === 400) throw new AuthError('Sign-in could not be completed (the request was refused). Sign in again.', 400)
+  throw new AuthError(`Sign-in could not be completed (HTTP ${res.status}).`, res.ok ? 502 : res.status)
 }
 
 let mintInFlight: Promise<string> | null = null
