@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { analyticsSafePath, buildPortalUrl, cleanedUrl, consumeState, hasCredentialParams, issueState, MAX_AGE_MS, parseAuthCallback } from './callbackState'
+import { analyticsSafePath, buildPortalUrl, callbackAction, cleanedUrl, consumeState, exchangeRedirectUri, hasCredentialParams, issueState, MAX_AGE_MS, parseAuthCallback, STATE_KEY, verifyCallback } from './callbackState'
 import type { LocationLike, StorageLike } from './callbackState'
 
 // The same assertions as the node:test copy kept in the other products.
@@ -83,4 +83,82 @@ test('analytics never receives a credential, a one-time code or the callback que
   assert.equal(analyticsSafePath('/desktop-signin?code=ABCD-EFGH'), '/desktop-signin')
   assert.equal(analyticsSafePath('/x?token=T&cb_state=C&state=S&context=J&page=3'), '/x?page=3')
   assert.equal(analyticsSafePath(''), '/')
+})
+
+// --- The registry hand-off (IDN-01): the portal answers this app with `sso_code` -----------------
+// The URLs below are what my-aicountly-com's Login::authentication_jump() emits for a registry
+// product (docs/contracts/insights/sso_callback.json shapes, product origin substituted).
+const ORIGIN = 'https://app.example'
+const NONCE = '0123456789abcdef0123456789abcdef'
+const SSO = 'a'.repeat(64)
+
+test('the callback matrix: sso_code, sso_error, an empty state, code, nothing', () => {
+  const sso = parseAuthCallback(loc(CB, `?cb_state=${NONCE}&sso_code=${SSO}&state=${NONCE}`), CB)
+  assert.deepEqual(
+    [sso.ssoCode, sso.ssoError, sso.code, sso.authToken, sso.state, sso.cbState, sso.hasCredential, sso.unsolicited],
+    [SSO, null, null, null, NONCE, NONCE, true, false],
+  )
+  const err = parseAuthCallback(loc(CB, `?cb_state=${NONCE}&sso_error=temporarily_unavailable&state=${NONCE}`), CB)
+  assert.deepEqual([err.ssoError, err.ssoCode, err.hasCredential, err.unsolicited], ['temporarily_unavailable', null, false, false])
+  const launcher = parseAuthCallback(loc(CB, `?sso_code=${SSO}&state=`), CB)
+  assert.deepEqual([launcher.ssoCode, launcher.state, launcher.cbState, launcher.hasCredential, launcher.unsolicited], [SSO, null, null, true, true])
+  const launcherToken = parseAuthCallback(loc(CB, '?auth_token=T&state='), CB)
+  assert.equal(launcherToken.unsolicited, true, 'a launcher token is unsolicited too')
+  const code = parseAuthCallback(loc(CB, `?cb_state=${NONCE}&code=ONE&state=${NONCE}`), CB)
+  assert.deepEqual([code.code, code.ssoCode, code.hasCredential, code.unsolicited], ['ONE', null, true, false])
+  const nothing = parseAuthCallback(loc(CB), CB)
+  assert.deepEqual([nothing.onCallbackPath, nothing.hasCredential, nothing.ssoError, nothing.unsolicited], [true, false, null, false])
+  const elsewhere = parseAuthCallback(loc('/docs', `?sso_code=${SSO}&state=${NONCE}&cb_state=${NONCE}`), CB)
+  assert.deepEqual([elsewhere.ssoCode, elsewhere.hasCredential], [null, false], 'never read off the callback route')
+})
+
+test('only an answer to this tab\'s own sign-in verifies; a launcher hand-off never spends the nonce', () => {
+  const s = memory()
+  issueState(s, 1000)
+  const launcher = parseAuthCallback(loc(CB, `?sso_code=${SSO}&state=`), CB)
+  assert.equal(verifyCallback(launcher, s, 2000), false)
+  assert.equal(s.getItem(STATE_KEY) !== null, true, 'the outstanding nonce is kept for the real answer')
+  assert.equal(verifyCallback(parseAuthCallback(loc(CB), CB), s, 2000), false, 'nothing to verify')
+  assert.equal(s.getItem(STATE_KEY) !== null, true)
+  const nonce = issueState(s, 1000)
+  const own = parseAuthCallback(loc(CB, `?cb_state=${nonce}&sso_code=${SSO}&state=${nonce}`), CB)
+  assert.equal(verifyCallback(own, s, 2000), true)
+  assert.equal(verifyCallback(own, s, 2001), false, 'once')
+  const n2 = issueState(s, 1000)
+  assert.equal(verifyCallback(parseAuthCallback(loc(CB, `?cb_state=${n2}&sso_error=temporarily_unavailable&state=${n2}`), CB), s, 2000), true)
+  issueState(s, 1000)
+  assert.equal(verifyCallback(parseAuthCallback(loc(CB, `?cb_state=${NONCE}&sso_code=${SSO}&state=${NONCE}`), CB), s, 2000), false, 'someone else\'s nonce')
+})
+
+test('what the app does with each verified answer', () => {
+  const p = (q: string) => parseAuthCallback(loc(CB, q), CB)
+  const own = `cb_state=${NONCE}&state=${NONCE}`
+  assert.deepEqual(callbackAction(p(`?cb_state=${NONCE}&sso_code=${SSO}&state=${NONCE}`), true, false), { kind: 'exchange-sso', ssoCode: SSO, cbState: NONCE })
+  assert.deepEqual(callbackAction(p(`?${own}&sso_error=temporarily_unavailable`), true, false), { kind: 'retry-later' })
+  assert.deepEqual(callbackAction(p(`?${own}&code=ONE`), true, false), { kind: 'exchange-code', code: 'ONE' })
+  assert.deepEqual(callbackAction(p(`?${own}&auth_token=T`), true, false), { kind: 'retry-later' }, 'URL token refused by default: it means no code could be stored')
+  assert.deepEqual(callbackAction(p(`?${own}&auth_token=T`), true, true), { kind: 'token', authToken: 'T' }, 'only with the fallback switched on')
+  assert.deepEqual(callbackAction(p(`?${own}&auth_error=access_denied`), true, false), { kind: 'portal-error', error: 'access_denied' })
+  assert.deepEqual(callbackAction(p(`?sso_code=${SSO}&state=`), false, true), { kind: 'none' }, 'an unverified answer is never used')
+  assert.deepEqual(callbackAction(p(''), false, false), { kind: 'none' })
+})
+
+test('the exchange redirect_uri is byte for byte the returnUrl sent, cb_state included', () => {
+  const callback = `${ORIGIN}/auth/callback`
+  const sent = new URL(buildPortalUrl('https://my.example/login/authentication_jump/app', 'returnUrl', callback, NONCE)).searchParams.get('returnUrl')
+  assert.equal(exchangeRedirectUri(callback, NONCE), sent)
+  assert.equal(exchangeRedirectUri(callback, NONCE), `${ORIGIN}/auth/callback?cb_state=${NONCE}`)
+  // The callback URL minus the `&sso_code=…&state=…` the portal appended is the same string.
+  const landed = `${sent}&sso_code=${SSO}&state=${NONCE}`
+  assert.equal(landed.replace(/[?&]sso_code=[0-9a-f]{64}&state=[^&]*$/, ''), exchangeRedirectUri(callback, NONCE))
+  assert.equal(exchangeRedirectUri(callback, null), callback, 'no cb_state: the portal bound the code to its default callback')
+})
+
+test('sso_code and sso_error never stay in the address or reach analytics', () => {
+  const l = loc(CB, `?cb_state=${NONCE}&sso_code=${SSO}&state=${NONCE}`)
+  assert.equal(hasCredentialParams(l), true)
+  assert.equal(cleanedUrl(l), `${CB}?state=${NONCE}`)
+  assert.equal(cleanedUrl(loc('/x', `?sso_code=${SSO}&sso_error=temporarily_unavailable&tab=1`)), '/x?tab=1')
+  assert.equal(analyticsSafePath(`/x?sso_code=${SSO}&tab=1`), '/x?tab=1')
+  assert.equal(analyticsSafePath(`/auth/callback?sso_code=${SSO}`), '/auth/callback')
 })

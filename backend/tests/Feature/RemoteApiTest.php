@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Domain\Audit\EventType;
+use App\Domain\Auth\PortalClient;
 use App\Domain\Auth\RemoteIdentity;
 use App\Domain\Policy\PermissionCatalog;
 use CodeIgniter\Test\FeatureTestTrait;
@@ -715,6 +716,57 @@ final class RemoteApiTest extends RemoteTestCase
 
         $result->assertStatus(404);
         $this->assertStringContainsString('not relayed', $result->getJSON());
+    }
+
+    public function testTheRelayForwardsTheRegistrySsoExchangeAsThePortalAnswered(): void
+    {
+        // The portal hands Remote (a registry product) a one-time `sso_code`; the
+        // browser redeems it here, and this host must pass it on unchanged with no
+        // Origin of its own (the portal would refuse it and burn the code), then
+        // hand back the portal's status, body and Retry-After (IDN-01).
+        $portal = new class (Services::remoteConfig()) extends PortalClient {
+            /** @var list<array{method: string, path: string, headers: array<int, string>, body: string}> */
+            public array $calls = [];
+            /** @var array{status: int, body: string, contentType: string, retryAfter: string} */
+            public array $answer = ['status' => 200, 'body' => '{"status":1,"auth_token":"tok-live"}', 'contentType' => 'application/json', 'retryAfter' => ''];
+
+            public function forward(string $method, string $path, array $headers, string $body): array
+            {
+                $this->calls[] = ['method' => $method, 'path' => $path, 'headers' => $headers, 'body' => $body];
+
+                return $this->answer;
+            }
+        };
+        Services::injectMock('portalClient', $portal);
+
+        $body = [
+            'sso_code'     => str_repeat('a', 64),
+            'redirect_uri' => 'https://remote.aicountly.com/auth/callback?cb_state=0123456789abcdef0123456789abcdef',
+            'product'      => 'remote',
+        ];
+        $result = $this->withHeaders(['Origin' => 'https://remote.aicountly.com'])
+            ->withBodyFormat('json')
+            ->post('global/sso/exchange', $body);
+
+        $result->assertStatus(200);
+        $this->assertSame('tok-live', json_decode((string) $result->response()->getBody(), true)['auth_token']);
+        $this->assertCount(1, $portal->calls);
+        $this->assertSame('sso/exchange', $portal->calls[0]['path']);
+        $this->assertSame($body, json_decode($portal->calls[0]['body'], true), 'the body goes on unchanged');
+        foreach ($portal->calls[0]['headers'] as $line) {
+            $this->assertStringStartsNotWith('origin:', strtolower($line), 'no Origin is sent to the portal');
+        }
+
+        $portal->answer = ['status' => 503, 'body' => '{"status":0,"error":"auth_unavailable","retryable":true}', 'contentType' => 'application/json', 'retryAfter' => '5'];
+        $down = $this->withBodyFormat('json')->post('global/sso/exchange', $body);
+        $down->assertStatus(503);
+        $this->assertSame('5', $down->response()->getHeaderLine('Retry-After'));
+        $this->assertSame('auth_unavailable', json_decode((string) $down->response()->getBody(), true)['error']);
+
+        $portal->answer = ['status' => 401, 'body' => '{"status":0,"error":"invalid_grant","retryable":false}', 'contentType' => 'application/json', 'retryAfter' => ''];
+        $spent = $this->withBodyFormat('json')->post('global/sso/exchange', $body);
+        $spent->assertStatus(401);
+        $this->assertSame('invalid_grant', json_decode((string) $spent->response()->getBody(), true)['error']);
     }
 
     // ------------------------------------------------------- rate limiting

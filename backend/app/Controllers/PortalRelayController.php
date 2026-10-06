@@ -34,6 +34,10 @@ class PortalRelayController extends Controller
         // The one-time sign-in code redemption (I-17): the portal's CORS list is
         // static, so the browser reaches `POST /api/auth/exchange` through here.
         'auth/exchange',
+        // The registry products' one-time code (`sso_code`), which is what the
+        // portal hands this app (IDN-01). Relayed with no Origin of our own: the
+        // portal compares an Origin only when one is sent, and ours would not match.
+        'sso/exchange',
     ];
 
     public function relay(string ...$segments): ResponseInterface
@@ -83,11 +87,17 @@ class PortalRelayController extends Controller
                 ->setJSON(['message' => 'Auth service unavailable — please retry.']);
         }
 
-        return $this->response
+        $response = $this->response
             ->setStatusCode($result['status'])
             ->setContentType($result['contentType'])
-            ->setHeader('Cache-Control', 'no-store')
-            ->setBody($result['body']);
+            ->setHeader('Cache-Control', 'no-store');
+
+        // sso/exchange 503 auth_unavailable: when the same code may be tried again.
+        if (($result['retryAfter'] ?? '') !== '') {
+            $response = $response->setHeader('Retry-After', $result['retryAfter']);
+        }
+
+        return $response->setBody($result['body']);
     }
 
     /**

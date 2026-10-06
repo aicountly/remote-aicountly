@@ -19,8 +19,18 @@
  *
  * A credential on any other page, or on the callback without our nonce, is never
  * stored; it is removed from the address and the app starts its own round trip.
- * The portal is asked for a one-time `code` (response_type=code) that is
- * redeemed once for the token, so no long-lived token appears in a URL at all.
+ * The portal is asked for a one-time code (response_type=code) that is redeemed
+ * once for the token, so no long-lived token appears in a URL at all.
+ *
+ * This app is a registry product of the portal (ProductRegistry::PRODUCT_CALLBACKS),
+ * so the code it gets back is an `sso_code`, redeemed at `POST /api/sso/exchange`
+ * with the exact returnUrl it sent (including `?cb_state=`). When the portal could
+ * not store a code it answers `sso_error=temporarily_unavailable`. A hand-off with
+ * an empty `state` and no `cb_state` is Jump To or another product's launcher: it
+ * is never used, and the app starts its own sign-in. Contract:
+ * my-aicountly-com docs/contracts/insights/README.md (the same for every registry
+ * product). `code` (POST /api/auth/exchange) is the portal's flow for products
+ * with their own hand-off branch, still understood here.
  *
  * Pure functions over an injectable storage and location, so they run under
  * `node --test` and vitest alike. Keep this file identical in every product SPA.
@@ -113,8 +123,12 @@ export interface ParsedCallback {
   /** The address is this app's callback route (and only there is anything read). */
   onCallbackPath: boolean
   authToken: string | null
-  /** The portal's one-time hand-off code (response_type=code). */
+  /** The one-time code of the portal's hand-off-branch flow (POST /api/auth/exchange). */
   code: string | null
+  /** The registry products' one-time code (POST /api/sso/exchange). */
+  ssoCode: string | null
+  /** The portal could not issue a one-time code (`temporarily_unavailable`). */
+  ssoError: string | null
   /** The portal's echo of the `state` this app sent. */
   state: string | null
   /** The nonce this app put in its own callback URL. */
@@ -122,6 +136,11 @@ export interface ParsedCallback {
   authError: string | null
   /** A token or code is present (whether or not it will be trusted). */
   hasCredential: boolean
+  /**
+   * An answer that carries no nonce at all (empty `state`, no `cb_state`): Jump To
+   * or another product's launcher. Never used; the app starts its own sign-in.
+   */
+  unsolicited: boolean
 }
 
 function normalisePath(path: string): string {
@@ -146,7 +165,10 @@ function paramSources(loc: LocationLike): URLSearchParams[] {
 export function parseAuthCallback(loc: LocationLike, callbackPath: string): ParsedCallback {
   const onCallbackPath = normalisePath(loc.pathname) === normalisePath(callbackPath)
   if (!onCallbackPath) {
-    return { onCallbackPath: false, authToken: null, code: null, state: null, cbState: null, authError: null, hasCredential: false }
+    return {
+      onCallbackPath: false, authToken: null, code: null, ssoCode: null, ssoError: null,
+      state: null, cbState: null, authError: null, hasCredential: false, unsolicited: false,
+    }
   }
   const sources = paramSources(loc)
   const pick = (name: string): string | null => {
@@ -158,7 +180,65 @@ export function parseAuthCallback(loc: LocationLike, callbackPath: string): Pars
   }
   const authToken = pick('auth_token')
   const code = pick('code')
-  return { onCallbackPath, authToken, code, state: pick('state'), cbState: pick(CB_PARAM), authError: pick('auth_error'), hasCredential: authToken !== null || code !== null }
+  const ssoCode = pick('sso_code')
+  const ssoError = pick('sso_error')
+  const authError = pick('auth_error')
+  const state = pick('state')
+  const cbState = pick(CB_PARAM)
+  const hasCredential = authToken !== null || code !== null || ssoCode !== null
+  const answered = hasCredential || ssoError !== null || authError !== null
+  return {
+    onCallbackPath, authToken, code, ssoCode, ssoError, state, cbState, authError, hasCredential,
+    unsolicited: answered && state === null && cbState === null,
+  }
+}
+
+/**
+ * True when this is the portal's answer to a sign-in this tab started: the nonce
+ * came back with it (spent here, once). An unsolicited hand-off, or an address
+ * with no answer in it, never touches the nonce.
+ */
+export function verifyCallback(p: ParsedCallback, storage: StorageLike | null = defaultStorage(), now: number = Date.now()): boolean {
+  if (!p.onCallbackPath || p.unsolicited) return false
+  if (!p.hasCredential && p.ssoError === null && p.authError === null) return false
+  return consumeState([p.cbState, p.state], storage, now)
+}
+
+/**
+ * The `redirect_uri` for `POST /api/sso/exchange`: byte for byte the returnUrl this
+ * app sent (its callback with `?cb_state=<nonce>`). Without a `cb_state` the portal
+ * bound the code to its default callback, which has no query.
+ */
+export function exchangeRedirectUri(callbackUrl: string, cbState: string | null): string {
+  return cbState ? withCallbackState(callbackUrl, cbState) : callbackUrl
+}
+
+export type CallbackAction =
+  /** Nothing this app may use: carry on with the stored sign-in, or start one. */
+  | { kind: 'none' }
+  /** The portal declined a sign-in this tab asked for. */
+  | { kind: 'portal-error'; error: string }
+  /** The portal could not issue a one-time code: start again after a short wait. */
+  | { kind: 'retry-later' }
+  | { kind: 'exchange-sso'; ssoCode: string; cbState: string | null }
+  | { kind: 'exchange-code'; code: string }
+  /** A bare auth_token, only while the URL-token fallback is switched on. */
+  | { kind: 'token'; authToken: string }
+
+/**
+ * What to do with the portal's answer. Only a verified answer is ever used. A bare
+ * `auth_token` with the fallback off is how a registry product hears that no code
+ * could be stored (the portal hands the token instead), so it is the same as
+ * `sso_error`: the token is not used and sign-in starts again.
+ */
+export function callbackAction(p: ParsedCallback, verified: boolean, urlTokenFallback: boolean): CallbackAction {
+  if (!verified) return { kind: 'none' }
+  if (p.authError !== null) return { kind: 'portal-error', error: p.authError }
+  if (p.ssoCode !== null) return { kind: 'exchange-sso', ssoCode: p.ssoCode, cbState: p.cbState }
+  if (p.code !== null) return { kind: 'exchange-code', code: p.code }
+  if (p.authToken !== null) return urlTokenFallback ? { kind: 'token', authToken: p.authToken } : { kind: 'retry-later' }
+  if (p.ssoError !== null) return { kind: 'retry-later' }
+  return { kind: 'none' }
 }
 
 /**
@@ -167,7 +247,7 @@ export function parseAuthCallback(loc: LocationLike, callbackPath: string): Pars
  * them for itself: Remote's `/desktop-signin?code=`, a `?state=` filter) and are
  * only withheld from analytics.
  */
-const CREDENTIAL_PARAMS = ['auth_token', 'ses_key', 'access_token', 'id_token', 'pending_token', CB_PARAM, 'auth_error']
+const CREDENTIAL_PARAMS = ['auth_token', 'sso_code', 'sso_error', 'ses_key', 'access_token', 'id_token', 'pending_token', CB_PARAM, 'auth_error']
 const ANALYTICS_HIDDEN_PARAMS = [...CREDENTIAL_PARAMS, 'token', 'code', 'state', 'jti', 'context', 'remote_context']
 
 function without(params: URLSearchParams, names: string[]): URLSearchParams {
