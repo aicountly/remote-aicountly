@@ -52,7 +52,7 @@ class InvitationController extends BaseApiController
 
         return $this->ok(array_map(
             static fn (array $row) => Presenter::invitation($row),
-            Services::invitationService()->forSession((int) $session['id']),
+            Services::invitationService()->listForHost($session, $this->identity()),
         ));
     }
 

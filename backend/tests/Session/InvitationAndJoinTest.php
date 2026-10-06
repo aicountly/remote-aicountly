@@ -286,4 +286,21 @@ final class InvitationAndJoinTest extends RemoteTestCase
 
         Services::participantService()->approve($this->reload($session), (string) $joined['participant']['uuid'], $bystander);
     }
+
+    public function testOnlyTheHostMayListTheInvitations(): void
+    {
+        $host      = $this->makeIdentity('Host');
+        $bystander = $this->makeIdentity('Bystander');
+
+        $session = $this->makeSession($host);
+        $policy  = Services::policyResolver()->resolve($host, 'PERSONAL', null);
+        Services::invitationService()->create($session, $host, $policy, 'INTERNAL', 'colleague@example.test', null);
+
+        $this->assertCount(1, Services::invitationService()->listForHost($this->reload($session), $host));
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Only the person who started this session can see its invitations.');
+
+        Services::invitationService()->listForHost($this->reload($session), $bystander);
+    }
 }
