@@ -21,6 +21,16 @@
   # whichever directory this file sits in, so the API works at <docroot>/api
   # and at the root of a dedicated vhost without editing this line.
 
+  # Everything else deployed beside public/ is private: framework and
+  # application code, logs and caches, migrations, operator scripts, tests, and
+  # the CLI entry point and dependency manifests. Refused before anything is
+  # rewritten, so nothing below can route a request around it (a read-only scan
+  # found GET /api/spark answering 500 where it should be refused). None of
+  # these is an API route and public/ is not listed, so the front controller is
+  # untouched. The name may be followed by a path (spark/x, app/Config/...).
+  RewriteRule ^(app|system|vendor|writable|scripts|tests|database|build|deploy)(/|$) - [F,L]
+  RewriteRule ^(spark|composer\.json|composer\.lock|phpunit[^/]*)(/|$) - [F,L]
+
   # Already inside public/ — CodeIgniter's own rules handle it from here.
   RewriteRule ^public/ - [L]
 
@@ -62,5 +72,12 @@ RedirectMatch 404 (^|/)error_log$
 # script failed in. They have no extension, so the rule above misses them, and
 # they carry request URLs and stack traces.
 <FilesMatch "^(error_log|php_errorlog)$">
+  Require all denied
+</FilesMatch>
+
+# The framework's CLI entry point and the dependency and test manifests at the
+# root. The rules at the top refuse them by URL; this refuses the file itself,
+# whichever way a request reached it.
+<FilesMatch "^(spark|composer\.json|composer\.lock|phpunit[^/]*)$">
   Require all denied
 </FilesMatch>
