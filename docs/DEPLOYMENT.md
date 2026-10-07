@@ -34,7 +34,7 @@ build and the API deploy in the same run: they always change together.
 ├── assets/
 ├── .htaccess                    SPA history fallback, cache headers, CSP
 └── api/                         backend/ — the CodeIgniter API
-    ├── .htaccess                rewrites everything into public/
+    ├── .htaccess                rewrites everything into public/, and refuses the rest
     ├── .env                     created by hand, never uploaded
     ├── public/                  the front controller
     ├── app/                     denied by its own .htaccess
@@ -60,7 +60,12 @@ document root — needs a second rsync target and a second secret, and produces 
 layout that no longer matches the repository. Instead, every directory that must
 not be served carries `Require all denied`: `app/`, `writable/`, `tests/`, and
 `vendor/` (the workflow copies the rule in, since `vendor/` is not in the
-repository).
+repository). `backend/.htaccess` also refuses them by name, ahead of the
+rewrite, together with `system/`, `scripts/`, `database/`, `build/`, `deploy/`,
+the `spark` CLI, `composer.json`, `composer.lock` and `phpunit*`, and any
+dotfile. `tests/Deploy/ApiHtaccessTest.php` evaluates those rules against real
+paths and against the route table, and fails when something new appears at the
+top of `backend/` that is neither refused nor `public/`.
 
 Verify after the first deploy:
 
@@ -68,6 +73,7 @@ Verify after the first deploy:
 curl -i https://remote.aicountly.com/api/app/Config/Remote.php   # expect 403/404
 curl -i https://remote.aicountly.com/api/.env                    # expect 404
 curl -i https://remote.aicountly.com/api/writable/logs/          # expect 403/404
+curl -i https://remote.aicountly.com/api/spark                   # expect 403/404, never 200 or 500
 ```
 
 ### Why the API's `.env` survives

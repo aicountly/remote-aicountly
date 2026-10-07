@@ -215,7 +215,30 @@ class InvitationService
         ]);
     }
 
-    /** @return list<array<string, mixed>> */
+    /**
+     * Who was invited to a session is the host's to see: the list names the
+     * people, and the outside e-mail addresses, they asked in. Being in the
+     * room, or being able to read the company's sessions, does not make
+     * someone the host.
+     *
+     * @param  array<string, mixed> $session
+     * @return list<array<string, mixed>>
+     */
+    public function listForHost(array $session, RemoteIdentity $identity): array
+    {
+        if ((int) $session['owner_user_id'] !== $identity->id) {
+            throw ApiException::forbidden('NOT_SESSION_HOST', 'Only the person who started this session can see its invitations.');
+        }
+
+        return $this->forSession((int) $session['id']);
+    }
+
+    /**
+     * Unchecked, for a caller that has already established the host (the
+     * session resource does). A request handler uses {@see listForHost()}.
+     *
+     * @return list<array<string, mixed>>
+     */
     public function forSession(int $sessionId): array
     {
         return $this->db->table('remote_invitations')

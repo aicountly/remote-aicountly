@@ -285,6 +285,71 @@ final class AccessHardeningApiTest extends RemoteTestCase
         $this->assertCount(0, $after);
     }
 
+    // ---------------------------------------------- invitation list: host only
+
+    /** @param array<string, mixed> $room */
+    private function listInvitations(array $headers, array $room): \CodeIgniter\Test\TestResponse
+    {
+        return $this->withHeaders($headers)->get('v1/remote/sessions/' . $room['session']['uuid'] . '/invitations');
+    }
+
+    public function testOnlyTheHostCanListTheInvitationsOfARoom(): void
+    {
+        $room = $this->roomWithTwoWaiting();
+        Services::participantService()->approve($room['session'], (string) $room['memberParticipant']['uuid'], $room['host']);
+
+        // Someone who can read the whole company's sessions, without being the host.
+        $admin = $this->makeIdentity('Admin');
+        $this->grantCompanyAccess($admin, 481, 'COMPANY_ADMIN', true);
+
+        $list = $this->listInvitations($this->asUser($room['host'], 'key-host'), $room);
+        $list->assertStatus(200);
+        $invitations = $this->json($list)['data'];
+        $this->assertCount(1, $invitations);
+        $this->assertSame('amit@example.com', $invitations[0]['inviteeEmail']);
+
+        // An admitted member sees the room, and still not who was invited to it.
+        foreach ([[$room['member'], 'key-member'], [$admin, 'key-admin']] as [$person, $key]) {
+            $refused = $this->listInvitations($this->asUser($person, $key), $room);
+            $refused->assertStatus(403);
+            $this->assertSame('NOT_SESSION_HOST', $this->json($refused)['error']['code']);
+            $this->assertStringNotContainsString('amit@example.com', (string) $refused->getJSON());
+
+            // The room itself is theirs to read, so only the list was the leak.
+            $this->withHeaders($this->asUser($person, $key))->get('v1/remote/sessions/' . $room['session']['uuid'])->assertStatus(200);
+        }
+
+        // Nor does the session resource carry the list for anyone but the host.
+        $this->assertArrayHasKey('invitations', $this->json($this->withHeaders($this->asUser($room['host'], 'key-host'))->get('v1/remote/sessions/' . $room['session']['uuid']))['data']);
+        $this->assertArrayNotHasKey('invitations', $this->json($this->withHeaders($this->asUser($room['member'], 'key-member'))->get('v1/remote/sessions/' . $room['session']['uuid']))['data']);
+    }
+
+    public function testSomeoneStillWaitingOrNotInTheRoomAtAllCannotListItsInvitations(): void
+    {
+        $room     = $this->roomWithTwoWaiting();
+        $stranger = $this->makeIdentity('Stranger');
+
+        $waiting = $this->listInvitations($this->asUser($room['member'], 'key-member'), $room);
+        $waiting->assertStatus(403);
+        $this->assertSame('AWAITING_APPROVAL', $this->json($waiting)['error']['code']);
+
+        $outsider = $this->listInvitations($this->asUser($stranger, 'key-stranger'), $room);
+        $outsider->assertStatus(404);
+        $this->assertStringNotContainsString('amit@example.com', (string) $outsider->getJSON());
+
+        $anonymous = $this->withHeaders([])->get('v1/remote/sessions/' . $room['session']['uuid'] . '/invitations');
+        $anonymous->assertStatus(401);
+    }
+
+    public function testAGuestTokenCannotListInvitations(): void
+    {
+        $room = $this->roomWithTwoWaiting();
+        Services::participantService()->approve($room['session'], (string) $room['guest']['participant']['uuid'], $room['host']);
+
+        // The route is signed-in only, so even an admitted guest is turned away.
+        $this->listInvitations($this->asGuest($room['guest']['guestToken']), $room)->assertStatus(401);
+    }
+
     public function testTheHostAndAnAdmittedMemberAreUnaffected(): void
     {
         $room = $this->roomWithTwoWaiting();
