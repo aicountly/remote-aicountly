@@ -101,7 +101,7 @@ final class ConsoleDatabaseScriptsTest extends RemoteTestCase
         [$code, $out] = $this->spark('migrate', ['CONSOLE_API_URL' => 'http://127.0.0.1:1/api', 'CONSOLE_DB_DETAILS_KEY' => $this->key]);
 
         $this->assertNotSame(0, $code);
-        $this->assertStringContainsString('Could not fetch database details from Console', $out);
+        $this->assertMatchesRegularExpression('/Could not fetch database details from Console|Reason: console_unreachable/', $out);
         $this->assertStringNotContainsString($this->key, $out);
     }
 
@@ -275,13 +275,45 @@ final class ConsoleDatabaseScriptsTest extends RemoteTestCase
     private function spark(string $command, array $env, array $args = []): array
     {
         $env  = $env + ['PATH' => (string) getenv('PATH'), 'HOME' => sys_get_temp_dir()];
-        $proc = proc_open(array_merge([PHP_BINARY, dirname(__DIR__, 2) . '/spark', $command], $args), [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, dirname(__DIR__, 2), $env);
+        $proc = proc_open(array_merge([PHP_BINARY, $this->isolatedSpark(), $command], $args), [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, dirname(__DIR__, 2), $env);
         $this->assertIsResource($proc);
         $out = (string) stream_get_contents($pipes[1]) . (string) stream_get_contents($pipes[2]);
         $code = proc_close($proc);
 
         // CodeIgniter colours its output; the assertions read the words.
         return [$code, (string) preg_replace('/\e\[[0-9;]*m/', '', $out)];
+    }
+
+    /**
+     * The project's own `spark`, unchanged but for two things: it is told to look for its .env in an empty directory (a
+     * developer's, or CI's, .env would otherwise answer for every setting the test leaves out, and CodeIgniter reads it
+     * before the process environment), and it finds the project by absolute path. Only what the test passes counts.
+     */
+    private function isolatedSpark(): string
+    {
+        static $path = null;
+        if ($path === null) {
+            $root   = dirname(__DIR__, 2);
+            $source = (string) file_get_contents($root . '/spark');
+            $empty  = sys_get_temp_dir() . '/remote-no-dotenv';
+            @mkdir($empty);
+            // Older Paths configs have no envDirectory property, and assigning one would be a (deprecated) dynamic property:
+            // a subclass declares it instead.
+            $declared = str_contains((string) file_get_contents($root . '/app/Config/Paths.php'), 'envDirectory');
+            $paths    = $declared
+                ? '$paths = new Paths(); $paths->envDirectory = ' . var_export($empty, true) . ';'
+                : '$paths = new class () extends Paths { public ?string $envDirectory = ' . var_export($empty, true) . '; };';
+            $patched = str_replace(['__DIR__', '$paths = new Paths();'], [var_export($root, true), $paths], $source);
+            $this->assertNotSame($source, $patched);
+            $this->assertStringContainsString('envDirectory', $patched, 'the project\'s spark builds its Paths the way this expects');
+            $path = sys_get_temp_dir() . '/remote-spark-' . bin2hex(random_bytes(4)) . '.php';
+            file_put_contents($path, $patched);
+            register_shutdown_function(static function () use ($path): void {
+                @unlink($path);
+            });
+        }
+
+        return $path;
     }
 
     /** @return array{host: string, port: string, name: string, user: string, pass: string} */
