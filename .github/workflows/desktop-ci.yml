@@ -15,16 +15,11 @@
 # ---------------------------------------------------------------------------
 name: Desktop CI
 
+# Manual only since 2026-10-08 (this replaces any "runs on every pull request / push"
+# wording above): no push or pull_request trigger, to save GitHub Actions minutes. Run
+# the same suite locally before merging, or here from the Actions tab (workflow_dispatch);
+# a deploy runs it first when its run_ci_gate box is ticked (workflow_call).
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'desktop/**'
-      - '.github/workflows/desktop-ci.yml'
-  pull_request:
-    paths:
-      - 'desktop/**'
-      - '.github/workflows/desktop-ci.yml'
   workflow_dispatch:
   workflow_call:
 

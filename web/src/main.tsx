@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 
 import App from './App.tsx'
 import { AuthProvider } from './auth/AuthProvider.tsx'
+import { purgeLegacySharedAuthToken } from './auth/sharedAuthCookie'
 import { router } from './app/router'
 import { initAnalytics, trackRouterPageViews } from './utils/analytics'
 import { stashDesktopSignInReturnPath } from './features/desktop/returnPath'
@@ -22,6 +23,9 @@ stashDesktopSignInReturnPath(window.location)
 // too, which the subscription alone never reports.
 initAnalytics()
 trackRouterPageViews(router)
+
+// Remove the retired shared auth_token cookie an older release may have left.
+purgeLegacySharedAuthToken()
 
 const rootElement = document.getElementById('root')
 if (!rootElement) throw new Error('Root element #root not found')
