@@ -13,9 +13,7 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  # push / pull_request removed: run on demand (or via workflow_call from a deploy); test locally before merging to save Actions minutes.
   workflow_dispatch:
   workflow_call:
 
