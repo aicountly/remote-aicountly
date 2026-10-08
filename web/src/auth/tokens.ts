@@ -45,10 +45,9 @@ export function setAuthToken(token: string | null): void {
 }
 
 /**
- * Hold a token from a sign-in in memory only — not localStorage, and above all not
- * the cookie every AICOUNTLY product trusts — until the portal has accepted it
- * (commitAuthToken). A token the portal refuses is dropped with
- * discardStagedAuthToken and never reaches anything another product reads.
+ * Hold a token from a sign-in in memory only — not localStorage — until the
+ * portal has accepted it (commitAuthToken). A token the portal refuses is
+ * dropped with discardStagedAuthToken and is never stored.
  */
 export function stageAuthToken(token: string | null): void {
   authToken = token || null
@@ -109,7 +108,7 @@ export function clearSession(): void {
   sesExpiry = 0
 }
 
-/** Full sign-out: drops the session key, the auth token and the shared cookie. */
+/** Full sign-out: drops the session key and the auth token, and purges a leftover legacy cookie (.aicountly.com only). */
 export function clearAllTokens(): void {
   clearSession()
   authToken = null

@@ -66,5 +66,18 @@ export const router = createBrowserRouter([
   { path: '/join/:token', element: page(<GuestJoin />) },
   // The portal returns here after sign-in; AuthProvider has already consumed
   // the token by the time this renders.
-  { path: '/auth/callback', element: <Navigate to="/" replace /> },
+  { path: '/auth/callback', element: <CallbackLanding /> },
 ])
+
+/**
+ * Where the portal's callback goes. The router is created on /auth/callback,
+ * before AuthProvider puts the page the person was opening back in the address
+ * bar (auth/portal.ts `clearCallbackFromUrl`), so it still thinks it is on the
+ * callback: follow the browser there — query and hash included — or home when
+ * there was none.
+ */
+export function CallbackLanding() {
+  const { pathname, search, hash } = window.location
+  const target = pathname !== '/auth/callback' ? `${pathname}${search}${hash}` : '/'
+  return <Navigate to={target} replace />
+}

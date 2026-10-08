@@ -184,10 +184,11 @@ export interface LaunchOptions {
  *
  * It used to append the long-lived auth_token (`…/auth/callback?auth_token=`),
  * which put the credential in the DOM, the history, the destination's access
- * logs and — through its callback — analytics (I-17, G27#13, G28#7). The shared
- * `.aicountly.com` cookie already carries a signed-in person to the destination;
- * one with no cookie goes through the portal round trip that destination starts
- * for itself, which returns at once while the portal session is live.
+ * logs and — through its callback — analytics (I-17, G27#13, G28#7). The
+ * destination signs the person in through the portal round trip it starts for
+ * itself (my.aicountly.com /login/authentication_jump, backed by the portal's
+ * httpOnly `AIC_AUTH_TOKEN` cookie), which returns at once while the portal
+ * session is live. The shared `.aicountly.com` `auth_token` cookie is retired.
  */
 export function buildAppLaunchUrl(app: AicountlyAppDef, options: LaunchOptions = {}): string {
   return resolveAppOrigin(app, options.sandbox ?? isSandboxHost())

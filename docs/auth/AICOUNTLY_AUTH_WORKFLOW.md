@@ -14,36 +14,48 @@ minutes and for one room. See [../SECURITY.md](../SECURITY.md).
 
 | Token | Lifetime | Storage | Use |
 |-------|----------|---------|-----|
-| `auth_token` | Long-lived | `localStorage` + a `.aicountly.com` cookie | Mint / refresh a `ses_key` |
+| `auth_token` | Long-lived | `localStorage` (this origin only) | Mint / refresh a `ses_key` |
 | `ses_key` | ~15 minutes | **Memory only** | `Authorization: Bearer` on product APIs |
 
 `ses_key` must **never** be written to `localStorage` or `sessionStorage`. In
 this app it lives in a module variable in `web/src/auth/tokens.ts` and dies with
 the page.
 
-The `auth_token` cookie is scoped to `.aicountly.com` on purpose:
-`localStorage` is origin-scoped, so without the cookie a user arriving from
-another AICOUNTLY product would have to sign in again.
+The shared, JavaScript-readable `.aicountly.com` `auth_token` cookie is
+**retired**: any script on any `*.aicountly.com` page could read it. It is never
+written or read any more. Cross-product sign-in is the portal hand-off —
+`my.aicountly.com/login/authentication_jump/<product_key>`, backed by the
+portal's own httpOnly `AIC_AUTH_TOKEN` cookie — so a user arriving from another
+AICOUNTLY product still signs in without retyping anything. A leftover cookie
+from an older release is purged (on `*.aicountly.com` only) at start-up and on
+sign-out.
 
 ## Login flow
 
 1. User opens `remote.aicountly.com` (or `remote.gh.aicountly.com`).
-2. No `auth_token` → redirect to
-   `{portal}/login/authentication_jump/remote?returnUrl={origin}/auth/callback`.
+2. No `auth_token` → remember the address the tab is on (path + query + hash,
+   per tab in `sessionStorage` `remote:returnRoute`; not the bare root, never an
+   `/auth/*` path), issue a single-use nonce, and redirect to
+   `{portal}/login/authentication_jump/remote?returnUrl=…&state=…&response_type=code`,
+   the `returnUrl` being `{origin}/auth/callback?cb_state=…`.
    The portal reuses an existing portal web session — this is what makes moving
    between AICOUNTLY products seamless. With no session it shows its login form.
-3. Portal redirects back to `/auth/callback?auth_token=…`. The SPA history
-   fallback in `web/public/.htaccess` serves the app at that path, and the
-   router sends it to the dashboard; `AuthProvider` reads the token at boot and
-   clears it from the URL before anything renders.
-4. App stores `auth_token`, then `POST /api/global/seskey` with
-   `Bearer auth_token` → `ses_key`.
-5. Dashboard.
+3. Portal redirects back to `/auth/callback?cb_state=…&state=…&sso_code=…` — a
+   one-time code, never the long-lived token (see `web/src/auth/callbackState.ts`).
+   The SPA history fallback in `web/public/.htaccess` serves the app at that
+   path. `AuthProvider` accepts the answer only when the nonce comes back with
+   it, and replaces the URL with the remembered address (or `/`) before anything
+   renders; the router's callback route follows the browser there.
+4. App redeems the code at `POST /api/sso/exchange` for the `auth_token`, then
+   `POST /api/global/seskey` with `Bearer auth_token` → `ses_key`; only then is
+   the `auth_token` stored.
+5. The remembered screen, else the dashboard.
 
-Logout clears both tokens and the shared cookie, tells the portal to invalidate
-the `auth_token`, and navigates to `{portal}/login/logout` so the portal's own
-session cookie goes too. Skipping that last step leaves the portal session
-alive and the next visit signs the user straight back in.
+Logout clears both tokens (and purges any leftover legacy `auth_token`
+cookie), tells the portal to invalidate the `auth_token`, and navigates to
+`{portal}/login/logout` so the portal's own session cookie goes too. Skipping
+that last step leaves the portal session alive and the next visit signs the
+user straight back in.
 
 ## Host mapping
 

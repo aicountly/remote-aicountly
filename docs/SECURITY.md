@@ -83,11 +83,17 @@ Remote issues no credential of its own. AICOUNTLY's portal owns identity.
 
 | Credential | Lifetime | Stored | Purpose |
 |---|---|---|---|
-| `auth_token` | long | `localStorage` + a `.aicountly.com` cookie | mint a `ses_key` |
+| `auth_token` | long | `localStorage` (this origin only) | mint a `ses_key` |
 | `ses_key` | ~15 min | **memory only** | `Authorization: Bearer` on the API |
 | Guest token | until the session ends | `sessionStorage` | one participant, one session |
 | Signalling token | 2 minutes | memory only | one room |
 | Device credential | minutes | **memory only, on the machine** | one enrolled device, scoped |
+
+The shared `.aicountly.com` `auth_token` cookie is retired: it was readable by
+any script on any `*.aicountly.com` page. Cross-product sign-in is the portal
+hand-off (`my.aicountly.com/login/authentication_jump`, backed by the portal's
+httpOnly `AIC_AUTH_TOKEN` cookie); a leftover cookie is purged at start-up and
+sign-out on `*.aicountly.com`.
 
 A **device** is not a person and never holds a person's credential. It proves
 possession of an Ed25519 private key that never leaves the machine, over a

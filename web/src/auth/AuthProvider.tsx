@@ -148,7 +148,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       // The one-time code is redeemed for the token, which is held in memory and
-      // reaches localStorage and the shared cookie only once the portal accepts it.
+      // reaches localStorage only once the portal accepts it.
       let staged = false
       if (action.kind === 'exchange-sso' || action.kind === 'exchange-code' || action.kind === 'token') {
         try {
@@ -193,7 +193,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         await ensureSesKey()
         if (staged) {
-          // The portal accepted the token: now it may reach localStorage and the shared cookie.
+          // The portal accepted the token: now it may reach localStorage.
           commitAuthToken()
           clearLogoutFlag()
           clearRedirectGuard()
