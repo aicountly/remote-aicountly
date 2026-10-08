@@ -11,11 +11,7 @@
  * variable that dies with the page.
  */
 
-import {
-  readSharedAuthToken,
-  writeSharedAuthToken,
-  clearSharedAuthToken,
-} from './sharedAuthCookie'
+import { clearSharedAuthToken } from './sharedAuthCookie'
 
 const AUTH_TOKEN_KEY = 'auth_token'
 
@@ -45,8 +41,7 @@ export function setAuthToken(token: string | null): void {
     }
   }
 
-  if (token) writeSharedAuthToken(token)
-  else clearSharedAuthToken()
+  if (!token) clearSharedAuthToken()
 }
 
 /**
@@ -59,7 +54,7 @@ export function stageAuthToken(token: string | null): void {
   authToken = token || null
 }
 
-/** Persist the staged token (localStorage and the shared cookie). */
+/** Persist the staged token (localStorage). */
 export function commitAuthToken(): void {
   if (authToken) setAuthToken(authToken)
 }
@@ -70,9 +65,8 @@ export function discardStagedAuthToken(): void {
 }
 
 /**
- * Memory → localStorage → shared cookie. The cookie is the cross-product hop:
- * finding a token there means the user signed in on another AICOUNTLY product,
- * so it is promoted into localStorage for this origin.
+ * Memory → localStorage. Cross-product sign-in is the portal hand-off, not a
+ * shared cookie.
  */
 export function getAuthToken(): string | null {
   if (authToken) return authToken
@@ -90,15 +84,7 @@ export function getAuthToken(): string | null {
     }
   }
 
-  authToken = readSharedAuthToken()
-  if (authToken && store) {
-    try {
-      store.setItem(AUTH_TOKEN_KEY, authToken)
-    } catch {
-      /* ignore */
-    }
-  }
-  return authToken
+  return null
 }
 
 // ---------- ses_key (memory only, never persisted) ----------
