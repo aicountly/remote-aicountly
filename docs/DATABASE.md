@@ -8,6 +8,17 @@ Every table is prefixed `remote_`. AICOUNTLY runs several products against
 shared infrastructure, and a table called `sessions` would be a collision
 waiting to happen.
 
+## Which database
+
+The database **name and username come from Console > SaaS Database Details**
+(`CONSOLE_API_URL` + `CONSOLE_DB_DETAILS_KEY`, the `sdb_` key generated on this
+deployment's row); the hostname, port and password stay in `backend/.env`.
+`database.default.database` / `.username` are a local-development fallback and are
+not read while both Console variables are set. `php spark remote:db-check` shows where
+the connection comes from and whether it works. The test suite never uses Console: it
+runs against the `tests` connection group (`database.tests.*`). See
+[DEPLOYMENT.md](DEPLOYMENT.md).
+
 ## Migrations
 
 ```bash

@@ -55,7 +55,7 @@ check_with_hint() {
 # It is Remote's API (fatal; the old check printed an error but let the deploy pass). "degraded"
 # (HTTP 503) means it cannot reach its database: configuration on the server, not this deploy, so
 # it only warns.
-check_with_hint "degraded: the API cannot reach its database. Check api/.env, and writable/logs/log-$(date +%Y-%m-%d).log on the server for the exception." \
+check_with_hint "degraded: the API cannot reach its database. Check api/.env (a databaseReason starting console_ means the database name and username could not be had from Console: CONSOLE_API_URL / CONSOLE_DB_DETAILS_KEY), run php spark remote:db-check in api/, and see writable/logs/log-$(date +%Y-%m-%d).log on the server for the exception." \
   json "Remote API (${target})" "${base}/api/health" \
   '.app == "AICOUNTLY Remote"' \
   '.status == "ok"'
