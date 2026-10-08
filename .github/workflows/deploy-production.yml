@@ -14,6 +14,11 @@ name: Deploy to cPanel Production
 
 on:
   workflow_dispatch:
+    inputs:
+      run_ci_gate:
+        description: Run the GitHub test gate before deploying (off = the suite was run locally before merge)
+        type: boolean
+        default: false
 
 # Never let two deploys to the same target overlap.
 concurrency:
@@ -27,12 +32,16 @@ jobs:
   # Gate: the full test-and-lint suite runs first, on this exact commit, by calling
   # ci.yml as a reusable workflow. The deploy job `needs:` it, so a red suite
   # blocks the deploy. The suite only tests and lints; it never deploys or reaches a live host.
+  # Off by default since 2026-10-08 (tests run locally before merge, to save Actions
+  # minutes): tick the run_ci_gate input when starting the deploy to run it here first.
   verify:
+    if: ${{ inputs.run_ci_gate }}
     name: Verify (full CI suite)
     uses: ./.github/workflows/ci.yml
 
   deploy:
     needs: verify
+    if: ${{ !cancelled() && !failure() }}
     name: Build and deploy to Production
     runs-on: ubuntu-latest
     timeout-minutes: 15
