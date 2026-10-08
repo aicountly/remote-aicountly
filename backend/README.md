@@ -7,7 +7,8 @@ This is one of three pieces; see the [repository README](../README.md) and
 
 ```bash
 composer install
-cp .env.example .env         # then fill in the database and the two secrets
+cp .env.example .env         # then fill in the database (locally database.default.database / .username; on a server Console names them) and the two secrets
+php spark remote:db-check    # where the database connection comes from, and whether it works
 php spark migrate
 php spark db:seed RemotePlatformDefaultsSeeder
 php spark serve --port 8080
