@@ -76,7 +76,17 @@
   #   frame-ancestors 'none' — Remote must never be embedded; a framed screen
   #                            share is a screen share the user cannot see the
   #                            context of
-  Header set Content-Security-Policy "default-src 'self'; script-src 'self' https://www.googletagmanager.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://www.google-analytics.com; media-src 'self' blob:; font-src 'self' data:; connect-src 'self' https://my.aicountly.com wss: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+  #
+  # AICOUNTLY Connect (the embedded widget, src/connect/): its loader.js and
+  # widget.js (script-src), widget.css — a <link> inside the widget's shadow
+  # root, which style-src still governs — and its static images (img-src) come
+  # from the Connect origin, production and sandbox. Its API calls are plain
+  # https fetches (connect-src, listed explicitly though `https:` already
+  # covers them). It uses no frames, fonts or workers of its own, so nothing
+  # else is opened up. Permissions-Policy is deliberately unchanged: a Connect
+  # audio call uses the microphone Remote already allows; `camera=()` stays, so
+  # a Connect video call cannot start here.
+  Header set Content-Security-Policy "default-src 'self'; script-src 'self' https://www.googletagmanager.com https://connect.aicountly.com https://connect.gh.aicountly.com; style-src 'self' 'unsafe-inline' https://connect.aicountly.com https://connect.gh.aicountly.com; img-src 'self' data: blob: https://www.google-analytics.com https://connect.aicountly.com https://connect.gh.aicountly.com; media-src 'self' blob:; font-src 'self' data:; connect-src 'self' https://my.aicountly.com https://connect.aicountly.com https://connect.gh.aicountly.com wss: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
 </IfModule>
 
 # Deny access to any dotfile that somehow lands in the docroot (e.g. .env),

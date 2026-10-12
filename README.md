@@ -23,6 +23,10 @@ the desktop agent, controls it.
   customer was working in
 - **Company policy, role and user permissions**, resolved server-side
 - **Session history and an audit trail** — without ever storing screen content
+- **AICOUNTLY Connect** in the signed-in app — the bottom-right launcher for
+  conversations, calls and AI Pulse (pinned first), as in every AICOUNTLY
+  product; taken down during a live session. See
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#aicountly-connect)
 
 On a Windows machine with **AICOUNTLY Remote for Windows** installed:
 
@@ -187,6 +191,7 @@ everywhere; until then the header shows the plain wordmark. See
 | [DEVELOPMENT.md](docs/DEVELOPMENT.md) | Running it, and the two-browser walkthrough |
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | cPanel deployment and first-run setup |
 | [SAFE_SHARE_INTEGRATION.md](docs/SAFE_SHARE_INTEGRATION.md) | Launching Remote from another AICOUNTLY product |
+| [ARCHITECTURE.md § AICOUNTLY Connect](docs/ARCHITECTURE.md#aicountly-connect) | The embedded Connect widget: where, session, scope, live sessions |
 | [DESKTOP_AGENT.md](docs/DESKTOP_AGENT.md) | How the desktop agent plugs into this |
 | [desktop/ARCHITECTURE.md](docs/desktop/ARCHITECTURE.md) | The agent's design, and what is not built |
 | [desktop/SECURITY.md](docs/desktop/SECURITY.md) | What has to be true before a keystroke lands |

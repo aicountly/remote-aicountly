@@ -186,7 +186,12 @@ Cache-Control: no-store, private
 
 The API returns only JSON, which is what makes `default-src 'none'`
 appropriate. The SPA's own CSP ships with the web build in
-`web/public/.htaccess` and must permit the app's scripts and its WebSocket.
+`web/public/.htaccess` and must permit the app's scripts and its WebSocket —
+and the AICOUNTLY Connect widget's origins (`connect.aicountly.com`,
+`connect.gh.aicountly.com`) in `script-src`, `style-src`, `img-src` and
+`connect-src`, nothing wider. The widget authenticates with Remote's ses_key as
+a Bearer to Connect only, renders in its own shadow root, and is destroyed for
+the duration of a live session (see ARCHITECTURE.md § AICOUNTLY Connect).
 
 CORS is an exact-match allowlist and is empty in both deployed environments,
 where the app and API share an origin. `Access-Control-Allow-Origin: *` is
