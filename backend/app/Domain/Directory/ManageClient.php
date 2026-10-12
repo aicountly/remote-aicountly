@@ -18,10 +18,16 @@ use Config\Remote as RemoteConfig;
  *
  * Contract (manage-aicountly `server-php/public/index.php`):
  *
- *   GET /api/companyinfo?comp_id=   404 "not found or access denied" unless the
- *        session has an access row; otherwise the company with `ownership` and
- *        `access_type`.
- *   GET /api/companies?filter=all   the companies the session may open, paged.
+ *   GET /api/companyinfo?comp_id=&app=remote   404 "not found or access denied"
+ *        unless the session has an access row; 403 COMPANY_ACCESS_REQUIRED when
+ *        the person may see the company but not open it in Remote (company
+ *        registry, per-application access); otherwise the company with
+ *        `ownership` and `access_type`.
+ *   GET /api/companies?filter=all&app=remote   the companies the session may
+ *        open, paged; each row carries `can_open_in_current_app` for Remote.
+ *
+ * Both calls name Remote (`app=remote`, its Manage catalog key) so that Manage
+ * answers for Remote and not merely for company membership.
  *   GET /api/companies/{id}/share   the member directory (uuid, display_name,
  *        email, is_owner) — answered to any member, 403 to anyone else.
  *
@@ -39,6 +45,9 @@ class ManageClient
     private const PAGE_SIZE               = 100;
     private const MAX_PAGES               = 10;
 
+    /** Remote's Manage catalog key (company registry, per-application access). */
+    public const APP_KEY = 'remote';
+
     public function __construct(private readonly RemoteConfig $config)
     {
     }
@@ -50,7 +59,7 @@ class ManageClient
      */
     public function companyAccess(string $sesKey, int $companyId): array
     {
-        $result = $this->get('companyinfo?comp_id=' . $companyId, $sesKey);
+        $result = $this->get('companyinfo?comp_id=' . $companyId . '&app=' . self::APP_KEY, $sesKey);
         $answer = self::classifyCompanyInfo($result['status'], $result['body'], $companyId);
 
         if ($answer['state'] !== 'unevaluated') {
@@ -116,17 +125,23 @@ class ManageClient
     }
 
     /**
-     * Every company this session may open, as company id => name.
+     * Every company this session may open in Remote, as company id => name.
+     *
+     * A row Manage marks `can_open_in_current_app: false` (the person may see
+     * the company but not open it in Remote) is left out — denied, fail closed.
+     * A row without the field (a Manage that predates per-application access)
+     * counts as before.
      *
      * @return array<int, string>|null null when Manage could not be asked
      */
     public function accessibleCompanies(string $sesKey): ?array
     {
         $companies = [];
+        $listed    = [];
 
         for ($page = 1; $page <= self::MAX_PAGES; $page++) {
             $result = $this->get(
-                'companies?filter=all&page=' . $page . '&per_page=' . self::PAGE_SIZE,
+                'companies?filter=all&app=' . self::APP_KEY . '&page=' . $page . '&per_page=' . self::PAGE_SIZE,
                 $sesKey,
             );
             if ($result['status'] !== 200) {
@@ -147,13 +162,18 @@ class ManageClient
                     continue;
                 }
                 $id = (int) ($row['comp_id'] ?? $row['cmp_id'] ?? $row['id'] ?? 0);
-                if ($id > 0) {
-                    $companies[$id] = trim((string) ($row['company_name'] ?? $row['comp_name'] ?? $row['name'] ?? ''));
+                if ($id <= 0) {
+                    continue;
                 }
+                $listed[$id] = true;
+                if (($row['can_open_in_current_app'] ?? null) === false) {
+                    continue; // visible to the person, not openable in Remote
+                }
+                $companies[$id] = trim((string) ($row['company_name'] ?? $row['comp_name'] ?? $row['name'] ?? ''));
             }
 
             $total = (int) ($body['total'] ?? 0);
-            if (count($rows) < self::PAGE_SIZE || ($total > 0 && count($companies) >= $total)) {
+            if (count($rows) < self::PAGE_SIZE || ($total > 0 && count($listed) >= $total)) {
                 break;
             }
         }

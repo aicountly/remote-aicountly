@@ -14,10 +14,12 @@ import {
   MonitorSmartphone,
   MonitorUp,
   ScrollText,
+  Search,
   Settings,
   ShieldCheck,
   UserCog,
   Users,
+  UsersRound,
   X,
 } from 'lucide-react'
 
@@ -28,6 +30,9 @@ import AicountlyLogo from '../components/brand/AicountlyLogo'
 import { AppLauncher } from '../components/AppLauncher'
 import { consumeDesktopSignInReturnPath } from '../features/desktop/returnPath'
 import { ConnectMount } from '../connect/ConnectMount'
+import Modal from '../components/ui/Modal'
+import { CompanyDirectoryPicker } from '../company-access/index.ts'
+import { REGISTRY_APP_NAME, getCompanyRegistry } from '../services/companyRegistry'
 
 /**
  * The application frame: AICOUNTLY header, organisation switcher, navigation.
@@ -45,6 +50,7 @@ export default function AppShell() {
   const navigate = useNavigate()
 
   const [scopeMenuOpen, setScopeMenuOpen] = useState(false)
+  const [browsingCompanies, setBrowsingCompanies] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const scopeRef = useRef<HTMLDivElement>(null)
 
@@ -117,6 +123,8 @@ export default function AppShell() {
           ...(can(PERMISSIONS.AUDIT_VIEW) ? [{ to: '/admin/audit', label: 'Audit trail', icon: ScrollText }] : []),
         ]
       : []),
+    // Company access (Manage's company registry): who may open this organisation in Remote.
+    ...(scopeType === 'COMPANY' ? [{ to: '/settings/users-access', label: 'Users & Access', icon: UsersRound }] : []),
     { to: '/settings', label: 'Settings', icon: Settings },
   ]
 
@@ -200,13 +208,49 @@ export default function AppShell() {
 
               {companies.length === 0 ? (
                 <p className="scope-menu__empty">
-                  No AICOUNTLY organisations are linked to your account yet. Start Remote from a product
-                  such as AICOUNTLY Books to bring its organisation across.
+                  No AICOUNTLY organisations are linked to your account yet. Search your workspace
+                  companies below first, or start Remote from a product such as AICOUNTLY Books to bring
+                  its organisation across.
                 </p>
               ) : null}
+
+              <button
+                type="button"
+                role="menuitem"
+                className="scope-menu__item scope-menu__browse"
+                onClick={() => {
+                  setScopeMenuOpen(false)
+                  setBrowsingCompanies(true)
+                }}
+              >
+                <span className="scope-menu__name">
+                  <Search size={14} aria-hidden="true" /> Browse all workspace companies
+                </span>
+              </button>
             </div>
           ) : null}
         </div>
+
+        <Modal
+          open={browsingCompanies}
+          title="Workspace companies"
+          description="Every company you can see in your Aicountly workspaces. Seeing a company does not give access to it."
+          onClose={() => setBrowsingCompanies(false)}
+          size="lg"
+        >
+          {browsingCompanies ? (
+            <CompanyDirectoryPicker
+              client={getCompanyRegistry()}
+              appName={REGISTRY_APP_NAME}
+              title={null}
+              selectedCmpId={scopeType === 'COMPANY' ? companyId : null}
+              onOpen={(company) => {
+                setBrowsingCompanies(false)
+                void chooseScope('COMPANY', company.cmp_id)
+              }}
+            />
+          ) : null}
+        </Modal>
 
         <div className="shell__actions">
           {policy && !policy.remoteEnabled ? (

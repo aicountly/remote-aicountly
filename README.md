@@ -137,6 +137,28 @@ Windows machine — is set out in
 [docs/desktop/TESTING.md](docs/desktop/TESTING.md), and the manual pass that
 has to precede a release is `desktop/tests/MANUAL.md`.
 
+## Company access (registry)
+
+Manage's company registry decides who may see and who may open a company, per product.
+
+- **App key:** `remote`.
+- **Server gate:** `backend/app/Domain/Directory/ManageClient.php` names Remote on both questions it
+  puts to Manage: `companyinfo?comp_id=…&app=remote` (Manage answers **403 `COMPANY_ACCESS_REQUIRED`**
+  for someone who may see the company but not open it in Remote → `DENIED`) and the fallback
+  `companies?filter=all&app=remote`, where a row with `can_open_in_current_app: false` counts as
+  denied (absent field = legacy behaviour). `MembershipVerifier` acts on that denial as on any other:
+  the `remote_user_company_access` row and the person's seat in that company's live sessions are removed.
+- **Local projection:** `remote_user_company_access` is a cache of Manage's answer, re-confirmed per
+  `membershipVerifySeconds`; it is not an independent source of access.
+- **Picker:** the organisation menu has *Browse all workspace companies* (shared `CompanyDirectoryPicker`),
+  which switches scope through the existing `switchScope`.
+- **Users & Access:** `/settings/users-access` (nav entry in company scope) renders the shared
+  `CompanyUsersAccessPanel` for the selected organisation, natively. Remote's own user and role
+  permissions (Administration) are unchanged.
+- **Client:** `web/src/services/companyRegistry.ts` (browser → Manage `/api/v1/*` with the in-memory
+  ses_key). `web/src/company-access/` is copied verbatim from Manage (`Saas Common Handler/company-access`).
+- **Discovery is not access:** a company listed in the directory may still be closed to Remote.
+
 ## Environment variables
 
 Two `.env` files, working in opposite ways.

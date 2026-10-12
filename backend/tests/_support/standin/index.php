@@ -19,6 +19,12 @@
  *   mgr-ok-<cmp>             a Manage session that owns company <cmp>
  *   mgr-eval-<cmp>           companyinfo that does not say how the session relates
  *   mgr-none                 a Manage session with no companies
+ *   mgr-noapp-<cmp>          a member of <cmp> whose access excludes Remote: asked
+ *                            for app=remote, companyinfo answers 403
+ *                            COMPANY_ACCESS_REQUIRED and the list marks the row
+ *                            can_open_in_current_app=false; without app, as before
+ *   mgr-evalnoapp-<cmp>      companyinfo that says nothing, and a list that marks
+ *                            <cmp> not openable in Remote
  */
 
 $path   = (string) parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
@@ -28,7 +34,7 @@ $header = getallheaders();
 $bearer = trim(preg_replace('/^Bearer\s+/i', '', (string) ($header['Authorization'] ?? $header['authorization'] ?? '')));
 
 if (($log = getenv('STANDIN_LOG')) !== false && $log !== '') {
-    file_put_contents($log, $_SERVER['REQUEST_METHOD'] . ' ' . $path . ' ' . ($query['comp_id'] ?? '') . ' ' . $bearer . "\n", FILE_APPEND);
+    file_put_contents($log, $_SERVER['REQUEST_METHOD'] . ' ' . $path . ' ' . ($query['comp_id'] ?? '') . ' ' . $bearer . (isset($query['app']) ? ' app=' . $query['app'] : '') . "\n", FILE_APPEND);
 }
 
 function reply(int $status, $body, ?string $contentType = null): void
@@ -66,13 +72,20 @@ if ($path === '/api/userprofile') {
 
 // ------------------------------------------------------------------- manage
 
-$ownedCompany = preg_match('/^mgr-(?:ok|eval)-(\d+)$/', $bearer, $m) ? (int) $m[1] : 0;
-$evaluated    = str_starts_with($bearer, 'mgr-ok-');
+$ownedCompany = preg_match('/^mgr-(?:ok|eval|noapp|evalnoapp)-(\d+)$/', $bearer, $m) ? (int) $m[1] : 0;
+$evaluated    = str_starts_with($bearer, 'mgr-ok-') || str_starts_with($bearer, 'mgr-noapp-');
+// Company registry: asked for Remote, a member whose access excludes it is refused.
+$askedRemote  = ($query['app'] ?? '') === 'remote';
+$notForRemote = $askedRemote && (str_starts_with($bearer, 'mgr-noapp-') || str_starts_with($bearer, 'mgr-evalnoapp-'));
 
 if ($path === '/api/companyinfo') {
     $asked = (int) ($query['comp_id'] ?? 0);
     if ($ownedCompany === 0 || $asked !== $ownedCompany) {
         reply(404, ['message' => 'not found or access denied']);
+    }
+    if ($notForRemote && str_starts_with($bearer, 'mgr-noapp-')) {
+        reply(403, ['success' => false, 'status' => 0, 'code' => 'COMPANY_ACCESS_REQUIRED', 'message' => 'You can see this company, but you do not have access to it in Remote.',
+            'error' => ['code' => 'COMPANY_ACCESS_REQUIRED', 'message' => 'Ask the company owner for access.', 'details' => ['cmp_id' => $asked, 'app' => 'remote']]]);
     }
     $company = ['comp_id' => $asked, 'comp_name' => 'ABC Private Limited'];
     if ($evaluated) {
@@ -84,6 +97,10 @@ if ($path === '/api/companyinfo') {
 
 if ($path === '/api/companies') {
     $rows = $ownedCompany > 0 ? [['comp_id' => $ownedCompany, 'company_name' => 'ABC Private Limited', 'ownership' => 'owner']] : [];
+    if ($askedRemote && $rows !== []) {
+        $rows[0]['app_access_status'] = $notForRemote ? 'ACCESS_RESTRICTED' : 'OWNER';
+        $rows[0]['can_open_in_current_app'] = ! $notForRemote;
+    }
     reply(200, ['success' => '1', 'data' => $rows, 'total' => count($rows)]);
 }
 

@@ -1605,3 +1605,16 @@
     max-width: none;
   }
 }
+
+/* Company registry: "Browse all workspace companies" at the foot of the organisation menu. */
+.scope-menu__browse {
+  margin-top: var(--space-1);
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.scope-menu__browse .scope-menu__name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}

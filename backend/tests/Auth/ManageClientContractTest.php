@@ -89,6 +89,33 @@ final class ManageClientContractTest extends RemoteTestCase
         );
     }
 
+    public function testEveryQuestionNamesRemoteSoManageAnswersForRemote(): void
+    {
+        $manage = Services::manageClient();
+        $manage->companyAccess('mgr-ok-481', 481);
+        $manage->accessibleCompanies('mgr-ok-481');
+
+        $requests = StandInServer::requests();
+        $this->assertNotEmpty($requests);
+        foreach ($requests as $line) {
+            $this->assertStringEndsWith(' app=remote', $line, 'company registry: Remote names itself to Manage');
+        }
+    }
+
+    public function testManageRefusingRemoteForTheCompanyIsADenial(): void
+    {
+        $manage = Services::manageClient();
+
+        // A member who may see the company, but whose access excludes Remote: 403 COMPANY_ACCESS_REQUIRED.
+        $this->assertSame(ManageClient::DENIED, $manage->companyAccess('mgr-noapp-481', 481)['state']);
+        $this->assertSame([], $manage->accessibleCompanies('mgr-noapp-481'), 'a row not openable in Remote is not a company Remote may use');
+
+        // Where companyinfo says nothing, the list decides — and a row marked not openable denies.
+        $this->assertSame(ManageClient::DENIED, $manage->companyAccess('mgr-evalnoapp-481', 481)['state']);
+        // A row Manage marks openable (or a legacy row without the field) still grants.
+        $this->assertSame(ManageClient::GRANTED, $manage->companyAccess('mgr-eval-481', 481)['state']);
+    }
+
     public function testTheMemberDirectoryListsNamesAndEmailsForAMember(): void
     {
         $members = Services::manageClient()->companyMembers('mgr-ok-481', 481);
