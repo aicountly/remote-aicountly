@@ -511,6 +511,33 @@ export async function ensureSesKey(): Promise<string> {
   return mintInFlight
 }
 
+/**
+ * The ses_key for an embedded sibling (AICOUNTLY Connect's `getSesKey`).
+ *
+ * Same key as Remote's own API calls (`ensureSesKey`); with `forceRefresh` —
+ * Connect saw a 401 — a fresh one is minted from the auth_token, replacing the
+ * cached key in one step so Remote's own calls never see a gap. It never
+ * throws, never navigates and never signs anyone out: `null` is the answer when
+ * signed out, while signing out, or when the portal refused or could not be
+ * reached, and Remote's own requests decide what that means for the person.
+ */
+export async function sesKeyForEmbed(forceRefresh: boolean): Promise<string | null> {
+  if (isLogoutInProgress() || !getAuthToken()) return null
+  try {
+    if (forceRefresh) {
+      if (!mintInFlight) {
+        mintInFlight = requestSesKey('/seskey').finally(() => {
+          mintInFlight = null
+        })
+      }
+      return await mintInFlight
+    }
+    return await ensureSesKey()
+  } catch {
+    return null
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Logout
 // ---------------------------------------------------------------------------

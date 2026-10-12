@@ -27,6 +27,7 @@ import { PERMISSIONS } from '../types/remote'
 import AicountlyLogo from '../components/brand/AicountlyLogo'
 import { AppLauncher } from '../components/AppLauncher'
 import { consumeDesktopSignInReturnPath } from '../features/desktop/returnPath'
+import { ConnectMount } from '../connect/ConnectMount'
 
 /**
  * The application frame: AICOUNTLY header, organisation switcher, navigation.
@@ -264,6 +265,10 @@ export default function AppShell() {
           <Outlet />
         </main>
       </div>
+
+      {/* AICOUNTLY Connect (AI Pulse pinned first): its own element under <body>,
+          bottom-right; gone with the shell on sign-out and in the session room. */}
+      <ConnectMount />
     </div>
   )
 }

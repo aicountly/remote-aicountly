@@ -12,6 +12,8 @@ interface ImportMetaEnv {
   readonly VITE_GA4_SAAS_REMOTE_MEASUREMENT_ID?: string
   /** Shared fallback GA4 measurement ID. */
   readonly VITE_GA4_MEASUREMENT_ID?: string
+  /** AICOUNTLY Connect origin for the embedded widget; derived from the host when unset, `off` disables it. */
+  readonly VITE_CONNECT_ORIGIN?: string
 }
 
 interface ImportMeta {

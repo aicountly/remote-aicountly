@@ -167,6 +167,26 @@ A company-scoped workflow can never be escaped into a personal session: with a
 verified context present, `scopeType: PERSONAL` is refused outright rather than
 quietly downgraded.
 
+## AICOUNTLY Connect
+
+Remote embeds the **AICOUNTLY Connect** widget, like Books, Sales, HRMS,
+Billing, Docs, Calendar, Contacts and Purchases: a bottom-right launcher that
+opens the person's Connect inbox — conversations, calls, and **AI Pulse pinned
+first**, answered live by Pulse through Connect. The contract is
+connect-aicountly `docs/EMBED_SDK.md` (v1); the code is `web/src/connect/`.
+
+| | |
+| --- | --- |
+| Where | `ConnectMount` in the signed-in shell (`app/AppShell.tsx`). Never for a guest, never on the sign-in screen. |
+| Origin | `{connect}/embed/v1/loader.js`, `connect` from the launcher catalog (`connect.aicountly.com`; sandbox and localhost `connect.gh.aicountly.com`), or `VITE_CONNECT_ORIGIN` (`off` disables). |
+| Session | `getSesKey` = `sesKeyForEmbed` (`auth/portal.ts`): Remote's own ses_key, re-minted on `forceRefresh`, `null` when signed out or refused — it never throws or navigates. |
+| Scope | From Remote's active scope (the bootstrap's `activeScope`, then the header's organisation menu), never from a query parameter: `companyId` in a COMPANY scope — `fyId` / `boId` only when the bootstrap knows them — and nothing in Personal scope (Pulse answers without a company). `update()` on every switch. |
+| Live sessions | The room (`/room/:uuid`) and a guest link (`/join/:token`) sit outside the shell, so the widget is **destroyed** on entering a session and mounted again on leaving; `ConnectMount` also refuses those paths itself. Destroyed rather than `launcher: false`, because `calling` is read at mount only: a hidden widget would still poll for Connect calls and could ring, and ask for the microphone, over the shared screen. |
+| Stacking | `zIndex: 50` — above the header (30), mobile navigation (24–25) and organisation menu (40); below dialogs (100) and the app launcher popover (1000). |
+| Sign-out | The shell unmounts and `destroy()` removes the widget, its element and the session callback. |
+| Failure | Loader offline, blocked, hanging (10 s) or an `init()` that never settles (15 s): Remote is unchanged, no launcher, at most one console warning. |
+| Headers | The SPA's CSP (`web/public/.htaccess`) allows the two Connect origins in `script-src`, `style-src`, `img-src` and `connect-src`. `camera=()` is kept, so Connect calls from Remote are audio-only. Connect's CORS list must admit `remote.aicountly.com` and `remote.gh.aicountly.com`. |
+
 ---
 
 ## Realtime
@@ -333,6 +353,7 @@ out of twenty.
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Running the pieces, and the two-browser walkthrough |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | cPanel deployment and first-run setup |
 | [SAFE_SHARE_INTEGRATION.md](SAFE_SHARE_INTEGRATION.md) | Launching Remote from another AICOUNTLY product |
+| [AICOUNTLY Connect](#aicountly-connect) | The embedded Connect widget (AI Pulse pinned first) |
 | [DESKTOP_AGENT.md](DESKTOP_AGENT.md) | How the desktop agent plugs into this |
 | [desktop/ARCHITECTURE.md](desktop/ARCHITECTURE.md) | The Windows agent's own design |
 | [desktop/SECURITY.md](desktop/SECURITY.md) | What has to be true before a keystroke lands |
