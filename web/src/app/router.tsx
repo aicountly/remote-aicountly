@@ -30,6 +30,7 @@ const AdminPermissions = lazy(() => import('../features/admin/PermissionsPage'))
 const AdminRolePermissions = lazy(() => import('../features/admin/RolePermissionsPage'))
 const AdminAudit = lazy(() => import('../features/admin/AuditPage'))
 const SettingsPage = lazy(() => import('../features/settings/SettingsPage'))
+const UsersAccessPage = lazy(() => import('../features/settings/UsersAccessPage'))
 const DesktopSignIn = lazy(() => import('../features/desktop/DesktopSignInPage'))
 const NotFound = lazy(() => import('../features/misc/NotFoundPage'))
 
@@ -54,6 +55,7 @@ export const router = createBrowserRouter([
       { path: 'admin/roles', element: page(<AdminRolePermissions />) },
       { path: 'admin/audit', element: page(<AdminAudit />) },
       { path: 'settings', element: page(<SettingsPage />) },
+      { path: 'settings/users-access', element: page(<UsersAccessPage />) },
       { path: 'desktop-signin', element: page(<DesktopSignIn />) },
       { path: '*', element: page(<NotFound />) },
     ],
