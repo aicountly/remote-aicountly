@@ -38,6 +38,37 @@ pub const PRODUCT_NAME: &str = "AICOUNTLY Remote";
 /// This build's version. One authoritative value — see `desktop/Cargo.toml`.
 pub const VERSION: &str = AGENT_VERSION;
 
+/// The argument the installer's sign-in `Run` entry starts the agent with
+/// (`installers/windows/hooks.nsh`).
+pub const BACKGROUND_ARGUMENT: &str = "--background";
+
+/// Whether the agent was started in the background — by the sign-in `Run`
+/// entry — rather than by a person opening it.
+///
+/// A background start goes to the tray without putting a window in front of
+/// whoever just signed in; every other start shows the window. Only the exact
+/// argument counts, and the program name (the first item) never does.
+#[must_use]
+pub fn is_background_launch<I>(arguments: I) -> bool
+where
+    I: IntoIterator,
+    I::Item: AsRef<std::ffi::OsStr>,
+{
+    arguments
+        .into_iter()
+        .skip(1)
+        .any(|argument| argument.as_ref() == std::ffi::OsStr::new(BACKGROUND_ARGUMENT))
+}
+
+/// Whether closing the window hides it (true) or lets the application exit.
+///
+/// The setting decides — except that a running session always keeps the
+/// application, and with it the tray icon and the way to stop control, alive.
+#[must_use]
+pub fn keep_running_after_close(run_in_background: bool, session_active: bool) -> bool {
+    run_in_background || session_active
+}
+
 /// Build and run the Tauri application.
 ///
 /// Kept out of `main.rs` so `main.rs` is four lines and everything testable is
@@ -60,8 +91,13 @@ pub fn run() {
         // One instance. A second copy of the agent would mean two tray icons,
         // two presence connections claiming the same device, and two processes
         // each believing it owns the session.
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            tray::show_window(app);
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // A second sign-in start (`--background`) must not pull the window
+            // up over what the person is doing; a person opening the agent
+            // again must.
+            if !is_background_launch(argv) {
+                tray::show_window(app);
+            }
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -89,6 +125,13 @@ pub fn run() {
 
             tray::install(app.handle())?;
 
+            // The main window is created hidden (tauri.conf.json). The sign-in
+            // `Run` entry passes `--background`, and that start belongs in the
+            // tray; any other start is a person opening the agent.
+            if !is_background_launch(std::env::args_os()) {
+                tray::show_window(app.handle());
+            }
+
             // The connection loop: authenticate, stay reachable, and notice
             // what changed on the server. Its handle lives in Tauri's managed
             // state so it is dropped — and the loop stops — when the
@@ -115,11 +158,72 @@ pub fn run() {
             // Remote" are separate items — because quitting the UI on a
             // machine an administrator enabled unattended access for is a
             // decision, not an accident.
+            //
+            // "Keep running when the window is closed" in Settings turns that
+            // off, but never while a session is running: the window and the
+            // tray are how a person sees and stops it.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+                use tauri::Manager;
+
+                let agent = window.app_handle().state::<std::sync::Arc<Agent>>();
+
+                if keep_running_after_close(
+                    agent.config().run_in_background,
+                    agent.state().is_session_active(),
+                ) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
             }
         })
         .run(tauri::generate_context!())
         .expect("AICOUNTLY Remote failed to start");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_background_launch, keep_running_after_close};
+
+    #[test]
+    fn closing_the_window_exits_only_when_the_setting_is_off_and_nothing_is_running() {
+        assert!(keep_running_after_close(true, false));
+        assert!(keep_running_after_close(true, true));
+        assert!(keep_running_after_close(false, true));
+        assert!(!keep_running_after_close(false, false));
+    }
+
+    #[test]
+    fn the_sign_in_run_entry_starts_in_the_background() {
+        assert!(is_background_launch([
+            "AICOUNTLY Remote.exe",
+            "--background"
+        ]));
+    }
+
+    #[test]
+    fn a_plain_start_shows_the_window() {
+        assert!(!is_background_launch(["AICOUNTLY Remote.exe"]));
+        assert!(!is_background_launch(Vec::<String>::new()));
+    }
+
+    #[test]
+    fn only_the_exact_argument_counts() {
+        assert!(!is_background_launch([
+            "AICOUNTLY Remote.exe",
+            "--background=false"
+        ]));
+        assert!(!is_background_launch([
+            "AICOUNTLY Remote.exe",
+            "background"
+        ]));
+        assert!(!is_background_launch([
+            "AICOUNTLY Remote.exe",
+            "--Background"
+        ]));
+    }
+
+    #[test]
+    fn the_program_name_is_never_an_argument() {
+        assert!(!is_background_launch(["--background"]));
+    }
 }

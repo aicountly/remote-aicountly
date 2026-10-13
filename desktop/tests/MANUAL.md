@@ -37,6 +37,18 @@ Record the build under test — the version, the commit and whether it is signed
 | 1.7 | Task Manager → Startup apps | "AICOUNTLY Remote", enabled, removable |
 | 1.8 | Check UAC settings before and after | **Unchanged.** `ConsentPromptBehaviorAdmin` and `PromptOnSecureDesktop` untouched |
 | 1.9 | Check Windows Security | No exclusion added; no setting changed |
+| 1.10 | Finish the installer with "Run AICOUNTLY Remote" ticked | The window opens |
+| 1.11 | Sign out and back in (or restart) | The tray icon appears and the window does **not** open: the Run entry passes `--background` |
+| 1.12 | With the agent already running, start `"AICOUNTLY Remote.exe" --background` again | Nothing opens. Start it again without the flag: the existing window comes to the front |
+
+### 1a. Upgrade and reinstall over a running install
+
+| # | Do | Expect |
+|---|---|---|
+| 1a.1 | Install a newer build over the running one, service **running**, agent open | No "file in use" prompt and no reboot request; the installer waits for the service to stop |
+| 1a.2 | `sc.exe query AicountlyRemoteService` afterwards | `RUNNING`, registered once |
+| 1a.3 | Open `services.msc` and leave it open, then reinstall | The service is registered afterwards (the installer retries past "marked for deletion"), or says plainly that it could not be |
+| 1a.4 | Install the same build twice in a row | Still one service, one Run entry, one Start Menu entry |
 
 ## 2. Registration
 
@@ -54,6 +66,16 @@ Record the build under test — the version, the commit and whether it is signed
 | 2.10 | Register again, but decline the code in the browser instead of confirming | The agent says the sign-in was declined and offers to try again |
 | 2.11 | Register again, close the browser tab, and wait past the code's expiry (see `Config\Remote::$desktopSignInCodeTtlSeconds`) without confirming | The agent says the code expired and offers to start again |
 | 2.12 | Already signed in to AICOUNTLY in the default browser before clicking Register | The browser tab still opens and still needs the code confirmed — this is the case the old loopback sign-in silently failed on; it must not silently fail here |
+
+## 2a. Settings
+
+| # | Do | Expect |
+|---|---|---|
+| 2a.1 | As a **standard** user, change Screen quality and press Save | A clear message that settings can only be changed by an administrator, not "could not be read" |
+| 2a.2 | As an administrator, run the agent elevated and Save | It saves; `config.json` in `C:\ProgramData\AICOUNTLY\Remote` changes; the service picks it up on its next start |
+| 2a.3 | Turn "Keep running when the window is closed" **off**, Save, close the window | The agent exits and the tray icon goes |
+| 2a.4 | Same setting off, but with a session running, close the window | The window hides and the agent keeps running: a running session is never left without its tray icon |
+| 2a.5 | The Settings page | No "Start when I sign in" switch; the text points to Task Manager → Startup apps |
 
 ## 3. Presence and policy
 
@@ -176,6 +198,8 @@ to do the thing.
 | 11.5 | `%ProgramFiles%\AICOUNTLY Remote` | Gone |
 | 11.6 | Computers page | The device is still listed. **Correct** — the server is the authority, and an administrator removes it |
 | 11.7 | Reinstall and open the agent | Not registered. Unattended access has **not** silently come back |
+| 11.8 | Before uninstalling, create `C:\ProgramData\AICOUNTLY\Remote\device-signing-key.key.new` by hand (what a crash mid-write leaves) | After uninstall, `C:\ProgramData\AICOUNTLY` is gone, including that file |
+| 11.9 | Uninstall with the Services console open | The service is not left "marked for deletion" after the console is closed; no reboot needed |
 
 ## 12. Signed builds
 

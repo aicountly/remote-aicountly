@@ -50,10 +50,30 @@
 !macro NSIS_HOOK_PREINSTALL
   ; An upgrade must not write over a running service's binary. Stopping it
   ; first turns "file in use, reboot required" into an ordinary install.
+  ;
+  ; Waits for the service to report STOPPED rather than sleeping a fixed
+  ; moment: `sc stop` only asks, and a service that takes longer than the
+  ; sleep still has its binary open when the files are copied. A machine that
+  ; has no service yet (a first install) answers `sc query` with 1060 and
+  ; skips all of this.
   DetailPrint "Stopping the AICOUNTLY Remote service if it is running..."
-  nsExec::ExecToLog 'sc.exe stop "${AICOUNTLY_SERVICE_NAME}"'
+  Push $1
+  nsExec::ExecToLog 'sc.exe query "${AICOUNTLY_SERVICE_NAME}"'
   Pop $0
-  Sleep 1500
+  ${If} $0 == 0
+    nsExec::ExecToLog 'sc.exe stop "${AICOUNTLY_SERVICE_NAME}"'
+    Pop $0
+    StrCpy $1 0
+    ${Do}
+      nsExec::ExecToLog 'cmd.exe /c sc.exe query "${AICOUNTLY_SERVICE_NAME}" | findstr /C:"STOPPED"'
+      Pop $0
+      ${IfThen} $0 == 0 ${|} ${ExitDo} ${|}
+      IntOp $1 $1 + 1
+      ${IfThen} $1 >= 20 ${|} ${ExitDo} ${|}
+      Sleep 500
+    ${Loop}
+  ${EndIf}
+  Pop $1
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -96,8 +116,23 @@
     DetailPrint "Registering the AICOUNTLY Remote service..."
     nsExec::ExecToLog '"$INSTDIR\${AICOUNTLY_SERVICE_EXE}" --uninstall'
     Pop $0
-    nsExec::ExecToLog '"$INSTDIR\${AICOUNTLY_SERVICE_EXE}" --install'
-    Pop $0
+
+    ; A reinstall or upgrade deletes the previous registration first. If
+    ; anything still holds a handle on it (Services console, an MMC snap-in)
+    ; Windows only marks it for deletion, and creating it again fails with
+    ; error 1072 until that handle closes. Retry for a few seconds instead of
+    ; finishing an install with no service registered at all.
+    Push $1
+    StrCpy $1 0
+    ${Do}
+      nsExec::ExecToLog '"$INSTDIR\${AICOUNTLY_SERVICE_EXE}" --install'
+      Pop $0
+      ${IfThen} $0 == 0 ${|} ${ExitDo} ${|}
+      IntOp $1 $1 + 1
+      ${IfThen} $1 >= 5 ${|} ${ExitDo} ${|}
+      Sleep 2000
+    ${Loop}
+    Pop $1
 
     ${If} $0 != 0
       ; Not fatal. The machine still works for attended sessions started from
@@ -184,6 +219,10 @@
   ; `remote_security::DEVICE_KEY_ENTRY` and the `.key` suffix the Windows
   ; secure-storage provider appends.
   Delete "${AICOUNTLY_DATA_DIR}\device-signing-key.key"
+  ; The temporary file the secure-storage provider writes before renaming it
+  ; over the key (`path.with_extension("key.new")`). A crash or power loss
+  ; mid-write leaves it behind, and it is a second copy of the DPAPI blob.
+  Delete "${AICOUNTLY_DATA_DIR}\device-signing-key.key.new"
   Delete "${AICOUNTLY_DATA_DIR}\config.json"
   Delete "${AICOUNTLY_DATA_DIR}\config.json.new"
   ; The enrolment record — device uuid, company, key fingerprint; never the

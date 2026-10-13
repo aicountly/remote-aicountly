@@ -162,21 +162,38 @@ impl AgentConfig {
             detail: "has no parent directory",
         })?;
 
-        std::fs::create_dir_all(directory)
-            .map_err(|error| ConfigError::Malformed(error.to_string()))?;
+        std::fs::create_dir_all(directory).map_err(not_saved)?;
 
         let temporary = directory.join("config.json.new");
 
-        std::fs::write(&temporary, self.to_json())
-            .map_err(|error| ConfigError::Malformed(error.to_string()))?;
+        std::fs::write(&temporary, self.to_json()).map_err(|error| {
+            let _ = std::fs::remove_file(&temporary);
+
+            not_saved(error)
+        })?;
 
         std::fs::rename(&temporary, &path).map_err(|error| {
             // Leaving the temporary file behind would make the next save look
             // as though it had succeeded before.
             let _ = std::fs::remove_file(&temporary);
 
-            ConfigError::Malformed(error.to_string())
+            not_saved(error)
         })
+    }
+}
+
+/// A failed write, said as what it is.
+///
+/// The data directory is writable by SYSTEM and administrators only (see
+/// `installers/windows/hooks.nsh`), and the tray application runs as whoever is
+/// signed in — so "access denied" is the ordinary outcome of Save for a person
+/// who is not an administrator, and it must not be reported as a configuration
+/// that "could not be read".
+fn not_saved(error: std::io::Error) -> ConfigError {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        ConfigError::NotPermitted
+    } else {
+        ConfigError::NotSaved(error.to_string())
     }
 }
 
@@ -239,6 +256,14 @@ pub enum ConfigError {
     /// Not valid JSON, or not this shape.
     #[error("the configuration could not be read: {0}")]
     Malformed(String),
+
+    /// The configuration file could not be written.
+    #[error("the settings could not be saved: {0}")]
+    NotSaved(String),
+
+    /// The configuration file is not writable by this account.
+    #[error("the settings can only be changed by an administrator of this computer")]
+    NotPermitted,
 
     /// A plaintext endpoint outside a debug build.
     #[error("the {0} address must be https")]
@@ -398,6 +423,31 @@ mod tests {
 
         assert!(config.endpoint("v1/remote/devices").is_err());
         assert!(config.endpoint("//evil.example.com/steal").is_err());
+    }
+
+    #[test]
+    fn a_refused_write_says_it_needs_an_administrator() {
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+
+        assert_eq!(not_saved(denied), ConfigError::NotPermitted);
+        assert!(ConfigError::NotPermitted
+            .to_string()
+            .contains("administrator"));
+    }
+
+    #[test]
+    fn any_other_failed_write_is_reported_as_not_saved_and_not_as_unreadable() {
+        let other = std::io::Error::other("disk full");
+
+        match not_saved(other) {
+            ConfigError::NotSaved(reason) => assert!(reason.contains("disk full")),
+            unexpected => panic!("expected NotSaved, got {unexpected:?}"),
+        }
+
+        let message = ConfigError::NotSaved("x".into()).to_string();
+
+        assert!(message.contains("could not be saved"));
+        assert!(!message.contains("could not be read"));
     }
 
     #[test]

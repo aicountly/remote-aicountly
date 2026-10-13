@@ -89,17 +89,10 @@ export function SettingsPage({
           />
         </label>
 
-        <label className="field field--inline">
-          <span>
-            <span className="field__label">Start when I sign in to Windows</span>
-          </span>
-          <input
-            type="checkbox"
-            checked={draft.startAtLogin}
-            onChange={(event) => setDraft({ ...draft, startAtLogin: event.target.checked })}
-            disabled={busy}
-          />
-        </label>
+        <p className="field__hint" style={{ marginBottom: 'var(--space-4)' }}>
+          AICOUNTLY Remote starts quietly in the tray when anyone signs in to Windows. To stop that,
+          turn it off in Task Manager under Startup apps.
+        </p>
 
         <button type="button" className="btn btn--primary" onClick={() => onSave(draft)} disabled={busy}>
           Save settings
