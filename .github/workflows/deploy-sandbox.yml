@@ -365,8 +365,14 @@ jobs:
           # and independently verifies the result, because a chmod that exits 0
           # is not proof the bits actually ended up group-writable — an ACL,
           # quota, or ownership mismatch can still leave the directory unusable.
-          if ! ssh deploy-target "chmod -R 775 '$REMOTE_ROOT/api/writable'" 2>/tmp/chmod.err; then
-            echo "::error::chmod -R 775 on writable/ failed — see output below. The API will 500 on every request until this is fixed by hand over SSH."
+          #
+          # The rsync above excludes writable/cache, logs and session so a deploy
+          # never wipes them, which also means it never creates them on a server
+          # that lacks them: no cache/ is a 500 on every request, and no logs/ is
+          # a 500 with no log to explain it. Create them first (a no-op when
+          # they exist).
+          if ! ssh deploy-target "cd '$REMOTE_ROOT/api/writable' && mkdir -p cache logs session uploads debugbar && chmod -R 775 ." 2>/tmp/chmod.err; then
+            echo "::error::creating writable/ subdirectories or chmod -R 775 on writable/ failed — see output below. The API will 500 on every request until this is fixed by hand over SSH."
             sed 's/^/    /' /tmp/chmod.err
           fi
 
