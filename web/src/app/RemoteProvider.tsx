@@ -6,6 +6,7 @@ import { RemoteApiError, setLaunchContextToken } from '../services/api/client'
 import { getCapabilities } from '../services/browser/capabilities'
 import type { RemoteBrowserCapabilities } from '../services/browser/capabilities'
 import type { Bootstrap, EffectivePolicy, ScopeType } from '../types/remote'
+import { noteCompanyLifecycle, setActiveCompanyForRestrictions } from '../services/companyRestriction'
 
 /**
  * Application-wide Remote state: who you are, which organisation you are acting
@@ -125,13 +126,20 @@ export function RemoteProvider({ children }: { children: ReactNode }) {
 
       setScopeType(next.scopeType)
       setCompanyId(next.companyId)
+      setActiveCompanyForRestrictions(next.companyId)
+      // Manage's company lifecycle as Remote enforces it: the read-only banner.
+      if (data.activeScope.companyId != null) {
+        noteCompanyLifecycle(data.activeScope.companyId, (data.activeScope as { lifecycle?: unknown }).lifecycle)
+      }
 
       // bootstrap already carries the policy for the scope it chose; refetch
       // only when we restored a different one.
       if (next.scopeType === data.activeScope.scopeType && next.companyId === data.activeScope.companyId) {
         setPolicy(data.policy)
       } else {
-        setPolicy(await fetchEffectivePolicy(next.scopeType, next.companyId))
+        const restored = await fetchEffectivePolicy(next.scopeType, next.companyId)
+        if (next.companyId != null) noteCompanyLifecycle(next.companyId, (restored as { lifecycle?: unknown }).lifecycle)
+        setPolicy(restored)
       }
 
       setStatus('ready')
@@ -159,9 +167,12 @@ export function RemoteProvider({ children }: { children: ReactNode }) {
     setScopeType(nextScope)
     setCompanyId(resolvedCompanyId)
     writeStoredScope({ scopeType: nextScope, companyId: resolvedCompanyId })
+    setActiveCompanyForRestrictions(resolvedCompanyId)
 
     try {
-      setPolicy(await fetchEffectivePolicy(nextScope, resolvedCompanyId))
+      const next = await fetchEffectivePolicy(nextScope, resolvedCompanyId)
+      if (resolvedCompanyId != null) noteCompanyLifecycle(resolvedCompanyId, (next as { lifecycle?: unknown }).lifecycle)
+      setPolicy(next)
     } catch (err) {
       // A policy we could not fetch must not leave the previous organisation's
       // policy on screen — that is exactly the cross-tenant confusion §77

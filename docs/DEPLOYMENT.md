@@ -205,8 +205,14 @@ and a failure to obtain them is reported by its own `databaseReason` with a `dat
    `"database":"unavailable"` means the credentials are wrong;
    `"signalling":"unconfigured"` means `remote.signallingSecret` is empty and no
    session will connect.
-8. **Deploy the signalling service** (below).
-9. **Open the site** and sign in. See
+8. **Install the company-lifecycle worker's cron** (cPanel → Cron Jobs) and set
+   `LIFECYCLE_WEBHOOK_SECRET` / `MANAGE_API_URL` in `api/.env`
+   ([COMPANY_LIFECYCLE.md](COMPANY_LIFECYCLE.md)):
+   ```cron
+   */5 * * * * cd ~/public_html/api && php lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php >> $HOME/logs/remote-company-lifecycle.log 2>&1
+   ```
+9. **Deploy the signalling service** (below).
+10. **Open the site** and sign in. See
    [auth/AICOUNTLY_AUTH_WORKFLOW.md](auth/AICOUNTLY_AUTH_WORKFLOW.md) for what a
    healthy login looks like.
 

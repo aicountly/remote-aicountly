@@ -175,6 +175,10 @@ one. The signalling URL and the ICE servers are deliberately not build-time
 values: the browser receives them from the API, per session, so a TURN
 credential never ends up in a JavaScript bundle.
 
+Manage's company lifecycle (an organisation read-only after its subscription lapsed, then purged) needs
+`LIFECYCLE_WEBHOOK_SECRET` and `MANAGE_API_URL` in `backend/.env` and one cron line — see
+[docs/COMPANY_LIFECYCLE.md](docs/COMPANY_LIFECYCLE.md).
+
 ## Deployment
 
 Manual only — **Actions → pick a workflow → Run workflow**. Nothing deploys on

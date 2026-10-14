@@ -8,6 +8,7 @@ use App\Controllers\BaseApiController;
 use App\Domain\Policy\PermissionCatalog;
 use App\Domain\Support\ApiException;
 use App\Domain\Support\Presenter;
+use App\Libraries\CompanyLifecycle;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
 
@@ -76,6 +77,9 @@ class BootstrapController extends BaseApiController
             'activeScope' => [
                 'scopeType' => $scopeType,
                 'companyId' => $companyId,
+                // Manage's company lifecycle as Remote enforces it (active | restricted | purge_pending |
+                // purged, restricted_until): the SPA's read-only banner.
+                'lifecycle' => $companyId !== null ? CompanyLifecycle::lifecycle($companyId) : null,
             ],
             'launchContext' => $context?->toArray(),
             'policy'  => $policy->toArray(),
@@ -117,6 +121,9 @@ class BootstrapController extends BaseApiController
         $companyIdRaw = $this->request->getGet('companyId');
         $companyId    = is_numeric($companyIdRaw) ? (int) $companyIdRaw : null;
 
-        return $this->ok($this->policyFor($scopeType, $companyId)->toArray());
+        return $this->ok($this->policyFor($scopeType, $companyId)->toArray() + [
+            // Manage's company lifecycle for the organisation switched to: the SPA's read-only banner.
+            'lifecycle' => $companyId !== null ? CompanyLifecycle::lifecycle($companyId) : null,
+        ]);
     }
 }

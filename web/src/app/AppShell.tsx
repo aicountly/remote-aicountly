@@ -33,6 +33,7 @@ import { ConnectMount } from '../connect/ConnectMount'
 import Modal from '../components/ui/Modal'
 import { CompanyDirectoryPicker } from '../company-access/index.ts'
 import { REGISTRY_APP_NAME, getCompanyRegistry } from '../services/companyRegistry'
+import { CompanyRestrictedBanner } from '../components/CompanyRestrictedBanner'
 
 /**
  * The application frame: AICOUNTLY header, organisation switcher, navigation.
@@ -306,6 +307,7 @@ export default function AppShell() {
         ) : null}
 
         <main className="shell__main">
+          <CompanyRestrictedBanner cmpId={companyId} />
           <Outlet />
         </main>
       </div>

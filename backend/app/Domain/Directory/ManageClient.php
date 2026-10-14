@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Domain\Directory;
 
+use App\Libraries\CompanyLifecycle;
 use Config\Remote as RemoteConfig;
 
 /**
@@ -61,6 +62,10 @@ class ManageClient
     {
         $result = $this->get('companyinfo?comp_id=' . $companyId . '&app=' . self::APP_KEY, $sesKey);
         $answer = self::classifyCompanyInfo($result['status'], $result['body'], $companyId);
+
+        // companyinfo carries Manage's company lifecycle (`lifecycle`, `restricted_until`), the source of
+        // truth: written through, so a lifecycle event Remote missed is corrected. Never throws.
+        CompanyLifecycle::syncFromCompanyInfo($companyId, (int) $result['status'], (string) $result['body']);
 
         if ($answer['state'] !== 'unevaluated') {
             return ['state' => $answer['state'], 'name' => $answer['name']];

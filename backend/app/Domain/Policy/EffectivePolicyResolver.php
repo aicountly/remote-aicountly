@@ -7,6 +7,7 @@ namespace App\Domain\Policy;
 use App\Domain\Auth\RemoteIdentity;
 use App\Domain\Directory\MembershipVerifier;
 use App\Domain\Support\ApiException;
+use App\Libraries\CompanyLifecycle;
 use CodeIgniter\Database\BaseConnection;
 use Config\Remote as RemoteConfig;
 
@@ -75,6 +76,11 @@ class EffectivePolicyResolver
                     'You do not have access to this organisation in AICOUNTLY.',
                 );
             }
+
+            // Manage's company lifecycle: only now that the caller may act in the company (a stranger was
+            // refused above), a company whose Remote subscription lapsed answers its writes with 423
+            // COMPANY_RESTRICTED — ending, leaving and presence excepted (CompanyLifecycle::ALLOW).
+            CompanyLifecycle::enforce($companyId);
         }
 
         $policyRow   = $companyId !== null ? $this->companyPolicy($companyId) : CompanyPolicyDefaults::personal();
