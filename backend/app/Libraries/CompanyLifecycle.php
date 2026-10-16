@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Libraries;
 
+use Aicountly\Lifecycle\HookContext;
 use Aicountly\Lifecycle\Kit;
 use App\Domain\Support\ApiException;
 use CodeIgniter\HTTP\IncomingRequest;
@@ -21,7 +22,10 @@ use PDO;
  *                 there first) — calls it for the company. While the company's Remote subscription has
  *                 lapsed, a write that is not in ALLOW answers 423 COMPANY_RESTRICTED (ApiException,
  *                 `details.restricted_until`). Reads pass, and so do the writes that only end, leave,
- *                 stop or reduce something, and device/agent presence.
+ *                 stop or reduce something, and device/agent presence. A request authenticated by a
+ *                 DEVICE credential (the desktop agent — a machine caller) goes through the kit 1.1
+ *                 checkMachine() with MACHINE_ALLOW, which is empty: Remote receives no money-moved,
+ *                 telephony or provider webhook and no Manage-signed callback.
  *   - syncFromCompanyInfo(): Manage's companyinfo is the source of truth; ManageClient::companyAccess()
  *                 writes it through whenever it asks.
  *   - purgeAccount(): the kit's account hook (see config/lifecycle-manifest.php).
@@ -51,6 +55,13 @@ final class CompanyLifecycle
         'POST /v1/remote/devices/me/unattended/disable',
         'POST /v1/remote/devices/me/presence',
     ];
+
+    /**
+     * Machine writes (device-credential requests) that stay open while read-only (kit 1.1 checkMachine()):
+     * ONLY money that already moved, telephony / provider webhooks and Manage-signed callbacks — Remote has
+     * none. A device's presence and disabling its unattended access stay open through ALLOW.
+     */
+    public const MACHINE_ALLOW = [];
 
     private static ?Kit $kit = null;
 
@@ -123,7 +134,8 @@ final class CompanyLifecycle
         if (! $request instanceof IncomingRequest) {
             return;
         }
-        $refusal = self::refusal($companyId, $request->getMethod(), '/' . ltrim($request->getPath(), '/'));
+        $machine = service('requestContext')->device() !== null;
+        $refusal = self::refusal($companyId, $request->getMethod(), '/' . ltrim($request->getPath(), '/'), $machine);
         if ($refusal === null) {
             return;
         }
@@ -135,14 +147,19 @@ final class CompanyLifecycle
         ]);
     }
 
-    /** @return array{0:int, 1:array<string,mixed>}|null */
-    public static function refusal(int $companyId, string $method, string $path): ?array
+    /**
+     * @param bool $machine a device credential (the desktop agent), not a person's session: kit 1.1 checkMachine()
+     * @return array{0:int, 1:array<string,mixed>}|null
+     */
+    public static function refusal(int $companyId, string $method, string $path, bool $machine = false): ?array
     {
         if (in_array(strtoupper($method), ['GET', 'HEAD', 'OPTIONS'], true)) {
             return null;
         }
         try {
-            return self::kit()->guard(self::ALLOW)->check($companyId, $method, $path);
+            $guard = self::kit()->guard(self::ALLOW, self::MACHINE_ALLOW);
+
+            return $machine ? $guard->checkMachine($companyId, $method, $path) : $guard->check($companyId, $method, $path);
         } catch (\Throwable $e) {
             self::log('warning', 'write gate skipped for company ' . $companyId . ': ' . $e->getMessage());
 
@@ -188,15 +205,23 @@ final class CompanyLifecycle
      * remote_identities (the person, by platform_uuid) is pointed at by the company's records with
      * ON DELETE NO ACTION, so the engine cannot delete it; this hook does what can be done without
      * touching any company's data: deletes the person's PERSONAL sessions (no company — their
-     * participants, messages, events, transfers, invitations and feedback cascade), their personal
-     * devices and desktop sign-in codes, and anonymises the identity projection (name,
-     * e-mail, platform user id). Company sessions and devices stay with their companies.
+     * participants, messages, events, transfers, recordings, invitations and feedback cascade), their
+     * personal devices (challenges cascade) and desktop sign-in codes, and anonymises the identity
+     * projection (name, e-mail, platform user id). Company sessions and devices stay with their companies.
+     *
+     * Kit 1.1: every row it deletes or changes — the cascaded children, the rows whose device_id /
+     * session_id the deletes set to NULL, the identity it anonymises — is first archived into the purge's
+     * archive ($ctx->archiveRows), children before parents, so `--restore=<archive>` puts it all back
+     * (parents first; the deferrable invitation ↔ participant reference is deferred during a restore).
      *
      * @param array<string, mixed> $result the engine's (empty) user-scope result
      */
-    public static function purgeAccount(int|string $uuid, array $result): ?string
+    public static function purgeAccount(int|string $uuid, array $result, ?HookContext $ctx = null): ?string
     {
-        $pdo = self::kit()->pdo();
+        if ($ctx === null) {
+            throw new \RuntimeException('The account hook needs the kit 1.1 HookContext: rows are archived before they change.');
+        }
+        $pdo = $ctx->pdo();
         $find = $pdo->prepare('SELECT id FROM remote_identities WHERE platform_uuid = :u');
         $find->execute(['u' => (string) $uuid]);
         $ids = array_map('intval', $find->fetchAll(PDO::FETCH_COLUMN));
@@ -204,14 +229,29 @@ final class CompanyLifecycle
             return null;
         }
         $in = implode(',', $ids);
+        $sessions = "SELECT s.id FROM remote_sessions s WHERE s.company_id IS NULL AND s.scope_type = 'PERSONAL'
+            AND (s.owner_user_id IN ({$in}) OR s.initiator_user_id IN ({$in}))
+            AND NOT EXISTS (SELECT 1 FROM remote_support_requests r WHERE r.session_id = s.id AND r.company_id IS NOT NULL)";
+        $devices = "SELECT d.id FROM remote_devices d WHERE d.company_id IS NULL AND d.user_id IN ({$in})";
 
         $pdo->beginTransaction();
         try {
+            // Children before parents: a restore puts the last archived back first.
+            foreach (['remote_file_transfers', 'remote_messages', 'remote_recordings', 'remote_session_events', 'remote_session_feedback'] as $child) {
+                $ctx->archiveRows($child, "session_id IN ({$sessions})");
+            }
+            $ctx->archiveRows('remote_participants', "session_id IN ({$sessions}) OR device_id IN ({$devices})");
+            $ctx->archiveRows('remote_invitations', "session_id IN ({$sessions})");
+            $ctx->archiveRows('remote_support_requests', "session_id IN ({$sessions})");
+            $ctx->archiveRows('remote_sessions', "id IN ({$sessions}) OR device_id IN ({$devices})");
+            $ctx->archiveRows('remote_device_challenges', "device_id IN ({$devices})");
+            $ctx->archiveRows('remote_devices', "id IN ({$devices})");
+            $ctx->archiveRows('remote_desktop_signin_codes', "identity_id IN ({$in})");
+            $ctx->archiveRows('remote_identities', "id IN ({$in})");
+
             $counts = [];
-            $counts['personal sessions'] = $pdo->exec("DELETE FROM remote_sessions WHERE company_id IS NULL AND scope_type = 'PERSONAL'
-                AND (owner_user_id IN ({$in}) OR initiator_user_id IN ({$in}))
-                AND NOT EXISTS (SELECT 1 FROM remote_support_requests r WHERE r.session_id = remote_sessions.id AND r.company_id IS NOT NULL)");
-            $counts['personal devices'] = $pdo->exec("DELETE FROM remote_devices WHERE company_id IS NULL AND user_id IN ({$in})");
+            $counts['personal sessions'] = $pdo->exec("DELETE FROM remote_sessions WHERE id IN ({$sessions})");
+            $counts['personal devices'] = $pdo->exec("DELETE FROM remote_devices WHERE id IN ({$devices})");
             $counts['desktop sign-in codes'] = $pdo->exec("DELETE FROM remote_desktop_signin_codes WHERE identity_id IN ({$in})");
             $pdo->exec("UPDATE remote_identities SET display_name = 'Former AICOUNTLY user', email = NULL, platform_user_id = NULL, updated_at = now() WHERE id IN ({$in})");
             $pdo->commit();

@@ -210,6 +210,7 @@ and a failure to obtain them is reported by its own `databaseReason` with a `dat
    ([COMPANY_LIFECYCLE.md](COMPANY_LIFECYCLE.md)):
    ```cron
    */5 * * * * cd ~/public_html/api && php lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php >> $HOME/logs/remote-company-lifecycle.log 2>&1
+   37 3 * * *  cd ~/public_html/api && php lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php --expire-retained >> $HOME/logs/remote-company-lifecycle.log 2>&1
    ```
 9. **Deploy the signalling service** (below).
 10. **Open the site** and sign in. See

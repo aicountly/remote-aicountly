@@ -110,6 +110,59 @@ final class CompanyLifecycleTest extends RemoteTestCase
         $engine = new PurgeEngine(CompanyLifecycle::pdo(), $manifest);
         $this->assertSame([], $engine->problems('company'), 'company scope');
         $this->assertSame([], $engine->problems('user'), 'user scope');
+        $this->assertSame([], $manifest->warnings(), 'kit 1.1: nothing retained, so no period is missing');
+        $this->assertSame(['redeemed_participant_id'], $manifest->breakCycle('public.remote_invitations'), 'the cycle is broken by break_cycle');
+    }
+
+    public function testKit11SchemaAndTheRestoredForeignKey(): void
+    {
+        $this->assertSame(
+            hash_file('sha256', ROOTPATH . 'lib/company-lifecycle/schema-1.1.sql'),
+            hash_file('sha256', APPPATH . 'Database/Sql/2026-10-16-000100_aic_company_lifecycle_1_1.sql'),
+            'the kit\'s schema-1.1.sql, verbatim',
+        );
+        $this->assertTrue($this->db->tableExists('aic_lifecycle_expiries', false));
+        $fk = $this->db->query("SELECT confdeltype, condeferrable, condeferred FROM pg_constraint WHERE conname = 'remote_invitations_redeemed_participant_id_fkey'")->getRowArray();
+        $this->assertNotNull($fk, 'remote_invitations.redeemed_participant_id → remote_participants is back');
+        $this->assertSame(['n', 't', 'f'], [$fk['confdeltype'], $fk['condeferrable'] === true || $fk['condeferrable'] === 't' ? 't' : 'f', $fk['condeferred'] === true || $fk['condeferred'] === 't' ? 't' : 'f'],
+            'ON DELETE SET NULL, DEFERRABLE INITIALLY IMMEDIATE');
+    }
+
+    public function testADeviceCredentialIsAMachineCallerWithNothingMachineAllowed(): void
+    {
+        $this->assertSame([], CompanyLifecycle::MACHINE_ALLOW);
+        $this->send($this->event('company_restricted', ['cmp_id' => 7110, 'reason' => 'subscription_lapsed', 'restricted_until' => '2026-12-01T00:00:00Z']))->assertStatus(202);
+        $refusal = CompanyLifecycle::refusal(7110, 'POST', '/v1/remote/devices/me/sessions/x1/join', true);
+        $this->assertSame(423, $refusal[0] ?? null, 'a device joining a session of a read-only company');
+        $this->assertSame('COMPANY_RESTRICTED', $refusal[1]['code'] ?? null);
+        $this->assertNull(CompanyLifecycle::refusal(7110, 'POST', '/v1/remote/devices/me/presence', true), 'presence stays open (ALLOW)');
+        $this->assertNull(CompanyLifecycle::refusal(7110, 'POST', '/internal/manage/company-lifecycle', true), 'Manage\'s event is always open to a machine');
+    }
+
+    public function testACompanyPurgeBreaksTheInvitationCycleAndARestoreRelinksIt(): void
+    {
+        $company = $this->makeCompany(7111, 'Cycle Co');
+        $host    = $this->makeIdentity('Host');
+        $this->grantCompanyAccess($host, $company, 'COMPANY_ADMIN', true);
+        $session = $this->makeSession($host, 'COMPANY', $company);
+        $participant = (int) $this->db->table('remote_participants')->where('session_id', $session['id'])->get()->getRow()->id;
+        $this->db->query("INSERT INTO remote_invitations (uuid, session_id, token_hash, created_by_user_id, expires_at, redeemed_participant_id)
+            VALUES (gen_random_uuid(), ?, repeat('a', 64), ?, now() + interval '1 day', ?)", [$session['id'], $host->id, $participant]);
+        $invitation = (int) $this->db->table('remote_invitations')->where('session_id', $session['id'])->get()->getRow()->id;
+        $this->db->table('remote_participants')->where('id', $participant)->update(['invitation_id' => $invitation]);
+
+        $this->send($this->event('company_purge_requested', ['cmp_id' => $company, 'reason' => 'subscription_lapsed']))->assertStatus(202);
+        $acks    = [];
+        $summary = $this->runWorker($acks);
+        $this->assertSame(1, $summary['purged'], json_encode($acks));
+        $this->assertSame(0, $this->db->table('remote_invitations')->where('id', $invitation)->countAllResults());
+        $archive = (string) $this->db->query("SELECT archive_name FROM aic_lifecycle_jobs WHERE kind = 'company' AND target_cmp_id = ?", [$company])->getRow()->archive_name;
+        $this->assertSame($participant, (int) $this->db->query('SELECT redeemed_participant_id FROM "' . $archive . '".remote_invitations')->getRow()->redeemed_participant_id, 'archived before it was unlinked');
+
+        $restore = CompanyLifecycle::build()->engine()->restore($archive, true);
+        $this->assertTrue($restore['ok'], json_encode($restore));
+        $this->assertSame($participant, (int) $this->db->table('remote_invitations')->where('id', $invitation)->get()->getRow()->redeemed_participant_id, 'the restore relinks it');
+        $this->assertSame($invitation, (int) $this->db->table('remote_participants')->where('id', $participant)->get()->getRow()->invitation_id);
     }
 
     public function testEveryAllowListEntryMatchesARealRoute(): void
@@ -226,5 +279,15 @@ final class CompanyLifecycleTest extends RemoteTestCase
         $row = $this->db->table('remote_identities')->where('id', $person->id)->get()->getRowArray();
         $this->assertSame('Former AICOUNTLY user', $row['display_name']);
         $this->assertNull($row['email']);
+
+        // Kit 1.1: everything the hook deleted or changed was archived first, so a restore puts it back.
+        $archive = (string) $this->db->query("SELECT archive_name FROM aic_lifecycle_jobs WHERE kind = 'account' ORDER BY id DESC LIMIT 1")->getRow()->archive_name;
+        $this->assertStringContainsString('archived first', (string) $acks[0]['detail']);
+        $restore = CompanyLifecycle::build()->engine()->restore($archive, true);
+        $this->assertTrue($restore['ok'], json_encode($restore));
+        $this->assertSame(1, $this->db->table('remote_sessions')->where('scope_type', 'PERSONAL')->where('owner_user_id', $person->id)->countAllResults(), 'the personal session is back');
+        $this->assertGreaterThan(0, $this->db->query("SELECT COUNT(*) AS n FROM remote_participants p JOIN remote_sessions s ON s.id = p.session_id WHERE s.scope_type = 'PERSONAL' AND s.owner_user_id = ?", [$person->id])->getRow()->n, 'with its participants');
+        $row = $this->db->table('remote_identities')->where('id', $person->id)->get()->getRowArray();
+        $this->assertSame(['Asha Rao', 'asha@example.test'], [$row['display_name'], $row['email']], 'and the identity as it was');
     }
 }
