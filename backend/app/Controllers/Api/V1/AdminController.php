@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Controllers\Api\V1;
 
 use App\Controllers\BaseApiController;
+use App\Domain\Audit\AuditService;
+use App\Domain\Audit\AuditTrailReader;
 use App\Domain\Audit\EventType;
 use App\Domain\Policy\CompanyPolicyDefaults;
 use App\Domain\Policy\PermissionCatalog;
@@ -108,23 +110,20 @@ class AdminController extends BaseApiController
         $update['updated_by']    = $this->identity()->id;
         $update['updated_at']    = Clock::now();
 
-        db_connect()->table('remote_company_policies')->where('company_id', $id)->update($update);
+        $db = db_connect();
+        $db->transException(true)->transStart();
+
+        $db->table('remote_company_policies')->where('company_id', $id)->update($update);
 
         $saved = Services::policyResolver()->companyPolicy($id);
 
         // What changed, not the whole row: an audit entry should answer "who
         // turned entire-screen sharing on?" without being a diff to read.
-        $changed = [];
-        foreach ($update as $column => $value) {
-            if ($column === 'updated_at' || $column === 'updated_by') {
-                continue;
-            }
-            if (($current[$column] ?? null) !== $value) {
-                $changed[$column] = ['from' => $current[$column] ?? null, 'to' => $value];
-            }
-        }
+        $touched = array_diff_key($update, ['updated_at' => 1, 'updated_by' => 1]);
+        $changes = AuditService::diff($current, $touched);
 
-        Services::auditService()->recordAudit(
+        // The change and its record commit together, or neither does.
+        Services::auditService()->recordMaterial(
             EventType::POLICY_UPDATED,
             $this->identity()->id,
             'USER',
@@ -132,8 +131,15 @@ class AdminController extends BaseApiController
             null,
             null,
             null,
-            ['changes' => $changed],
+            [
+                'changes' => $changes,
+                'before'  => array_intersect_key($current, array_column($changes, 'field', 'field')),
+                'after'   => array_intersect_key($touched, array_column($changes, 'field', 'field')),
+            ],
+            ['type' => 'company_policy', 'id' => (string) $id, 'label' => $saved['policy_preset'] ?? null],
+            sprintf('Changed Remote policy (%d setting%s)', count($changes), count($changes) === 1 ? '' : 's'),
         );
+        $db->transComplete();
 
         return $this->ok(['policy' => Presenter::companyPolicy($saved)]);
     }
@@ -255,6 +261,13 @@ class AdminController extends BaseApiController
 
         $db->transException(true)->transStart();
 
+        $existing = array_column(
+            $db->table('remote_user_permissions')->select('permission, effect')
+                ->where('user_id', (int) $target['id'])->where('company_id', $id)->get()->getResultArray(),
+            'effect',
+            'permission',
+        );
+
         foreach ($changes as $permission => $effect) {
             if (! is_string($permission) || ! PermissionCatalog::isValid($permission)) {
                 throw ApiException::badRequest('PERMISSION_UNKNOWN', 'That is not a Remote permission.', [
@@ -292,18 +305,14 @@ class AdminController extends BaseApiController
             $applied[$permission] = $effect;
         }
 
-        $db->transComplete();
-
-        Services::auditService()->recordAudit(
-            EventType::PERMISSION_UPDATED,
-            $this->identity()->id,
-            'USER',
+        $this->auditPermissions(
             $id,
-            null,
-            null,
-            null,
-            ['targetUserUuid' => $userUuid, 'changes' => $applied],
+            ['targetUserUuid' => $userUuid],
+            ['type' => 'user', 'id' => $userUuid, 'label' => (string) $target['display_name']],
+            $existing,
+            $applied,
         );
+        $db->transComplete();
 
         $identity  = Services::identityResolver()->findById((int) $target['id']);
         $effective = $identity !== null ? $resolver->resolve($identity, 'COMPANY', $id)->permissions : [];
@@ -360,6 +369,13 @@ class AdminController extends BaseApiController
 
         $db->transException(true)->transStart();
 
+        $existing = array_column(
+            $db->table('remote_role_permissions')->select('permission, effect')
+                ->where('role_key', $roleKey)->where('company_id', $id)->get()->getResultArray(),
+            'effect',
+            'permission',
+        );
+
         foreach ($changes as $permission => $effect) {
             if (! is_string($permission) || ! PermissionCatalog::isValid($permission)) {
                 throw ApiException::badRequest('PERMISSION_UNKNOWN', 'That is not a Remote permission.');
@@ -395,18 +411,14 @@ class AdminController extends BaseApiController
             $applied[$permission] = $effect;
         }
 
-        $db->transComplete();
-
-        Services::auditService()->recordAudit(
-            EventType::PERMISSION_UPDATED,
-            $this->identity()->id,
-            'USER',
+        $this->auditPermissions(
             $id,
-            null,
-            null,
-            null,
-            ['roleKey' => $roleKey, 'changes' => $applied],
+            ['roleKey' => $roleKey],
+            ['type' => 'role', 'id' => $roleKey, 'label' => $roleKey],
+            $existing,
+            $applied,
         );
+        $db->transComplete();
 
         return $this->ok(['roleKey' => $roleKey, 'overrides' => $applied]);
     }
@@ -425,37 +437,139 @@ class AdminController extends BaseApiController
         $id = $this->companyId($companyId);
         $this->requirePermission($id, PermissionCatalog::AUDIT_VIEW);
 
-        $limit  = min(max((int) ($this->request->getGet('limit') ?? 50), 1), 200);
-        $offset = max((int) ($this->request->getGet('offset') ?? 0), 0);
+        [$limit, $offset] = $this->paging();
+        [$rows, $total]   = (new AuditTrailReader(db_connect()))->search($id, $this->auditFilters(), $limit, $offset);
 
-        $builder = db_connect()->table('remote_audit_logs a')
-            ->select('a.*, i.display_name AS actor_name')
-            ->join('remote_identities i', 'i.id = a.actor_user_id', 'left')
-            ->where('a.company_id', $id);
+        return $this->ok($rows, ['total' => $total]);
+    }
 
-        if (($event = $this->request->getGet('event')) !== null && $event !== '') {
-            $builder->where('a.event', strtoupper((string) $event));
-        }
-        if (($from = $this->request->getGet('from')) !== null && $from !== '') {
-            $builder->where('a.created_at >=', $from);
-        }
-        if (($to = $this->request->getGet('to')) !== null && $to !== '') {
-            $builder->where('a.created_at <=', $to);
-        }
-        if (($sessionUuid = $this->request->getGet('sessionUuid')) !== null && $sessionUuid !== '') {
-            $builder->where('a.session_uuid', $sessionUuid);
-        }
+    /**
+     * `GET /company/{companyId}/audit/entity/{type}/{id}` — everything one
+     * record has been through (a session, a device, a person's permissions).
+     */
+    public function auditEntity(string $companyId, string $type, string $entityId): ResponseInterface
+    {
+        $id = $this->companyId($companyId);
+        $this->requirePermission($id, PermissionCatalog::AUDIT_VIEW);
 
-        $total = (clone $builder)->countAllResults(false);
-        $rows  = $builder->orderBy('a.created_at', 'DESC')->limit($limit, $offset)->get()->getResultArray();
+        [$limit, $offset] = $this->paging();
+        [$rows, $total]   = (new AuditTrailReader(db_connect()))
+            ->history($id, strtolower(urldecode($type)), urldecode($entityId), $limit, $offset);
 
-        return $this->ok(
-            array_map(static fn (array $row) => Presenter::auditEntry($row), $rows),
-            ['total' => $total],
+        return $this->ok($rows, ['total' => $total]);
+    }
+
+    /**
+     * `GET /company/{companyId}/audit/export` — the whole filtered trail as CSV.
+     *
+     * Same permission as reading it. The download is itself recorded: who took
+     * a copy of the security record, with which filters, and how many rows.
+     */
+    public function auditExport(string $companyId): ResponseInterface
+    {
+        $id = $this->companyId($companyId);
+        $this->requirePermission($id, PermissionCatalog::AUDIT_VIEW);
+
+        $filters = $this->auditFilters();
+        $export  = (new AuditTrailReader(db_connect()))->exportCsv($id, $filters);
+
+        Services::auditService()->recordAudit(
+            EventType::AUDIT_EXPORTED,
+            $this->identity()->id,
+            'USER',
+            $id,
+            null,
+            null,
+            null,
+            ['filters' => array_filter($filters, static fn ($v) => $v !== null && $v !== ''), 'rows' => $export['rows'], 'partial' => $export['partial']],
+            ['type' => 'audit_trail', 'id' => (string) $id, 'label' => null],
+            sprintf('Exported the audit trail (%d row%s%s)', $export['rows'], $export['rows'] === 1 ? '' : 's', $export['partial'] ? ', partial' : ''),
         );
+
+        return $this->response
+            ->setStatusCode(200)
+            ->setHeader('Content-Type', 'text/csv; charset=utf-8')
+            ->setHeader('Content-Disposition', 'attachment; filename="remote-audit-trail-' . $id . '-' . gmdate('Ymd-His') . '.csv"')
+            ->setHeader('Cache-Control', 'no-store')
+            ->setHeader('X-Audit-Export-Partial', $export['partial'] ? 'true' : 'false')
+            ->setBody($export['csv']);
     }
 
     // ------------------------------------------------------------- internals
+
+    /** @return array{0: int, 1: int} */
+    private function paging(): array
+    {
+        return [
+            min(max((int) ($this->request->getGet('limit') ?? 50), 1), 200),
+            max((int) ($this->request->getGet('offset') ?? 0), 0),
+        ];
+    }
+
+    /**
+     * The audit filters the query string carries. Both the snake_case names
+     * of the standard and the camelCase the SPA's other calls use are read;
+     * `action` is `event` by another name.
+     *
+     * @return array<string, mixed>
+     */
+    private function auditFilters(): array
+    {
+        $get = fn (string ...$names) => array_values(array_filter(
+            array_map(fn (string $n) => $this->request->getGet($n), $names),
+            static fn ($v) => $v !== null && $v !== '',
+        ))[0] ?? null;
+
+        return [
+            'from'         => $get('from'),
+            'to'           => $get('to'),
+            'event'        => $get('event', 'action'),
+            'severity'     => $get('severity'),
+            'entity_type'  => $get('entity_type', 'entityType'),
+            'entity_id'    => $get('entity_id', 'entityId'),
+            'entity_label' => $get('entity_label', 'entityLabel'),
+            'actor_uuid'   => $get('actor_uuid', 'actorUuid', 'actor'),
+            'session_uuid' => $get('sessionUuid', 'session_uuid'),
+            'q'            => $get('q'),
+        ];
+    }
+
+    /**
+     * One audit row for a permission change, written inside the caller's
+     * transaction so a grant can never exist without its record.
+     *
+     * @param array<string, mixed>                                     $metadata  identifies the target (user uuid or role key)
+     * @param array{type: string, id: string, label: string}           $entity
+     * @param array<string, string>                                    $existing  permission => effect before the change
+     * @param array<string, string>                                    $applied   permission => effect after (INHERIT when removed)
+     */
+    private function auditPermissions(int $companyId, array $metadata, array $entity, array $existing, array $applied): void
+    {
+        $before = [];
+        foreach (array_keys($applied) as $permission) {
+            $before[$permission] = $existing[$permission] ?? 'INHERIT';
+        }
+        $changes = AuditService::diff($before, $applied);
+
+        Services::auditService()->recordMaterial(
+            EventType::PERMISSION_UPDATED,
+            $this->identity()->id,
+            'USER',
+            $companyId,
+            null,
+            null,
+            null,
+            $metadata + ['changes' => $changes, 'before' => $before, 'after' => $applied],
+            $entity,
+            sprintf(
+                'Changed %d permission%s for %s %s',
+                count($changes),
+                count($changes) === 1 ? '' : 's',
+                $entity['type'],
+                $entity['label'],
+            ),
+        );
+    }
 
     private function companyId(string $raw): int
     {

@@ -274,6 +274,18 @@ class SessionController extends BaseApiController
             ],
         );
 
+        // That feedback was left, not what was said: the comment stays in its own table.
+        Services::auditService()->recordAudit(
+            EventType::SESSION_FEEDBACK_RECORDED,
+            $identity->id,
+            'USER',
+            isset($session['company_id']) ? (int) $session['company_id'] : null,
+            (string) $session['uuid'],
+            null,
+            $session['source_product'] ?? null,
+            ['resolution' => $resolution, 'rating' => $rating, 'hasComment' => $comments !== null && $comments !== ''],
+        );
+
         return $this->ok(['recorded' => true]);
     }
 

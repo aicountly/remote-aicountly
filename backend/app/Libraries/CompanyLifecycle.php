@@ -85,7 +85,15 @@ final class CompanyLifecycle
             return is_scalar($value) && (string) $value !== '' ? (string) $value : null;
         };
 
-        return Kit::fromEnv(self::APP_KEY, self::pdo(), self::manifestPath(), $env, [], $options + [
+        $pdo = self::pdo();
+        if (PHP_SAPI === 'cli') {
+            // This connection is the purge worker's (lib/company-lifecycle/bin/worker.php, run from cron): the
+            // append-only remote_audit_logs trigger lets it delete a purged company's audit rows (migration
+            // 2026-10-16-000400). A web request never sets it, so the API cannot delete or change a row.
+            $pdo->exec("SET aicountly.lifecycle_purge = 'on'");
+        }
+
+        return Kit::fromEnv(self::APP_KEY, $pdo, self::manifestPath(), $env, [], $options + [
             'log'   => [self::class, 'log'],
             'hooks' => ['account' => [[self::class, 'purgeAccount']]],
         ]);

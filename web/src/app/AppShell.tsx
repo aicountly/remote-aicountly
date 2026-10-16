@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ClipboardList,
   Check,
+  ExternalLink,
   History,
   LayoutDashboard,
   LifeBuoy,
@@ -34,6 +35,8 @@ import Modal from '../components/ui/Modal'
 import { CompanyDirectoryPicker } from '../company-access/index.ts'
 import { REGISTRY_APP_NAME, getCompanyRegistry } from '../services/companyRegistry'
 import { CompanyRestrictedBanner } from '../components/CompanyRestrictedBanner'
+import { manageProfilePath, openManagePortal } from '../services/appLauncher'
+import CompanyIdTag from '../components/ui/CompanyIdTag'
 
 /**
  * The application frame: AICOUNTLY header, organisation switcher, navigation.
@@ -99,6 +102,8 @@ export default function AppShell() {
     can(PERMISSIONS.POLICY_VIEW) || can(PERMISSIONS.POLICY_MANAGE) || can(PERMISSIONS.AUDIT_VIEW)
 
   const isSupportAgent = bootstrap?.user.isSupportAgent ?? false
+  // The portal (my.aicountly) user id — what support asks for as the "Cust ID".
+  const custId = bootstrap?.user.uuid || null
 
   const navItems = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -167,6 +172,7 @@ export default function AppShell() {
           >
             <Building2 size={15} aria-hidden="true" />
             <span className="scope-button__label truncate">{scopeLabel}</span>
+            {scopeType === 'COMPANY' ? <CompanyIdTag id={companyId} className="scope-button__id" /> : null}
             <ChevronDown size={14} aria-hidden="true" />
           </button>
 
@@ -198,7 +204,9 @@ export default function AppShell() {
                   onClick={() => void chooseScope('COMPANY', company.companyId)}
                 >
                   <span>
-                    <span className="scope-menu__name">{company.name}</span>
+                    <span className="scope-menu__name">
+                      {company.name} <CompanyIdTag id={company.companyId} />
+                    </span>
                     <span className="scope-menu__hint">
                       {company.isCompanyAdmin ? 'Administrator' : 'Member'}
                     </span>
@@ -259,7 +267,25 @@ export default function AppShell() {
           ) : null}
 
           <div className="shell__user">
-            <span className="shell__user-name truncate">{bootstrap?.user.displayName ?? '—'}</span>
+            <span className="shell__user-id">
+              <span className="shell__user-name truncate">{bootstrap?.user.displayName ?? '—'}</span>
+              {custId ? (
+                <span className="shell__cust-id truncate" title="Your AICOUNTLY customer ID">
+                  Cust ID: <span className="shell__cust-id-value">{custId}</span>
+                </span>
+              ) : null}
+            </span>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={() => openManagePortal(manageProfilePath())}
+              title="Opens your profile in Manage in a new tab"
+              aria-label="Manage profile (opens in a new tab)"
+            >
+              <UserCog size={15} aria-hidden="true" />
+              <span className="shell__logout-label">Manage profile</span>
+              <ExternalLink size={13} aria-hidden="true" className="shell__logout-label" />
+            </button>
             <button type="button" className="btn btn--ghost btn--sm" onClick={signOut}>
               <LogOut size={15} aria-hidden="true" />
               <span className="shell__logout-label">Log out</span>

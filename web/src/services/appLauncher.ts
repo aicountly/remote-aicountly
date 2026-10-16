@@ -30,6 +30,28 @@ export function getManageApiOrigin(sandbox: boolean = isSandboxHost()): string {
   return sandbox ? MANAGE_API_SANDBOX : MANAGE_API_PRODUCTION
 }
 
+/** Manage page where the signed-in person edits their own profile. */
+export function manageProfilePath(): string {
+  return '/profile'
+}
+
+/**
+ * A page in the Manage portal (hash-routed SPA), e.g. `manageProfilePath()`.
+ * Manage signs the person in through its own portal round trip, exactly as a
+ * launcher tile does, so no credential is put in the address.
+ */
+export function buildManagePortalUrl(path: string, sandbox: boolean = isSandboxHost()): string {
+  const manage = getAppById('manage')
+  const origin = manage ? resolveAppOrigin(manage, sandbox) : getManageApiOrigin(sandbox)
+  const route = `/${String(path || '').replace(/^[#/]+/, '')}`
+  return `${origin}/#${route}`
+}
+
+/** Open a Manage page in a new tab (never replaces the Remote tab). */
+export function openManagePortal(path: string): void {
+  window.open(buildManagePortalUrl(path), '_blank', 'noopener,noreferrer')
+}
+
 /** Central product icons live behind Console — one origin regardless of sandbox/production. */
 export const CONSOLE_API_PRODUCTION = 'https://console.aicountly.org'
 

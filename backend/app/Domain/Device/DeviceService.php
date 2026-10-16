@@ -156,6 +156,8 @@ class DeviceService
         // cannot widen anything by editing this JSON.
         $declared = DeviceCapabilities::normaliseDeclaration($input['capabilities'] ?? []);
 
+        $this->db->transException(true)->transStart();
+
         $this->db->table('remote_devices')->insert([
             'uuid'                   => $uuid,
             'company_id'             => $companyId,
@@ -184,7 +186,7 @@ class DeviceService
 
         $device = $this->findByUuidOrFail($uuid);
 
-        $this->audit->recordAudit(
+        $this->audit->recordMaterial(
             EventType::DEVICE_ENROLLED,
             $identity->id,
             'USER',
@@ -201,7 +203,10 @@ class DeviceService
                 // compare with what the agent displays, and not a credential.
                 'keyFingerprint'  => DeviceSignature::displayFingerprint($fingerprint),
             ],
+            ['type' => 'device', 'id' => $uuid, 'label' => (string) $device['device_name']],
+            'Enrolled device ' . $device['device_name'],
         );
+        $this->db->transComplete();
 
         return $device;
     }
@@ -369,9 +374,13 @@ class DeviceService
         }
 
         $update['updated_at'] = Clock::now();
+
+        $this->db->transException(true)->transStart();
         $this->db->table('remote_devices')->where('id', $device['id'])->update($update);
 
-        $this->audit->recordAudit(
+        $touched = array_diff_key($update, ['updated_at' => 1, 'unattended_enabled_at' => 1]);
+        $changes = AuditService::diff($device, $touched, ['device_name' => 'Device name']);
+        $this->audit->recordMaterial(
             EventType::DEVICE_UPDATED,
             $identity->id,
             'USER',
@@ -379,8 +388,11 @@ class DeviceService
             null,
             null,
             null,
-            ['deviceUuid' => $uuid, 'changes' => array_keys($update)],
+            ['deviceUuid' => $uuid, 'changes' => $changes],
+            ['type' => 'device', 'id' => $uuid, 'label' => (string) ($update['device_name'] ?? $device['device_name'])],
+            'Updated device ' . ($update['device_name'] ?? $device['device_name']),
         );
+        $this->db->transComplete();
 
         return $this->findByUuidOrFail($uuid);
     }
@@ -404,6 +416,8 @@ class DeviceService
             return $device;
         }
 
+        $this->db->transException(true)->transStart();
+
         $this->db->table('remote_devices')
             ->where('id', $device['id'])
             ->where('status !=', self::STATUS_REVOKED)
@@ -417,7 +431,7 @@ class DeviceService
                 'updated_at'                => Clock::now(),
             ]);
 
-        $this->audit->recordAudit(
+        $this->audit->recordMaterial(
             EventType::DEVICE_REVOKED,
             $identity->id,
             'USER',
@@ -425,8 +439,15 @@ class DeviceService
             null,
             null,
             null,
-            ['deviceUuid' => $uuid, 'reason' => $this->clean($reason, 120)],
+            [
+                'deviceUuid' => $uuid,
+                'reason'     => $this->clean($reason, 120),
+                'changes'    => AuditService::diff($device, ['status' => self::STATUS_REVOKED, 'unattended_access_enabled' => false]),
+            ],
+            ['type' => 'device', 'id' => $uuid, 'label' => (string) $device['device_name']],
+            'Revoked device ' . $device['device_name'],
         );
+        $this->db->transComplete();
 
         return $this->findByUuidOrFail($uuid);
     }
@@ -488,6 +509,8 @@ class DeviceService
             return $device;
         }
 
+        $this->db->transException(true)->transStart();
+
         $this->db->table('remote_devices')->where('id', $device['id'])->update([
             'unattended_access_enabled'     => true,
             'unattended_enabled_at'         => Clock::now(),
@@ -495,7 +518,7 @@ class DeviceService
             'updated_at'                    => Clock::now(),
         ]);
 
-        $this->audit->recordAudit(
+        $this->audit->recordMaterial(
             EventType::UNATTENDED_ACCESS_ENABLED,
             $identity->id,
             'USER',
@@ -503,8 +526,15 @@ class DeviceService
             null,
             null,
             null,
-            ['deviceUuid' => $uuid, 'deviceName' => $device['device_name']],
+            [
+                'deviceUuid' => $uuid,
+                'deviceName' => $device['device_name'],
+                'changes'    => AuditService::diff($device, ['unattended_access_enabled' => true], ['unattended_access_enabled' => 'Unattended access']),
+            ],
+            ['type' => 'device', 'id' => $uuid, 'label' => (string) $device['device_name']],
+            'Enabled unattended access on ' . $device['device_name'],
         );
+        $this->db->transComplete();
 
         return $this->findByUuidOrFail($uuid);
     }
@@ -534,9 +564,10 @@ class DeviceService
             return $device;
         }
 
+        $this->db->transException(true)->transStart();
         $this->clearUnattended((int) $device['id']);
 
-        $this->audit->recordAudit(
+        $this->audit->recordMaterial(
             EventType::UNATTENDED_ACCESS_DISABLED,
             $identity->id,
             'USER',
@@ -544,8 +575,16 @@ class DeviceService
             null,
             null,
             null,
-            ['deviceUuid' => $uuid, 'by' => 'USER'],
+            [
+                'deviceUuid' => $uuid,
+                'deviceName' => $device['device_name'],
+                'by'         => 'USER',
+                'changes'    => AuditService::diff($device, ['unattended_access_enabled' => false], ['unattended_access_enabled' => 'Unattended access']),
+            ],
+            ['type' => 'device', 'id' => $uuid, 'label' => (string) $device['device_name']],
+            'Disabled unattended access on ' . $device['device_name'],
         );
+        $this->db->transComplete();
 
         return $this->findByUuidOrFail($uuid);
     }

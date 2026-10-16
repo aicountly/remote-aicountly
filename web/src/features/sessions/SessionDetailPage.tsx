@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, ScrollText } from 'lucide-react'
 
 import { fetchSession, fetchSessionEvents } from '../../services/api/remote'
 import { RemoteApiError } from '../../services/api/client'
+import { useRemote } from '../../app/RemoteProvider'
+import { PERMISSIONS } from '../../types/remote'
 import StatusBadge from '../../components/ui/StatusBadge'
 import RestrictionNotice from '../../components/ui/RestrictionNotice'
 import type { SessionDetail, SessionEvent } from '../../types/remote'
@@ -26,6 +28,7 @@ import {
  */
 export default function SessionDetailPage() {
   const { uuid = '' } = useParams()
+  const { can } = useRemote()
 
   const [session, setSession] = useState<SessionDetail | null>(null)
   const [events, setEvents] = useState<SessionEvent[]>([])
@@ -115,6 +118,13 @@ export default function SessionDetailPage() {
             {describeScope(session.scopeType, session.companyName)}
             {session.sourceProductLabel ? ` · ${session.sourceProductLabel}` : ''}
           </p>
+
+          {session.scopeType !== 'PERSONAL' && can(PERMISSIONS.AUDIT_VIEW) ? (
+            <Link to={`/admin/audit?entityType=session&entityId=${session.uuid}`} className="back-link">
+              <ScrollText size={15} aria-hidden="true" />
+              History of this session
+            </Link>
+          ) : null}
         </header>
 
         {policyBlocked.length > 0 ? (

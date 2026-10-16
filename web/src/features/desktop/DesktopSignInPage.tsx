@@ -159,7 +159,7 @@ export default function DesktopSignInPage() {
                 >
                   {companies.map((company) => (
                     <option key={company.companyId} value={company.companyId}>
-                      {company.name}
+                      {`${company.name} (ID: ${company.companyId})`}
                     </option>
                   ))}
                 </select>

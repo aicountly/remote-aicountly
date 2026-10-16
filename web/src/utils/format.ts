@@ -194,6 +194,13 @@ const EVENT_LABELS: Record<string, string> = {
   POLICY_UPDATED: 'Remote policy changed',
   PERMISSION_UPDATED: 'Remote permissions changed',
   SIGNALLING_TOKEN_ISSUED: 'Secure connection authorised',
+  DEVICE_ENROLLED: 'Device enrolled',
+  DEVICE_UPDATED: 'Device changed',
+  DEVICE_REVOKED: 'Device revoked',
+  UNATTENDED_ACCESS_ENABLED: 'Unattended access turned on',
+  UNATTENDED_ACCESS_DISABLED: 'Unattended access turned off',
+  SESSION_FEEDBACK_RECORDED: 'Session feedback left',
+  AUDIT_EXPORTED: 'Audit trail exported',
 }
 
 export function describeEvent(eventType: string): string {

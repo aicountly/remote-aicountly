@@ -31,12 +31,6 @@
         "enable": false,
         "scope": []
       }
-    },
-    "trayIcon": {
-      "id": "aicountly-remote",
-      "iconPath": "icons/tray.png",
-      "iconAsTemplate": false,
-      "menuOnLeftClick": false
     }
   },
   "bundle": {

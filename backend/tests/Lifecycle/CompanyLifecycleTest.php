@@ -118,7 +118,7 @@ final class CompanyLifecycleTest extends RemoteTestCase
     {
         $this->assertSame(
             hash_file('sha256', ROOTPATH . 'lib/company-lifecycle/schema-1.1.sql'),
-            hash_file('sha256', APPPATH . 'Database/Sql/2026-10-16-000100_aic_company_lifecycle_1_1.sql'),
+            hash_file('sha256', APPPATH . 'Database/Sql/2026-10-16-000200_aic_company_lifecycle_1_1.sql'),
             'the kit\'s schema-1.1.sql, verbatim',
         );
         $this->assertTrue($this->db->tableExists('aic_lifecycle_expiries', false));

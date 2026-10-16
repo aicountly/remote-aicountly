@@ -7,7 +7,7 @@ declare(strict_types=1);
  *
  * Drafted by lib/company-lifecycle/bin/discover-manifest.php from a freshly migrated database (every
  * app/Database/Migrations file to 2026-10-14) and reviewed line by line; decisions in
- * docs/COMPANY_LIFECYCLE.md. Kit 1.1 (migrations 2026-10-16-000100 / -000200): the invitation ↔
+ * docs/COMPANY_LIFECYCLE.md. Kit 1.1 (migrations 2026-10-16-000200 / -000300): the invitation ↔
  * participant foreign-key cycle is back and broken by break_cycle; the account hook archives first.
  *
  *   company_tables  EVERYTHING company-scoped (key company_id): the company's sessions with their
@@ -44,7 +44,7 @@ return [
         ['table' => 'remote_session_feedback', 'via' => ['column' => 'session_id', 'parent' => 'remote_sessions', 'parent_column' => 'id']],
         // Participants before invitations: participants.invitation_id points at an invitation. The reverse
         // reference, invitations.redeemed_participant_id (ON DELETE SET NULL, DEFERRABLE — restored by
-        // migration 2026-10-16-000200), closes a cycle: break_cycle below NULLs it on the purged invitations
+        // migration 2026-10-16-000300), closes a cycle: break_cycle below NULLs it on the purged invitations
         // after archiving them, before anything is deleted, and a restore relinks it.
         ['table' => 'remote_participants', 'via' => ['column' => 'session_id', 'parent' => 'remote_sessions', 'parent_column' => 'id']],
         ['table' => 'remote_invitations', 'via' => ['column' => 'session_id', 'parent' => 'remote_sessions', 'parent_column' => 'id']],

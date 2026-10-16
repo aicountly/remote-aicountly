@@ -302,3 +302,45 @@ export async function apiFetchWithMeta<T>(
 
   return { data: payload?.data as T, meta: payload?.meta ?? {} }
 }
+
+/**
+ * A text download (the audit trail's CSV). Same authentication and error
+ * mapping as {@link apiFetch}; `partial` is the server saying the export was
+ * cut at its row cap.
+ */
+export async function apiFetchText(path: string): Promise<{ text: string; partial: boolean }> {
+  const headers: Record<string, string> = { Accept: 'text/csv' }
+
+  try {
+    const auth = await authorization(false)
+    if (auth) headers.Authorization = auth
+  } catch (error) {
+    if (error instanceof AuthError) throw authFailure(error)
+    throw error
+  }
+
+  let response: Response
+  try {
+    response = await fetch(`${getApiBaseUrl()}/v1/remote${path}`, { headers })
+  } catch {
+    throw new RemoteApiError('NETWORK_ERROR', 'We could not reach AICOUNTLY Remote. Check your connection.', 0)
+  }
+
+  const text = await response.text()
+
+  if (!response.ok) {
+    let error: { code?: string; message?: string } | undefined
+    try {
+      error = (JSON.parse(text) as { error?: { code?: string; message?: string } }).error
+    } catch {
+      error = undefined
+    }
+    throw new RemoteApiError(
+      error?.code ?? 'REQUEST_FAILED',
+      error?.message ?? 'Something went wrong. Please try again.',
+      response.status,
+    )
+  }
+
+  return { text, partial: response.headers.get('X-Audit-Export-Partial') === 'true' }
+}
