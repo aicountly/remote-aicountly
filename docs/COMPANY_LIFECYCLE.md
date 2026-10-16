@@ -4,7 +4,7 @@ Manage decides **when** a company that stopped paying for Remote becomes read-on
 only, for 45 days), and when its data here is deleted; Remote decides **how**, through a reviewed
 manifest. Manage also asks, when an AICOUNTLY account is closed, for that person's own non-company data
 to be deleted. Contract: manage-aicountly `docs/company-lifecycle/README.md`. Implementation: the
-AICOUNTLY company-lifecycle receiver kit **v1.1.0**, vendored unchanged at
+AICOUNTLY company-lifecycle receiver kit **v1.1.1**, vendored unchanged at
 `backend/lib/company-lifecycle/` (copy it again from manage-aicountly
 `Saas Common Handler/company-lifecycle/` to update; never edit it here).
 
@@ -29,6 +29,7 @@ AICOUNTLY company-lifecycle receiver kit **v1.1.0**, vendored unchanged at
 * **company_tables — everything company-scoped** (`company_id`): sessions with their participants, invitations, messages, file-transfer records, recording records, events and feedback; support requests; devices and their challenges; desktop sign-in codes; launch-context tokens; policy, entitlements (the plan limits as Remote applies them — billing is Manage's), role / user permissions, memberships, the directory projection; and Remote's own audit log (no statute keeps it). Archived first, children before parents.
 * **company_retain — none.**
 * **Account purge — the account hook, not `user_tables`.** The person is a `remote_identities` row (`platform_uuid`) that the company's records point at with `ON DELETE NO ACTION`, so the engine cannot delete it, and every personal table reaches the person only through it. `CompanyLifecycle::purgeAccount()` (the kit's `account` hook) does, in one transaction: delete the person's **PERSONAL** sessions (no company — their participants, messages, events, transfers, invitations and feedback cascade), personal devices and desktop sign-in codes, and anonymise the identity projection (name → "Former AICOUNTLY user", e-mail and platform user id cleared). Company sessions and devices stay with their companies. Kit 1.1: before anything changes, the hook archives every row it deletes or changes into the purge's archive (`$ctx->archiveRows`): the personal sessions and their cascaded children, the rows whose `device_id` / `session_id` the deletes set to NULL (a personal device used in a company session), the device challenges, the sign-in codes and the identity it anonymises — children before parents, so `--restore=<archive> --confirm` puts it all back (parents first, the deferrable invitation ↔ participant reference deferred).
+* **Retention groups** (kit 1.1.1): nothing retained, so no group roots — `--check-manifest` reports no warnings and no `expiry_groups`; the optional `schema-1.1.1.sql` (group columns in the expiry record) is not added, as no group can expire here.
 * **Retention periods / scrub / legal hold** (kit 1.1): none — nothing is retained, no retained row holds personal fields, and Remote records no legal hold. **Senders**: Remote writes into no other product (Manage and the portal are only read), so there is no `DeferredSend` outbox.
 * **ignore** — `remote_identities` (above) and the CodeIgniter migrations table. The draft's `uuid` columns are each row's own public id, not a person.
 
