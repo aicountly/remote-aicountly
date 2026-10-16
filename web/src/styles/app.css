@@ -194,6 +194,36 @@
   font-weight: 550;
 }
 
+/* Name over the "Cust ID: <uuid>" line (the portal user id support asks for). */
+.shell__user-id {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.shell__cust-id {
+  max-width: 180px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.shell__cust-id-value {
+  color: var(--text-primary);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* "ID: 123" beside a company name, so similarly named companies can be told apart. */
+.company-id-tag {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .shell__body {
   display: flex;
   flex: 1;
@@ -1431,7 +1461,9 @@
     gap: var(--space-3);
   }
 
-  .shell__user-name {
+  .shell__user-name,
+  .shell__user-id,
+  .scope-button__id {
     display: none;
   }
 
