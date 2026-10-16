@@ -108,6 +108,41 @@ final class EventType
     public const DESKTOP_SIGNIN_CONFIRMED = 'DESKTOP_SIGNIN_CONFIRMED';
     public const DESKTOP_SIGNIN_DENIED    = 'DESKTOP_SIGNIN_DENIED';
 
+    /** Someone downloading the audit trail itself, and the feedback left on a session. */
+    public const AUDIT_EXPORTED             = 'AUDIT_EXPORTED';
+    public const SESSION_FEEDBACK_RECORDED  = 'SESSION_FEEDBACK_RECORDED';
+
+    /**
+     * How much a reader of the trail should care about an event: `security`
+     * for access, policy and credential-adjacent changes, `material` for the
+     * records people act on, `info` for the rest of a session's life.
+     */
+    public static function severity(string $event): string
+    {
+        return match ($event) {
+            self::POLICY_UPDATED, self::PERMISSION_UPDATED,
+            self::DEVICE_ENROLLED, self::DEVICE_REVOKED, self::DEVICE_AUTH_FAILED,
+            self::UNATTENDED_ACCESS_ENABLED, self::UNATTENDED_ACCESS_DISABLED,
+            self::COMPANY_CONTEXT_MISMATCH, self::POLICY_REJECTED, self::CONTROL_GRANTED,
+            self::DESKTOP_SIGNIN_CONFIRMED, self::DESKTOP_SIGNIN_DENIED,
+            self::AUDIT_EXPORTED => 'security',
+
+            self::SESSION_CREATED, self::SESSION_ENDED, self::INVITATION_CREATED, self::INVITATION_REVOKED,
+            self::PARTICIPANT_APPROVED, self::PARTICIPANT_DENIED, self::DEVICE_UPDATED,
+            self::DEVICE_REBOOT_REQUESTED, self::UNATTENDED_SESSION_STARTED,
+            self::FILE_TRANSFER_STARTED, self::FILE_TRANSFER_COMPLETED,
+            self::RECORDING_STARTED, self::RECORDING_STOPPED => 'material',
+
+            default => 'info',
+        };
+    }
+
+    /** The event as a sentence fragment, for the one-line summary of a row. */
+    public static function describe(string $event): string
+    {
+        return ucfirst(strtolower(str_replace('_', ' ', $event)));
+    }
+
     /**
      * Which sharing surface the browser reported, as an event name (§27).
      */

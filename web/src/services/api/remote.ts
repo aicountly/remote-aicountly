@@ -6,9 +6,10 @@
  * rather than a search-and-replace across the feature folders.
  */
 
-import { apiFetch, apiFetchWithMeta, setGuestToken } from './client'
+import { apiFetch, apiFetchText, apiFetchWithMeta, setGuestToken } from './client'
 import type {
   AuditEntry,
+  AuditFilters,
   Bootstrap,
   ChatMessage,
   CompanyPolicy,
@@ -603,16 +604,46 @@ export function updateRolePermissions(
   })
 }
 
-export function fetchAuditTrail(
-  companyId: number,
-  filters: { event?: string; from?: string; to?: string; sessionUuid?: string; limit?: number; offset?: number } = {},
-): Promise<{ data: AuditEntry[]; meta: Record<string, unknown> }> {
+function auditQuery(filters: AuditFilters): string {
+  const names: Record<string, string> = {
+    entityType: 'entity_type',
+    entityId: 'entity_id',
+    entityLabel: 'entity_label',
+    actorUuid: 'actor_uuid',
+  }
   const params = new URLSearchParams()
   for (const [key, value] of Object.entries(filters)) {
-    if (value !== undefined && value !== null && value !== '') params.set(key, String(value))
+    if (value !== undefined && value !== null && value !== '') params.set(names[key] ?? key, String(value))
   }
 
-  return apiFetchWithMeta<AuditEntry[]>(`/company/${companyId}/audit?${params.toString()}`)
+  return params.toString()
+}
+
+export function fetchAuditTrail(
+  companyId: number,
+  filters: AuditFilters = {},
+): Promise<{ data: AuditEntry[]; meta: Record<string, unknown> }> {
+  return apiFetchWithMeta<AuditEntry[]>(`/company/${companyId}/audit?${auditQuery(filters)}`)
+}
+
+/** Everything one record (a session, a device, a person's permissions) has been through. */
+export function fetchAuditHistory(
+  companyId: number,
+  entityType: string,
+  entityId: string,
+  filters: { limit?: number; offset?: number } = {},
+): Promise<{ data: AuditEntry[]; meta: Record<string, unknown> }> {
+  return apiFetchWithMeta<AuditEntry[]>(
+    `/company/${companyId}/audit/entity/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}?${auditQuery(filters)}`,
+  )
+}
+
+/** The filtered trail as CSV text, ready to hand to the browser as a download. */
+export function exportAuditTrail(
+  companyId: number,
+  filters: AuditFilters = {},
+): Promise<{ text: string; partial: boolean }> {
+  return apiFetchText(`/company/${companyId}/audit/export?${auditQuery({ ...filters, limit: undefined, offset: undefined })}`)
 }
 
 // --- Desktop-agent sign-in (docs/desktop/DEVICE_ENROLMENT.md) --------------

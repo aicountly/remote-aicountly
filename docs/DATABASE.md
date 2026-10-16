@@ -188,6 +188,18 @@ Deliberately separate.
 * **Audit** is the security record: actor, company, IP, user agent, request id.
   It outlives the session and needs `remote.audit.view`.
 
+`remote_audit_logs` is append-only (migration `…HardenRemoteAuditTrail`): a row
+trigger refuses every UPDATE and DELETE; TRUNCATE is not a row change and is
+what the test suite uses between tests. Each row carries the actor (`actor_uuid`,
+`actor_label`), the record it is about (`entity_type`/`entity_id`/`entity_label`),
+a one-line `summary`, a `severity` (`info`, `material`, `security`) and, for
+updates, `metadata.changes` as `{field, label, old, new}`. Access, policy and
+device changes are written with `AuditService::recordMaterial()` inside the
+change's own transaction, so they fail closed; everything else uses
+`recordAudit()`, which never breaks the request. Read it with
+`GET /company/{id}/audit`, `…/audit/export` (CSV) and
+`…/audit/entity/{type}/{id}`, all behind `remote.audit.view`.
+
 Neither ever receives screen content or a chat body. `AuditService::scrub()`
 enforces that before the write.
 

@@ -295,13 +295,43 @@ export interface AuditEntry {
   event: string;
   actorType: string;
   actorName: string | null;
+  actorUuid: string | null;
   companyId: number | null;
+  severity: 'info' | 'material' | 'security';
+  summary: string;
+  entityType: string | null;
+  entityId: string | null;
+  entityLabel: string | null;
+  requestId: string | null;
   sessionUuid: string | null;
   sourceProduct: string | null;
   ip: string | null;
   userAgent: string | null;
   metadata: Record<string, unknown>;
   createdAt: string | null;
+}
+
+/** One field of an audited update: what it was and what it became. */
+export interface AuditChange {
+  field: string;
+  label: string;
+  old: unknown;
+  new: unknown;
+}
+
+export interface AuditFilters {
+  event?: string;
+  severity?: string;
+  entityType?: string;
+  entityId?: string;
+  entityLabel?: string;
+  actorUuid?: string;
+  q?: string;
+  from?: string;
+  to?: string;
+  sessionUuid?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface ChatMessage {

@@ -246,4 +246,6 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
     $routes->get('company/(:num)/role-permissions', 'AdminController::listRolePermissions/$1', ['filter' => 'api-auth']);
     $routes->put('company/(:num)/role-permissions/(:segment)', 'AdminController::updateRolePermissions/$1/$2', ['filter' => 'api-auth']);
     $routes->get('company/(:num)/audit', 'AdminController::audit/$1', ['filter' => 'api-auth']);
+    $routes->get('company/(:num)/audit/export', 'AdminController::auditExport/$1', ['filter' => 'api-auth']);
+    $routes->get('company/(:num)/audit/entity/(:segment)/(:segment)', 'AdminController::auditEntity/$1/$2/$3', ['filter' => 'api-auth']);
 });
