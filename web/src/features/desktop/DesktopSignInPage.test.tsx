@@ -75,8 +75,8 @@ describe('DesktopSignInPage', () => {
       { companyId: 482, name: 'Southwind', isCompanyAdmin: false, roleKey: 'MEMBER', branchId: null, financialYearId: null },
     ])
 
-    expect(screen.getByRole('option', { name: 'Northwind' })).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: 'Southwind' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Northwind (ID: 481)' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Southwind (ID: 482)' })).toBeInTheDocument()
   })
 
   it('explains there is nothing to register into when there are no companies', () => {
