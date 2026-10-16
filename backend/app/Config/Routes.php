@@ -49,6 +49,15 @@ $routes->match(['get', 'post'], 'global/(:segment)/(:segment)', 'PortalRelayCont
 $routes->get('session', 'PortalRelayController::whoami', ['filter' => 'api-auth']);
 
 // ---------------------------------------------------------------------------
+// Manage's company lifecycle (lib/company-lifecycle, docs/COMPANY_LIFECYCLE.md)
+//
+// A machine route with no filter: no session, no company context, no rate limit — the HMAC over the
+// raw body (LIFECYCLE_WEBHOOK_SECRET) is its only credential.
+// ---------------------------------------------------------------------------
+
+$routes->post('internal/manage/company-lifecycle', 'Api\CompanyLifecycleController::receive');
+
+// ---------------------------------------------------------------------------
 // Remote API v1
 // ---------------------------------------------------------------------------
 

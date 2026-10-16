@@ -46,6 +46,10 @@ final class ApiHtaccessTest extends CIUnitTestCase
         'scripts/x.php',
         'build/logs/clover.xml',
         'deploy/vendor.htaccess',
+        'lib/company-lifecycle/src/Kit.php',
+        'lib/company-lifecycle/schema.sql',
+        'config/lifecycle-manifest.php',
+        'config/lifecycle-kit.php',
         '.env',
         '.env.example',
         '.gitignore',
@@ -75,6 +79,8 @@ final class ApiHtaccessTest extends CIUnitTestCase
         'builder/x',
         'databases',
         'composer.json.php',
+        'library/x',
+        'configuration',
     ];
 
     private string $htaccess;

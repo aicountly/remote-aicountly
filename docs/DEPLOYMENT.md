@@ -205,8 +205,16 @@ and a failure to obtain them is reported by its own `databaseReason` with a `dat
    `"database":"unavailable"` means the credentials are wrong;
    `"signalling":"unconfigured"` means `remote.signallingSecret` is empty and no
    session will connect.
-8. **Deploy the signalling service** (below).
-9. **Open the site** and sign in. See
+8. **Install the company-lifecycle worker's cron** (cPanel → Cron Jobs) and set
+   `LIFECYCLE_WEBHOOK_SECRET` / `MANAGE_API_URL` in `api/.env`
+   ([COMPANY_LIFECYCLE.md](COMPANY_LIFECYCLE.md)):
+   ```cron
+   # Each line below reports to Console's Cron Job Monitor after the run (monitor in MON=; key CONSOLE_CRON_MONITOR_KEY in the api .env; never fails the line) — console-react-app docs/CRON_MONITORS.md.
+   */5 * * * * cd ~/public_html/api && php lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php >> $HOME/logs/remote-company-lifecycle.log 2>&1; RC=$?; MON=remote.company_lifecycle; KEY=$(sed -n 's/^CONSOLE_CRON_MONITOR_KEY *= *//p' .env | tr -d "\"' \r"); BASE=$(sed -n 's/^CONSOLE_API_BASE *= *//p' .env | tr -d "\"' \r"); [ -n "$KEY" ] && curl -fsS -m 5 -o /dev/null -X POST "${BASE:-https://console.aicountly.org/api}/portal/cron-heartbeat" -H "X-Console-Cron-Key: $KEY" -H 'Content-Type: application/json' -d "{\"monitor\":\"$MON\",\"run_id\":\"$MON-$(date +\%s)-$$\",\"outcome\":\"$([ $RC = 0 ] && echo ok || echo error)\",\"finished_at\":$(date +\%s)}" || true
+   37 3 * * *  cd ~/public_html/api && php lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php --expire-retained >> $HOME/logs/remote-company-lifecycle.log 2>&1; RC=$?; MON=remote.company_lifecycle_expiry; KEY=$(sed -n 's/^CONSOLE_CRON_MONITOR_KEY *= *//p' .env | tr -d "\"' \r"); BASE=$(sed -n 's/^CONSOLE_API_BASE *= *//p' .env | tr -d "\"' \r"); [ -n "$KEY" ] && curl -fsS -m 5 -o /dev/null -X POST "${BASE:-https://console.aicountly.org/api}/portal/cron-heartbeat" -H "X-Console-Cron-Key: $KEY" -H 'Content-Type: application/json' -d "{\"monitor\":\"$MON\",\"run_id\":\"$MON-$(date +\%s)-$$\",\"outcome\":\"$([ $RC = 0 ] && echo ok || echo error)\",\"finished_at\":$(date +\%s)}" || true
+   ```
+9. **Deploy the signalling service** (below).
+10. **Open the site** and sign in. See
    [auth/AICOUNTLY_AUTH_WORKFLOW.md](auth/AICOUNTLY_AUTH_WORKFLOW.md) for what a
    healthy login looks like.
 

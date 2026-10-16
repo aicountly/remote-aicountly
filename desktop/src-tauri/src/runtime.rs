@@ -430,6 +430,14 @@ fn describe(error: &ApiError) -> String {
         ApiError::Refused { status, .. } if *status >= 500 => {
             "AICOUNTLY is not answering at the moment.".into()
         }
+        // Manage's company lifecycle: the organisation is read-only in Remote. The server's sentence says
+        // until when and what to do; it is shown rather than a refusal that sounds like this machine's fault.
+        ApiError::Refused { .. } if error.is_company_restricted() => error
+            .company_restricted_message()
+            .map_or_else(
+                || "This organisation is read-only in AICOUNTLY Remote because its subscription ended. Renew it to start sessions again.".into(),
+                str::to_owned,
+            ),
         ApiError::Refused { .. } => "AICOUNTLY refused this computer's request.".into(),
         _ => "This computer could not reach AICOUNTLY.".into(),
     }
@@ -525,6 +533,31 @@ mod tests {
         });
 
         assert_ne!(server, refusal);
+    }
+
+    /// A read-only organisation shows the server's sentence, not the generic refusal.
+    #[test]
+    fn a_read_only_organisation_is_described_in_the_servers_words() {
+        let restricted = describe(&ApiError::Refused {
+            status: 423,
+            code: "COMPANY_RESTRICTED".into(),
+            message: "This company is read-only until 1 Dec 2026 because its subscription ended."
+                .into(),
+        });
+
+        assert_eq!(
+            restricted,
+            "This company is read-only until 1 Dec 2026 because its subscription ended."
+        );
+
+        let unreadable = describe(&ApiError::Refused {
+            status: 423,
+            code: "COMPANY_RESTRICTED".into(),
+            message: "<html>proxy</html>".into(),
+        });
+
+        assert!(unreadable.contains("read-only"));
+        assert!(!unreadable.contains("<html>"));
     }
 
     /// A revoked device is terminal and is never a retry.

@@ -11,6 +11,7 @@
 
 import { getApiBaseUrl } from '../../config'
 import { ensureSesKey, AuthError } from '../../auth/portal'
+import { activeCompanyForRestrictions, noteRestrictedResponse } from '../companyRestriction'
 
 const REQUEST_TIMEOUT_MS = 20_000
 
@@ -230,6 +231,9 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
   }
 
   if (!response.ok) {
+    // 423 COMPANY_RESTRICTED: the organisation's subscription lapsed and it is read-only (Manage's company
+    // lifecycle). Recorded for the read-only banner, which also raises a toast; the error still throws.
+    noteRestrictedResponse(activeCompanyForRestrictions(), response.status, payload)
     const error = (payload as { error?: { code?: string; message?: string; details?: Record<string, unknown> } })?.error
 
     throw new RemoteApiError(
@@ -288,6 +292,7 @@ export async function apiFetchWithMeta<T>(
   const payload = text ? (JSON.parse(text) as ApiEnvelope<T> & { error?: { code: string; message: string } }) : null
 
   if (!response.ok) {
+    noteRestrictedResponse(activeCompanyForRestrictions(), response.status, payload)
     throw new RemoteApiError(
       payload?.error?.code ?? 'REQUEST_FAILED',
       payload?.error?.message ?? 'Something went wrong. Please try again.',

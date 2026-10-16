@@ -59,6 +59,17 @@ abstract class RemoteTestCase extends CIUnitTestCase
     {
         parent::setUp();
 
+        // A request that threw inside transStart() (an ApiException is not a database error, so
+        // CodeIgniter does not roll back) leaves the shared test connection inside that transaction; in
+        // production the request's connection closes with it. Roll it back here, or every later test
+        // runs inside it — and once something ends it, CodeIgniter still counts a transaction that
+        // PostgreSQL no longer has (the audit writer's savepoints are then refused, and the next
+        // transStart() never begins one).
+        while ($this->db->transDepth > 0 && $this->db->transRollback()) {
+            // until the outermost one is rolled back
+        }
+        $this->db->resetTransStatus();
+
         $this->db->query('TRUNCATE ' . implode(', ', self::TABLES) . ' RESTART IDENTITY CASCADE');
         $this->db->query('ALTER SEQUENCE remote_session_display_seq RESTART WITH 10001');
 

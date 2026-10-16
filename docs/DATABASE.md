@@ -190,7 +190,10 @@ Deliberately separate.
 
 `remote_audit_logs` is append-only (migration `…HardenRemoteAuditTrail`): a row
 trigger refuses every UPDATE and DELETE; TRUNCATE is not a row change and is
-what the test suite uses between tests. Each row carries the actor (`actor_uuid`,
+what the test suite uses between tests. The one exception is the company-lifecycle
+purge worker (migration `…LetTheLifecyclePurgeDeleteRemoteAuditLogs`): its own
+command-line connection sets `aicountly.lifecycle_purge = on`, and only then may
+it DELETE a purged company's rows (archived first; docs/COMPANY_LIFECYCLE.md). Each row carries the actor (`actor_uuid`,
 `actor_label`), the record it is about (`entity_type`/`entity_id`/`entity_label`),
 a one-line `summary`, a `severity` (`info`, `material`, `security`) and, for
 updates, `metadata.changes` as `{field, label, old, new}`. Access, policy and

@@ -720,12 +720,41 @@ impl ApiError {
         )
     }
 
+    /// Whether the organisation is read-only in AICOUNTLY Remote: its subscription lapsed, so Manage's
+    /// company lifecycle answers its writes `423 COMPANY_RESTRICTED`. Not this machine's fault and not
+    /// final — renewing lifts it — so it is retried with back-off and its own sentence is shown.
+    #[must_use]
+    pub fn is_company_restricted(&self) -> bool {
+        matches!(self, Self::Refused { status: 423, code, .. } if code == "COMPANY_RESTRICTED")
+    }
+
+    /// The server's own sentence for a read-only organisation (it names the date, and what to do), when it
+    /// is one a window may show: a single short line of plain text. `None` for any other error.
+    #[must_use]
+    pub fn company_restricted_message(&self) -> Option<&str> {
+        match self {
+            Self::Refused { message, .. } if self.is_company_restricted() => {
+                let message = message.trim();
+                let plain = !message.is_empty()
+                    && message.chars().count() <= 300
+                    && !message
+                        .chars()
+                        .any(|c| c == '<' || c == '>' || c.is_control());
+
+                plain.then_some(message)
+            }
+            _ => None,
+        }
+    }
+
     /// Whether trying again could plausibly work.
     #[must_use]
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::Transport(_) => true,
-            Self::Refused { status, .. } => *status >= 500 || *status == 429,
+            Self::Refused { status, .. } => {
+                *status >= 500 || *status == 429 || self.is_company_restricted()
+            }
             _ => false,
         }
     }
@@ -779,6 +808,42 @@ mod tests {
             assert!(error.is_device_rejected(), "{code}");
             assert!(!error.is_retryable(), "{code} must not be retried");
         }
+    }
+
+    /// A read-only organisation (AICOUNTLY company lifecycle) is the server's to explain, and renewing
+    /// lifts it: its sentence is shown and the agent keeps trying.
+    #[test]
+    fn a_read_only_organisation_keeps_the_servers_sentence_and_is_retried() {
+        let restricted = ApiError::Refused {
+            status: 423,
+            code: "COMPANY_RESTRICTED".into(),
+            message: "This company is read-only until 1 Dec 2026 because its subscription ended."
+                .into(),
+        };
+
+        assert!(restricted.is_company_restricted());
+        assert!(restricted.is_retryable());
+        assert!(!restricted.is_device_rejected());
+        assert_eq!(
+            restricted.company_restricted_message(),
+            Some("This company is read-only until 1 Dec 2026 because its subscription ended.")
+        );
+
+        let html = ApiError::Refused {
+            status: 423,
+            code: "COMPANY_RESTRICTED".into(),
+            message: "<html>blocked</html>".into(),
+        };
+        assert_eq!(html.company_restricted_message(), None, "never markup");
+
+        let other = ApiError::Refused {
+            status: 423,
+            code: "LOCKED".into(),
+            message: "y".into(),
+        };
+        assert!(!other.is_company_restricted());
+        assert!(!other.is_retryable());
+        assert_eq!(other.company_restricted_message(), None);
     }
 
     #[test]
