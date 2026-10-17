@@ -178,6 +178,67 @@ and a failure to obtain them is reported by its own `databaseReason` with a `dat
 
 ---
 
+## Database migrations during the deploy
+
+Both deploy workflows apply the pending migrations themselves, in the step
+**Database migrations**, right after the API upload and before the live-app
+checks. The workflow input `migrate` decides:
+
+| `migrate` | What happens |
+|---|---|
+| `apply` (default) | status, then `php spark migrate`, then the status again, which must say *fully migrated* |
+| `skip` | the database is left alone and the run carries a warning; use it for the first deploy, before `api/.env` exists |
+
+The step sends `scripts/ci/remote-migrate.sh` over SSH (on stdin; nothing is
+left on the server) and runs CodeIgniter's own runner in `<document root>/api`:
+
+1. `php spark remote:db-check` — read-only: is the database reached (and from
+   where), and what is pending — then, when something is pending,
+   `php spark migrate:status`, the runner's own list. Nothing pending ends the
+   step green; a status that cannot be read (no `api/.env`, refused login,
+   Console, no usable PHP) fails the deploy with nothing applied.
+2. `php spark migrate`, which applies every pending migration in order and
+   records each one after it succeeds.
+3. `php spark remote:db-check` again: anything still pending fails the deploy.
+
+`spark migrate` has **no dry run**, so there is none in the deploy. Two things
+about it are worth knowing:
+
+- It runs a migration **without a transaction**. When one fails, the ones before
+  it stay applied and recorded, and the statements of the failing one that ran
+  before the error are not undone. The deploy fails with an error; check the
+  database, fix the migration and deploy again.
+- With `database.default.DBDebug = false` (what `api/.env` sets for the web API)
+  a failing statement returns false instead of throwing, so the migration would
+  be recorded as applied. The deploy runs it with DBDebug on, and since `spark
+  migrate` exits 0 even after a failed migration, it judges the result by the
+  second `remote:db-check`.
+
+PHP on the server: the first of `/opt/cpanel/ea-php84`, `ea-php83`, `ea-php82`,
+`ea-php81`, `/usr/local/bin/php` and the `php` on `PATH` that is PHP 8.2+ with
+`pgsql`, `intl` and `mbstring` (cPanel's default `php` can be older, or lack
+`pgsql`). The optional repository variables `PROD_PHP_CLI` / `SANDBOX_PHP_CLI`
+(*Settings → Secrets and variables → Actions → Variables*) name one explicitly.
+
+Each run writes one line to the run summary: `none pending`, `applied N: …`,
+`skipped`, or why it failed.
+
+**By hand** (the fallback), over SSH:
+
+```bash
+cd ~/public_html/api && php spark migrate && php spark remote:db-check
+```
+
+This runs with `api/.env`'s `DBDebug = false`, so read the output for an
+exception rather than trusting the exit code. The deploy's own script runs from
+a checkout too, with DBDebug on and the same checks:
+
+```bash
+ssh <cpanel user>@<host> "bash -s -- public_html '' apply" < scripts/ci/remote-migrate.sh
+```
+
+---
+
 ## First deploy
 
 1. **Create the subdomain** in cPanel and note its document root.
@@ -186,17 +247,24 @@ and a failure to obtain them is reported by its own `databaseReason` with a `dat
    `PROD_SSH_REMOTE_ROOT` — and the same five with a `SANDBOX_` prefix.
    Because the deploys run with `--delete`, a `*_SSH_REMOTE_ROOT` that would
    resolve to the home directory itself, a system directory, or anything
-   containing `..` is refused by the workflow.
+   containing `..` is refused by the workflow. Optionally, the repository
+   variable `PROD_PHP_CLI` / `SANDBOX_PHP_CLI` names the PHP CLI the
+   migrations run with (see above).
 3. **Create the PostgreSQL database and user**, and grant ALL PRIVILEGES.
-4. **Run the deploy workflow.** The API is deployed but unconfigured.
+4. **Run the deploy workflow with `migrate` = `skip`.** There is no `api/.env`
+   yet, so there is no database to migrate: the API is deployed but
+   unconfigured (with `apply` the migration step would fail on the missing
+   `.env`).
 5. **Create `api/.env`** on the server, from `backend/.env.example`.
-6. **Run the migrations**, over SSH:
+6. **Run the deploy workflow again with `migrate` = `apply`** (the default). It
+   applies every migration; then seed the platform defaults once, over SSH:
    ```bash
    cd ~/public_html/api
-   php spark remote:db-check     # is the database reached, and from where?
-   php spark migrate
+   php spark remote:db-check     # is the database reached, and from where? fully migrated?
    php spark db:seed RemotePlatformDefaultsSeeder
    ```
+   By hand instead of the second deploy: `php spark migrate` in the same folder
+   (see *Database migrations during the deploy*).
 7. **Confirm:**
    ```bash
    curl -s https://remote.aicountly.com/api/health | jq
@@ -320,15 +388,13 @@ the UI explains an unreachable peer honestly rather than retrying forever.
 ## Upgrading
 
 1. Merge to the deployment branch.
-2. Run the workflow. It reinstalls Composer dependencies, rebuilds the web app
-   and rsyncs both.
-3. **Run new migrations by hand** over SSH — they are deliberately not part of
-   the deploy:
-   ```bash
-   cd ~/public_html/api && php spark migrate
-   ```
-   An automated migration in a `--delete` deploy is a schema change nobody
-   reviewed, running against production, with no way to stop it half-way.
+2. Run the workflow. It reinstalls Composer dependencies, rebuilds the web app,
+   rsyncs both and applies the new migrations (`migrate` = `apply`, the
+   default). A failed migration fails the deploy after the upload: the new code
+   is live, on the schema as far as it got, so fix it and deploy again.
+3. With `migrate` = `skip` the new migrations stay pending, and the run says
+   so; apply them by hand over SSH (`cd ~/public_html/api && php spark
+   migrate`) or with the next deploy.
 4. Re-check `/api/health`.
 
 Rolling back the code is re-running the workflow from an earlier commit.

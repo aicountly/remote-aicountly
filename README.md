@@ -196,9 +196,13 @@ The Windows release takes a version and a channel (`sandbox`, `beta`,
 and has no branch by which an unsigned artifact becomes a release. See
 [docs/desktop/WINDOWS_RELEASE.md](docs/desktop/WINDOWS_RELEASE.md).
 
-Migrations are run by hand over SSH, deliberately: an automated migration
-inside a `--delete` deploy is a schema change nobody reviewed, running against
-production, with no way to stop it half-way.
+The deploy applies the pending database migrations itself, after the API
+upload (input `migrate`, default `apply`): `php spark remote:db-check` and
+`migrate:status`, then `php spark migrate`, then `remote:db-check` again, which
+must report the database fully migrated, or the deploy fails. `spark migrate`
+has no dry run. Run the first deploy with `migrate` = `skip`, since `api/.env`
+does not exist yet. By hand, the fallback is still `php spark migrate` in
+`api/` on the server. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#database-migrations-during-the-deploy).
 
 ## Brand assets
 
