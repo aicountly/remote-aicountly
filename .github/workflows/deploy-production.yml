@@ -6,9 +6,10 @@
 #
 # What it does: builds web/ and installs backend/'s Composer dependencies on
 # the runner, rsyncs the built dist/ over SSH to the cPanel document root, then
-# rsyncs backend/ to the api/ folder inside that same document root. No
-# frontend source, no node_modules, no dev dependencies and no .env ever reach
-# the server.
+# rsyncs backend/ to the api/ folder inside that same document root, and then
+# applies the pending database migrations there (input migrate). No frontend
+# source, no node_modules, no dev dependencies and no .env ever reach the
+# server.
 # ---------------------------------------------------------------------------
 name: Deploy to cPanel Production
 
@@ -19,6 +20,11 @@ on:
         description: Run the GitHub test gate before deploying (off = the suite was run locally before merge)
         type: boolean
         default: false
+      migrate:
+        description: apply = apply the pending database migrations during the deploy (php spark migrate; it has no dry run, a failure stops the deploy) · skip = leave the database alone (first deploy, before api/.env exists)
+        type: choice
+        options: [apply, skip]
+        default: apply
 
 # Never let two deploys to the same target overlap.
 concurrency:
@@ -385,7 +391,75 @@ jobs:
           fi
 
           echo "Deployed backend to \$REMOTE_ROOT/api/"
-          echo "::notice::If this is the first API deploy, create api/.env on the server from backend/.env.example, then run the migrations — see docs/DEPLOYMENT.md."
+          echo "::notice::First API deploy: run it with migrate = skip, create api/.env on the server from backend/.env.example, then deploy again with migrate = apply — see docs/DEPLOYMENT.md."
+
+      # Schema changes ship as CodeIgniter migrations in backend/app/Database/Migrations. The deploy
+      # applies them (input migrate, default apply) right after the API upload, with CodeIgniter's
+      # own runner: php spark remote:db-check (read-only: is the database reached, is anything
+      # pending) and php spark migrate:status, then php spark migrate, then remote:db-check again,
+      # which must report the database fully migrated. spark migrate has no dry run, so there is
+      # none here. It runs the pending migrations in order and records each one after it succeeds;
+      # none runs in a transaction, so when one fails the ones before it stay applied and what the
+      # failing one did before its error is not undone. scripts/ci/remote-migrate.sh runs on the server
+      # and picks PHP with pgsql (the PROD_PHP_CLI variable names one explicitly). migrate = skip
+      # leaves the database alone (first deploy, before api/.env exists) and warns.
+      # Manual fallback: cd <document root>/api && php spark migrate
+      - name: Database migrations
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
+          PHP_CLI: ${{ vars.PROD_PHP_CLI }}
+          MIGRATE: ${{ inputs.migrate || 'apply' }}
+        run: |
+          set +e
+          summary() { echo "**Database migrations:** $1" >> "$GITHUB_STEP_SUMMARY"; }
+
+          if [ "$MIGRATE" = skip ]; then
+            echo "::warning::Database migrations were not applied (migrate = skip). Pending ones stay pending until run on the server (cd <document root>/api && php spark migrate) or the next deploy with migrate = apply."
+            summary "skipped (migrate = skip)"
+            exit 0
+          fi
+
+          # shellcheck disable=SC2029  # the remote command line is built here on purpose (quoted with printf %q)
+          migrate() {
+            ssh deploy-target "bash -s -- $(printf '%q ' "$REMOTE_ROOT" "${PHP_CLI:-}" "$1")" < scripts/ci/remote-migrate.sh
+          }
+
+          echo "::group::remote:db-check and migrate:status"
+          migrate status > /tmp/migrate-status.txt 2>&1
+          rc=$?
+          sed 's/^/    /' /tmp/migrate-status.txt
+          echo "::endgroup::"
+          if [ "$rc" -eq 0 ]; then
+            echo "The database schema is up to date."
+            summary "none pending"
+            exit 0
+          fi
+          if [ "$rc" -eq 3 ]; then
+            echo "::error::The server is not ready to run migrations (see the output above: the api folder, api/.env or a PHP CLI with pgsql is missing); nothing was applied. On a first deploy, before api/.env exists, run the deploy with migrate = skip."
+            summary "failed: server not ready (nothing applied)"
+            exit 1
+          fi
+          if [ "$rc" -ne 10 ]; then
+            echo "::error::Could not read the migration status on the server; nothing was applied. See the output above (api/.env, the database login or Console, PHP with pgsql: PROD_PHP_CLI)."
+            summary "failed: status unreadable (nothing applied)"
+            exit 1
+          fi
+          pending="$(awk '$1 == "PENDING" {print $2}' /tmp/migrate-status.txt | tr '\n' ' ')"
+          pending="${pending% }"
+          echo "Pending: ${pending:-(see the status above)}"
+
+          echo "::group::spark migrate (apply)"
+          migrate apply > /tmp/migrate-apply.txt 2>&1
+          rc=$?
+          sed 's/^/    /' /tmp/migrate-apply.txt
+          echo "::endgroup::"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Applying the database migrations failed, or the database is not fully migrated afterwards (see the output above). The failing migration is not recorded and the ones before it stay applied. CodeIgniter runs a migration without a transaction, so statements of the failing one that ran before the error are not undone: check the database, then fix the migration and deploy again."
+            summary "failed while applying (pending were: ${pending:-unknown})"
+            exit 1
+          fi
+          echo "Applied: ${pending}"
+          summary "applied $(wc -w <<< "$pending"): ${pending}"
 
       # Is the live site really Remote, and the build just deployed? The host's
       # anti-bot page ("One moment, please...") answers some requests from
@@ -408,7 +482,7 @@ jobs:
           fi
           export EXPECTED_ENTRY
           if ! bash scripts/ci/post-deploy-checks.sh production; then
-            echo "If this is the first deploy, check that the subdomain's document root is the one in PROD_SSH_REMOTE_ROOT, that api/.env exists and that migrations have run. Otherwise this is a regression: check writable/logs/log-$(date +%Y-%m-%d).log on the server for the real exception."
+            echo "If this is the first deploy, check that the subdomain's document root is the one in PROD_SSH_REMOTE_ROOT, that api/.env exists and that the migrations are applied (the Database migrations step above; with migrate = skip they were not). Otherwise this is a regression: check writable/logs/log-$(date +%Y-%m-%d).log on the server for the real exception."
             exit 1
           fi
 
