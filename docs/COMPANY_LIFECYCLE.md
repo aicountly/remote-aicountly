@@ -43,23 +43,22 @@ None: Remote stores no file and no recording object — file transfers go peer-t
 
 ## Cron
 
-cPanel → Cron Jobs, with the PHP the deploy names:
+Installed by the production deploy, never by hand: `backend/bin/ops/jobs.txt` (`bin/ops/post-deploy-jobs.sh` →
+`bin/ops/install-jobs.sh --apply`) holds three jobs, run from `api/` with the PHP the deploy names
+(`PROD_PHP_CLI`, else the first CLI with `pdo_pgsql`, which the worker's PDO connection needs):
 
-```cron
-# Each line below reports to Console's Cron Job Monitor after the run (monitor in MON=; key CONSOLE_CRON_MONITOR_KEY in the api .env; never fails the line) — console-react-app docs/CRON_MONITORS.md.
-*/5 * * * * cd ~/public_html/api && <php> lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php >> $HOME/logs/remote-company-lifecycle.log 2>&1; RC=$?; MON=remote.company_lifecycle; KEY=$(sed -n 's/^CONSOLE_CRON_MONITOR_KEY *= *//p' .env | tr -d "\"' \r"); BASE=$(sed -n 's/^CONSOLE_API_BASE *= *//p' .env | tr -d "\"' \r"); [ -n "$KEY" ] && curl -fsS -m 5 -o /dev/null -X POST "${BASE:-https://console.aicountly.org/api}/portal/cron-heartbeat" -H "X-Console-Cron-Key: $KEY" -H 'Content-Type: application/json' -d "{\"monitor\":\"$MON\",\"run_id\":\"$MON-$(date +\%s)-$$\",\"outcome\":\"$([ $RC = 0 ] && echo ok || echo error)\",\"finished_at\":$(date +\%s)}" || true
-37 3 * * *  cd ~/public_html/api && <php> lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php --expire-retained >> $HOME/logs/remote-company-lifecycle.log 2>&1; RC=$?; MON=remote.company_lifecycle_expiry; KEY=$(sed -n 's/^CONSOLE_CRON_MONITOR_KEY *= *//p' .env | tr -d "\"' \r"); BASE=$(sed -n 's/^CONSOLE_API_BASE *= *//p' .env | tr -d "\"' \r"); [ -n "$KEY" ] && curl -fsS -m 5 -o /dev/null -X POST "${BASE:-https://console.aicountly.org/api}/portal/cron-heartbeat" -H "X-Console-Cron-Key: $KEY" -H 'Content-Type: application/json' -d "{\"monitor\":\"$MON\",\"run_id\":\"$MON-$(date +\%s)-$$\",\"outcome\":\"$([ $RC = 0 ] && echo ok || echo error)\",\"finished_at\":$(date +\%s)}" || true
-```
+| Job | Schedule | Command |
+|---|---|---|
+| `company-lifecycle` | `*/5 * * * *` | `worker.php --bootstrap=config/lifecycle-kit.php` — the purges Manage queued, and their acks |
+| `company-lifecycle-expiry` | `37 3 * * *` | `… --expire-retained` (kit 1.1) — the daily retention expiry: Remote retains nothing today, so it expires nothing, but a retained table given a period later is expired without a deploy step |
+| `lifecycle-archive-drop` | `17 3 * * 0` | `… --drop-archives-older-than=90 --confirm` — weekly, purge archives (they hold personal data) dropped after the 90-day window |
 
-The second line (kit 1.1) is the daily retention expiry: Remote retains nothing today, so it expires nothing, but
-a retained table given a period later is expired without a deploy step. Console monitors (Console
-`cron_monitors`, console-react-app migration 068, `docs/CRON_MONITORS.md`; the cron lines above report to them): `remote.company_lifecycle` and `remote.company_lifecycle_expiry`.
-
-Weekly, drop purge archives (they hold personal data) after the 90-day window:
-
-```cron
-17 3 * * 0 cd ~/public_html/api && <php> lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php --drop-archives-older-than=90 --confirm >> $HOME/logs/remote-company-lifecycle.log 2>&1
-```
+The first two run through `bin/ops/run-job.php --monitor=…` and report to Console's Cron Job Monitor (Console
+`cron_monitors`, console-react-app migration 068, `docs/CRON_MONITORS.md`): `remote.company_lifecycle` and
+`remote.company_lifecycle_expiry`, with `CONSOLE_CRON_MONITOR_KEY` in `api/.env`, written by the deploy from the
+repository secret. The deploy also replaces any lifecycle lines pasted by hand from an older copy of this page
+(they logged to `remote-company-lifecycle.log`), and prints the queued purges (`--status`) before installing.
+Check on the server with `bash ~/public_html/api/bin/ops/install-jobs.sh --check`.
 
 Operator commands (`--status`, `--dry-run=company:<cmp_id>`, `--dry-run=account:<uuid>`,
 `--requeue=<event_id>`, `--list-archives`, `--restore=<schema> --confirm`, kit 1.1 `--expire-retained=dry-run`,
@@ -81,7 +80,7 @@ The worker needs `CREATE` on the product database for the archive schemas
 the migrations and owns every table, the kit's five (`aic_lifecycle_events / _state / _jobs / _acks / _expiries`)
 and their sequences included.
 
-**Go live:** deploy → apply the migration → install the cron → set `LIFECYCLE_WEBHOOK_SECRET` and
+**Go live:** deploy (it applies the migration and installs the cron) → set `LIFECYCLE_WEBHOOK_SECRET` and
 `MANAGE_API_URL` here → in Manage set `LIFECYCLE_WEBHOOK_SECRET_REMOTE` (same value; and
 `LIFECYCLE_WEBHOOK_URL_REMOTE` if the catalog host is not this API) → update manage-aicountly
 `docs/company-lifecycle/README.md` §10.

@@ -23,13 +23,14 @@
 
   # Everything else deployed beside public/ is private: framework and
   # application code, logs and caches, migrations, operator scripts, tests, the
-  # company-lifecycle kit (lib/) and its manifest and worker bootstrap (config/), and
+  # company-lifecycle kit (lib/) and its manifest and worker bootstrap (config/), the
+  # scheduled-job wrappers the deploy installs into the crontab (bin/ops/), and
   # the CLI entry point and dependency manifests. Refused before anything is
   # rewritten, so nothing below can route a request around it (a read-only scan
   # found GET /api/spark answering 500 where it should be refused). None of
   # these is an API route and public/ is not listed, so the front controller is
   # untouched. The name may be followed by a path (spark/x, app/Config/...).
-  RewriteRule ^(app|system|vendor|writable|scripts|tests|database|build|deploy|lib|config)(/|$) - [F,L]
+  RewriteRule ^(app|system|vendor|writable|scripts|tests|database|build|deploy|lib|config|bin)(/|$) - [F,L]
   RewriteRule ^(spark|composer\.json|composer\.lock|phpunit[^/]*)(/|$) - [F,L]
 
   # Already inside public/ — CodeIgniter's own rules handle it from here.

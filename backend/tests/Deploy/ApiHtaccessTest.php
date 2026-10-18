@@ -50,6 +50,10 @@ final class ApiHtaccessTest extends CIUnitTestCase
         'lib/company-lifecycle/schema.sql',
         'config/lifecycle-manifest.php',
         'config/lifecycle-kit.php',
+        'bin',
+        'bin/ops/jobs.txt',
+        'bin/ops/run-job.php',
+        'bin/ops/install-jobs.sh',
         '.env',
         '.env.example',
         '.gitignore',
@@ -81,6 +85,7 @@ final class ApiHtaccessTest extends CIUnitTestCase
         'composer.json.php',
         'library/x',
         'configuration',
+        'binary/x',
     ];
 
     private string $htaccess;
