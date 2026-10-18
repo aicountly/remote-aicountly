@@ -273,14 +273,15 @@ ssh <cpanel user>@<host> "bash -s -- public_html '' apply" < scripts/ci/remote-m
    `"database":"unavailable"` means the credentials are wrong;
    `"signalling":"unconfigured"` means `remote.signallingSecret` is empty and no
    session will connect.
-8. **Install the company-lifecycle worker's cron** (cPanel → Cron Jobs) and set
-   `LIFECYCLE_WEBHOOK_SECRET` / `MANAGE_API_URL` in `api/.env`
-   ([COMPANY_LIFECYCLE.md](COMPANY_LIFECYCLE.md)):
-   ```cron
-   # Each line below reports to Console's Cron Job Monitor after the run (monitor in MON=; key CONSOLE_CRON_MONITOR_KEY in the api .env; never fails the line) — console-react-app docs/CRON_MONITORS.md.
-   */5 * * * * cd ~/public_html/api && php lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php >> $HOME/logs/remote-company-lifecycle.log 2>&1; RC=$?; MON=remote.company_lifecycle; KEY=$(sed -n 's/^CONSOLE_CRON_MONITOR_KEY *= *//p' .env | tr -d "\"' \r"); BASE=$(sed -n 's/^CONSOLE_API_BASE *= *//p' .env | tr -d "\"' \r"); [ -n "$KEY" ] && curl -fsS -m 5 -o /dev/null -X POST "${BASE:-https://console.aicountly.org/api}/portal/cron-heartbeat" -H "X-Console-Cron-Key: $KEY" -H 'Content-Type: application/json' -d "{\"monitor\":\"$MON\",\"run_id\":\"$MON-$(date +\%s)-$$\",\"outcome\":\"$([ $RC = 0 ] && echo ok || echo error)\",\"finished_at\":$(date +\%s)}" || true
-   37 3 * * *  cd ~/public_html/api && php lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php --expire-retained >> $HOME/logs/remote-company-lifecycle.log 2>&1; RC=$?; MON=remote.company_lifecycle_expiry; KEY=$(sed -n 's/^CONSOLE_CRON_MONITOR_KEY *= *//p' .env | tr -d "\"' \r"); BASE=$(sed -n 's/^CONSOLE_API_BASE *= *//p' .env | tr -d "\"' \r"); [ -n "$KEY" ] && curl -fsS -m 5 -o /dev/null -X POST "${BASE:-https://console.aicountly.org/api}/portal/cron-heartbeat" -H "X-Console-Cron-Key: $KEY" -H 'Content-Type: application/json' -d "{\"monitor\":\"$MON\",\"run_id\":\"$MON-$(date +\%s)-$$\",\"outcome\":\"$([ $RC = 0 ] && echo ok || echo error)\",\"finished_at\":$(date +\%s)}" || true
-   ```
+8. **Set** `LIFECYCLE_WEBHOOK_SECRET` / `MANAGE_API_URL` in `api/.env`
+   ([COMPANY_LIFECYCLE.md](COMPANY_LIFECYCLE.md)). The company-lifecycle worker's cron (every five minutes,
+   the daily retention expiry and the weekly drop of purge archives older than 90 days) is **not** added by
+   hand any more: the production deploy installs `backend/bin/ops/jobs.txt` into the crontab
+   (`bin/ops/post-deploy-jobs.sh` → `bin/ops/install-jobs.sh --apply`), replaces any lifecycle lines pasted
+   from an older copy of this page, and writes `CONSOLE_CRON_MONITOR_KEY` (repository secret) into
+   `api/.env`, so each run reports to Console's Cron Job Monitor (`remote.company_lifecycle`,
+   `remote.company_lifecycle_expiry`). The deploy log shows the queued purges (`worker.php --status`) before
+   the jobs are installed. Check on the server with `bash ~/public_html/api/bin/ops/install-jobs.sh --check`.
 9. **Deploy the signalling service** (below).
 10. **Open the site** and sign in. See
    [auth/AICOUNTLY_AUTH_WORKFLOW.md](auth/AICOUNTLY_AUTH_WORKFLOW.md) for what a
