@@ -155,8 +155,10 @@ Manage's company registry decides who may see and who may open a company, per pr
 - **Users & Access:** `/settings/users-access` (nav entry in company scope) renders the shared
   `CompanyUsersAccessPanel` for the selected organisation, natively. Remote's own user and role
   permissions (Administration) are unchanged.
-- **Client:** `web/src/services/companyRegistry.ts` (browser → Manage `/api/v1/*` with the in-memory
-  ses_key). `web/src/company-access/` is copied verbatim from Manage (`Saas Common Handler/company-access`).
+- **Client:** `web/src/services/companyRegistry.ts` (browser → Remote's own `/api/manage/v1/*` with the
+  in-memory ses_key, relayed to Manage `/api/v1/*` by `backend/app/Domain/Directory/ManageRegistryRelay.php` —
+  exactly the shared client's calls, 404 otherwise; production hosting can answer a direct cross-site call to
+  Manage with a challenge page that has no CORS headers). `web/src/company-access/` is copied verbatim from Manage (`Saas Common Handler/company-access`).
 - **Discovery is not access:** a company listed in the directory may still be closed to Remote.
 
 ## Environment variables

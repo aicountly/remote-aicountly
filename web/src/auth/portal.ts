@@ -562,8 +562,11 @@ export function performLogout(): void {
 
   if (authToken) {
     // Fire-and-forget: the portal invalidates the token server-side, but the
-    // redirect must not wait on it.
-    fetch(`${PORTAL_AUTH_API}/api/logout`, {
+    // redirect must not wait on it. It goes through this app's own API
+    // (/api/global/logout), like seskey: production hosting answers a browser
+    // it distrusts with a challenge page that carries no CORS headers, so a
+    // direct call to my.aicountly.com failed and the token was never revoked.
+    fetch(`${getApiBaseUrl()}/global/logout`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
