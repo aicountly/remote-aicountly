@@ -1,4 +1,4 @@
-# AICOUNTLY ICE kit — browser half (v1.1.0)
+# AICOUNTLY ICE kit — browser half (v1.2.0)
 
 Plain JavaScript (ES2020 modules) with `index.d.ts` beside it, so Remote (TypeScript) and Connect
 (JavaScript) carry the same files at `web/src/ice-kit`. The server half is `lib/ice-kit` (PHP).
@@ -13,8 +13,9 @@ Plain JavaScript (ES2020 modules) with `index.d.ts` beside it, so Remote (TypeSc
 | `needsRefresh` / `isExpired` | Judged against `refreshAt` / `expiresAt` |
 | `relayNodeForUrl(config, url)` | Which relay node a URL belongs to |
 | `ConnectionSupervisor` | *When* to restart ICE: grace for `disconnected`, at once for `failed`, backoff, fresh credentials from the second attempt, waits out offline, gives up honestly; `retry()` after |
-| `CredentialRefresher` | Asks again at `refreshAt`, shares concurrent requests, retries with backoff |
+| `CredentialRefresher` | Asks again at `refreshAt`, shares concurrent requests, retries with backoff; a renewal denied for capacity is not adopted while a working relay is held (`onDenied`) |
 | `IceDiagnostics` | Candidate types gathered, ICE errors by category and node, selected path from `getStats()`, a verdict, and the report the server's allow-list accepts — no address, SDP or credential ever |
+| `LatencyMeter` | Times each relay node with the credential the API just issued (a relay-candidate gather), remembers the result for hours, and hands it back as `rtt` for the next request so the server can route by the real network path. Measure after a call has connected |
 | `probeRelay(config)` | Relay-only gathering per node: proof this browser can get a relay |
 | `isRestartDriver(self, peer)` | Which side of a pair restarts ICE when there is no perfect negotiation |
 

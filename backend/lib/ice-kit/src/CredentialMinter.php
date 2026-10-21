@@ -82,7 +82,12 @@ final class CredentialMinter
     public static function subject(string $subject, string $fallback = 'aicountly'): string
     {
         $clean = preg_replace('/[^A-Za-z0-9_.-]/', '', $subject) ?? '';
+        if ($clean === '') {
+            // Nothing usable survived (an all-non-ASCII subject): derive a stable stand-in rather than merge
+            // every such client into one, which would share a lease and an allocation count.
+            return $subject === '' ? $fallback : 'x' . substr(hash('sha256', $subject), 0, 16);
+        }
 
-        return $clean === '' ? $fallback : substr($clean, 0, 64);
+        return substr($clean, 0, 64);
     }
 }

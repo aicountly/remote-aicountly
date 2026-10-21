@@ -182,6 +182,15 @@ class Remote extends BaseConfig
     public bool $turnRestartOnRenewal = true;
     public int $turnSessionTtlMax = 28800;
 
+    /**
+     * Plans (remote_entitlements.plan_code) whose companies are PAID for relay capacity: they share the
+     * reserved half of every TURN node. Empty — the default — means nobody is, so the reserve cannot be
+     * handed out by accident. Upper-case codes, comma separated.
+     *
+     * @var list<string>
+     */
+    public array $turnPaidPlanCodes = [];
+
     /** Where the scheduled TURN probe records node health (lib/ice-kit/bin/probe.php --write-health). */
     public string $turnHealthFile = '';
 
@@ -319,6 +328,7 @@ class Remote extends BaseConfig
             );
         }
         $this->turnHealthFile = $this->envString('WEBRTC_TURN_HEALTH_FILE', WRITEPATH . 'ice/turn-health.json');
+        $this->turnPaidPlanCodes    = array_map('strtoupper', $this->envList('WEBRTC_TURN_PAID_PLAN_CODES'));
         $this->turnRestartOnRenewal = $this->envBool('WEBRTC_TURN_RESTART_ON_RENEWAL', $this->turnRestartOnRenewal);
         $this->turnSessionTtlMax    = max(60, min(86400, $this->envInt('WEBRTC_TURN_SESSION_TTL_MAX', $this->turnSessionTtlMax)));
 

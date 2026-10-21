@@ -43,6 +43,9 @@ final class TurnNode
         private readonly string $staticUsername = '',
         #[\SensitiveParameter] private readonly string $staticCredential = '',
         private readonly ?array $explicitUrls = null,
+        public readonly ?float $lat = null,
+        public readonly ?float $lon = null,
+        public readonly Capacity $capacity = new Capacity(),
     ) {
         if (preg_match('/^[a-z0-9][a-z0-9-]{0,31}$/', $id) !== 1) {
             throw new \InvalidArgumentException("TURN node id '{$id}' must be 1-32 characters of a-z, 0-9 and '-'.");
@@ -68,6 +71,10 @@ final class TurnNode
         }
 
         $this->transports = $clean;
+
+        if (($lat === null) !== ($lon === null) || ($lat !== null && (abs($lat) > 90 || abs($lon) > 180))) {
+            throw new \InvalidArgumentException("TURN node '{$id}' needs both a latitude (-90..90) and a longitude (-180..180), or neither.");
+        }
     }
 
     public static function isValidHost(string $host): bool
@@ -121,6 +128,21 @@ final class TurnNode
      */
     public function turnUrls(): array
     {
+        return $this->urlsFor(self::TRANSPORTS);
+    }
+
+    /**
+     * The URLs for a node in a given role. A node that is a client's *fallback* (its second choice)
+     * needs only enough to be a way out if the first fails — by default just TURN/TLS on 443, which
+     * works on every network the first node's UDP and TCP do. That costs one allocation on the
+     * fallback node instead of three, and a browser allocates on every URL it is given, so the
+     * difference is a third of the fallback node's capacity per client.
+     *
+     * @param list<string> $transports the transports wanted; a node with none of them gives all it has
+     * @return list<string>
+     */
+    public function urlsFor(array $transports): array
+    {
         if ($this->explicitUrls !== null) {
             return array_values(array_filter(
                 $this->explicitUrls,
@@ -128,16 +150,21 @@ final class TurnNode
             ));
         }
 
+        $wanted = array_values(array_intersect($this->transports, $transports));
+        if ($wanted === []) {
+            $wanted = $this->transports;
+        }
+
         $host = $this->urlHost();
         $urls = [];
 
-        if (in_array('udp', $this->transports, true)) {
+        if (in_array('udp', $wanted, true)) {
             $urls[] = "turn:{$host}:{$this->port}?transport=udp";
         }
-        if (in_array('tcp', $this->transports, true)) {
+        if (in_array('tcp', $wanted, true)) {
             $urls[] = "turn:{$host}:{$this->port}?transport=tcp";
         }
-        if (in_array('tls', $this->transports, true)) {
+        if (in_array('tls', $wanted, true)) {
             $urls[] = "turns:{$host}:{$this->tlsPort}?transport=tcp";
         }
 

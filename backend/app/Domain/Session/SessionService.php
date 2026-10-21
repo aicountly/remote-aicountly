@@ -426,6 +426,7 @@ class SessionService
             ]);
 
         $this->audit->recordEvent((int) $row['id'], EventType::SESSION_EXPIRED, null, 'SYSTEM');
+        $this->releaseRelay($row);
 
         $row['status']       = SessionStatus::EXPIRED;
         $row['session_code'] = null;
@@ -474,7 +475,25 @@ class SessionService
             );
         }
 
-        return $this->findById((int) $session['id']) ?? $session;
+        $current = $this->findById((int) $session['id']) ?? $session;
+        if (SessionStatus::isTerminal($to)) {
+            $this->releaseRelay($current);
+        }
+
+        return $current;
+    }
+
+    /**
+     * A finished session holds no relay capacity: free what its participants reserved on the TURN
+     * nodes so the next client is admitted into it, instead of waiting for the credentials to expire.
+     *
+     * @param array<string, mixed> $session
+     */
+    private function releaseRelay(array $session): void
+    {
+        if (isset($session['uuid'])) {
+            \Config\Services::iceConfigService()->releaseSession((string) $session['uuid']);
+        }
     }
 
     /** @param array<string, mixed> $session */

@@ -102,6 +102,12 @@ jobs:
         working-directory: backend
         run: bash lib/ice-kit/tests/simulation/failover.sh
 
+      # Regional peers, the paid reserve across fallback, and what coturn's own quota cannot do — on three
+      # throwaway local relays. Logic and accounting only; it says nothing about the real nodes.
+      - name: ICE active-active simulation (local relays, routing and admission logic only)
+        working-directory: backend
+        run: bash lib/ice-kit/tests/simulation/active-active.sh
+
       - name: Verify migrations roll back cleanly
         working-directory: backend
         env:

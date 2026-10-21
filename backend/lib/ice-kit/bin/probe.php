@@ -21,9 +21,15 @@ declare(strict_types=1);
  *                         fail a node whose host name does not resolve to the address you expect
  *   --emit-grant=FILE     write an aicountly.ice/1 grant for the probed nodes to FILE (mode 0600) for
  *                         web/src/ice-kit/tools/relay-check.mjs on a test machine. --ttl=SECONDS
- *                         (60..900, default 600) bounds it; it holds live credentials — delete it after
+ *                         (60..900, default 600) bounds it; --tier=paid|free (default free) puts the tier in the
+ *                         username, as the API does, for load and reservation tests. It holds live credentials —
+ *                         delete it after
  *   --write-health        record the result for IceIssuer (the scheduled job does this)
- *   --status              print what the API would serve, and the recorded health; probe nothing
+ *   --status              print what the API would serve, and the recorded health; probe nothing. With the
+ *                         bootstrap's lease books and load file, also each node's capacity, load word, and what
+ *                         is reserved by tier (sessions, allocations, bandwidth) beside what is measured
+ *   --explain             with --status: for each tier and each node region, what a client would be offered and
+ *                         why (outcome, reason, proximity basis). Never changes the books
  *   --json                machine-readable output
  *   --timeout=5           seconds per step
  *   --ca-file=PATH        trust this CA for turns: (a test relay); --insecure skips verification
@@ -37,6 +43,7 @@ use Aicountly\Ice\HealthStore;
 use Aicountly\Ice\IceIssuer;
 use Aicountly\Ice\NodeStatus;
 use Aicountly\Ice\Probe\TurnProbe;
+use Aicountly\Ice\Tier;
 use Aicountly\Ice\Topology;
 
 if (PHP_SAPI !== 'cli') {
@@ -88,26 +95,66 @@ if (! isset($opts['status'])) {
 }
 
 if (isset($opts['status'])) {
-    $status = (new IceIssuer($topology, $health))->status();
+    // Reads the books and the load file; a status page must never write either.
+    $explainer = new IceIssuer($topology, $health, null, 'status', $kit['leases'] ?? null, $kit['load'] ?? null, $kit['latency'] ?? null);
+    $status    = $explainer->status();
 
     if ($json) {
         fwrite(STDOUT, json_encode($status, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
     } else {
         $out("source: {$status['source']}   relay configured: " . ($status['relayConfigured'] ? 'yes' : 'NO'));
+        $out(sprintf('admission: %s   paid reserve %d%%   busy at %d%%   free shed at %d%%', $status['admission']['mode'], $status['admission']['paidReservePercent'], $status['admission']['busyAtPercent'], $status['admission']['shedFreeAtPercent']));
         foreach ($status['nodes'] as $node) {
             $out(sprintf(
-                '  %-8s %-9s %-12s priority %-4d region %-9s probe %-9s %s',
+                '  %-8s %-9s %-12s priority %-4d region %-9s probe %-9s %-10s %s',
                 $node['id'],
                 $node['role'],
                 $node['state'],
                 $node['priority'],
                 $node['region'] ?: '-',
                 $node['health'],
-                $node['serving'] ? 'SERVING NOW' : '',
+                'load ' . $node['load'],
+                $node['serving'] ? 'SERVING (paid ' . ($node['servingBy']['paid'] ? 'yes' : 'no') . ', free ' . ($node['servingBy']['free'] ? 'yes' : 'no') . ')' : '',
             ));
+            if ($node['capacity']['maxAllocations'] > 0 || $node['capacity']['maxMbps'] > 0) {
+                $out(sprintf(
+                    '           capacity %s allocations / %s Mbit/s, %d%% reserved for paid · sessions paid %d free %d · reserved alloc paid %d free %d (measured %s) · reserved Mbit/s paid %.1f free %.1f (measured %s) · utilization %d%%',
+                    $node['capacity']['maxAllocations'] > 0 ? (string) $node['capacity']['maxAllocations'] : 'unmetered',
+                    $node['capacity']['maxMbps'] > 0 ? rtrim(rtrim(number_format($node['capacity']['maxMbps'], 1), '0'), '.') : 'unmetered',
+                    $node['capacity']['paidReservePercent'],
+                    $node['sessions']['paid'],
+                    $node['sessions']['free'],
+                    $node['allocations']['reserved']['paid'],
+                    $node['allocations']['reserved']['free'],
+                    $node['allocations']['measured'] ?? 'n/a',
+                    $node['bandwidth']['reservedBps']['paid'] / 1e6,
+                    $node['bandwidth']['reservedBps']['free'] / 1e6,
+                    $node['bandwidth']['measuredBps'] === null ? 'n/a' : number_format($node['bandwidth']['measuredBps'] / 1e6, 1),
+                    (int) round($node['utilization'] * 100),
+                ));
+            }
         }
         foreach ($status['warnings'] as $warning) {
             $out("  warning: {$warning}");
+        }
+
+        if (isset($opts['explain'])) {
+            $regions = array_values(array_unique(array_filter(array_map(static fn ($n): string => $n->region, $topology->nodes()))));
+            $out('');
+            $out('what a new client would be offered (read-only):');
+            foreach (['paid', 'free'] as $tier) {
+                foreach ($regions ?: [''] as $region) {
+                    $grant = $explainer->wouldIssue($tier, $region);
+                    $out(sprintf(
+                        '  %-4s client in %-9s -> %-14s %-10s %s',
+                        $tier,
+                        $region ?: '(unknown)',
+                        $grant['nodes'] === [] ? '(no relay)' : implode(',', $grant['nodes']),
+                        $grant['outcome'],
+                        $grant['outcome'] === 'denied' ? $grant['reason'] : ($grant['basis'] !== '' ? 'by ' . $grant['basis'] : ''),
+                    ));
+                }
+            }
         }
     }
 
@@ -250,7 +297,7 @@ if (is_string($opts['emit-grant'] ?? null) && $opts['emit-grant'] !== '') {
     foreach ($nodes as $node) {
         $urls = array_values(array_filter($node->turnUrls(), static fn (string $u): bool => $transports === null
             || in_array(TurnProbe::parseTurnUrl($u)['transport'] ?? '', $transports, true)));
-        $credentials = $node->credentialsFor('relay-check', $ttl, $now);
+        $credentials = $node->credentialsFor(Tier::parse($opts['tier'] ?? 'free')->letter() . '.relay-check', $ttl, $now);
         if ($urls === [] || $credentials === null) {
             continue;
         }
@@ -288,6 +335,8 @@ if (isset($opts['write-health'])) {
         'transports' => array_map(static fn (array $s): array => [
             'binding'    => $s['binding']['ok'],
             'allocation' => isset($s['allocation']) ? $s['allocation']['ok'] : null,
+            // How long the allocation took from here: a relay near its limit answers slowly long before it refuses.
+            'allocationMs' => isset($s['allocation']['rttMs']) ? (int) $s['allocation']['rttMs'] : null,
         ], $r['transports']),
     ], $results), time());
 

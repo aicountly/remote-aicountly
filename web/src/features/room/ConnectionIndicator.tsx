@@ -101,7 +101,11 @@ export default function ConnectionIndicator({ live, sessionStatus, onReconnect }
       {live?.connection === 'failed' ? (
         <span className="connection__hint">
           {live.network.message ??
-            (live.relayAvailable === false ? 'A direct connection could not be made on this network.' : null)}
+            (live.relayDenied
+              ? 'A direct connection could not be made, and relay capacity is fully used for this account right now. Try again shortly.'
+              : live.relayAvailable === false
+                ? 'A direct connection could not be made on this network.'
+                : null)}
           {onReconnect ? (
             <button type="button" className="btn btn--secondary btn--sm connection__retry" onClick={onReconnect}>
               Reconnect

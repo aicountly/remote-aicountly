@@ -117,7 +117,7 @@ final class IceApiTest extends RemoteTestCase
 
         $turn = $grant['iceServers'][1];
         $this->assertContains('turns:turn-mum.aicountly.com:443?transport=tcp', $turn['urls']);
-        $this->assertStringEndsWith(':' . $s['viewerUuid'], $turn['username'], 'The relay can attribute usage to a participant, never to an email address.');
+        $this->assertStringEndsWith('.' . $s['viewerUuid'], $turn['username'], 'The relay can attribute usage to a tier and a participant, never to an email address.');
         $this->assertSame(base64_encode(hash_hmac('sha1', $turn['username'], self::SECRET, true)), $turn['credential']);
 
         $this->assertStringNotContainsString(self::SECRET, (string) $raw);
@@ -229,8 +229,8 @@ final class IceApiTest extends RemoteTestCase
         $this->assertSame('configured', $data['relay']);
         $this->assertSame(
             [
-                ['id' => 'mum', 'status' => 'active', 'servable' => true, 'health' => 'unknown', 'condition' => 'unknown', 'state' => 'unknown', 'serving' => true],
-                ['id' => 'ncr', 'status' => 'disabled', 'servable' => false, 'health' => 'unknown', 'condition' => 'unknown', 'state' => 'disabled', 'serving' => false],
+                ['id' => 'mum', 'status' => 'active', 'servable' => true, 'health' => 'unknown', 'condition' => 'unknown', 'state' => 'unknown', 'serving' => true, 'load' => 'normal', 'servingBy' => ['paid' => true, 'free' => true]],
+                ['id' => 'ncr', 'status' => 'disabled', 'servable' => false, 'health' => 'unknown', 'condition' => 'unknown', 'state' => 'disabled', 'serving' => false, 'load' => 'normal', 'servingBy' => ['paid' => false, 'free' => false]],
             ],
             $data['relayNodes'],
         );

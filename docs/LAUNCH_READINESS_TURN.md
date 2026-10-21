@@ -12,11 +12,43 @@ against the real Mumbai node, from the API host and from a browser.
 
 1. **Mumbai only, production:** go when runbook A1–A4 and B pass on Mumbai, `turn-probe` is running, and C passes in
    staging. The expected effort is the runbook plus creating one repository secret.
-2. **Greater Noida:** stays `disabled` in production. It needs its own A/B/D results in staging **and** the security clearance. Neither
-   exists today.
+2. **Greater Noida:** stays `disabled` in production — not `standby`, which still serves. It needs its own A/B/D/F results in staging **and** the security
+   clearance. Neither exists today. See § 1a for the active-active and licence-reserve gates.
 3. **Capabilities actually tested** (locally only): HMAC credential issuance and rejection, allocation over UDP/TCP/TLS, relay-only Chromium
    connection with data, ICE restart onto renewed credentials, selection and failover logic, secret injection.
    **Assumptions** (untested on real infrastructure): everything in the matrix marked Pending test or Blocked.
+
+## 1a. Revised launch blockers — active-active routing and licence-aware admission
+
+Added by the confirmed architectural decisions (regional peers; ≥ 50 % of every node reserved for paid licences, enforced across fallback).
+The design, with what is implemented, proposed and assumed, is `docs/ACTIVE_ACTIVE_TURN.md`; the commands that settle the open items are
+`docs/TURN_VALIDATION_RUNBOOK.md` parts D, F and G. **Nothing below has been exercised against Mumbai or Greater Noida.**
+
+| # | Blocker | Status | Evidence / what remains | Gates |
+|---|---|---|---|---|
+| A1 | Application implements regional-peer routing, tiers, capacity books, admission, release, telemetry ingest, relay-side attribution | **Resolved (tested locally)** | Kit suite 149 tests (admission arithmetic incl. randomised, selection, books under nine racing processes, telemetry, latency, usage log, 20 review-regression tests); Remote API tests for plan → tier, full free pool, release on end/leave, reported direct path, health shape; browser kit 41 tests; both simulations pass with real coturn and Chromium | — |
+| A2 | Mumbai authenticated allocation and relayed data (unchanged from § 1, #1) | **Pending test** | Runbook A, B | any production relay traffic |
+| A3 | Every capacity number — what a session costs, what a node sustains, where to shed — is an assumption | **Pending test** | Runbook F1, F2. Defaults in `.env.example` are placeholders | `enforce` (not `observe`) |
+| A4 | Licence → tier: which Remote plans are paid | **Partially resolved** | Plan → tier is implemented (`WEBRTC_TURN_PAID_PLAN_CODES` against `remote_entitlements.plan_code`; unknown or unlisted = free, tested over HTTP). **Which plans are paid is a business decision nobody has made**; the platform default row seeds `REMOTE_PROFESSIONAL`. | `enforce` |
+| A5 | The paid reserve holds under load on the real nodes (a free flood cannot take it; paid inside the reserve is never refused) | **Pending test** | Runbook F5. Local evidence only: `active-active.sh` (four-slot nodes) and the randomised admission test | `enforce` |
+| A6 | coturn's own limits on the real build (`total-quota`, `user-quota`, `max-bps`, `bps-capacity`) | **Pending test** | Runbook F3. Tier-blindness of coturn's quota **demonstrated locally** (four free credentials exhaust a `total-quota=4` relay; a paid one is refused) — the reason the application layer exists | recommended before `enforce` |
+| A7 | Measured node load reaches the API (`turn-node-load.sh` → `ingest-load.php`) | **Partially resolved** | Collector and ingest tested locally (counted 4 of 4 real allocations). The transport — a forced-command, read-only SSH login per node — is a **proposal** nobody has built. Without it admission runs on the books alone, which drift if clients misreport or sessions leak | recommended before `enforce` |
+| A8 | Relay-side attribution of traffic to tiers (the audit that free traffic stayed in its share) | **Partially resolved** | Parser tested on real coturn 4.6.1 lines; a real Chromium's bytes attributed to paid and free locally. The real nodes' log format is unverified (the version is reported as "4.18") — Runbook F6 | recommended |
+| A9 | Regional routing quality: edge geography unknown; measured-RTT loop implemented | **Pending test** | Runbook G1. Not a blocker while Noida is out of production (one node = nothing to choose between) | enabling Noida |
+| A10 | Regional fallback and capacity spill between Mumbai and Noida | **Blocked** | Needs Noida cleared (A11). Local simulation passes; staging Part D1/D2 are written | enabling Noida |
+| A11 | **Greater Noida in production** | **Blocked** | Authenticated tests (Runbook A, B, F1–F3 for ncr) **and** the security review of its historical privileged-access concern, signed off and recorded (G5). Production config keeps `STATUS=disabled` and holds no Noida secret | enabling Noida |
+| A12 | Renewals near overload keep a session alive | **Pending test** | Runbook G4. Logic and client behaviour (a denied renewal is never adopted) tested locally | `enforce` |
+| A13 | One API host per product assumed (the lease books are a locked file) | **Limitation** | A second API host sharing the same relays needs a shared lease store behind `LeaseStore`; not built. Not a blocker for the current single-host deployment | scaling out |
+
+### Recommendation, revised
+
+1. **Production is Mumbai only.** With one node there is nothing to route between, but the reserve still applies to it.
+2. **Start in `WEBRTC_TURN_ADMISSION = observe`.** The books and the audit log run, nothing is denied, and `probe.php --status --explain` shows what `enforce` would have refused.
+   Move to `enforce` only when A3 (capacities measured), A4 (a real licence feed) and A5 (the reserve verified under load) are done — enforcing earlier either locks
+   people out against invented numbers or, with no licence feed, treats every customer as free.
+3. **Greater Noida is enabled in production only by a deliberate change** after A11. Until then it is `disabled`, not `standby`: a standby node is still a node that serves.
+4. **What is tested vs assumed:** tested locally — the arithmetic, the selection, the books under concurrency, the clients, the HTTP paths, and everything against real coturn
+   *processes* on one machine. Assumed — every number in the capacity model, the real nodes' behaviour, their log format, the edge's geography, the licence feed.
 
 ## 1. Launch-blocker matrix
 

@@ -186,7 +186,7 @@ export class IceDiagnostics {
   /**
    * One word for what went wrong, or `ok`. Ordered from the most specific cause to the least.
    *
-   * @returns {'ok'|'no-relay-configured'|'relay-auth-failed'|'relay-unreachable'|'relay-refused'|'no-relay-candidates'|'ice-failed'}
+   * @returns {'ok'|'no-relay-configured'|'relay-capacity-limited'|'relay-auth-failed'|'relay-unreachable'|'relay-refused'|'no-relay-candidates'|'ice-failed'}
    */
   verdict() {
     const state = this.pc.iceConnectionState;
@@ -196,7 +196,7 @@ export class IceDiagnostics {
     const relayExpected = Boolean(this.config?.relayAvailable);
 
     if (state !== 'failed' && state !== 'disconnected') return 'ok';
-    if (!relayExpected) return 'no-relay-configured';
+    if (!relayExpected) return this.config?.admission?.outcome === 'denied' ? 'relay-capacity-limited' : 'no-relay-configured';
     if (this.gathered.relay === 0) {
       if (categories.has('turn_auth_failed')) return 'relay-auth-failed';
       if (categories.has('turn_forbidden') || categories.has('turn_capacity')) return 'relay-refused';
@@ -233,6 +233,7 @@ export class IceDiagnostics {
       remoteCandidateType: path.remoteCandidateType ?? null,
       relayProtocol: path.relayProtocol ?? null,
       relayNode: path.relayNode ?? null,
+      admission: this.config?.admission?.outcome ?? null,
       gathered: { ...this.gathered },
       iceErrors: errors.slice(0, MAX_ERRORS).map(({ category, node, code }) => ({ category, node, code })),
       restarts: this.restarts,
@@ -258,6 +259,8 @@ export function describeVerdict(verdict) {
   switch (verdict) {
     case 'no-relay-configured':
       return 'A direct connection was not possible on this network, and no relay server is configured to carry it instead.';
+    case 'relay-capacity-limited':
+      return 'A direct connection was not possible on this network, and relay capacity is fully used for this account right now. Try again shortly.';
     case 'relay-auth-failed':
       return 'The relay server refused this connection’s credentials. Reconnecting fetches new ones; if it keeps happening, the relay is misconfigured.';
     case 'relay-unreachable':

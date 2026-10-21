@@ -127,7 +127,7 @@ final class DeviceIceTest extends RemoteTestCase
         $raw      = (string) $response->getJSON();
         $data     = json_decode($raw, true)['data'];
 
-        $this->assertStringEndsWith(':' . $data['participant']['uuid'], $data['iceServers'][1]['username']);
+        $this->assertStringEndsWith('.' . $data['participant']['uuid'], $data['iceServers'][1]['username'], 'The username carries the tier (f./p.) and then the participant, never an email address.');
         $this->assertStringNotContainsString(self::SECRET, $raw);
     }
 

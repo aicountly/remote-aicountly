@@ -63,6 +63,9 @@ Vagrantfile
 /writable/debugbar/*
 !/writable/debugbar/index.html
 
+# TURN node health, admission books, measured load and learned latency (lib/ice-kit): runtime state.
+/writable/ice/
+
 php_errors.log
 
 #-------------------------

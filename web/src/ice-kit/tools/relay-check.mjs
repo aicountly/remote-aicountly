@@ -59,7 +59,7 @@ try {
 }
 
 const PAGE = `<!doctype html><meta charset="utf-8"><script type="module">
-import { ConnectionSupervisor, IceDiagnostics, applyIceConfig, normalizeIceConfig, probeRelay, rtcConfiguration } from './index.js';
+import { ConnectionSupervisor, IceDiagnostics, LatencyMeter, applyIceConfig, normalizeIceConfig, probeRelay, rtcConfiguration } from './index.js';
 
 const until = (promise, ms, what) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(what + ' timed out')), ms))]);
 
@@ -126,6 +126,13 @@ window.runRelayCheck = async (rawGrant, rawFresh) => {
     result.error = String(error.message || error);
   }
 
+  // How long each served node takes to hand this browser a relay: the figure sent back as rtt.
+  try {
+    result.latency = await new LatencyMeter({ storage: null, samples: 1, timeoutMs: 8000 }).measure(config);
+  } catch (error) {
+    result.latencyError = String(error.message || error);
+  }
+
   result.verdict = diagnostics.verdict();
   result.iceErrors = diagnostics.iceErrors();
   result.gathered = diagnostics.gathered;
@@ -183,6 +190,7 @@ const checks = [
   ['the selected path is the relay', result.path?.path === 'relay'],
   ...(expectNode ? [[`the relay that carried it was node '${expectNode}'`, result.path?.relayNode === expectNode]] : []),
   ...(expectProtocol ? [[`over ${expectProtocol}`, result.path?.relayProtocol === expectProtocol]] : []),
+  ['the client could time every reachable node (the `rtt` it sends back)', Object.keys(result.latency ?? {}).length === result.probe.nodes.filter((n) => !tolerated.has(n.id)).length && Object.values(result.latency ?? {}).every((ms) => ms > 0)],
   ...(fresh ? [
     ['fresh credentials were applied to both peers', result.applied === true],
     ['after an ICE restart onto them, data still flows', result.secondMessage === 'ping-2'],
@@ -194,6 +202,7 @@ for (const node of result.probe.nodes) {
   console.log(`node ${node.id} (${node.label}): ${node.relayCandidates} relay candidate(s) over ${node.protocols.join(', ') || '-'}${node.errors.length ? `; errors: ${node.errors.join(', ')}` : ''}`);
 }
 if (result.path) console.log(`path: ${result.path.path} via ${result.path.relayNode ?? '?'} (${result.path.relayProtocol ?? '?'}), rtt ${result.path.rttMs ?? '?'} ms`);
+if (result.latency) console.log(`measured: ${Object.entries(result.latency).map(([id, ms]) => `${id} ${ms} ms`).join(', ') || 'nothing'}`);
 if (result.pathAfterRestart) console.log(`after restart: ${JSON.stringify(result.pathAfterRestart)}`);
 if (result.error) console.log(`error: ${result.error}`);
 if (result.iceErrors.length) console.log(`ice errors: ${result.iceErrors.map((e) => `${e.category}${e.node ? `@${e.node}` : ''}×${e.count}`).join(', ')}`);

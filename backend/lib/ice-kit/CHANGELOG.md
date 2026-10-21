@@ -1,5 +1,35 @@
 # Changelog — AICOUNTLY ICE kit
 
+## 1.2.0 — 2026-10-21
+
+Active-active routing and licence-aware admission (docs/ACTIVE_ACTIVE_TURN.md). Backward compatible: with
+no capacity configured nothing is limited, and `WEBRTC_TURN_ADMISSION` defaults to `observe` (books and
+audit, no denial).
+
+- **Regional peers.** Several `active` nodes serve at once; each client is ranked per request by proximity
+  (measured RTT › learned RTT › edge geography › region hint), load, health and stickiness, with the other
+  peer as reciprocal fallback offered over `WEBRTC_TURN_FALLBACK_TRANSPORTS` (default TLS only: one
+  allocation instead of three).
+- **Admission.** `Tier` (paid/free; unknown is free), `Capacity` (allocations and bandwidth, ≥ 50 % paid
+  reserve), `Admission::evaluate` (pool rule + shed threshold, renewals exempt from shedding),
+  `AdmissionPolicy` (off/observe/enforce, thresholds, usage profiles), lease books (`Lease`, `LeaseBook`,
+  `FileLeaseStore` under flock, `MemoryLeaseStore`) updated in the same locked step as the decision,
+  `IceIssuer::release()` and `noteConnection()` (bandwidth follows the node a client says it relays through,
+  zero for a direct path). A denied client gets STUN only and `admission.outcome = denied`.
+- **Tier in the TURN username** (`<expiry>:p.<subject>` / `f.<subject>`), signed, so the relay's own log
+  attributes traffic to a tier (`UsageLog`, `bin/summarize-usage.php`).
+- **Measured load.** `LoadStore` + `bin/ingest-load.php` + `bin/turn-node-load.sh` (a read-only node-side
+  collector: UDP sockets in the relay range, NIC rx/tx); traffic the books cannot explain is charged to both tiers.
+- **Latency.** `ClientContext` (region, edge position, client-measured RTT), `GeoHeaders`, `LatencyStore`
+  (per-region moving average, bounded), `Proximity`; browser `LatencyMeter` times each node with its own credential.
+- **Health.** State `full` (coturn refused for capacity) kept apart from `down`; condition `overloaded`.
+- **Browser.** `admission` and node `load` in the normalised config; `relay-capacity-limited` verdict; a renewal
+  denied for capacity never replaces a working relay configuration (`CredentialRefresher.onDenied`).
+- **Tooling.** `probe.php --status` shows capacity, load and reservations by tier, `--explain` what each tier in
+  each region would be offered; `IceRuntime` builds the stores from the environment; simulations
+  `active-active.sh`; `relay-check.mjs` also checks the latency meter.
+- Per-node `LAT`/`LON`, `MAX_ALLOCATIONS`, `MAX_MBPS`, `TIERS`, `PAID_RESERVE_PERCENT`; `WEBRTC_TURN_*` admission keys.
+
 ## 1.1.0 — 2026-10-21
 
 Live-integration hardening. Nothing in 1.0.0's contract is removed.

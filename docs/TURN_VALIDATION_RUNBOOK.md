@@ -16,6 +16,7 @@ short-lived credentials, changes nothing on a TURN server, and needs no root.
 | The application mints coturn REST credentials per node, from a per-node secret | Tested (unit, HTTP, and against a local coturn 4.6.1) |
 | A relay allocation, a refusal of wrong/expired/missing credentials, and a browser relaying data, over UDP/TCP/TLS | Tested **against a local coturn only** |
 | The same against `turn-mum.aicountly.com` and `turn-ncr.aicountly.com` | **Not yet run — this is what the commands below are for** |
+| Regional routing, the paid reserve, overload shedding, load measurement | Implemented and tested against **local** relays only; **every capacity number is an assumption** until Part F |
 
 ## 0. Before you start
 
@@ -169,20 +170,126 @@ curl -s https://remote.gh.aicountly.com/api/health | jq '.relayNodes'
 The summary shows how many sessions were relayed, through which node over which transport, the time to
 connect, ICE errors by node, restarts and credential renewals — the Remote evidence.
 
-## Part D — failover in staging, without touching any server
+## Part D — regional fallback in staging, without touching any server
 
-This changes only the **staging application's** `.env`; no TURN server, firewall or DNS is touched.
+Mumbai and Greater Noida are regional peers (`docs/ACTIVE_ACTIVE_TURN.md`). This changes only the **staging
+application's** `.env`; no TURN server, firewall or DNS is touched. Staging only: Noida is not enabled in
+production until it is cleared.
 
-1. In staging's `api/.env`, point Mumbai at a closed port: `WEBRTC_TURN_NODE_MUM_PORT = 3499` and
-   `WEBRTC_TURN_NODE_MUM_TLS_PORT = 3499`; set `WEBRTC_TURN_NODE_NCR_STATUS = standby`.
-2. `$PHP lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --allocate --write-health` — run it
-   twice (the cron job, where installed, does this every 5 minutes).
-3. `--status` must show `mum active unreachable`, `ncr standby … SERVING NOW`, and `/health` the same.
-4. Start a Remote session: the Security panel / connectivity report must name **ncr**.
-5. Restore the two ports; run the probe once; `--status` must show `mum … SERVING NOW` and ncr not.
+**D1 — a peer becomes unreachable.**
 
-The same chain, on two throwaway local relays, runs in CI
-(`lib/ice-kit/tests/simulation/failover.sh`) — useful, but a test of the logic, not of your nodes.
+1. In staging's `api/.env`: both nodes `STATUS = active`; point Mumbai at a closed port
+   (`WEBRTC_TURN_NODE_MUM_PORT = 3499`, `WEBRTC_TURN_NODE_MUM_TLS_PORT = 3499`).
+2. `$PHP lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --allocate --write-health` twice (the cron
+   job does this every 5 minutes where installed — **sandbox deploys do not install it**).
+3. `--status --explain` must show `mum … unreachable`, and a client in *every* region offered `ncr` only,
+   with no `failover` flag (peers, not primary and standby). `/health` shows the same.
+4. Start a staging session from a Mumbai-region network: the Security panel / connectivity report must name **ncr**.
+5. Restore the two ports; run the probe once; `--status --explain` must show Mumbai-region clients going to `mum` again.
+
+**D2 — a peer fills up (the capacity spill).** Still staging, `WEBRTC_TURN_ADMISSION = enforce`, and a small
+capacity so it can be seen: `WEBRTC_TURN_NODE_MUM_MAX_ALLOCATIONS = 12` (and the same for `ncr`).
+
+1. Open free-plan sessions from a Mumbai-region network until `--status` shows Mumbai's free share used
+   (`reserved alloc … free 6` of 12 — half is the paid reserve). The next free session must be offered `ncr`.
+2. Fill Noida's free share too. The next free session must receive **no relay**: `admission.outcome = denied`,
+   `reason = free_pool_full`, and the Security panel says relay capacity is fully used (not "no relay is configured").
+3. A paid-plan session started *now*, from the same network, must still get a relay (`admission.outcome = admitted`).
+4. End a free session: `--status` must show its allocations returned at once, and the next free session is admitted.
+
+Expected output of `--status --explain` after step 2 (shape, not exact numbers):
+
+```
+  free client in in-west  -> (no relay)  denied  free_pool_full
+  paid client in in-west  -> mum,ncr     admitted
+```
+
+The same chains run in CI on throwaway local relays (`lib/ice-kit/tests/simulation/failover.sh`,
+`active-active.sh`) — useful, but a test of the logic, not of your nodes.
+
+## Part F — capacity, admission and the paid reserve, against the real nodes
+
+Nothing in the capacity model has been measured on Mumbai or Noida. Every number the application uses —
+what a session costs, what a node sustains, where it should start shedding — is an **assumption** until this
+part replaces it. Run F1–F3 on Mumbai first; Noida only in staging and only after its clearance.
+Synthetic load consumes real bandwidth: agree a window with the infrastructure team, run off-peak, and stop at the first sign of
+loss. The tools below are coturn's own (`turnutils_uclient`, `turnutils_peer`) — flags vary by version; check `-h`.
+
+**F1 — what one session costs a node (replaces the profile assumptions).**
+On the node (infrastructure team, unprivileged): `bash turn-node-load.sh --node=mum --sample=30` — this prints
+one JSON line: concurrent allocations (UDP sockets in the relay range) and rx/tx bit/s on the NIC. Take it:
+
+1. idle (B0);
+2. with `k` relay-only staging sessions of ONE class running for 5 minutes (staging only: `WEBRTC_FORCE_RELAY = true`) —
+   a Remote screen-share session, a Connect 1:1 video call, an audio-only call, a 4-person room participant;
+3. footprint per client = `(rx+tx with k) − (rx+tx at idle)`, divided by `k`; allocations per client the same way.
+
+Repeat per class with `k` = 1, 3, 6 and keep the median. Put the results into
+`WEBRTC_TURN_PROFILE_REMOTE_KBPS`, `…_CALL_KBPS`, `…_ROOM_KBPS`, `…_AUDIO_KBPS`. If allocations per client are not 3 on the
+first node and 1 on the fallback node, the allocation estimate is wrong — say so.
+
+**F2 — what a node sustains (sets MAX_ALLOCATIONS and MAX_MBPS).**
+From a test machine near the node, with a short-lived credential for synthetic load
+(`$PHP lib/ice-kit/bin/probe.php … --node=mum --tier=free --emit-grant=/tmp/g.json --ttl=900`; take the
+`username` and `credential` of the TURN entry), ramp client-to-client sessions:
+
+```
+U=$(jq -r '.iceServers[]|select(.username)|.username' /tmp/g.json); P=$(jq -r '.iceServers[]|select(.username)|.credential' /tmp/g.json)
+for m in 25 50 100 200 400; do
+  turnutils_uclient -y -m $m -n 2000 -l 500 -z 20 -u "$U" -w "$P" turn-mum.aicountly.com | tail -4
+done
+```
+
+(each step must finish inside the credential's 15 minutes; mint a fresh one between steps if not). While it runs, on the node:
+`turn-node-load.sh` every 10 s and `top -b -n1 | head -15`. The **sustainable** capacity is the largest step where packet loss stays under 0.5 %,
+jitter under 30 ms and CPU under 70 %; set `MAX_ALLOCATIONS` / `MAX_MBPS` to **80 % of it**. Record the step
+at which the node degrades — that is where `BUSY_AT` / `SHED_FREE_AT` should sit below.
+
+**F3 — do coturn's own limits behave as assumed?** With the infrastructure team's agreement, on a *staging copy* of the relay config
+(or Noida, before it is enabled), set `total-quota`, `user-quota`, `max-bps`, `bps-capacity` as in `docs/ACTIVE_ACTIVE_TURN.md` § 8 and check, with the
+probe and `turnutils_uclient`: a node at `total-quota` refuses a new allocation with `486`/`508` (the probe reports `allocation_quota_reached`
+and the health file marks the node `full`); one credential cannot hold more than `user-quota` allocations; a session above `max-bps` is
+throttled. **Also record that a free-tier and a paid-tier credential are treated identically** — that is the reason the application layer exists.
+
+**F4 — does measurement agree with the books and with coturn?** With 10 known sessions running: `turn-node-load.sh` allocations must equal what the
+admission books reserved (`probe.php --status` → `reserved alloc paid + free`) within the browsers' variance, and measured bit/s must be
+within a factor of ~1.5 of reserved bit/s. A large gap means the profile (F1) or the allocation estimate is wrong; the application then charges the
+difference to both tiers, which is safe but wasteful.
+
+**F5 — does the reserve hold under load?** Staging, `enforce`, capacities from F2. From test machines: (a) start a free flood — mint free-tier
+grants (`--tier=free`) in a loop until the application refuses (`--status --explain` shows `free … denied`); (b) while the flood runs, start paid sessions
+(`--tier=paid`) up to the reserve — **every one must be admitted**; (c) record the free share reached (expect ≤ `1 − reserve%`), and that the node's measured
+utilization stayed under the shed threshold plus the paid headroom. Any paid refusal while paid usage is inside the reserve is a defect.
+
+**F6 — does the relay's own log attribute traffic by tier?** After F5 (or any session mix), on the node:
+`journalctl -u coturn --since '1 hour ago' | grep -c 'usage:'` must be non-zero; then on the API host, with the log copied or piped in:
+`$PHP lib/ice-kit/bin/summarize-usage.php <logfile> --window=3600`. Free bytes must be a plausible share of the total and no larger than the free share of the
+books. **If there are no `usage:` lines, or they have another format, say so** — the format was read from coturn 4.6.1 and the nodes are reported as "4.18".
+
+## Part G — routing between the regions, from real networks
+
+**G1 — does each region get its nearer node?** From at least: a Mumbai-area network, a Delhi/NCR network, and one elsewhere (mobile data, another city).
+On each, with staging in `observe`: open a staging session; read the connectivity report / Security panel for the selected node;
+run `relay-check.mjs` (Part B) and note its `measured:` line (the browser's own time to a relay on each node); and note the first node of
+`POST …/ice-servers` (for Remote, the `relayNodes` order; for Connect `GET /api/calls/config`). Fill in:
+
+| Network | measured mum ms | measured ncr ms | first node offered | node that carried data |
+|---|---|---|---|---|
+
+The first request on a new browser has no measurement and uses the region hint / edge geography; the second (after a call) uses the measurement. Both rows
+matter. If the edge does not supply geography (`WEBRTC_GEO_*` unset) say so.
+
+**G2 — reciprocal fallback:** Part D1. **G3 — overload spill:** Part D2.
+
+**G4 — a renewal near overload keeps a session alive.** Staging, `enforce`, `WEBRTC_TURN_TTL = 120`: start a free session and a call; then fill the node
+past the shed threshold with other free sessions; the original session's credentials renew at about 96 s. The session must stay connected
+(`remote.ice.issue` / `connect.ice.issue` shows an admitted renewal, not `node_overloaded`). Then lower `MAX_ALLOCATIONS` below current use: the renewal may be
+refused (`denied`); the client must keep its existing credentials and the session must not drop.
+
+**G5 — Greater Noida gating (no commands).** Before `WEBRTC_TURN_NODE_NCR_STATUS` is anything but `disabled` on a production-facing deployment, the following
+must be recorded in `docs/LAUNCH_READINESS_TURN.md`: Part A passed against `turn-ncr` (all three transports, negative tests, certificate, DNS); Part B passed
+from a restrictive network; F1–F3 done for Noida; the **security review of the machine's historical privileged-access concern signed off**, with the date and
+who accepted it; and Noida's own `static-auth-secret` (different from Mumbai's) stored as a repository secret **and rotated if the review recommends it**.
 
 ## Part E — what to send back
 
@@ -191,6 +298,10 @@ The same chain, on two throwaway local relays, runs in CI
 /tmp/evidence-ncr.json (staging)             browser-mum-{udp,tcp,tls,restart}.json
 the summarize-reports output                 curl …/health | jq .relayNodes   (before and during Part D)
 turnserver --version                         grep -viE 'secret|password' /etc/turnserver.conf
+F1: the per-class footprint table            F2: the ramp table (clients, loss %, jitter, CPU, Mbit/s) and the chosen capacities
+F3: the quota experiments                    F4: books vs measurement for 10 sessions
+F5: the flood/paid run, probe --status --explain before and after     F6: summarize-usage output, one sample `usage:` line (usernames are signed, not secret)
+G1: the network table                        G4: the issue log lines of the renewals
 ```
 
 `grep -vi` keeps the shared secret out of what you send. Please also say which network each browser run
@@ -203,4 +314,6 @@ used and whether UDP was blocked there.
   will read `degraded`. Run Part A from the API host *and* from any other machine to tell a blocked
   probe from a broken node.
 * Whether an established allocation survives its credential's expiry (A3) — on the actual coturn build.
+* What a session costs and what a node sustains (F1–F2), and whether the nodes' `usage:` log lines have the format the tier attribution reads (F6).
+* Whether each region really gets its nearer node, and whether the edge supplies geography (G1).
 * That the relay's per-peer rules allow what real sessions need (Part C).

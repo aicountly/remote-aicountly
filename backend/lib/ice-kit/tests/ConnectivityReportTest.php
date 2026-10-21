@@ -20,6 +20,7 @@ final class ConnectivityReportTest extends IceKitTestCase
             'remoteCandidateType' => 'srflx',
             'relayProtocol'       => 'tls',
             'relayNode'           => 'mum',
+            'admission'           => 'admitted',
             'gathered'            => ['host' => 3, 'srflx' => 1, 'relay' => 2],
             'iceErrors'           => [['category' => 'turn_unreachable', 'node' => 'mum', 'code' => 701]],
             'restarts'            => 1,
@@ -30,6 +31,7 @@ final class ConnectivityReportTest extends IceKitTestCase
 
         $this->assertSame('recovered', $clean['outcome']);
         $this->assertSame('mum', $clean['relayNode']);
+        $this->assertSame('admitted', $clean['admission']);
         $this->assertSame(['host' => 3, 'srflx' => 1, 'prflx' => 0, 'relay' => 2], $clean['gathered']);
         $this->assertSame([['category' => 'turn_unreachable', 'node' => 'mum', 'code' => 701]], $clean['iceErrors']);
         $this->assertSame(850, $clean['timeToConnectMs']);
@@ -43,6 +45,7 @@ final class ConnectivityReportTest extends IceKitTestCase
             'localCandidateType' => 'candidate:1 1 udp 2122260223 192.168.1.20 54400 typ host',
             'relayNode'          => '203.0.113.9',
             'relayProtocol'      => 'quic',
+            'admission'          => 'platinum',
             'sdp'                => "v=0\r\no=- 1 2 IN IP4 192.168.1.20",
             'credential'         => 'abc',
             'gathered'           => ['host' => -5, 'relay' => 10 ** 9, 'bogus' => 3],
@@ -56,6 +59,7 @@ final class ConnectivityReportTest extends IceKitTestCase
         $encoded = json_encode($clean, JSON_THROW_ON_ERROR);
 
         $this->assertNull($clean['outcome']);
+        $this->assertNull($clean['admission']);
         $this->assertSame('unknown', $clean['path']);
         $this->assertNull($clean['localCandidateType']);
         $this->assertNull($clean['relayNode']);

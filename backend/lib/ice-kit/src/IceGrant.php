@@ -31,6 +31,8 @@ final class IceGrant
         public readonly bool $degraded = false,
         public readonly bool $failover = false,
         public readonly bool $restartOnRenewal = true,
+        /** @var array{tier: string, outcome: string, reason: string, mode: string} */
+        public readonly array $admission = ['tier' => 'free', 'outcome' => 'unmetered', 'reason' => 'ok', 'mode' => 'off'],
     ) {
     }
 
@@ -87,6 +89,10 @@ final class IceGrant
             // them for the next time it must gather. Operators turn it off once `probe.php
             // --expiry-test` has shown their relay keeps established allocations alive.
             'restartOnRenewal'     => $this->restartOnRenewal,
+            // Why a client got the relays it did, or none: `outcome` is admitted | unmetered | denied |
+            // unconfigured; `reason` names the limit (free_pool_full, node_overloaded, node_full, …).
+            // A denied client has no relay and a product should say why, not "no relay configured".
+            'admission'            => $this->admission,
         ];
     }
 }

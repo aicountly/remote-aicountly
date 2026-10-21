@@ -49,8 +49,18 @@ IceKitBoot::boot($paths);
 
 $config = config('Remote');
 $ice    = new IceConfigService($config);
+$stores = Aicountly\Ice\IceRuntime::stores(
+    static fn (string $key): ?string => is_scalar($v = env($key)) ? (string) $v : null,
+    WRITEPATH,
+);
 
+// The same files the API reads and writes: health (this probe), the admission books, measured node load
+// (bin/ingest-load.php) and learned client latency — so `probe.php --status --explain` shows what the API
+// would decide right now.
 return [
     'topology' => $ice->topology(),
-    'health'   => new Aicountly\Ice\HealthStore($config->turnHealthFile),
+    'health'   => $stores['health'],
+    'leases'   => $stores['leases'],
+    'load'     => $stores['load'],
+    'latency'  => $stores['latency'],
 ];

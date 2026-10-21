@@ -8,6 +8,7 @@
 
 import { apiFetch, apiFetchText, apiFetchWithMeta, setGuestToken } from './client'
 import type { ConnectivityReport } from '../../ice-kit/index.js'
+import { latencyBody } from './iceLatency'
 import type {
   AuditEntry,
   AuditFilters,
@@ -205,7 +206,7 @@ export function reportPresence(
 // --- Signalling -------------------------------------------------------------
 
 export function fetchSignallingCredentials(sessionUuid: string): Promise<SignallingCredentials> {
-  return apiFetch<SignallingCredentials>(`/sessions/${sessionUuid}/signalling-token`, { method: 'POST' })
+  return apiFetch<SignallingCredentials>(`/sessions/${sessionUuid}/signalling-token`, { method: 'POST', body: latencyBody() })
 }
 
 /**
@@ -217,7 +218,7 @@ export function fetchSignallingCredentials(sessionUuid: string): Promise<Signall
  * ice-kit normalises.
  */
 export function fetchIceServers(sessionUuid: string): Promise<unknown> {
-  return apiFetch<unknown>(`/sessions/${sessionUuid}/ice-servers`, { method: 'POST' })
+  return apiFetch<unknown>(`/sessions/${sessionUuid}/ice-servers`, { method: 'POST', body: latencyBody() })
 }
 
 /**

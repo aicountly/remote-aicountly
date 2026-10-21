@@ -68,7 +68,7 @@ final class IceIssuerTest extends IceKitTestCase
     {
         $turn = $this->issuer($this->topology($this->productionEnv()))->issue('participant-1')->iceServers()[1];
 
-        $this->assertSame((self::NOW + 3600) . ':participant-1', $turn['username']);
+        $this->assertSame((self::NOW + 3600) . ':f.participant-1', $turn['username']);
         $this->assertSame(base64_encode(hash_hmac('sha1', $turn['username'], 'shared-coturn-secret', true)), $turn['credential']);
     }
 
@@ -202,7 +202,7 @@ final class IceIssuerTest extends IceKitTestCase
         $turn = $this->issuer($this->topology($this->productionEnv()))->issue('evil:user@example.com')->iceServers()[1];
 
         $this->assertSame(1, substr_count($turn['username'], ':'));
-        $this->assertSame('eviluserexample.com', explode(':', $turn['username'], 2)[1]);
+        $this->assertSame('f.eviluserexample.com', explode(':', $turn['username'], 2)[1]);
     }
 
     // ------------------------------------------------------------------ conditions and failover
@@ -349,7 +349,7 @@ final class IceIssuerTest extends IceKitTestCase
 
         $this->assertSame(3600, $ordinary->expiresIn());
         $this->assertSame(7800, $bound->expiresIn());
-        $this->assertSame((self::NOW + 7800) . ':p', $bound->iceServers()[1]['username']);
+        $this->assertSame((self::NOW + 7800) . ':f.p', $bound->iceServers()[1]['username']);
         $this->assertSame(86400, $issuer->issue('p', ['ttl' => 10 ** 7])->expiresIn(), 'Never beyond the absolute ceiling.');
     }
 

@@ -229,3 +229,46 @@ test('after giving up, a person can ask for a fresh round of attempts', async ()
   pc.set('connected');
   assert.equal(supervisor.state, 'connected');
 });
+
+test('a renewal denied for capacity never replaces a working relay configuration', async () => {
+  const clock = new ManualClock(0);
+  const denied = { contract: 'aicountly.ice/1', iceServers: [{ urls: ['stun:s.example:3478'] }], relayAvailable: false, relayNodes: [], expiresIn: 600, refreshAfter: 480, admission: { tier: 'free', outcome: 'denied', reason: 'node_overloaded', mode: 'enforce' } };
+  let calls = 0;
+  const refreshed = [];
+  const seenDenied = [];
+  const refresher = new CredentialRefresher({
+    clock,
+    retryDelayMs: 1000,
+    fetch: async () => { calls += 1; return calls < 3 ? denied : grant({ expiresIn: 600, refreshAfter: 480 }); },
+    onRefreshed: (config) => refreshed.push(config),
+    onDenied: (config) => seenDenied.push(config),
+  }).start(normalizeIceConfig(grant({ expiresIn: 600, refreshAfter: 480 }), 0));
+  const original = refresher.current;
+
+  await clock.advance(480_000);
+  assert.equal(calls, 1);
+  assert.equal(refreshed.length, 0, 'The denied grant is not adopted: a relayed session would be restarted without its relay.');
+  assert.equal(seenDenied.length, 1);
+  assert.equal(refresher.current, original);
+
+  await clock.advance(30_000);
+  assert.equal(calls, 1, 'A denial is retried after a minute, not hammered.');
+  await clock.advance(30_000);
+  assert.equal(calls, 2);
+
+  await clock.advance(120_000);
+  assert.equal(calls, 3);
+  assert.equal(refreshed.length, 1, 'Room opened; the fresh grant is adopted.');
+  refresher.stop();
+});
+
+test('a first grant that is denied is still adopted: there was no relay to lose', async () => {
+  const clock = new ManualClock(0);
+  const denied = { contract: 'aicountly.ice/1', iceServers: [], relayAvailable: false, relayNodes: [], admission: { tier: 'free', outcome: 'denied', reason: 'free_pool_full', mode: 'enforce' } };
+  const refreshed = [];
+  const refresher = new CredentialRefresher({ clock, fetch: async () => denied, onRefreshed: (c) => refreshed.push(c) }).start(normalizeIceConfig(denied, 0));
+
+  await refresher.refreshNow();
+  assert.equal(refreshed.length, 1);
+  refresher.stop();
+});

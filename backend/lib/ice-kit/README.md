@@ -1,4 +1,4 @@
-# AICOUNTLY ICE kit (v1.1.0)
+# AICOUNTLY ICE kit (v1.2.0)
 
 The one way an AICOUNTLY product decides **which TURN relays a client may use** and **mints the
 short-lived credential for each**. Remote (`backend/lib/ice-kit`) and Connect
@@ -97,6 +97,22 @@ each transport, then releases it. It is the test that catches a secret mismatch 
 a full relay range (`insufficient_capacity`), a TLS certificate problem (`tls_failed`) and a firewall
 (`connect_failed`/`timeout`) — none of which a STUN answer would reveal. An allocation granted with no
 credential at all is reported as `open_relay`, a finding rather than a success.
+
+## Active-active routing and admission
+
+Nodes are regional peers. `IceIssuer::issue()` takes the client's `tier` (`paid`/`free`, unknown = free), a usage
+`profile`, a `sessionRef` and a `ClientContext`; ranks the nodes by proximity, load and health; checks each
+against its capacity and the paid reserve (`Admission`); and writes the lease in the same locked step.
+`release()` frees a finished session, `noteConnection()` moves the bandwidth charge to where the traffic is,
+`learnLatency()` folds a client's measured round trips into its region's average. See
+`docs/ACTIVE_ACTIVE_TURN.md` in the product for the design, thresholds and what is proposed rather than built.
+
+```bash
+php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --status --explain   # capacity, load, what each tier is offered
+php lib/ice-kit/bin/summarize-usage.php /var/log/turnserver/*.log --window=3600   # traffic per tier, from the relay's log
+bash lib/ice-kit/bin/turn-node-load.sh --node=mum | php lib/ice-kit/bin/ingest-load.php --bootstrap=config/ice-kit.php
+bash lib/ice-kit/tests/simulation/active-active.sh                                 # local relays; logic only
+```
 
 ## Selection and failover
 

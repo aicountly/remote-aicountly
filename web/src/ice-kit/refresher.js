@@ -12,6 +12,12 @@
  *
  * A static credential (no expiry) is never refreshed. A failed fetch is retried, with backoff, for as
  * long as the refresher runs.
+ *
+ * A renewal the server DENIES for capacity (`admission.outcome === 'denied'`: the node is overloaded and
+ * this is a free-licence session) is not adopted. Replacing a working relay configuration with a
+ * STUN-only one would, at the restart that follows, take a relayed session down; keeping the old one lets
+ * the session carry on for as long as its allocation lives, and the next attempt — a minute later —
+ * finds out whether room has opened. Overload closes the door to new free sessions; it does not evict.
  */
 
 import { normalizeIceConfig } from './iceConfig.js';
@@ -20,6 +26,7 @@ import { defaultClock } from './supervisor.js';
 const MIN_DELAY_MS = 30_000;
 const RETRY_DELAY_MS = 15_000;
 const MAX_RETRY_DELAY_MS = 120_000;
+const DENIED_RETRY_MS = 60_000;
 
 export class CredentialRefresher {
   /**
@@ -27,11 +34,13 @@ export class CredentialRefresher {
    * @param {() => Promise<unknown>} options.fetch the product's endpoint; resolves to its raw response
    * @param {(config: ReturnType<typeof normalizeIceConfig>) => void} [options.onRefreshed]
    * @param {(error: unknown) => void} [options.onError]
+   * @param {(config: ReturnType<typeof normalizeIceConfig>) => void} [options.onDenied] a renewal was refused for capacity
    */
   constructor(options) {
     this.fetchFn = options.fetch;
     this.onRefreshed = options.onRefreshed ?? (() => {});
     this.onError = options.onError ?? (() => {});
+    this.onDenied = options.onDenied ?? (() => {});
     this.clock = options.clock ?? defaultClock;
     this.minDelayMs = options.minDelayMs ?? MIN_DELAY_MS;
     this.retryDelayMs = options.retryDelayMs ?? RETRY_DELAY_MS;
@@ -39,6 +48,7 @@ export class CredentialRefresher {
     this.timer = null;
     this.failures = 0;
     this.pending = null;
+    this.denied = false;
     this.stopped = true;
   }
 
@@ -63,6 +73,13 @@ export class CredentialRefresher {
         const config = normalizeIceConfig(await this.fetchFn(), this.clock.now());
         if (this.stopped) return config;
 
+        if (config.admission?.outcome === 'denied' && this.current?.relayAvailable) {
+          this.denied = true;
+          this.onDenied(config);
+          throw new Error('relay_capacity_denied');
+        }
+
+        this.denied = false;
         this.current = config;
         this.failures = 0;
         this.onRefreshed(config);
@@ -89,6 +106,7 @@ export class CredentialRefresher {
     let delay;
     if (this.failures > 0) {
       delay = Math.min(this.retryDelayMs * 2 ** (this.failures - 1), MAX_RETRY_DELAY_MS);
+      if (this.denied) delay = Math.max(delay, DENIED_RETRY_MS);
     } else if (this.current?.refreshAt != null) {
       delay = Math.max(this.minDelayMs, this.current.refreshAt - this.clock.now());
     } else {

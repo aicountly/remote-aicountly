@@ -52,6 +52,7 @@ import {
   reportShareStopped,
   reportTransferProgress,
 } from '../api/remote'
+import { latencyMeter } from '../api/iceLatency'
 import { RemoteSignallingClient } from '../signalling/RemoteSignallingClient'
 import type { SignallingMessage, SignallingPeer, SignallingStatus } from '../signalling/RemoteSignallingClient'
 import { RemotePeerConnection } from './RemotePeerConnection'
@@ -152,6 +153,11 @@ export interface EngineSnapshot {
   /** Live file transfers, both directions, newest first (§36). */
   transfers: TransferView[]
   relayAvailable: boolean
+  /**
+   * The relay was refused for capacity (this account's licence tier, on an overloaded or full node) — not
+   * a missing configuration. Only a direct connection is possible until room opens.
+   */
+  relayDenied: boolean
   /**
    * The peer this browser is currently sending input to, if any.
    *
@@ -291,6 +297,7 @@ export class RemoteSessionEngine {
     annotations: [],
     transfers: [],
     relayAvailable: false,
+    relayDenied: false,
     controllingPeerId: null,
     network: {
       path: 'unknown',
@@ -308,6 +315,7 @@ export class RemoteSessionEngine {
   /** The ICE configuration new and restarted connections use (aicountly.ice/1). */
   private ice: IceConfig = normalizeIceConfig(null)
   private refresher: CredentialRefresher | null = null
+  private measuredLatency = false
 
   constructor(private readonly options: EngineOptions) {}
 
@@ -339,13 +347,15 @@ export class RemoteSessionEngine {
     }
 
     this.adoptIce(normalizeIceConfig(credentials))
-    this.patch({ relayAvailable: credentials.relayAvailable })
+    this.patch({ relayAvailable: credentials.relayAvailable, relayDenied: this.ice.admission.outcome === 'denied' })
 
     // Credentials are renewed before they expire, not when a relay starts
     // refusing them in the middle of somebody's session.
     this.refresher = new CredentialRefresher({
       fetch: () => fetchIceServers(this.options.sessionUuid),
       onRefreshed: (config) => void this.onIceRefreshed(config),
+      // A renewal refused for capacity keeps the relay configuration the live connections already use.
+      onDenied: () => this.patch({ relayDenied: true }),
     }).start(this.ice)
 
     this.signalling = new RemoteSignallingClient({
@@ -1150,6 +1160,7 @@ export class RemoteSessionEngine {
   /** Point every connection at a newer grant. Used for the next gathering. */
   private adoptIce(config: IceConfig): void {
     this.ice = config
+    if (config.relayAvailable) this.patch({ relayAvailable: true, relayDenied: false })
 
     for (const entry of this.peers.values()) {
       entry.connection.applyIceConfig(config)
@@ -1236,6 +1247,13 @@ export class RemoteSessionEngine {
       await reportConnectivity(this.options.sessionUuid, await entry.diagnostics.report(outcome))
     } catch {
       /* diagnostics are best-effort */
+    }
+
+    // Once a connection is up — never while one is being set up — time the relay nodes for the next
+    // request for credentials. Best effort, and once per page.
+    if (outcome === 'connected' && !this.measuredLatency) {
+      this.measuredLatency = true
+      void latencyMeter.measure(this.ice).catch(() => undefined)
     }
   }
 

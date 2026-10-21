@@ -94,27 +94,27 @@ credentials reads it. `GET /api/health` lists each node as:
 | `unreachable` | two consecutive probes failed (`WEBRTC_TURN_HEALTH_FAILURES`) |
 | `standby` | the node's role, and healthy: held in reserve |
 | `disabled` | never served, whatever its health |
+| `full` | coturn refused the probe for capacity (`486`/`508`): alive, but not a node to send more people to (condition `overloaded`) |
 | `unknown` | no probe result, or one older than 15 minutes (a stopped probe job says nothing about a node) |
 
 plus `serving` — whether a client asking right now is given this node.
 
-Selection, for every request:
+Selection, for every request (the full algorithm, with costs and thresholds, is `docs/ACTIVE_ACTIVE_TURN.md`):
 
-1. **Active nodes that are not `unreachable`.** A node declared down is never handed out beside a working one.
-2. **Standby nodes join** whenever no active node is fully working — the primary is down, has lost a
-   transport, or has just failed one probe. A fully healthy primary is served **alone**.
-3. **Last resort:** if everything servable is `unreachable`, all of it is offered, active first, flagged
-   `degraded: true` — any may have recovered since the last probe, and offering nothing cannot be better.
-4. Fully working nodes lead, then the client's region hint, then priority; the cap on nodes per client
-   (`WEBRTC_TURN_MAX_NODES`, default 2) is applied **after** that, so it can never cut a working standby in
-   favour of a degraded primary. A `disabled` node cannot be reached by any of this.
+1. **Candidates** — servable nodes (not `disabled`) that serve the client's licence tier.
+2. **Admission** — each candidate's committed capacity (lease books, plus any measured load) is checked for the tier; in `enforce` mode a node with no room is removed.
+3. **Pool** — `active` nodes that are not `down`. Mumbai and Greater Noida are **regional peers**: when both are active both serve, each its own region first. `standby` nodes join only when no active node is fully working. If everything admissible is known down, all of it is offered flagged `degraded`; capacity is never overridden.
+4. **Rank** — fully working nodes first, then by estimated distance (the client's measured round trip › learned › edge geography › region hint) plus a load penalty from 70 % utilization, with nodes in the same 15 ms band ordered by load. The cap on nodes per client is applied after that.
+5. **Offer** — the first node with every URL it has; any other only over `WEBRTC_TURN_FALLBACK_TRANSPORTS` (default TLS), so a fallback costs one allocation, not three.
 
-Timing: the first failed probe (≤ 5 min after the failure) brings the standby in beside the primary; the
-second (≤ 10 min) drops the primary. Between failure and detection a client is offered the primary and
-tries it, which costs one failed gather — it does not stop it using the others it was given. Recovery is
-one successful probe.
+A client refused for capacity gets STUN only and `admission.outcome = denied`.
 
-Tested in CI as a local simulation (`lib/ice-kit/tests/simulation/failover.sh`: two throwaway coturns with
+Timing: the first failed probe (≤ 5 min after the failure) makes the node `degraded`, so its peer leads for every client; the second (≤ 10 min) removes it
+from what is offered. Between failure and detection a client is offered the failing node and tries it, which costs one failed gather — it does not stop
+it using the peer it was also given. Recovery is one successful probe. (With a primary and a `standby` the same two steps bring the standby in and then
+drop the primary.)
+
+Tested in CI as local simulations (`lib/ice-kit/tests/simulation/failover.sh` for primary/standby and `active-active.sh` for regional peers: throwaway coturns with
 different secrets, probe → health file → grant → a real browser relaying through whichever is served).
 That is a test of this logic, **not** of Mumbai or Noida.
 
@@ -180,6 +180,28 @@ it moves relayed connections onto renewed credentials ahead of expiry) and treat
 launch-blocking for sessions longer than the TTL. If it does survive on both, `false` removes a needless
 ICE restart every ~48 minutes from every relayed connection.
 
+## Active-active routing and licence-aware admission (kit 1.2.0)
+
+Additions to `aicountly.ice/1`; every field is optional for an older client, which ignores it.
+
+| Where | Field | Meaning |
+|---|---|---|
+| request body | `region` | a hint naming a node region (`in-west`, `in-north`); never a filter |
+| request body | `rtt` | `{nodeId: ms}` — the client's own measured time to each node (`web/src/ice-kit/latency.js`); advice, bounded 1–3000 ms |
+| grant | `admission` | `{tier, outcome, reason, mode}`; `outcome` is `admitted`, `unmetered` (no capacity configured), `denied` (capacity — relay is STUN-only) or `unconfigured`; `reason` is `free_pool_full`, `node_overloaded`, `node_full`, … |
+| grant `relayNodes[]` | `load` | `normal`, `busy`, `overloaded`, `full` |
+| grant `relayNodes[]` | `proximity` | `{ms, basis}` — why this node ranked where it did (`measured`, `learned`, `geo`, `region`, `unknown`) |
+| grant `relayNodes[]` | `urls` | the URLs *offered*: all of them for the first node, the fallback transports for the others |
+| connectivity report | `admission` | the outcome the client saw (an enumeration) |
+| TURN username | `<expiry>:p.<subject>` / `f.<subject>` | the tier, signed into the credential so the relay's own log attributes traffic to it |
+
+Configuration keys: `WEBRTC_TURN_ADMISSION` (`off` | `observe` default | `enforce`), `WEBRTC_TURN_PAID_RESERVE_PERCENT` (≥ 50),
+`WEBRTC_TURN_BUSY_AT`, `WEBRTC_TURN_SHED_FREE_AT`, `WEBRTC_TURN_BALANCE_BAND_MS`, `WEBRTC_TURN_PROFILE_<NAME>_KBPS`,
+`WEBRTC_TURN_FALLBACK_TRANSPORTS`, per node `_LAT`, `_LON`, `_MAX_ALLOCATIONS`, `_MAX_MBPS`, `_TIERS`, `_PAID_RESERVE_PERCENT`,
+files `WEBRTC_TURN_LEASE_FILE`, `_LOAD_FILE`, `_LOAD_MAX_AGE`, `_LATENCY_FILE`, and optional edge geography `WEBRTC_GEO_*`.
+A client that is **renewing** keeps its place under overload, and a renewal the hard limits still refuse is not adopted: the client keeps
+the credentials it has.
+
 ## Secrets
 
 * The only place a TURN secret lives is the coturn config and the API host's `api/.env`. The grant carries
@@ -208,7 +230,7 @@ ICE restart every ~48 minutes from every relayed connection.
 | What an expiring credential does | `… --node=mum --transports=tcp --expiry-test=tcp` |
 | Grant files for the browser check | `… --node=mum --transports=tls --emit-grant=/tmp/g.json --ttl=900` (0600; live credentials) |
 | Health, every 5 minutes | `turn-probe` in `bin/ops/jobs.txt` → `writable/ice/turn-health.json` (**production deploy installs it; sandbox deploys do not**) |
-| At a glance | `GET /api/health` → `relayNodes: [{{id, status, servable, health, condition, state, serving}}]` |
+| At a glance | `GET /api/health` → `relayNodes: [{id, status, servable, health, condition, state, serving, load, servingBy}]` |
 | Per-connection outcomes | `php lib/ice-kit/bin/summarize-reports.php writable/logs/log-YYYY-MM-DD.log` |
 | Browser relay check | `web/src/ice-kit/tools/relay-check.mjs` (`ICE_EXPECT_NODE`, `ICE_EXPECT_PROTOCOL`, `ICE_REPORT`) |
 | Local failover simulation | `lib/ice-kit/tests/simulation/failover.sh` |
