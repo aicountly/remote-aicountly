@@ -269,6 +269,9 @@ curl -s https://remote.aicountly.com/api/health | jq
 # The relay is an allowlist
 curl -i -X POST https://remote.aicountly.com/api/global/login     # expect 404
 
+# So is the Manage registry relay (only the shared company-access client's calls)
+curl -i https://remote.aicountly.com/api/manage/v1/audit-log      # expect 404
+
 # The .env is not fetchable
 curl -i https://remote.aicountly.com/api/.env                     # expect 404
 

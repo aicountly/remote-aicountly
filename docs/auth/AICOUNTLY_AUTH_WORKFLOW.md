@@ -93,7 +93,11 @@ portal directly if the relay is missing — useful before the API is deployed.
 
 The relay is an **allowlist** (`RELAYED_PATHS` in
 `backend/app/Controllers/PortalRelayController.php`): `seskey`,
-`seskey/refresh`, `refresh_authtoken`. Forwarding arbitrary paths would turn
+`seskey/refresh`, `refresh_authtoken`, `auth/exchange`, `sso/exchange` and
+`logout`. Sign-out goes this way too because production hosting answers a
+browser it distrusts with a challenge page that carries no CORS headers, so a
+direct `POST my.aicountly.com/api/logout` could fail and leave the token live.
+Forwarding arbitrary paths would turn
 this host into an open proxy for the portal's whole auth surface, with the
 portal seeing this server's IP instead of the caller's. It is rate limited at
 30 requests a minute per IP.

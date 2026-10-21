@@ -14,6 +14,7 @@ use App\Domain\Device\DeviceService;
 use App\Domain\Device\DeviceSessionService;
 use App\Domain\Device\DesktopSignInService;
 use App\Domain\Directory\ManageClient;
+use App\Domain\Directory\ManageRegistryRelay;
 use App\Domain\Directory\MembershipVerifier;
 use App\Domain\Directory\PlatformDirectory;
 use App\Domain\Policy\EffectivePolicyResolver;
@@ -313,6 +314,16 @@ class Services extends BaseService
         }
 
         return new ManageClient(static::remoteConfig());
+    }
+
+    /** Manage's company registry, relayed for the browser with the caller's own session. */
+    public static function manageRegistryRelay(bool $getShared = true): ManageRegistryRelay
+    {
+        if ($getShared) {
+            return static::getSharedInstance('manageRegistryRelay');
+        }
+
+        return new ManageRegistryRelay(static::remoteConfig());
     }
 
     /** Keeps Remote's company membership confirmed against Manage (G28#4). */

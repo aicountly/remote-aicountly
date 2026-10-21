@@ -38,6 +38,11 @@ class PortalRelayController extends Controller
         // portal hands this app (IDN-01). Relayed with no Origin of our own: the
         // portal compares an Origin only when one is sent, and ours would not match.
         'sso/exchange',
+        // Sign-out. The browser used to POST my.aicountly.com/api/logout itself;
+        // production hosting answers a browser it distrusts (common Indian CGNAT
+        // broadband) with a challenge page that has no CORS headers, so that
+        // cross-site call failed and the portal token was never revoked.
+        'logout',
     ];
 
     public function relay(string ...$segments): ResponseInterface

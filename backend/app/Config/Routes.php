@@ -14,7 +14,8 @@ use CodeIgniter\Router\RouteCollection;
  *
  * Two groups exist:
  *   * the legacy auth surface (`/health`, `/global/*`, `/session`), kept
- *     byte-compatible with the API this replaces so sign-in keeps working;
+ *     byte-compatible with the API this replaces so sign-in keeps working,
+ *     and the Manage company-registry relay (`/manage/v1/*`);
  *   * the product API under `/v1/remote`.
  *
  * Filters, per route:
@@ -47,6 +48,13 @@ $routes->match(['get', 'post'], 'global/(:segment)/(:segment)', 'PortalRelayCont
 ]);
 
 $routes->get('session', 'PortalRelayController::whoami', ['filter' => 'api-auth']);
+
+// Manage's company registry for the shared company-access screens, relayed so the browser never
+// calls manage.aicountly.com (production hosting can answer that with a challenge page carrying no
+// CORS headers). The allow-list — exactly the shared client's calls, method by method — is inside
+// ManageRegistryRelay; the wildcard here only routes. No `api-auth`: Manage checks the person's own
+// ses_key on every call, and the relay grants nothing.
+$routes->match(['get', 'post', 'put', 'patch', 'delete'], 'manage/v1/(:any)', 'ManageRegistryController::relay/$1');
 
 // ---------------------------------------------------------------------------
 // Manage's company lifecycle (lib/company-lifecycle, docs/COMPANY_LIFECYCLE.md)
