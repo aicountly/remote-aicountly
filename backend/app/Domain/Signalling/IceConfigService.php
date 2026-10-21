@@ -9,6 +9,10 @@ use Aicountly\Ice\GeoHeaders;
 use Aicountly\Ice\IceGrant;
 use Aicountly\Ice\IceIssuer;
 use Aicountly\Ice\IceRuntime;
+use Aicountly\Ice\Licence\LicenceResolver;
+use Aicountly\Ice\Licence\LicenceRuntime;
+use Aicountly\Ice\Licence\LicenceState;
+use Aicountly\Ice\Licence\Resolution;
 use Aicountly\Ice\Tier;
 use Aicountly\Ice\Topology;
 use Config\Remote as RemoteConfig;
@@ -28,9 +32,12 @@ use Config\Services;
  *
  * Nodes are regional peers (Mumbai, Greater Noida): each client is offered the best of them for it, and
  * every grant is accounted to a licence tier so the paid reserve of each node holds across fallback
- * (docs/ACTIVE_ACTIVE_TURN.md). Remote's tier is the plan of the company that owns the session:
- * `WEBRTC_TURN_PAID_PLAN_CODES` lists the `remote_entitlements.plan_code` values that are paid; any other
- * plan, an unknown company, or a failed lookup is free.
+ * (docs/ACTIVE_ACTIVE_TURN.md). Remote's tier is the licence state of the company that owns the session, as the
+ * CENTRAL licensing backend states it (docs/LICENCE_ENTITLEMENT_CONTRACT.md): a signed entitlement read through the common
+ * adapter (lib/ice-kit, Licence\LicenceResolver). Remote keeps no licensing authority of its own. Until that backend exists,
+ * a company's own `remote_entitlements.plan_code` on `WEBRTC_TURN_PAID_PLAN_CODES` is accepted as a development-time
+ * compatibility mapping (evidence `compat`, honoured only while WEBRTC_LICENCE_COMPAT is not `deny`); any other plan, an
+ * unknown company, a stale or unverifiable document, or a failed lookup is free.
  *
  * No credential is ever hardcoded, and the shared secret never leaves this server: a client receives
  * `<expiry>:<subject>` and its HMAC, useless after the TTL. A static pair never expires and reaches
@@ -40,9 +47,20 @@ class IceConfigService
 {
     private ?IceIssuer $issuer = null;
 
-    public function __construct(private readonly RemoteConfig $config)
-    {
+    /**
+     * @param LicenceResolver|null          $licence   the common licence adapter; defaults to one built from the environment
+     * @param (\Closure(): list<string>)|null $readiness why paid status cannot be trusted yet (empty = ready); defaults to the
+     *        adapter's central-source check. Seams for tests.
+     */
+    public function __construct(
+        private readonly RemoteConfig $config,
+        private ?LicenceResolver $licence = null,
+        private readonly ?\Closure $readiness = null,
+    ) {
     }
+
+    /** The product id Remote is known by at the central licensing backend (Manage's app_key). */
+    public const LICENCE_PRODUCT = 'remote';
 
     /**
      * A credentialed ICE configuration for one client.
@@ -80,14 +98,17 @@ class IceConfigService
      * @param array<string, mixed>  $session
      * @param array<string, mixed>  $body    the request body (`region`, `rtt`)
      * @param callable(string): (string|null) $header reads one request header
-     * @return array{tier: Tier, sessionRef: string, profile: string, client: ClientContext}
+     * @return array{tier: Tier, licence: array<string, mixed>, sessionRef: string, profile: string, client: ClientContext}
      */
     public function contextFor(array $session, array $body, callable $header): array
     {
         $geo = GeoHeaders::fromEnvironment(static fn (string $key): ?string => is_scalar($v = env($key)) ? (string) $v : null);
 
+        $licence = $this->licenceForSession($session);
+
         return [
-            'tier'       => $this->tierForSession($session),
+            'tier'       => $licence->tier(),
+            'licence'    => $licence->audit(),
             'sessionRef' => (string) ($session['uuid'] ?? ''),
             'profile'    => 'remote',
             'client'     => ClientContext::fromRequest($body, $geo->extract($header)),
@@ -95,99 +116,104 @@ class IceConfigService
     }
 
     /**
-     * Paid only on positive, current evidence: the session's company has its OWN entitlement row, valid now
-     * (`valid_from`/`valid_until`), updated recently enough (when a limit is set), on a plan the operator listed
-     * as paid. Everything else is free:
-     *
-     *   * no company (a personal session), no row of its own, an expired or not-yet-valid row, a stale row;
-     *   * the platform DEFAULT row (company_id NULL, seeded `REMOTE_PROFESSIONAL`) — it is a feature set for
-     *     companies nobody has set up, not a subscription, and must never make a company paid;
-     *   * a lookup that throws.
+     * Paid only on trusted server-side evidence: the central backend's signed, fresh, unrevoked entitlement for the
+     * company that owns the session, in state `paid` (Licence\LicenceResolver states every condition). Everything else is
+     * free — a personal session with no company, no entitlement, an expired or suspended licence, a stale or unverifiable
+     * document, a lookup that fails. Nothing the client sent is consulted.
      *
      * @param array<string, mixed> $session
      */
     public function tierForSession(array $session): Tier
     {
-        $paid = $this->config->turnPaidPlanCodes;
-        if ($paid === [] || ($session['company_id'] ?? null) === null) {
-            return Tier::Free;
-        }
-
-        try {
-            $row = $this->entitlementRow((int) $session['company_id']);
-        } catch (\Throwable) {
-            return Tier::Free;
-        }
-
-        if ($row === null) {
-            return Tier::Free;
-        }
-
-        $maxAge = $this->config->turnEntitlementMaxAgeHours;
-        if ($maxAge > 0 && isset($row['updated_at']) && strtotime((string) $row['updated_at']) < time() - $maxAge * 3600) {
-            return Tier::Free;
-        }
-
-        return in_array(strtoupper((string) ($row['plan_code'] ?? '')), $paid, true) ? Tier::Paid : Tier::Free;
+        return $this->licenceForSession($session)->tier();
     }
 
     /**
-     * The company's own entitlement row, valid right now — never the platform default.
+     * The licence resolution for the company that owns the session: state (free / paid / expired / suspended / unknown),
+     * the reason, and how much the evidence is worth (`central` / `compat` / `none`).
      *
-     * @return array<string, mixed>|null
+     * @param array<string, mixed> $session
      */
-    private function entitlementRow(int $companyId): ?array
+    public function licenceForSession(array $session): Resolution
     {
-        return \Config\Database::connect()->table('remote_entitlements')
+        $company = $session['company_id'] ?? null;
+        if ($company === null || $company === '') {
+            return Resolution::unknown('no_customer');
+        }
+
+        try {
+            return $this->licence()->forCustomer(
+                (string) (int) $company,
+                self::LICENCE_PRODUCT,
+                fn (): ?Resolution => $this->compatResolution((int) $company),
+            );
+        } catch (\Throwable) {
+            return Resolution::unknown('lookup_failed');
+        }
+    }
+
+    public function licence(): LicenceResolver
+    {
+        return $this->licence ??= LicenceRuntime::resolver(
+            static fn (string $key): ?string => is_scalar($v = env($key)) ? (string) $v : null,
+            WRITEPATH,
+        );
+    }
+
+    /**
+     * DEVELOPMENT-TIME COMPATIBILITY: the company's own `remote_entitlements` row, valid now and recently updated, on a plan
+     * the operator listed as paid. Evidence `compat` — never accepted for enforcement. The platform DEFAULT row
+     * (company_id NULL, seeded `REMOTE_PROFESSIONAL`) is a feature set for companies nobody has set up, not a subscription, and
+     * never makes a company paid. Returns null when there is nothing to say (so the answer stays `unknown`).
+     */
+    private function compatResolution(int $companyId): ?Resolution
+    {
+        $paid = $this->config->turnPaidPlanCodes;
+        if ($paid === []) {
+            return null;
+        }
+
+        $row = \Config\Database::connect()->table('remote_entitlements')
             ->select('plan_code, updated_at')
             ->where('company_id', $companyId)
             ->groupStart()->where('valid_from', null)->orWhere('valid_from <=', 'NOW()', false)->groupEnd()
             ->groupStart()->where('valid_until', null)->orWhere('valid_until >', 'NOW()', false)->groupEnd()
             ->get()
             ->getRowArray();
+
+        if ($row === null) {
+            return null;
+        }
+
+        $maxAge = $this->config->turnEntitlementMaxAgeHours;
+        if ($maxAge > 0 && isset($row['updated_at']) && strtotime((string) $row['updated_at']) < time() - $maxAge * 3600) {
+            return LicenceResolver::compat(LicenceState::Unknown, 'compat_stale');
+        }
+
+        $plan = strtoupper((string) ($row['plan_code'] ?? ''));
+
+        return in_array($plan, $paid, true)
+            ? LicenceResolver::compat(LicenceState::Paid, 'compat_plan_paid', $plan)
+            : LicenceResolver::compat(LicenceState::Free, 'compat_plan_not_paid', $plan);
     }
 
     /**
-     * Why enforcement must not start yet — empty when who-is-paid is known, current and complete. Consulted only when
-     * `WEBRTC_TURN_ADMISSION=enforce`; while this list is not empty the application observes instead.
+     * Why hard enforcement must not start yet — empty only when the central licence source is operational and validated.
+     * Consulted only when `WEBRTC_TURN_ADMISSION=enforce`; while this list is not empty the application observes instead.
      *
      * @return list<string>
      */
     public function licenceBlockers(): array
     {
-        $c       = $this->config;
-        $reasons = [];
-
-        if ($c->turnPaidPlanCodes === []) {
-            $reasons[] = 'WEBRTC_TURN_PAID_PLAN_CODES is empty: no plan is mapped to paid';
-        }
-        if (! $c->turnLicenceFeedConfirmed) {
-            $reasons[] = 'WEBRTC_TURN_LICENCE_FEED is not "confirmed": nothing attests that company entitlements are fed from the billing system of record';
-        }
-        if ($c->turnEntitlementMaxAgeHours <= 0) {
-            $reasons[] = 'WEBRTC_TURN_ENTITLEMENT_MAX_AGE_HOURS is not set: a stopped feed would leave companies paid forever';
-        }
-        if (in_array('REMOTE_FREE', $c->turnPaidPlanCodes, true)) {
-            $reasons[] = 'REMOTE_FREE is listed as paid';
+        if ($this->readiness !== null) {
+            return ($this->readiness)();
         }
 
-        try {
-            $codes = array_map(
-                static fn (array $r): string => strtoupper((string) $r['plan_code']),
-                \Config\Database::connect()->query('SELECT DISTINCT plan_code FROM remote_entitlements WHERE company_id IS NOT NULL')->getResultArray(),
-            );
-            $unmapped = array_values(array_diff($codes, $c->turnPaidPlanCodes, $c->turnFreePlanCodes));
-            if ($unmapped !== []) {
-                $reasons[] = 'plan codes in use with no paid/free mapping: ' . implode(', ', array_slice($unmapped, 0, 10));
-            }
-            if ($codes === []) {
-                $reasons[] = 'no company has an entitlement row: the feed has not populated remote_entitlements';
-            }
-        } catch (\Throwable) {
-            $reasons[] = 'remote_entitlements could not be read';
-        }
-
-        return $reasons;
+        return (LicenceRuntime::readiness(
+            static fn (string $key): ?string => is_scalar($v = env($key)) ? (string) $v : null,
+            WRITEPATH,
+            self::LICENCE_PRODUCT,
+        ))();
     }
 
     /** Free what a session (or one participant of it) held on the relays. Best effort: never throws. */

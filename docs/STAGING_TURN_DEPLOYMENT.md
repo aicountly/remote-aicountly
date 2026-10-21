@@ -7,6 +7,12 @@ Identical in `aicountly/remote-aicountly` and `aicountly/connect-aicountly`.
 > *prepared* command for the operator. No production system, secret or DNS record is touched by any of it; the
 > sandbox deploy workflows now **refuse** a production target (§2).
 
+**Licensing does not gate this work.** The central licensing module is under development (`docs/LICENCE_ENTITLEMENT_CONTRACT.md`). Staging
+deployment, authenticated relay tests, regional selection, failover and bandwidth measurements all run in `observe` mode today, using
+**signed fixtures** (§7.0) or the development-time compatibility mapping for the paid/free split. Only *enforcement* waits for the
+central source; the hard 50 % paid reservation across Remote and Connect (shared ledger) and the Mumbai/NCR routing are exercised
+regardless.
+
 Scope of this round: deploy the integration branch `claude/webrtc-turn-ice-integration` to the **existing sandbox
 accounts**, in **`observe`** mode, with **distinct per-node secrets**, a **staging** shared capacity ledger, and run the
 first authenticated relay tests. **Not** in scope: merging, production deployment, enabling enforcement, enabling
@@ -74,6 +80,7 @@ If the first line is a production account, stop and fix the `SANDBOX_*` secrets 
 |---|---|---|
 | `SANDBOX_TURN_MUM_SECRET` | `static-auth-secret` of the **Mumbai** coturn | Exists. One value per **node**, identical in both repos (it is the node's secret) |
 | `SANDBOX_TURN_NCR_SECRET` | `static-auth-secret` of the **Noida** coturn | Exists. **Must differ** from Mumbai's — `inject-turn-secrets.sh` refuses two equal node secrets |
+| `SANDBOX_LICENCE_S2S_SECRET` | this product's AIC-S2S v1 secret for the **central licence API** | **Not yet** — the API does not exist. The workflows already pass it over stdin when set (empty = ignored). Never reuse a TURN or ledger secret (the injector refuses) |
 | `SANDBOX_TURN_LEDGER_PASSWORD` | password of the staging ledger role `turn_ledger_staging` | **New.** Must differ from every TURN secret (the injector refuses otherwise, even with `--allow-shared`) |
 
 Production secrets (`TURN_*` without `SANDBOX_`) are untouched, and **must not be reused** for staging: staging should have
@@ -147,8 +154,10 @@ licence mapping. Applied by `api/bin/ops/apply-turn-config.sh` (Done — tested,
 * **Noida stays out of production.** In the *staging* file Noida is `active`, so it can be validated; the production `.env`
   is not changed by anything here, and the production deploy must pass `--keep-out=ncr`.
 * **Capacities are placeholders** (assumption). In observe they only size the books and the reconciliation report.
-* **Licence**: `WEBRTC_TURN_LICENCE_FEED` is deliberately **unset**, so even if someone later flips the mode to `enforce` the
-  readiness gate holds it at `observe` (`enforceBlockedBy`). See `docs/LICENCE_ENTITLEMENT_AUDIT.md`.
+* **Licence**: no central API exists yet, so `WEBRTC_LICENCE_API_URL` is unset and nothing syncs. The staging file sets
+  `WEBRTC_LICENCE_COMPAT=allow` (the legacy mapping may label the books) and leaves `WEBRTC_TURN_LICENCE_FEED` unset, so even if someone
+  flips the mode to `enforce` the readiness gate holds it at `observe` (`enforceBlockedBy` lists six conditions). See
+  `docs/LICENCE_ENTITLEMENT_CONTRACT.md` §10.
 
 ## 6. Deployment sequence
 
@@ -194,6 +203,41 @@ Prerequisites: SSH to the sandbox API host. In every command: `PHP=/opt/cpanel/e
 `openssl`, sockets and `pdo_pgsql`), `cd <ROOT>/api`. Commands print no secret. Files that contain **live credentials**
 (`--emit-grant`) are `0600`, valid ≤ 15 minutes; copy with `scp`, delete afterwards.
 
+### 7.0 Paid and free test identities — signed fixtures (no central backend needed)
+
+The real licence path (Ed25519 signature, freshness, tenant check, revocation) can be exercised before the licensing module exists with
+**signed staging fixtures**. Generate a staging key pair on an admin machine — the private half never goes to the API host — and give the API host
+only the public half:
+
+```bash
+# admin machine (needs PHP with libsodium)
+php backend/lib/ice-kit/bin/entitlement-fixture.php keys --out=$HOME/.aic-staging-keys --kid=stg-1
+#   prints:  WEBRTC_LICENCE_PUBLIC_KEYS entry: stg-1=<base64>
+printf 'WEBRTC_LICENCE_PUBLIC_KEYS=stg-1=<base64>\n' | ssh <sandbox> "bash <ROOT>/api/bin/ops/apply-turn-config.sh"
+
+# a PAID test entitlement for Remote company 481 (product remote) and for Connect user 7 (product chat; --subject makes it a by-subject answer)
+php backend/lib/ice-kit/bin/entitlement-fixture.php sign --secret-key-file=$HOME/.aic-staging-keys/stg-1.secret --kid=stg-1 \
+    --customer=481 --product=remote --state=paid --plan=STAGING_PAID_TEST --out=/tmp/paid-remote-481.json
+php backend/lib/ice-kit/bin/entitlement-fixture.php sign --secret-key-file=$HOME/.aic-staging-keys/stg-1.secret --kid=stg-1 \
+    --customer=42 --subject=7 --product=chat --state=paid --plan=STAGING_PAID_TEST --out=/tmp/paid-chat-7.json
+scp /tmp/paid-*.json <sandbox>:/tmp/        # signed, not secret; delete afterwards
+
+# on the API host
+$PHP lib/ice-kit/bin/entitlement-fixture.php load --bootstrap=config/ice-kit.php --file=/tmp/paid-remote-481.json
+$PHP lib/ice-kit/bin/entitlement-fixture.php resolve --bootstrap=config/ice-kit.php --customer=481 --product=remote
+#   state paid · tier paid · reason paid · evidence central · plan STAGING_PAID_TEST
+$PHP lib/ice-kit/bin/entitlement-fixture.php resolve --bootstrap=config/ice-kit.php --customer=999 --product=remote
+#   state unknown · tier free · reason no_entitlement · evidence none        (a free test company needs no fixture)
+
+# revocation and the other states, all through the same code the real feed will use
+$PHP lib/ice-kit/bin/entitlement-fixture.php revoke --bootstrap=config/ice-kit.php --customer=481 --product=remote --revision=1
+$PHP lib/ice-kit/bin/entitlement-fixture.php resolve --bootstrap=config/ice-kit.php --customer=481 --product=remote   # state suspended · reason revoked
+```
+
+`sign --state=` also takes `free`, `expired`, `suspended`, `unknown`, and `--kind=trial` shows a trial being refused the paid reserve. Fixtures are
+`evidence central` because they are genuinely signed; they prove the consumer, not the backend. The alternative for a quick check is the compat
+mapping (§7.2/§7.3 notes), which is labelled `evidence compat` and can never support enforcement.
+
 ### 7.1 First executable commands — configuration, ledger and authenticated allocation
 
 ```bash
@@ -218,16 +262,9 @@ security finding: stop.
 
 ### 7.2 Remote desktop sessions (authenticated, end to end)
 
-Needs a staging company with a **paid test entitlement** and a **free** one. Insert once (staging database only):
-
-```sql
--- paid test company: STAGING_PAID_TEST is in WEBRTC_TURN_PAID_PLAN_CODES (staging only; a test fixture, not a real plan)
-INSERT INTO remote_entitlements (company_id, plan_code, valid_from, valid_until)
-VALUES (<paid_company_id>, 'STAGING_PAID_TEST', now() - interval '1 day', now() + interval '30 days')
-ON CONFLICT (company_id) WHERE company_id IS NOT NULL DO UPDATE SET plan_code = EXCLUDED.plan_code, valid_from = EXCLUDED.valid_from,
-  valid_until = EXCLUDED.valid_until, updated_at = now();
--- free test company: no row at all (the platform default row is NOT used for tier), or plan_code = 'REMOTE_FREE'
-```
+Needs a staging company with a **paid test entitlement** and a **free** one: load the signed fixture for the paid company (§7.0) — or, for a quick
+check only, give it a compat row (`WEBRTC_TURN_PAID_PLAN_CODES=STAGING_PAID_TEST` is in the staging file, and a staging `remote_entitlements` row with
+that `plan_code` and the company id is accepted as *compat*). The free company needs nothing. The company ids must be the real staging company ids.
 
 Then, with `WEBRTC_FORCE_RELAY=true` in staging's `.env` (never production's) so every connection is relay-only, follow
 `TURN_VALIDATION_RUNBOOK.md` Part C (rows 1–10), which covers a browser-to-browser session, the Windows desktop agent
@@ -252,14 +289,8 @@ $PHP lib/ice-kit/bin/summarize-reports.php writable/logs/log-$(date +%F).log
 
 ### 7.3 Connect calls and rooms (authenticated)
 
-Insert a paid and a free test user (staging database; `source = 'manual'`):
-
-```sql
-INSERT INTO connect_license_tier (user_uuid, tier, valid_until, source, updated_at)
-VALUES ('<paid_user_id>', 'paid', now() + interval '30 days', 'manual', now())
-ON CONFLICT (user_uuid) DO UPDATE SET tier = 'paid', valid_until = EXCLUDED.valid_until, updated_at = now();
--- the free user needs no row
-```
+A paid test user: load the signed by-subject fixture for user `7` (§7.0, product `chat`). For a quick check only, a row in the temporary compat table
+`connect_license_tier` (`user_uuid`, `tier = 'paid'`, `source = 'manual'`) is accepted as *compat*. The free user needs nothing.
 
 ```bash
 # AIC_TOKEN = the staging bearer token of that user (the portal session); read -rs, never an argument.
@@ -342,6 +373,6 @@ complete; in `observe` the books show what *would* have been refused (`reason` i
 
 ## 9. Remaining blockers before enforcement or production
 
-See the PR descriptions and `docs/LAUNCH_READINESS_TURN.md` §1a. In short: licence mapping and feed (`docs/LICENCE_ENTITLEMENT_AUDIT.md`);
+See the PR descriptions and `docs/LAUNCH_READINESS_TURN.md` §1a. In short: the central licensing backend and its connection to both products (`docs/LICENCE_ENTITLEMENT_CONTRACT.md`, `docs/LICENCE_ENTITLEMENT_AUDIT.md` §3);
 measured capacities (Runbook F); tier-split relays + shaper + TLS-443 decision (`docs/TURN_BANDWIDTH_ENFORCEMENT.md`); Noida security
 clearance; production ledger adoption; the node-side collector and probe cron jobs installed.

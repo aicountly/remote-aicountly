@@ -4,7 +4,12 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use Aicountly\Ice\Licence\EntitlementVerifier;
+use Aicountly\Ice\Licence\LicencePolicy;
+use Aicountly\Ice\Licence\LicenceResolver;
+use Aicountly\Ice\Licence\MemoryEntitlementCache;
 use Aicountly\Ice\Topology;
+use App\Domain\Signalling\IceConfigService;
 use App\Domain\Auth\RemoteIdentity;
 use CodeIgniter\Test\FeatureTestTrait;
 use Config\Remote as RemoteConfig;
@@ -29,6 +34,12 @@ final class ActiveActiveIceApiTest extends RemoteTestCase
 
     /** @var list<string> */
     private array $files = [];
+
+    private MemoryEntitlementCache $central;
+    private string $centralKey = '';
+
+    /** @var list<string> what the licence readiness check reports; empty = the central source is operational and validated */
+    private array $licenceBlockers = [];
 
     protected function setUp(): void
     {
@@ -75,10 +86,19 @@ final class ActiveActiveIceApiTest extends RemoteTestCase
             $config->signalUrl        = 'wss://remote.aicountly.test/signal';
             $config->turnTopology     = Topology::fromEnvironment(static fn (string $k): ?string => $env[$k] ?? null, ['stunUrls' => []]);
             $config->turnPaidPlanCodes = ['REMOTE_BUSINESS'];
-            // Enforcement is allowed only once who-is-paid is mapped, attested and fresh (licenceBlockers()).
-            $config->turnLicenceFeedConfirmed   = true;
             $config->turnEntitlementMaxAgeHours = 48;
         });
+
+        // The common licence adapter, with a fake CENTRAL backend that signs with a throwaway key, and a readiness answer the
+        // test controls. Legacy plan mapping (above) is the compatibility path while no central entitlement exists.
+        $pair             = sodium_crypto_sign_keypair();
+        $this->centralKey = sodium_crypto_sign_secretkey($pair);
+        $this->central    = new MemoryEntitlementCache();
+        Services::injectMock('iceConfigService', new IceConfigService(
+            Services::remoteConfig(),
+            new LicenceResolver($this->central, new EntitlementVerifier(['central-test' => sodium_crypto_sign_publickey($pair)]), new LicencePolicy(172800, ['paid'], true, true)),
+            fn (): array => $this->licenceBlockers,
+        ));
     }
 
     protected function tearDown(): void
@@ -200,25 +220,115 @@ final class ActiveActiveIceApiTest extends RemoteTestCase
         $this->assertSame('paid', $this->iceFor($live)['admission']['tier'], 'The same plan, current, is paid.');
     }
 
-    public function testEnforcementIsHeldBackWhileTheLicenceMappingIsIncomplete(): void
+    public function testEnforcementIsHeldBackWhileTheCentralLicenceSourceIsNotOperational(): void
     {
-        Services::remoteConfig()->turnLicenceFeedConfirmed = false;
+        $this->licenceBlockers = ['the central licence API is not configured'];
         $s = $this->sessionOn(495, 'REMOTE_BUSINESS', 'gate');
 
         $status = Services::iceConfigService()->status();
-        $this->assertSame('observe', $status['admission']['mode'], 'Asked to enforce, but the feed is not confirmed: observing.');
-        $this->assertStringContainsString('WEBRTC_TURN_LICENCE_FEED', implode(' ', $status['enforceBlockedBy']));
+        $this->assertSame('observe', $status['admission']['mode'], 'Asked to enforce, but the central source is not operational: observing.');
+        $this->assertSame(['the central licence API is not configured'], $status['enforceBlockedBy']);
         $this->assertTrue($this->iceFor($s)['relayAvailable']);
     }
 
-    public function testAPlanCodeNobodyMappedBlocksEnforcement(): void
+    public function testWithNoReadinessWiredTheDefaultCheckBlocksEnforcement(): void
+    {
+        $service = new IceConfigService(Services::remoteConfig());
+
+        $this->assertNotEmpty($service->licenceBlockers(), 'No central API, no keys, no sync: the real default is "not ready".');
+        $this->assertSame('observe', $service->status()['admission']['mode']);
+    }
+
+    public function testAPlanNobodyMappedAsPaidIsFree(): void
     {
         $s = $this->sessionOn(496, 'REMOTE_MYSTERY', 'unmapped');
 
-        $blockers = implode(' ', Services::iceConfigService()->licenceBlockers());
-        $this->assertStringContainsString('REMOTE_MYSTERY', $blockers);
-        $this->assertSame('observe', Services::iceConfigService()->status()['admission']['mode']);
-        $this->assertSame('free', $this->iceFor($s)['admission']['tier'], 'And an unmapped plan is not paid.');
+        $this->assertSame('free', $this->iceFor($s)['admission']['tier']);
+        $this->assertSame('compat_plan_not_paid', Services::iceConfigService()->licenceForSession(['company_id' => 496])->reason);
+    }
+
+    /**
+     * @param array<string, mixed> $over
+     */
+    private function centralEnvelope(int $companyId, array $over = []): array
+    {
+        $now = time();
+        $doc = $over + [
+            'contract' => 'aicountly.licence/1', 'customer_id' => (string) $companyId, 'product_id' => 'remote', 'subject' => null,
+            'licence_id' => 'LIC-000' . $companyId, 'plan_code' => 'CENTRAL_PRO', 'plan_class' => 'paid', 'kind' => 'paid', 'state' => 'paid',
+            'valid_from' => gmdate('Y-m-d\TH:i:s\Z', $now - 86400), 'valid_until' => gmdate('Y-m-d\TH:i:s\Z', $now + 86400 * 30),
+            'entitlements' => [], 'revision' => 3, 'issued_at' => gmdate('Y-m-d\TH:i:s\Z', $now - 60),
+        ];
+
+        return EntitlementVerifier::sign($doc, 'central-test', $this->centralKey);
+    }
+
+    public function testACentralPaidEntitlementMakesTheCompanyPaidWhateverItsLocalPlanSays(): void
+    {
+        // Remote's own row says REMOTE_FREE; the central backend (the authority) says paid under ITS plan code.
+        $s = $this->sessionOn(497, 'REMOTE_FREE', 'central');
+        $this->assertSame('free', $this->iceFor($s)['admission']['tier']);
+
+        $this->central->put('customer', '497', 'remote', $this->centralEnvelope(497), time());
+
+        $this->assertSame('paid', $this->iceFor($s)['admission']['tier']);
+        $r = Services::iceConfigService()->licenceForSession(['company_id' => 497]);
+        $this->assertSame(['central', 'CENTRAL_PRO'], [$r->evidence, $r->planCode]);
+    }
+
+    public function testCentralEvidenceOverridesALegacyPaidMapping(): void
+    {
+        // The legacy mapping says paid; the central backend says the licence is suspended. The central answer wins, every time.
+        $s = $this->sessionOn(498, 'REMOTE_BUSINESS', 'suspended');
+        $this->assertSame('paid', $this->iceFor($s)['admission']['tier'], 'compat, before the central backend has spoken');
+
+        $this->central->put('customer', '498', 'remote', $this->centralEnvelope(498, ['state' => 'suspended']), time());
+
+        $this->assertSame('free', $this->iceFor($s)['admission']['tier']);
+        $this->assertSame('suspended', Services::iceConfigService()->licenceForSession(['company_id' => 498])->state->value);
+    }
+
+    public function testARevocationTakesEffectOnTheNextCredentialRequest(): void
+    {
+        $s = $this->sessionOn(499, 'REMOTE_FREE', 'revoked');
+        $this->central->put('customer', '499', 'remote', $this->centralEnvelope(499, ['revision' => 4]), time());
+        $this->assertSame('paid', $this->iceFor($s)['admission']['tier']);
+
+        $this->central->revoke('499', 'remote', 4, time());
+
+        $this->assertSame('free', $this->iceFor($s)['admission']['tier']);
+        $this->assertSame('revoked', Services::iceConfigService()->licenceForSession(['company_id' => 499])->reason);
+    }
+
+    public function testOneCompaniesEntitlementNeverMakesAnotherPaid(): void
+    {
+        $other = $this->sessionOn(500, 'REMOTE_FREE', 'other');
+        // A genuine, signed paid entitlement for company 497 — filed (wrongly or maliciously) under company 500.
+        $this->central->put('customer', '500', 'remote', $this->centralEnvelope(497), time());
+
+        $this->assertSame('free', $this->iceFor($other)['admission']['tier']);
+        $this->assertSame('identity_mismatch', Services::iceConfigService()->licenceForSession(['company_id' => 500])->reason);
+    }
+
+    public function testAForgedOrStaleCentralEntitlementIsNotPaid(): void
+    {
+        $s = $this->sessionOn(501, 'REMOTE_FREE', 'forged');
+        $forged = $this->centralEnvelope(501);
+        $forged['document']['plan_code'] = 'CENTRAL_ENTERPRISE';
+        $this->central->put('customer', '501', 'remote', $forged, time());
+        $this->assertSame('free', $this->iceFor($s)['admission']['tier']);
+        $this->assertSame('signature_invalid', Services::iceConfigService()->licenceForSession(['company_id' => 501])->reason);
+
+        $stale = $this->sessionOn(502, 'REMOTE_FREE', 'stale');
+        $this->central->put('customer', '502', 'remote', $this->centralEnvelope(502, ['issued_at' => gmdate('Y-m-d\TH:i:s\Z', time() - 4 * 86400)]), time());
+        $this->assertSame('free', $this->iceFor($stale)['admission']['tier']);
+        $this->assertSame('stale', Services::iceConfigService()->licenceForSession(['company_id' => 502])->reason);
+    }
+
+    public function testAPersonalSessionWithNoCompanyIsFree(): void
+    {
+        $this->assertSame('free', Services::iceConfigService()->tierForSession(['company_id' => null])->value);
+        $this->assertSame('no_customer', Services::iceConfigService()->licenceForSession(['company_id' => null])->reason);
     }
 
     public function testWithNoPaidPlansConfiguredEveryoneIsFree(): void

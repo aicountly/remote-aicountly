@@ -174,7 +174,7 @@ final class IceIssuer
             'wouldDeny' => $plan['wouldDeny'], 'failover' => $plan['failover'], 'degraded' => $plan['degraded'],
             'nodes' => array_map(static fn (array $n): string => (string) $n['id'], $relayNodes),
             'load' => array_map(static fn (AdmissionDecision $d): string => $d->load, $plan['decisions']),
-        ]);
+        ] + (is_array($options['licence'] ?? null) ? array_intersect_key($options['licence'], array_flip(['licence', 'licenceReason', 'licenceEvidence', 'plan'])) : []));
 
         return new IceGrant(
             iceServers: $iceServers,

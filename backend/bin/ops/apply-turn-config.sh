@@ -7,7 +7,7 @@
 # inject-turn-secrets.sh, which carries the secrets: this one carries everything else a TURN rollout sets
 # (nodes, regions, capacity, admission mode, ledger DSN, licence-feed settings) so it is reviewable and repeatable.
 #
-#   * Only WEBRTC_TURN_* / WEBRTC_STUN_* / WEBRTC_GEO_* keys are accepted — nothing else in the .env can be written.
+#   * Only WEBRTC_TURN_* / WEBRTC_STUN_* / WEBRTC_GEO_* / WEBRTC_LICENCE_* keys are accepted — nothing else in the .env can be written.
 #   * Anything that looks like a secret (…SECRET, …PASSWORD, …CREDENTIAL, …TOKEN, …KEY) is refused: those go through
 #     inject-turn-secrets.sh, so a secret never lands in a reviewable file.
 #   * Values: no spaces, quotes, '#' or '$' (each would break CodeIgniter's .env parser or expand).
@@ -43,7 +43,7 @@ if [ -t 0 ]; then
 fi
 [ -f "$env_file" ] || { echo "No .env at $env_file — create it from .env.example first." >&2; exit 3; }
 
-key_re='^WEBRTC_(TURN|STUN|GEO)_[A-Z0-9_]+$'
+key_re='^WEBRTC_(TURN|STUN|GEO|LICENCE)_[A-Z0-9_]+$'
 secret_re='(SECRET|PASSWORD|CREDENTIAL|TOKEN|PRIVATE|APIKEY|API_KEY)'
 value_re='^[A-Za-z0-9._~+/=:@%,;?&|*-]{1,400}$'
 
@@ -60,7 +60,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   value="${value#"${value%%[![:space:]]*}"}"; value="${value%"${value##*[![:space:]]}"}"
 
   if ! [[ "$key" =~ $key_re ]]; then
-    echo "Refused: '$key' is not a WEBRTC_TURN_/WEBRTC_STUN_/WEBRTC_GEO_ setting." >&2
+    echo "Refused: '$key' is not a WEBRTC_TURN_/STUN_/GEO_/LICENCE_ setting." >&2
     exit 2
   fi
   if [[ "$key" =~ $secret_re ]]; then

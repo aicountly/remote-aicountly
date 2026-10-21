@@ -58,6 +58,9 @@ $stores = Aicountly\Ice\IceRuntime::stores(
 // (bin/ingest-load.php) and learned client latency — so `probe.php --status --explain` shows what the API
 // would decide right now.
 return [
+    // For the licence tools (bin/sync-entitlements.php, bin/entitlement-fixture.php): the same environment and state directory.
+    'read'     => static fn (string $key): ?string => is_scalar($v = env($key)) ? (string) $v : null,
+    'dir'      => WRITEPATH,
     'topology' => $ice->topology(),
     'health'   => $stores['health'],
     'leases'   => $stores['leases'],

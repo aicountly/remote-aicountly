@@ -480,6 +480,7 @@ jobs:
           TURN_MUM_SECRET: ${{ secrets.SANDBOX_TURN_MUM_SECRET }}
           TURN_NCR_SECRET: ${{ secrets.SANDBOX_TURN_NCR_SECRET }}
           TURN_LEDGER_PASSWORD: ${{ secrets.SANDBOX_TURN_LEDGER_PASSWORD }}
+          LICENCE_S2S_SECRET: ${{ secrets.SANDBOX_LICENCE_S2S_SECRET }}
         run: |
           root="${REMOTE_ROOT#\~/}"
           {
@@ -487,6 +488,9 @@ jobs:
             printf 'WEBRTC_TURN_NODE_NCR_SECRET=%s\n' "$TURN_NCR_SECRET"
             # The shared capacity ledger's database password (docs/STAGING_TURN_DEPLOYMENT.md). Empty = not set = left alone.
             printf 'WEBRTC_TURN_LEDGER_PASSWORD=%s\n' "$TURN_LEDGER_PASSWORD"
+            # This product's AIC-S2S v1 secret for the CENTRAL licence API (docs/LICENCE_ENTITLEMENT_CONTRACT.md). The API is
+            # not built yet: while the secret is unset this line is empty and ignored.
+            printf 'WEBRTC_LICENCE_S2S_SECRET=%s\n' "$LICENCE_S2S_SECRET"
           } | ssh deploy-target "bash '$root/api/bin/ops/inject-turn-secrets.sh'"
 
       # Is the live site really Remote, and the build just deployed? The host's

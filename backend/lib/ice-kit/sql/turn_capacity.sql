@@ -53,3 +53,32 @@ CREATE TABLE IF NOT EXISTS turn_capacity_config (
     updated_at      bigint  NOT NULL,
     PRIMARY KEY (product, node_id)
 );
+
+-- ── Licence entitlement cache (Aicountly\Ice\Licence) ───────────────────────────────────────────────────────────
+-- Signed entitlement envelopes from the central licensing backend (docs/LICENCE_ENTITLEMENT_CONTRACT.md), shared by every
+-- product and host. NOT trusted storage: each envelope carries the central backend's Ed25519 signature and is
+-- re-verified when used, so a forged or edited row is ignored. Tenant isolation is by product_id in every key.
+CREATE TABLE IF NOT EXISTS aic_entitlement_cache (
+    scope       text   NOT NULL CHECK (scope IN ('customer', 'subject')),
+    ref         text   NOT NULL,
+    product_id  text   NOT NULL,
+    revision    bigint NOT NULL,
+    envelope    text   NOT NULL,
+    fetched_at  bigint NOT NULL,
+    PRIMARY KEY (scope, ref, product_id)
+);
+-- Revisions the central backend has revoked: a cached document at or below the revision is not trusted until a newer one arrives.
+CREATE TABLE IF NOT EXISTS aic_entitlement_revoked (
+    customer_id text   NOT NULL,
+    product_id  text   NOT NULL,
+    revision    bigint NOT NULL,
+    at          bigint NOT NULL,
+    PRIMARY KEY (customer_id, product_id)
+);
+-- How far each product has read the central changes feed, and when it last synced (the feed's heartbeat).
+CREATE TABLE IF NOT EXISTS aic_entitlement_sync (
+    product_id   text   PRIMARY KEY,
+    cursor_seq   bigint NOT NULL DEFAULT 0,
+    last_sync_at bigint,
+    last_full_at bigint
+);

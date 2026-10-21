@@ -1,5 +1,20 @@
 # Changelog — AICOUNTLY ICE kit
 
+## 1.4.0 — 2026-10-21
+
+The common licence-entitlement adapter (`Aicountly\Ice\Licence`, docs/LICENCE_ENTITLEMENT_CONTRACT.md). Remote and Connect consume
+centrally verified entitlements; neither is a licensing authority. Backward compatible: with nothing configured every customer is
+`unknown` → free capacity, and a product's legacy mapping can still stand in as `compat` evidence while `WEBRTC_LICENCE_COMPAT` is not `deny`.
+
+- **States** `free / paid / expired / suspended / unknown`; only a valid `paid` yields `Tier::Paid`, every doubt is free.
+- **Signed documents** (`Entitlement`, `Canonical`, `EntitlementVerifier`): Ed25519 over canonical JSON; products hold only the public key.
+- **Resolver** (`LicenceResolver`, `LicencePolicy`, `Resolution`): tenant check (customer / product / subject), freshness, revocation, validity window, paid kinds.
+- **Caches** (`EntitlementCache`: memory, file, PostgreSQL in the shared ledger) — untrusted storage, re-verified on use; a lower revision never replaces a higher.
+- **Central client and sync** (`AicS2s`, `CentralClient`, `EntitlementSync`, `bin/sync-entitlements.php`): AIC-S2S v1 signed GETs, snapshot + changes feed, revocation recorded before refetch.
+- **Readiness** (`LicenceReadiness`, `LicenceRuntime::readiness`): `enforce` stays `observe` until the central source is operational and validated.
+- **Tooling** `bin/entitlement-fixture.php` (keys / sign / load / revoke / resolve) for staging before the backend exists; conformance vectors `tests/contract/licence-v1-vectors.json`.
+- The issuer audit event carries `licence`, `licenceReason`, `licenceEvidence`, `plan` (never an identifier).
+
 ## 1.3.0 — 2026-10-21
 
 Shared capacity accounting, licence readiness and bandwidth-enforcement artifacts. Backward compatible: with no

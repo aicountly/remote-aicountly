@@ -266,8 +266,13 @@ Paid clients prefer their own instance (lower `priority`) and spill into the sha
   (`reason = ledger_unavailable`). In `observe` nobody is refused.
 * **Reconciliation.** `bin/reconcile.php` compares the books with the collector's measurement and with the relay's own per-tier byte
   counts (report-only; leaked leases lapse with their credentials rather than being dropped).
-* **Licence readiness gate.** `enforce` runs as `observe` — and `status.enforceBlockedBy` says why — until the product reports no
-  blockers (feed attested, freshness bounded, every plan mapped, the entitlement table populated and recently written).
+* **Licence entitlements (kit 1.4.0).** Who is paid is decided by the **central licensing backend**, not by Remote or Connect
+  (`docs/LICENCE_ENTITLEMENT_CONTRACT.md`). A common adapter reads its Ed25519-signed entitlements — states free / paid / expired /
+  suspended / unknown, tenant-checked, fresh, revocable — and only a valid `paid` yields the paid capacity class; every doubt is free.
+  The old per-product mappings (Remote's `WEBRTC_TURN_PAID_PLAN_CODES`, Connect's `connect_license_tier`) are a **development-time
+  compatibility path** with weaker evidence. **Licence readiness gate:** `enforce` runs as `observe` — and `status.enforceBlockedBy` says why —
+  until the central API is configured and syncing, keys are present, the maximum age is set, compat is denied and an operator has attested
+  validation. During development the mode stays `observe`; the 50 % reservation and the Mumbai/NCR routing are unaffected.
 * **Bandwidth.** §9's optional hard separation is now a concrete, locally exercised design (`infra/tier-split/`): two coturn instances
   per host, and an nftables-classified HTB shaper that guarantees the paid class its share of the NIC whatever the shared class
   offers. **Proposal for the infrastructure team; untested on the real nodes.**

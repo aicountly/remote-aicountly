@@ -78,7 +78,7 @@ final class ApplyTurnConfigTest extends TestCase
 
     public function testSecretsAreRefusedAndPointedAtTheStdinInjector(): void
     {
-        foreach (['WEBRTC_TURN_NODE_MUM_SECRET', 'WEBRTC_TURN_STATIC_AUTH_SECRET', 'WEBRTC_TURN_LEDGER_PASSWORD', 'WEBRTC_TURN_CREDENTIAL'] as $key) {
+        foreach (['WEBRTC_TURN_NODE_MUM_SECRET', 'WEBRTC_TURN_STATIC_AUTH_SECRET', 'WEBRTC_TURN_LEDGER_PASSWORD', 'WEBRTC_TURN_CREDENTIAL', 'WEBRTC_LICENCE_S2S_SECRET'] as $key) {
             [$code, $out] = $this->apply($key . "=abcdefghijklmnopqrstuvwxyz\n");
             $this->assertSame(2, $code, $key);
             $this->assertStringContainsString('inject-turn-secrets.sh', $out);
@@ -133,5 +133,13 @@ final class ApplyTurnConfigTest extends TestCase
         unlink($this->env);
         [$code] = $this->apply("WEBRTC_TURN_ADMISSION=observe\n");
         $this->assertSame(3, $code);
+    }
+
+    public function testTheCentralLicenceSettingsAreConfigurationNotSecrets(): void
+    {
+        [$code, $out] = $this->apply("WEBRTC_LICENCE_API_URL=https://licence.example.test/api\nWEBRTC_LICENCE_ENVIRONMENT=sandbox\nWEBRTC_LICENCE_COMPAT=allow\nWEBRTC_LICENCE_PUBLIC_KEYS=stg-1=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n");
+
+        $this->assertSame(0, $code, $out);
+        $this->assertStringContainsString('WEBRTC_LICENCE_COMPAT = allow', (string) file_get_contents($this->env));
     }
 }

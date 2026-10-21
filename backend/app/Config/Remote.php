@@ -183,27 +183,21 @@ class Remote extends BaseConfig
     public int $turnSessionTtlMax = 28800;
 
     /**
-     * Plans (remote_entitlements.plan_code) whose companies are PAID for relay capacity: they share the
-     * reserved half of every TURN node. Empty — the default — means nobody is, so the reserve cannot be
-     * handed out by accident. Upper-case codes, comma separated.
+     * LEGACY / COMPATIBILITY ONLY. Who is paid is decided by the central licensing backend (docs/LICENCE_ENTITLEMENT_CONTRACT.md):
+     * its signed entitlement says the plan class and the state, and the common adapter (lib/ice-kit, Licence\LicenceResolver)
+     * reads it. Until that backend exists, and only while WEBRTC_LICENCE_COMPAT is not `deny`, a company's own
+     * `remote_entitlements.plan_code` on this list is accepted as PAID with evidence `compat` — enough to label the books in
+     * `observe` mode, never enough to enforce (the readiness gate refuses enforcement while compat is on). Plan codes are
+     * expected to become the central catalogue's codes. Upper-case, comma separated.
      *
      * @var list<string>
      */
     public array $turnPaidPlanCodes = [];
 
     /**
-     * Plans that are explicitly NOT paid. Together with the paid list this is the whole mapping: a plan code that
-     * a company's entitlement row carries and that is on neither list is "unmapped", and while any is, enforcement
-     * is held back to observe (docs/ACTIVE_ACTIVE_TURN.md § licence policy).
-     *
-     * @var list<string>
+     * Compat only: a legacy entitlement row not updated for this many hours is not accepted as paid. The central path has its
+     * own, stricter limit (the same WEBRTC_TURN_ENTITLEMENT_MAX_AGE_HOURS bounds the age of a signed central document). 0 = no limit.
      */
-    public array $turnFreePlanCodes = ['REMOTE_FREE'];
-
-    /** `confirmed` once an operator attests that company entitlements are fed from the billing system of record. */
-    public bool $turnLicenceFeedConfirmed = false;
-
-    /** An entitlement row not updated for this many hours is not trusted as paid (a dead feed must not mean paid forever). 0 = no limit. */
     public int $turnEntitlementMaxAgeHours = 0;
 
     /** Where the scheduled TURN probe records node health (lib/ice-kit/bin/probe.php --write-health). */
@@ -344,9 +338,6 @@ class Remote extends BaseConfig
         }
         $this->turnHealthFile = $this->envString('WEBRTC_TURN_HEALTH_FILE', WRITEPATH . 'ice/turn-health.json');
         $this->turnPaidPlanCodes    = array_map('strtoupper', $this->envList('WEBRTC_TURN_PAID_PLAN_CODES'));
-        $free                       = array_map('strtoupper', $this->envList('WEBRTC_TURN_FREE_PLAN_CODES'));
-        $this->turnFreePlanCodes    = $free !== [] ? $free : $this->turnFreePlanCodes;
-        $this->turnLicenceFeedConfirmed   = strtolower($this->envString('WEBRTC_TURN_LICENCE_FEED', '')) === 'confirmed';
         $this->turnEntitlementMaxAgeHours = max(0, $this->envInt('WEBRTC_TURN_ENTITLEMENT_MAX_AGE_HOURS', 0));
         $this->turnRestartOnRenewal = $this->envBool('WEBRTC_TURN_RESTART_ON_RENEWAL', $this->turnRestartOnRenewal);
         $this->turnSessionTtlMax    = max(60, min(86400, $this->envInt('WEBRTC_TURN_SESSION_TTL_MAX', $this->turnSessionTtlMax)));

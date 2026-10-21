@@ -1,114 +1,81 @@
-# Licence entitlements for TURN admission — audit, mapping and feed (Remote and Connect)
+# Licence entitlements for TURN admission — audit and status (Remote and Connect)
 
 Identical in `aicountly/remote-aicountly` and `aicountly/connect-aicountly`.
 
-**Rule.** A user is *paid* for relay capacity only if a **trusted, current subscription entitlement** says so. Never
-from anything the client sends (a request field, a header, a JWT claim the client can influence, a UI flag). Every
-doubt — no row, unknown plan, expired, stale, unreadable, no database — resolves to **free**.
+> **Superseded in direction by the confirmed architecture** — a centralised licensing module (engage = staff allocation, manage =
+> customer view, a **central backend = the one authority**) that Remote and Connect *consume*. The contract, the common adapter and
+> the rollout are in **`docs/LICENCE_ENTITLEMENT_CONTRACT.md`**. This document keeps what was *audited* (what exists today, what does
+> not) and the **status of every licensing integration**. An earlier version of this audit proposed a Manage-internal "company
+> entitlements" endpoint feeding per-product mirror tables; that proposal is **withdrawn** — it would have created a second licensing
+> path beside the central one.
 
-**Status of enforcement.** `WEBRTC_TURN_ADMISSION=enforce` is **held at `observe`** by a readiness gate until the
-mappings and the feed below are complete (`enforceBlockedBy` in `probe.php --status`, `/health` and the audit log
-shows why). Staging runs in `observe`. **Nothing here enables enforcement.**
+**Rule (unchanged).** A user is *paid* for relay capacity only if a **trusted, current, server-side entitlement** says so — never
+from anything the client sends. Every doubt resolves to **free**.
 
-## 1. What was audited
+**Enforcement.** `WEBRTC_TURN_ADMISSION` is `observe` everywhere during development. A readiness gate forces `observe` even if
+`enforce` is configured, until the central source is operational and validated (`enforceBlockedBy` in `probe.php --status`, and an
+`enforce_blocked` audit event). **Nothing here enables enforcement.** See contract §10–§11.
 
-Repositories read: `remote-aicountly`, `connect-aicountly`, `manage-aicountly`, `engage-aicountly`, `my-aicountly-com`
-(the portal), `finance-aicountly`, `apis-aicountly`, `integrate-aicountly`. Findings are about the code on their default
-branches on 2026-10-21.
+## 1. What was audited (2026-10-21)
 
-## 2. The authoritative source
+Repositories read: `remote-aicountly`, `connect-aicountly`, `manage-aicountly`, `engage-aicountly`, `my-aicountly-com` (portal),
+`finance-aicountly`, `apis-aicountly`, `integrate-aicountly`.
 
-| Fact | Where | Verdict |
+| Fact | Where | Consequence |
 |---|---|---|
-| A company's subscription to an app is a row in **Manage `ghm_subscription`**: `cmp_id`, `app_key` (`remote`, `chat`, …), `kind` ∈ {`paid`,`trial`,`complimentary`}, `status` ∈ {`active`,`cancelled`,`expired`,`restricted`,`purge_pending`,`purged`}, `current_period_end`, `source` ∈ {`manual`,`payment`} | `manage-aicountly/server-php/database/migrations/018_subscription_lifecycle.sql` | **The system of record** for "does this company have a paid subscription to this product, and until when" |
-| Manage's rows are backed by **Engage licences** (`engage_licences`: `product_code`, `licence_type_code` → `lifecycle_kind` paid/trial/complimentary, `plan_code`, `app_keys[]`, `starts_at`, `ends_at`, `status`); Finance issues the invoices | `engage-aicountly/docs/LICENSING.md`, `manage-aicountly/docs/BILLING_INTEGRATION.md` | Upstream of Manage. Engage → Manage entitlement event is **"Phase B, not built"** |
-| Today every `ghm_subscription` row is `source = 'manual'` (operator-entered); `payment` is reserved for the unbuilt payment integration | same | Trusted (operators), but **not automated** |
-| **Products cannot read it.** `internal/company-status` and `companyinfo` expose only the *lifecycle* (`active`/`restricted`/`purge_pending`) — never `kind`, `plan`, or the end date. The portal (`my.aicountly.com`) `validatesession`/`userprofile` carry no licence data at all | `manage-aicountly/server-php/src/Lifecycle/CompanyLifecycleView.php`, `docs/INTERNAL_PRODUCT_APIS.md` | **There is no product-facing "is this company paid" endpoint.** This is the gap |
+| Manage holds `ghm_subscription` (company × app: `kind` paid/trial/complimentary, `status`, `current_period_end`; app keys `remote`, `chat`), today operator-entered (`source = 'manual'`); Engage holds `engage_licences` (`licence_ref`, `product_code`, `licence_type_code` → `lifecycle_kind`, `plan_code`, `starts_at`, `ends_at`, `status`) | `manage-aicountly/server-php/database/migrations/018_subscription_lifecycle.sql`; `engage-aicountly/docs/LICENSING.md` | These are the *inputs* to the central module the business has now confirmed; they are not read by products and were never meant to be |
+| Products can see only a company's lifecycle (`active`/`restricted`/`purge_pending`) through `companyinfo` / `internal/company-status` — never `kind`, plan or end date. The portal's `validatesession`/`userprofile` carry no licence data | `manage-aicountly/server-php/src/Lifecycle/CompanyLifecycleView.php`, `docs/INTERNAL_PRODUCT_APIS.md` | A product cannot learn "paid" from anything that exists today |
+| Engage → Manage entitlement event: "Phase B, not built"; checkout/payments not built | `manage-aicountly/docs/BILLING_INTEGRATION.md` | The central module is genuinely new work |
 
-**Conclusion.** The authoritative source is `ghm_subscription` in Manage (kind = `paid`, status = `active`, period not
-ended). The missing piece is an authenticated way to hand that to Remote and Connect.
-
-## 3. Recommended feed (a proposal — not built)
-
-Add to Manage, beside `internal/company-status`, **`GET /api/internal/company-entitlements?ids=…&app=remote|chat`**
-(product service key, same authentication as `company-status`), answering per company
-`{cmp_id, app_key, kind, status, current_period_end, as_of}` straight from `ghm_subscription`. A scheduled **pull** in each
-product (every 15 min, plus on demand when a company is first seen) upserts the product's local mirror:
-
-| Product | Mirror | Written by | Key |
-|---|---|---|---|
-| Remote | `remote_entitlements` (`company_id`, `plan_code`, `valid_from`, `valid_until`, `updated_at`) | the pull job | company |
-| Connect | `connect_license_tier` (`user_uuid`, `tier`, `valid_until`, `source`, `updated_at`) | the pull job | user (via company membership — see §5) |
-
-Why pull rather than push: a pull job's `updated_at` is the heartbeat that lets the product notice a stopped feed
-(**freshness**, §4), and it needs no inbound endpoint on a shared host. A push from Engage would also work if it rewrites
-rows on a schedule so the heartbeat exists. **Both need Manage/Engage engineering — not done here.**
-
-## 4. What the products enforce today (implemented and tested)
-
-| Rule | Remote (`App\Domain\Signalling\IceConfigService`) | Connect (`App\Services\Calling\LicenceTierResolver`) |
-|---|---|---|
-| Source of truth | only **the company's own** `remote_entitlements` row — **never** the platform-default row (`company_id IS NULL`, seeded `REMOTE_PROFESSIONAL`, a feature set, not a purchase) | only a `connect_license_tier` row for that user |
-| Paid means | `plan_code` ∈ `WEBRTC_TURN_PAID_PLAN_CODES` | `tier = 'paid'` |
-| Validity window | `valid_from ≤ now < valid_until` (database clock) | `now < valid_until` |
-| Freshness | row `updated_at` within `WEBRTC_TURN_ENTITLEMENT_MAX_AGE_HOURS`, else free | same |
-| Free | everything else | everything else |
-| Client input | never consulted | never consulted |
-| Readiness gate (`enforce` → `observe` while any blocker) | empty paid list; `WEBRTC_TURN_LICENCE_FEED` ≠ `confirmed`; max age unset; `REMOTE_FREE` listed as paid; **any plan code in use that is in neither list**; no company has an entitlement row; table unreadable | `WEBRTC_TURN_LICENCE_FEED` ≠ `confirmed`; max age unset; table empty; table not written within max age; table unreadable |
-
-`WEBRTC_TURN_LICENCE_FEED=confirmed` is an **operator attestation** that the feed in §3 exists, covers every paying
-company and is running. Setting it without that is a configuration error the code cannot detect; it is the one place a
-person, not the code, vouches. The freshness check is the code's backstop: a feed that stops, stops conferring paid status.
-
-## 5. Remote — the actual plan catalogue (audit result)
+## 2. Remote — the actual plan catalogue (audit result)
 
 `remote_entitlements.plan_code` values that **exist in the repository**:
 
 | Code | Where | What it is | Paid? |
 |---|---|---|---|
-| `REMOTE_FREE` | column default (`2026-01-05-000200_CreateRemotePolicyTables`); `EffectivePolicyResolver` fallback when no row | a company with no entitlement row | **Free** |
-| `REMOTE_PROFESSIONAL` | `RemotePlatformDefaultsSeeder` — the **platform-default** row (`company_id IS NULL`) | the feature ceiling applied to companies *without* their own row (120-minute sessions, recording off, …); not a purchase | **Not a paid signal** — the code ignores this row for tier |
+| `REMOTE_FREE` | column default; `EffectivePolicyResolver` fallback when a company has no row | no entitlement row | free |
+| `REMOTE_PROFESSIONAL` | `RemotePlatformDefaultsSeeder` — the **platform-default** row (`company_id IS NULL`) | the feature ceiling for companies without their own row; not a purchase | **never a paid signal** — the adapter's compat path ignores this row |
 
-**Nothing in the repository writes a per-company row** (only the seeder, for the default). The docs say "billing is
-Manage's" (`docs/COMPANY_LIFECYCLE.md`). So today: no company can be paid, and `WEBRTC_TURN_PAID_PLAN_CODES` cannot be
-completed from the code: **the paid plan codes are a business fact not present in any repository.** The earlier example
-value `REMOTE_BUSINESS,REMOTE_ENTERPRISE` in `.env.example` is a placeholder, not a catalogue.
+**Nothing in the repository writes a per-company row** (only the seeder, for the default); the docs say "billing is Manage's". So there
+is **no Remote paid plan code anywhere in the codebase**. Under the new architecture that is correct: the *central catalogue* will
+own plan codes and their `plan_class`; Remote's `plan_code` becomes a mirror of the central code (contract §9), and
+`WEBRTC_TURN_PAID_PLAN_CODES` survives only as a development-time compatibility list (`STAGING_PAID_TEST` in the sandbox).
 
-Mapping decisions needed (Remote):
+## 3. Status of every licensing integration
 
-1. The list of Remote plan codes that exist in Engage's catalogue (`engage_offers.plan_code` for `product_code` = remote) and
-   which are paid. Trial and complimentary kinds: **recommended free for relay priority** (a trial must not hold the
-   protected reserve), unless the business decides otherwise.
-2. Who maps Manage's `kind`/`plan` onto `remote_entitlements.plan_code` — the pull job in §3, and its owner.
+| # | Integration | Status | Notes |
+|---|---|---|---|
+| L1 | **Common licence-entitlement adapter** in the shared kit (`Aicountly\Ice\Licence`): states `free/paid/expired/suspended/unknown`, document validation, Ed25519 verification, resolver, caches (memory/file/PostgreSQL), AIC-S2S client, snapshot+changes sync with revocation, readiness | **Built, tested** | `LicenceTest`, `LicenceContractVectorsTest` (21 vectors) |
+| L2 | Wire contract, JSON Schema, conformance vectors for the licensing team | **Built** (a proposal for them to accept or change) | `docs/LICENCE_ENTITLEMENT_CONTRACT.md`, `docs/contracts/licence-entitlement-v1.schema.json`, `tests/contract/` |
+| L3 | **Remote** consumes it: company → product `remote`; central evidence overrides the legacy mapping; `plan_code` mirror semantics documented | **Built, tested** | `ActiveActiveIceApiTest` (central paid, central suspended beats compat paid, revocation, cross-tenant, forged, stale) |
+| L4 | **Connect** consumes it: user → product `chat`; meeting guest → host; `connect_license_tier` demoted to a temporary compat cache | **Built, tested** | `LicenceTierResolverTest`, `IceConfigServiceAdmissionTest` |
+| L5 | Staging without the central module: signed fixtures (`bin/entitlement-fixture.php keys/sign/load/revoke/resolve`) exercising the real signature, freshness and revocation path | **Built, tested** | staging key's private half never on the API host |
+| L6 | **Central licensing backend** (server side of the contract) | **Pending — not built** | the licensing module team |
+| L7 | Engage writes / Manage reads the central backend | **Pending** | licensing module |
+| L8 | Central signing-key custody and rotation; per-product AIC-S2S client ids and secrets | **Pending** | licensing + ops |
+| L9 | Scheduled `sync-entitlements` job on the API hosts; `SANDBOX_LICENCE_S2S_SECRET` repository secrets | **Not installed** (nothing to sync; the workflows already carry the secret through stdin when it is set) | ops, after L6 |
+| L10 | Mapping the document's `entitlements` onto `remote_entitlements` feature columns | **Pending** (not a TURN item) | needs the central entitlement-code catalogue |
+| L11 | Connect's unit (user vs seat) and trial/complimentary treatment (default: not paid capacity) | **Pending — business decision** | contract §4, §13 |
+| L12 | Optional signed revocation push to the products | **Not built; optional** | the poll is the guarantee |
+| L13 | Runtime database role of each product: SELECT-only on any compat table | **Not done**; matters less now (central documents are signed, compat rows are not trusted for enforcement) | ops |
+| L14 | Shadow comparison of central vs compat for every paying customer; then `WEBRTC_LICENCE_COMPAT=deny` | **Pending** (needs L6) | contract §11 phase 2–3 |
 
-## 6. Connect — the authoritative source and the tier unit
+## 4. Completion checklist before `enforce`
 
-Connect has no licence data of its own (`connect_license_tier` is empty and nothing writes it). Manage's `app_key` for
-Connect is `chat`. Two decisions are open:
+- [ ] L6–L8: the central backend exists, signs documents, products hold its public key and an AIC-S2S secret
+- [ ] L9: sync job installed on each API host; `lastSyncAt` fresh
+- [ ] L11: Connect unit and trial/complimentary decided
+- [ ] L14: shadow comparison clean; `WEBRTC_LICENCE_COMPAT=deny`
+- [ ] `WEBRTC_TURN_ENTITLEMENT_MAX_AGE_HOURS` set; `probe.php --status` shows `enforceBlockedBy: []` in each product in staging with real data
+- [ ] Capacities measured and the bandwidth shaper load-tested (`docs/TURN_BANDWIDTH_ENFORCEMENT.md`)
+- [ ] Operator sets `WEBRTC_TURN_LICENCE_FEED=confirmed`; approval recorded
+- [ ] Only then `WEBRTC_TURN_ADMISSION=enforce`, in staging first (`apply-turn-config.sh --allow-enforce`)
 
-* **Unit.** Subscriptions belong to a **company**, relay credentials are requested by a **user** (and, in a meeting room,
-  billed to the **host**). A user can belong to several companies. Recommended: a user is paid if **any** company they
-  belong to holds an active `paid` `chat` subscription; the pull job resolves membership (Manage `company-membership`) and
-  writes `connect_license_tier(user_uuid, tier, valid_until)`. Alternatives (per seat, per active company) are business choices.
-* **Guests** in a room have no account: they are accounted to the host's tier (implemented, `RoomService`).
+## 5. Security notes
 
-## 7. Completion checklist before `enforce`
-
-- [ ] Paid plan codes confirmed by the business and set in `WEBRTC_TURN_PAID_PLAN_CODES`; free codes in `WEBRTC_TURN_FREE_PLAN_CODES`
-- [ ] `GET /api/internal/company-entitlements` (or equivalent) built in Manage; pull job in Remote and in Connect
-- [ ] Trial / complimentary decision recorded
-- [ ] Connect tier unit decided (§6)
-- [ ] `probe.php --status` shows `enforceBlockedBy: []` for each product in staging with real data
-- [ ] A dry-run diff: for every paying company in Manage, the product's mirror says paid (and the reverse) — zero mismatches
-- [ ] Operator sets `WEBRTC_TURN_LICENCE_FEED=confirmed` and `WEBRTC_TURN_ENTITLEMENT_MAX_AGE_HOURS` (recommended 48)
-- [ ] Only then: `WEBRTC_TURN_ADMISSION=enforce` in staging first, via `apply-turn-config.sh --allow-enforce`
-
-## 8. Security notes
-
-* The mirror tables are written only by the pull job's database role. Give the API's runtime role **SELECT only** on them
-  where the host allows it — a compromised request handler must not be able to promote a user. (Not yet done; today the
-  runtime role can write — `database/16_connect_license_tier.sql` grants it.)
-* The tier is signed into the TURN username (`p.` / `f.`) by the API, so the relay's own log attributes traffic to a tier
-  that a client cannot forge (`UsageLog`, `bin/summarize-usage.php`). A client cannot change its tier by editing a request.
-* A failed lookup is **free**, never an error that grants. A paying customer is briefly treated as free during an outage of
-  the mirror — and then only when the free pool is full.
+* The signature, not the storage, is the trust anchor: the cache tables can be written by an application role without that role being
+  able to make anyone paid. Compat rows are unsigned and therefore only ever label the books in `observe`.
+* The tier is signed into the TURN username (`p.` / `f.`) by the API, so the relay's own log attributes traffic to a tier a client
+  cannot forge (`UsageLog`, `bin/summarize-usage.php`).
+* A failed lookup is **free**, never an error that grants. A paying customer is briefly treated as free during an outage — and then
+  only when the free pool is full.

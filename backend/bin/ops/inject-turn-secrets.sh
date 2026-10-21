@@ -8,7 +8,8 @@
 #
 #   * STDIN only. A secret in an argument is in `ps`, in shell history and in a workflow log.
 #   * Only these keys are accepted — WEBRTC_TURN_STATIC_AUTH_SECRET, WEBRTC_TURN_NODE_<ID>_SECRET and
-#     WEBRTC_TURN_LEDGER_PASSWORD (the shared capacity ledger's database password; it may never equal a TURN secret).
+#     WEBRTC_TURN_LEDGER_PASSWORD (the shared capacity ledger's database password; it may never equal a TURN secret) and
+#     WEBRTC_LICENCE_S2S_SECRET (this product's AIC-S2S v1 secret for the central licence API; likewise never a TURN secret).
 #     Anything else is refused, so this cannot be turned into a general .env writer.
 #   * A value must look like a secret: 16..256 characters of [A-Za-z0-9._~+/=:@%-]. That refuses a
 #     placeholder ("changeme", "<secret>"), and every character that would make CodeIgniter's .env
@@ -43,7 +44,7 @@ if [ -t 0 ]; then
 fi
 [ -f "$env_file" ] || { echo "No .env at $env_file — create it from .env.example first." >&2; exit 3; }
 
-key_re='^WEBRTC_TURN_(STATIC_AUTH_SECRET|LEDGER_PASSWORD|NODE_[A-Z0-9_]+_SECRET)$'
+key_re='^WEBRTC_(TURN_(STATIC_AUTH_SECRET|LEDGER_PASSWORD|NODE_[A-Z0-9_]+_SECRET)|LICENCE_S2S_SECRET)$'
 value_re='^[A-Za-z0-9._~+/=:@%-]{16,256}$'
 
 keys=()
@@ -57,7 +58,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   value="${line#*=}"
 
   if ! [[ "$key" =~ $key_re ]]; then
-    echo "Refused: '$key' is not an injectable key (WEBRTC_TURN_STATIC_AUTH_SECRET, WEBRTC_TURN_NODE_<ID>_SECRET or WEBRTC_TURN_LEDGER_PASSWORD)." >&2
+    echo "Refused: '$key' is not an injectable key (WEBRTC_TURN_STATIC_AUTH_SECRET, WEBRTC_TURN_NODE_<ID>_SECRET, WEBRTC_TURN_LEDGER_PASSWORD or WEBRTC_LICENCE_S2S_SECRET)." >&2
     exit 2
   fi
   if [ -z "$value" ]; then
@@ -91,13 +92,13 @@ if [ "$allow_shared" -eq 0 ]; then
   done
 fi
 
-# The ledger password protects a database, not a relay: it must differ from every TURN secret (no override).
+# The ledger password and the licence secret protect a database and a licensing API, not a relay: each must differ from every other secret (no override).
 for i in "${!keys[@]}"; do
-  [ "${keys[$i]}" = "WEBRTC_TURN_LEDGER_PASSWORD" ] || continue
+  case "${keys[$i]}" in WEBRTC_TURN_LEDGER_PASSWORD | WEBRTC_LICENCE_S2S_SECRET) ;; *) continue ;; esac
   for j in "${!keys[@]}"; do
     [ "$j" -eq "$i" ] && continue
     if [ "${values[$i]}" = "${values[$j]}" ]; then
-      echo "Refused: WEBRTC_TURN_LEDGER_PASSWORD and ${keys[$j]} carry the same value; the ledger password must be its own." >&2
+      echo "Refused: ${keys[$i]} and ${keys[$j]} carry the same value; a ledger or licence secret must be its own." >&2
       exit 2
     fi
   done

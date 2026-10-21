@@ -1,0 +1,969 @@
+{
+    "contract": "aicountly.licence/1",
+    "note": "TEST VECTORS ONLY. The key below is derived from a published seed and signs nothing real. Regenerate with tests/contract/generate-vectors.php.",
+    "public_key": {
+        "kid": "contract-test-1",
+        "alg": "ed25519",
+        "value": "MDX9QYRLfjf4d6YIkxbLe8YQLkcXYWTGsPtVklCuLAY="
+    },
+    "policy": {
+        "max_age_seconds": 172800,
+        "paid_kinds": [
+            "paid"
+        ]
+    },
+    "cases": [
+        {
+            "name": "paid_valid",
+            "why": "A signed, fresh, current paid licence of an allowed kind.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "subject": null,
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "state": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "Oe6IRiyv9A6hVohF4hpqbslGmPPDkcG928zajdivuXCVFhW8ev229Q/aDlieQiVniYxEg0leNqu1HjimUFGDDQ=="
+                }
+            },
+            "expect": {
+                "state": "paid",
+                "tier": "paid",
+                "reason": "paid"
+            }
+        },
+        {
+            "name": "free_plan",
+            "why": "The customer is on a free plan.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "state": "free",
+                    "licence_id": null,
+                    "plan_code": "REMOTE_FREE",
+                    "plan_class": "free",
+                    "kind": "free",
+                    "valid_until": null,
+                    "entitlements": [],
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "subject": null,
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "/zrUOvory1WGT09kZMNUWViaEzBysUdUoJPsT2GPpKH36ym6Ih0y0UPRBP3mv48Pzvo3ZXMrggoNfqxzXe4mCw=="
+                }
+            },
+            "expect": {
+                "state": "free",
+                "tier": "free",
+                "reason": "free"
+            }
+        },
+        {
+            "name": "state_expired",
+            "why": "The backend states the licence has expired.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "state": "expired",
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "subject": null,
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "HZBE+MKTt84VA0gB/2xNYMRbQrANSbZS+vEXxzbIpoyJMzWs30FHoAPx/xuTIyZm9T0quXP3eMpP4RjQ+sF/Bw=="
+                }
+            },
+            "expect": {
+                "state": "expired",
+                "tier": "free",
+                "reason": "expired"
+            }
+        },
+        {
+            "name": "valid_until_passed",
+            "why": "State still says paid but valid_until has passed by the time of use.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "valid_until": "2027-01-15T07:59:00Z",
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "subject": null,
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "state": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "SJ1n7UzzBOweSxNK90O2GpRzNsOpEVCx4vxXezHjTXMicQdQ1dEpwK8LzCMBT1cHvAsSljJpzm/BJ3CGUy/lAg=="
+                }
+            },
+            "expect": {
+                "state": "expired",
+                "tier": "free",
+                "reason": "valid_until_passed"
+            }
+        },
+        {
+            "name": "state_suspended",
+            "why": "The backend states the licence is suspended.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "state": "suspended",
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "subject": null,
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "Vg0qWiyr1ZaBVtJwVatIoU06j3fWjXpCKItx8Gbh6BZEThKFfh7WisiKS9ZEzWsZq+om7opaGM8xaec8elPVCg=="
+                }
+            },
+            "expect": {
+                "state": "suspended",
+                "tier": "free",
+                "reason": "suspended"
+            }
+        },
+        {
+            "name": "state_unknown",
+            "why": "The backend itself does not know.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "state": "unknown",
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "subject": null,
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "v4VJ4tK+nbW6VBdhcblNFw6Q50TmSLWrz7YWrvXuogqkqASZlV27F7yu1GaQoSJYf4ehsKNW25xab2+uQ3pgBA=="
+                }
+            },
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "central_unknown"
+            }
+        },
+        {
+            "name": "stale_document",
+            "why": "Issued more than the maximum age (48 h) before use: a stopped feed or a replay is not trusted.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "issued_at": "2027-01-12T08:00:00Z",
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "subject": null,
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "state": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "q/dCHfNfM2KjljjXxqaOUNnt/nL+04ovPaZGmmqDvOKMizbj4n2UMWH3P9A1IJpIESJ82roIGyXJxLRCmKQgBg=="
+                }
+            },
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "stale"
+            }
+        },
+        {
+            "name": "issued_in_future",
+            "why": "Issued after \"now\" by more than the clock-skew allowance.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "issued_at": "2027-01-15T09:00:00Z",
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "subject": null,
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "state": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "kZHHbsrEUOA6MP57jWj/lsAmwbKUAj7YmCv9Mz2gWV61rzSrU28Ee9zbjrE7IeY3sPYv2w6+lItE4Zy3WhgxDg=="
+                }
+            },
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "issued_in_future"
+            }
+        },
+        {
+            "name": "not_yet_valid",
+            "why": "valid_from is in the future.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "valid_from": "2027-01-15T09:00:00Z",
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "subject": null,
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "state": "paid",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "O1LbbwXytwOMyGMZQnCpIlfv4c7ZF5/VxAuAydcJnUIOzJpKEjDnPiKcdArP5HALq5ZJOOyK06kTiqgRtfOACg=="
+                }
+            },
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "not_yet_valid"
+            }
+        },
+        {
+            "name": "trial_is_not_paid_capacity",
+            "why": "A paid-state trial: the default policy admits kind \"paid\" only.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "kind": "trial",
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "subject": null,
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "state": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "L/LxqvRjPq+YD4BbhF9xECO6/J5KyZR9xRY/UVIDikldAEmXUdsw+RXu0VpzQDw9SefVI61WatsSygHyt/uEBQ=="
+                }
+            },
+            "expect": {
+                "state": "free",
+                "tier": "free",
+                "reason": "kind_not_paid"
+            }
+        },
+        {
+            "name": "revoked_revision",
+            "why": "A revocation at or above the document revision was recorded; revocation beats a still-valid-looking document.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": 5,
+            "envelope": {
+                "document": {
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "subject": null,
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "state": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "Oe6IRiyv9A6hVohF4hpqbslGmPPDkcG928zajdivuXCVFhW8ev229Q/aDlieQiVniYxEg0leNqu1HjimUFGDDQ=="
+                }
+            },
+            "expect": {
+                "state": "suspended",
+                "tier": "free",
+                "reason": "revoked"
+            }
+        },
+        {
+            "name": "revoked_older_revision_only",
+            "why": "A revocation of an OLDER revision does not affect a newer document.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": 4,
+            "envelope": {
+                "document": {
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "subject": null,
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "state": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "Oe6IRiyv9A6hVohF4hpqbslGmPPDkcG928zajdivuXCVFhW8ev229Q/aDlieQiVniYxEg0leNqu1HjimUFGDDQ=="
+                }
+            },
+            "expect": {
+                "state": "paid",
+                "tier": "paid",
+                "reason": "paid"
+            }
+        },
+        {
+            "name": "tampered_field",
+            "why": "A field edited after signing.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "subject": null,
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_ENTERPRISE",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "state": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "Oe6IRiyv9A6hVohF4hpqbslGmPPDkcG928zajdivuXCVFhW8ev229Q/aDlieQiVniYxEg0leNqu1HjimUFGDDQ=="
+                }
+            },
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "signature_invalid"
+            }
+        },
+        {
+            "name": "unsigned",
+            "why": "No signature at all.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "subject": null,
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "state": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                }
+            },
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "signature_invalid"
+            }
+        },
+        {
+            "name": "signed_by_another_key",
+            "why": "Signed by a key the product does not hold, under a known key id.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "subject": null,
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "state": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "PU/amCXF1NabdRZsggtLYak6+WuCsENPhQGaX6PmRtSgWoNzWReRYrGVES6TKEPBw4qqFKZTy4FnE7lVC62QDQ=="
+                }
+            },
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "signature_invalid"
+            }
+        },
+        {
+            "name": "unknown_key_id",
+            "why": "Signed correctly but under a key id the product does not hold.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "subject": null,
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "state": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "rotated-away-key",
+                    "value": "Oe6IRiyv9A6hVohF4hpqbslGmPPDkcG928zajdivuXCVFhW8ev229Q/aDlieQiVniYxEg0leNqu1HjimUFGDDQ=="
+                }
+            },
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "signature_invalid"
+            }
+        },
+        {
+            "name": "wrong_customer",
+            "why": "A genuine paid document for customer 99 presented for customer 42 (tenant isolation).",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "customer_id": "99",
+                    "contract": "aicountly.licence/1",
+                    "product_id": "remote",
+                    "subject": null,
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "state": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "BEUroDKe7Qk8ddaEiBnbQ5HOoxBBddsyAFJ8oRpsHSJaaklSCXTH0M99owsCUFwRcwUpCyPs4IQVEz+A0khHDg=="
+                }
+            },
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "identity_mismatch"
+            }
+        },
+        {
+            "name": "wrong_product",
+            "why": "A genuine paid document for product \"chat\" presented for \"remote\" (tenant isolation).",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "product_id": "chat",
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "subject": null,
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "state": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "KSxoDD221b+ywk3owCiWv6dtJHmYgDhQYXnRfD60uKn3l1CkkD1IwmHgxK8FbQAwTHQ1pYwwtaNpIi3r4NGBDg=="
+                }
+            },
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "identity_mismatch"
+            }
+        },
+        {
+            "name": "subject_scope_paid",
+            "why": "A by-subject answer: the best entitlement among the user's customers, naming the subject.",
+            "now": 1800000000,
+            "product": "chat",
+            "scope": "subject",
+            "ref": "u-7",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "product_id": "chat",
+                    "subject": "u-7",
+                    "plan_code": "CHAT_TEAM",
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "licence_id": "LIC-000123",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "state": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "ZxKyDI8KW/HDMEUgMvIbLW4KMYoDqktP6jml0u2n0XwrdA2RnUvkOgRAZtEE1srFhZdfb19J978g9hiM5W1aCw=="
+                }
+            },
+            "expect": {
+                "state": "paid",
+                "tier": "paid",
+                "reason": "paid"
+            }
+        },
+        {
+            "name": "subject_document_for_customer_lookup",
+            "why": "A subject-scoped document does not answer a customer lookup.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "subject": "u-7",
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "licence_id": "LIC-000123",
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "state": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "qIkguAXaXfk71e5Nr+NZpTygFMpCUQwFaj8+eQMscDr0Jf/CgptTU7eujha72Tavyhc0ZokoSyp1vddZ3A+BDQ=="
+                }
+            },
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "identity_mismatch"
+            }
+        },
+        {
+            "name": "malformed_paid_without_licence",
+            "why": "State paid but no licence_id: the document is refused as malformed.",
+            "now": 1800000000,
+            "product": "remote",
+            "scope": "customer",
+            "ref": "42",
+            "revoked_revision": -1,
+            "envelope": {
+                "document": {
+                    "licence_id": null,
+                    "contract": "aicountly.licence/1",
+                    "customer_id": "42",
+                    "product_id": "remote",
+                    "subject": null,
+                    "plan_code": "REMOTE_BUSINESS",
+                    "plan_class": "paid",
+                    "kind": "paid",
+                    "state": "paid",
+                    "valid_from": "2027-01-14T08:00:00Z",
+                    "valid_until": "2027-02-14T08:00:00Z",
+                    "entitlements": [
+                        {
+                            "code": "max_session_minutes",
+                            "value": 480
+                        },
+                        {
+                            "code": "recording",
+                            "value": true
+                        }
+                    ],
+                    "revision": 5,
+                    "issued_at": "2027-01-15T07:50:00Z"
+                },
+                "signature": {
+                    "alg": "ed25519",
+                    "kid": "contract-test-1",
+                    "value": "WSdkYMV2JfJQyOeVrFDViIlQly0IZp3pLE+5Tv/UD4ple3JGcV9j3+J9MkPyT8IPOVoIJkp0+QT9Jgz7at2WBQ=="
+                }
+            },
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "malformed"
+            }
+        }
+    ]
+}

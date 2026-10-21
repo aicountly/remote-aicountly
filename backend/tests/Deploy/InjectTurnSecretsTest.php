@@ -170,7 +170,27 @@ final class InjectTurnSecretsTest extends TestCase
         // Not even --allow-shared lets a database password double as a relay secret.
         [$code, $out] = $this->inject('WEBRTC_TURN_LEDGER_PASSWORD=' . self::MUM . "\nWEBRTC_TURN_NODE_MUM_SECRET=" . self::MUM . "\n", '--allow-shared');
         $this->assertSame(2, $code);
-        $this->assertStringContainsString('ledger password must be its own', $out);
+        $this->assertStringContainsString('must be its own', $out);
         $this->assertStringNotContainsString(self::MUM, $out);
+    }
+
+    public function testTheLicenceSecretIsInjectableAndNeverEqualToAnotherSecret(): void
+    {
+        $licence = 'licence-s2s-secret-0123456789abcdef0123';
+
+        [$code, $out] = $this->inject('WEBRTC_LICENCE_S2S_SECRET=' . $licence . "\n");
+        $this->assertSame(0, $code, $out);
+        $this->assertStringContainsString('WEBRTC_LICENCE_S2S_SECRET: written.', $out);
+        $this->assertStringNotContainsString($licence, $out);
+        $this->assertStringContainsString('WEBRTC_LICENCE_S2S_SECRET=' . $licence, (string) file_get_contents($this->env));
+
+        [$code, $out] = $this->inject('WEBRTC_LICENCE_S2S_SECRET=' . self::MUM . "\nWEBRTC_TURN_NODE_MUM_SECRET=" . self::MUM . "\n", '--allow-shared');
+        $this->assertSame(2, $code);
+        $this->assertStringContainsString('must be its own', $out);
+
+        foreach (['WEBRTC_LICENCE_API_URL', 'WEBRTC_LICENCE_PUBLIC_KEYS'] as $notASecret) {
+            [$code] = $this->inject($notASecret . '=' . $licence . "\n");
+            $this->assertSame(2, $code, "{$notASecret} is configuration, not an injectable secret");
+        }
     }
 }
