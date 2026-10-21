@@ -112,7 +112,7 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
         'filter' => ['api-auth:guest', 'rate-limit:signalling-token,60,60'],
     ]);
 
-    // Fresh TURN credentials for a relayed connection about to outlive its own (lib/ice-kit). Once
+    // Fresh TURN credentials for a connection whose own is about to expire (lib/ice-kit). Once
     // at 80% of a credential's life per peer, plus recovery after an ICE failure — 30 a minute is
     // far above either, and far below a loop.
     $routes->post('sessions/(:segment)/ice-servers', 'SignallingController::iceServers/$1', [

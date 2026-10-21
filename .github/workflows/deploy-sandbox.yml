@@ -460,6 +460,28 @@ jobs:
           echo "Applied: ${pending}"
           summary "applied $(wc -w <<< "$pending"): ${pending}"
 
+      # --------------------------------------------------------------------
+      # TURN relay secrets (docs/ICE_CONTRACT.md → Secrets)
+      #
+      # One repository secret per relay node, each the static-auth-secret of THAT
+      # coturn. Sent on STDIN to bin/ops/inject-turn-secrets.sh, which writes only
+      # allow-listed WEBRTC_TURN_* keys into api/.env and prints key names, never
+      # values; a secret never travels in an argument, an artifact or a log line.
+      # The sandbox receives both: Greater Noida is validated here, in isolation, before it is ever considered for production.
+      # --------------------------------------------------------------------
+
+      - name: TURN relay secrets (stdin only)
+        env:
+          REMOTE_ROOT: ${{ secrets.SANDBOX_SSH_REMOTE_ROOT }}
+          TURN_MUM_SECRET: ${{ secrets.SANDBOX_TURN_MUM_SECRET }}
+          TURN_NCR_SECRET: ${{ secrets.SANDBOX_TURN_NCR_SECRET }}
+        run: |
+          root="${REMOTE_ROOT#\~/}"
+          {
+            printf 'WEBRTC_TURN_NODE_MUM_SECRET=%s\n' "$TURN_MUM_SECRET"
+            printf 'WEBRTC_TURN_NODE_NCR_SECRET=%s\n' "$TURN_NCR_SECRET"
+          } | ssh deploy-target "bash '$root/api/bin/ops/inject-turn-secrets.sh'"
+
       # Is the live site really Remote, and the build just deployed? The host's
       # anti-bot page ("One moment, please...") answers some requests from
       # GitHub's runners with HTTP 200, so a status code proves nothing. These

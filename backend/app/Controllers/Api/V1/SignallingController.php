@@ -81,10 +81,10 @@ class SignallingController extends BaseApiController
     /**
      * `POST /sessions/{uuid}/ice-servers` — fresh TURN credentials, without a signalling token.
      *
-     * A relayed connection cannot outlive its credential: coturn refuses the allocation's next refresh
-     * once the username's timestamp has passed. The browser therefore asks again at `refreshAfter` and
-     * restarts ICE onto the new credential, and it asks here rather than re-minting a signalling token
-     * so that renewing a relay is not also a reconnection to the room. Same admission rule as the token.
+     * A relay refuses a new allocation on an expired credential, so whatever a long session must set up
+     * again (an ICE restart, a reconnect after a network change) needs a valid one. The browser asks again
+     * at `refreshAfter`, and asks here rather than re-minting a signalling token so that renewing a relay
+     * is not also a reconnection to the room. Same admission rule as the token.
      */
     public function iceServers(string $uuid): ResponseInterface
     {

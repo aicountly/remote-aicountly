@@ -93,6 +93,15 @@ final class TurnNode
         return $this->staticUsername !== '' && $this->staticCredential !== '' ? 'static' : 'none';
     }
 
+    /**
+     * Whether two nodes would mint credentials with the very same secret. Compared in constant time
+     * and never printed: the answer is all a configuration check needs.
+     */
+    public function sharesSecretWith(self $other): bool
+    {
+        return $this->secret !== '' && hash_equals($this->secret, $other->secret);
+    }
+
     public function hasCredentials(): bool
     {
         return $this->credentialMode() !== 'none';
@@ -157,6 +166,28 @@ final class TurnNode
             'static' => ['username' => $this->staticUsername, 'credential' => $this->staticCredential, 'expiresAt' => null],
             default  => null,
         };
+    }
+
+    /**
+     * A credential this node must REFUSE, for `bin/probe.php --negative`: `wrong-secret` is signed
+     * with a secret the relay does not hold, `expired` with the right one but a timestamp in the past.
+     * A relay that allocates for either is misconfigured, whatever its other tests say.
+     *
+     * @return array{username: string, credential: string}|null null when the node has no REST secret
+     */
+    public function refusableCredential(string $kind, string $subject, int $now): ?array
+    {
+        if ($this->secret === '') {
+            return null;
+        }
+
+        $minted = match ($kind) {
+            'wrong-secret' => CredentialMinter::mint(hash('sha256', 'not-' . $this->secret), $subject, 300, $now),
+            'expired'      => CredentialMinter::mintExpired($this->secret, $subject, 120, $now),
+            default        => throw new \InvalidArgumentException("Unknown credential kind {$kind}."),
+        };
+
+        return ['username' => $minted['username'], 'credential' => $minted['credential']];
     }
 
     /**

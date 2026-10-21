@@ -40,9 +40,21 @@ class IceConfigService
      * @param string $subject an opaque reference bound into the TURN username — a participant uuid, or
      *                        `device-<uuid>` — so relay usage is attributable without an email address
      */
-    public function grant(string $subject, ?string $preferRegion = null): IceGrant
+    public function grant(string $subject, ?string $preferRegion = null, ?int $ttl = null): IceGrant
     {
-        return $this->issuer()->issue($subject, ['preferRegion' => $preferRegion]);
+        return $this->issuer()->issue($subject, ['preferRegion' => $preferRegion] + ($ttl !== null ? ['ttl' => $ttl] : []));
+    }
+
+    /**
+     * A grant for a client that cannot renew — the desktop agent builds its ICE configuration once, at
+     * join. Valid for the rest of the session (plus five minutes), so anything the agent has to gather
+     * again during it — after a network change, or a restart the browser asks for — still authenticates.
+     *
+     * @param int $secondsRemaining how long the session has left
+     */
+    public function grantForSession(string $subject, int $secondsRemaining): IceGrant
+    {
+        return $this->grant($subject, null, $this->topology()->sessionBoundTtl($secondsRemaining));
     }
 
     /**
@@ -106,6 +118,8 @@ class IceConfigService
             ttlSeconds: max(60, min(86400, $this->config->turnCredentialTtlSeconds)),
             maxRelayNodes: 1,
             source: 'legacy',
+            restartOnRenewal: $this->config->turnRestartOnRenewal,
+            sessionTtlMax: $this->config->turnSessionTtlMax,
         );
     }
 }

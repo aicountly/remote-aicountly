@@ -18,6 +18,7 @@ const signalling = vi.hoisted(() => ({
 const api = vi.hoisted(() => ({
   iceFetches: 0,
   reports: [] as unknown[],
+  restartOnRenewal: true,
 }))
 
 vi.mock('../signalling/RemoteSignallingClient', () => ({
@@ -35,7 +36,8 @@ vi.mock('../signalling/RemoteSignallingClient', () => ({
   },
 }))
 
-const grant = (username: string) => ({
+const grant = (username: string, extra: Record<string, unknown> = {}) => ({
+  ...extra,
   contract: 'aicountly.ice/1',
   iceServers: [
     { urls: ['stun:turn-mum.aicountly.com:3478'] },
@@ -63,7 +65,7 @@ vi.mock('../api/remote', () => ({
   fetchIceServers: vi.fn(async () => {
     api.iceFetches += 1
 
-    return grant(`2:refresh-${api.iceFetches}`)
+    return grant(`2:refresh-${api.iceFetches}`, { restartOnRenewal: api.restartOnRenewal })
   }),
   reportConnectivity: vi.fn(async (_uuid: string, report: unknown) => {
     api.reports.push(report)
@@ -208,6 +210,7 @@ describe('ICE recovery in the session engine', () => {
     signalling.sent = []
     api.iceFetches = 0
     api.reports = []
+    api.restartOnRenewal = true
     vi.stubGlobal('RTCPeerConnection', FakePeerConnection)
     vi.stubGlobal('RTCSessionDescription', class { constructor(init: RTCSessionDescriptionInit) { return init } })
     vi.stubGlobal('RTCIceCandidate', class { constructor(init: RTCIceCandidateInit) { return init } })
@@ -360,6 +363,29 @@ describe('ICE recovery in the session engine', () => {
     expect(pc.configuration.iceServers?.[1].username).toBe('2:refresh-1')
     expect(pc.offers.length).toBe(offersBefore + 1)
     expect(pc.offers.at(-1)).toMatchObject({ iceRestart: true })
+    engine.dispose()
+  })
+
+  it('applies renewed credentials without restarting when the operator has turned that off', async () => {
+    api.restartOnRenewal = false
+    const { engine, signal } = await startEngine('a-me')
+    signal({ type: 'peer-joined', peer: browserPeer('b-them') })
+    await flush()
+    const pc = FakePeerConnection.instances[0]
+    signal({ type: 'answer', from: 'b-them', payload: { type: 'answer', sdp: 'x' } })
+    await flush()
+    pc.relayed()
+    pc.setState('connected')
+    await flush()
+
+    pc.signalingState = 'stable'
+    const offersBefore = pc.offers.length
+    await vi.advanceTimersByTimeAsync(2880 * 1000)
+    await flush()
+
+    expect(api.iceFetches).toBe(1)
+    expect(pc.configuration.iceServers?.[1].username).toBe('2:refresh-1')
+    expect(pc.offers.length).toBe(offersBefore)
     engine.dispose()
   })
 

@@ -71,16 +71,31 @@ abstract class IceKitTestCase extends TestCase
         return $path;
     }
 
-    /** @param array<string, int> $failures node id → consecutive failures, checked at $checkedAt */
-    protected function healthWith(array $failures, int $checkedAt = self::NOW): HealthStore
+    /**
+     * @param array<string, int>                                       $failures   node id → consecutive failures, checked at $checkedAt
+     * @param array<string, array<string, array<string, bool|null>>>   $transports node id → transport → {binding, allocation}
+     */
+    protected function healthWith(array $failures, int $checkedAt = self::NOW, array $transports = []): HealthStore
     {
         $path = $this->tempPath();
         $nodes = [];
         foreach ($failures as $id => $count) {
-            $nodes[$id] = ['ok' => $count === 0, 'checkedAt' => $checkedAt, 'consecutiveFailures' => $count];
+            $nodes[$id] = ['ok' => $count === 0, 'checkedAt' => $checkedAt, 'consecutiveFailures' => $count, 'transports' => $transports[$id] ?? []];
         }
         file_put_contents($path, json_encode(['version' => 1, 'nodes' => $nodes]));
 
         return new HealthStore($path, 900, 2);
+    }
+
+    /** A probe result in which only the listed transports allocated. */
+    protected static function onlyWorking(string ...$working): array
+    {
+        $all = [];
+        foreach (['udp', 'tcp', 'tls'] as $t) {
+            $ok = in_array($t, $working, true);
+            $all[$t] = ['binding' => $ok, 'allocation' => $ok];
+        }
+
+        return $all;
     }
 }

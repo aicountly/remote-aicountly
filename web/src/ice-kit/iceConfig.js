@@ -58,6 +58,10 @@ export function normalizeIceConfig(raw, now = Date.now()) {
     refreshAt,
     degraded: src.degraded === true,
     failover: src.failover === true,
+    // On unless the server says otherwise: restarting a relayed connection onto renewed credentials is
+    // safe whatever the relay does with an expired one, and an operator turns it off only after
+    // measuring (probe.php --expiry-test) that established allocations survive their credential.
+    restartOnRenewal: src.restartOnRenewal !== false,
   });
 }
 

@@ -462,6 +462,29 @@ jobs:
           summary "applied $(wc -w <<< "$pending"): ${pending}"
 
       # --------------------------------------------------------------------
+      # TURN relay secrets (docs/ICE_CONTRACT.md → Secrets)
+      #
+      # One repository secret per relay node, each the static-auth-secret of THAT
+      # coturn. Sent on STDIN to bin/ops/inject-turn-secrets.sh, which writes only
+      # allow-listed WEBRTC_TURN_* keys into api/.env and prints key names, never
+      # values; a secret never travels in an argument, an artifact or a log line.
+      # Production receives Mumbai's secret only: Greater Noida stays out of production's .env until it is cleared for service.
+      # --------------------------------------------------------------------
+
+      - name: TURN relay secrets (stdin only)
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
+          TURN_MUM_SECRET: ${{ secrets.TURN_MUM_SECRET }}
+        run: |
+          root="${REMOTE_ROOT#\~/}"
+          if [ -z "$TURN_MUM_SECRET" ]; then
+            echo "::warning::The TURN_MUM_SECRET repository secret is empty: api/.env keeps whatever Mumbai secret it has, and relaying is unavailable if it has none."
+            exit 0
+          fi
+          printf 'WEBRTC_TURN_NODE_MUM_SECRET=%s\n' "$TURN_MUM_SECRET" \
+            | ssh deploy-target "bash '$root/api/bin/ops/inject-turn-secrets.sh'"
+
+      # --------------------------------------------------------------------
       # Scheduled jobs (E8-OPS F160 — a README cron is not a worker)
       #
       # bin/ops/post-deploy-jobs.sh ON THE SERVER: writes the Cron Job Monitor

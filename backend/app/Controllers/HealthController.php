@@ -77,16 +77,19 @@ class HealthController extends Controller
             ]);
     }
 
-    /** @return list<array{id: string, status: string, servable: bool, health: string}> */
+    /** @return list<array{id: string, status: string, servable: bool, health: string, condition: string, state: string, serving: bool}> */
     private function relayNodes(): array
     {
         try {
             return array_map(
                 static fn (array $node): array => [
-                    'id'       => $node['id'],
-                    'status'   => $node['status'],
-                    'servable' => $node['servable'],
-                    'health'   => $node['health'],
+                    'id'        => $node['id'],
+                    'status'    => $node['status'],
+                    'servable'  => $node['servable'],
+                    'health'    => $node['health'],
+                    'condition' => $node['condition'],
+                    'state'     => $node['state'],
+                    'serving'   => $node['serving'],
                 ],
                 Services::iceConfigService()->status()['nodes'],
             );

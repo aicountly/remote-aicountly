@@ -160,4 +160,48 @@ final class TopologyAndHealthTest extends IceKitTestCase
         $this->assertSame(3, $store->failureThreshold);
         $this->assertSame('/default.json', HealthStore::fromEnvironment(static fn () => null, '/default.json')->path());
     }
+
+    public function testNodesSharingASecretAreFlaggedWithoutRevealingIt(): void
+    {
+        $shared = $this->topology($this->productionEnv());
+        $this->assertCount(1, $shared->warnings());
+        $this->assertStringContainsString("'mum' and 'ncr' use the same secret", $shared->warnings()[0]);
+        $this->assertStringNotContainsString('shared-coturn-secret', implode(' ', $shared->warnings()));
+
+        $separate = $this->topology($this->productionEnv([
+            'WEBRTC_TURN_STATIC_AUTH_SECRET' => null,
+            'WEBRTC_TURN_NODE_MUM_SECRET'    => 'mumbai-only-secret',
+            'WEBRTC_TURN_NODE_NCR_SECRET'    => 'noida-only-secret',
+        ]));
+        $this->assertSame([], $separate->warnings());
+        $this->assertSame([], $separate->problems());
+    }
+
+    public function testASingleNodeOrAStaticPairCannotShareASecretWithAnything(): void
+    {
+        $this->assertSame([], $this->topology([
+            'WEBRTC_TURN_URLS' => 'turn:t.example:3478', 'WEBRTC_TURN_STATIC_AUTH_SECRET' => 's',
+        ])->warnings());
+    }
+
+    public function testHealthDistinguishesAPartiallyWorkingNodeFromAHealthyOneAndADeadOne(): void
+    {
+        $store = new HealthStore($this->tempPath(), 900, 2);
+
+        $store->record(['mum' => ['ok' => true, 'transports' => [
+            'udp' => ['binding' => true, 'allocation' => true],
+            'tls' => ['binding' => true, 'allocation' => false],
+        ]]], self::NOW);
+        $this->assertSame('degraded', $store->state('mum', self::NOW));
+        $this->assertSame('degraded', HealthStore::condition('degraded'));
+
+        $store->record(['mum' => ['ok' => true, 'transports' => ['udp' => ['binding' => true, 'allocation' => true]]]], self::NOW + 300);
+        $this->assertSame('up', $store->state('mum', self::NOW + 300));
+        $this->assertSame('healthy', HealthStore::condition('up'));
+
+        $this->assertSame('degraded', HealthStore::condition('failing'));
+        $this->assertSame('unreachable', HealthStore::condition('down'));
+        $this->assertSame('unknown', HealthStore::condition('stale'));
+        $this->assertSame('unknown', HealthStore::condition('unknown'));
+    }
 }

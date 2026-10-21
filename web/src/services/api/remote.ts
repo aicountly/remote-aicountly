@@ -211,9 +211,10 @@ export function fetchSignallingCredentials(sessionUuid: string): Promise<Signall
 /**
  * Fresh TURN credentials, without reconnecting to the room (docs/ICE_CONTRACT.md).
  *
- * A relayed connection cannot outlive its credential — the relay refuses the allocation's next
- * refresh once it has expired — so the engine asks again before then and restarts ICE onto the new
- * one. The answer is the aicountly.ice/1 grant, which the ice-kit normalises.
+ * A relay refuses a new allocation on an expired credential, so anything a long session must set up
+ * again (an ICE restart, a reconnect) needs a valid one: the engine asks again before expiry and, by
+ * default, restarts relayed connections onto it. The answer is the aicountly.ice/1 grant, which the
+ * ice-kit normalises.
  */
 export function fetchIceServers(sessionUuid: string): Promise<unknown> {
   return apiFetch<unknown>(`/sessions/${sessionUuid}/ice-servers`, { method: 'POST' })

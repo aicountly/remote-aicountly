@@ -1,4 +1,4 @@
-# AICOUNTLY ICE kit (v1.0.0)
+# AICOUNTLY ICE kit (v1.1.0)
 
 The one way an AICOUNTLY product decides **which TURN relays a client may use** and **mints the
 short-lived credential for each**. Remote (`backend/lib/ice-kit`) and Connect
@@ -85,6 +85,11 @@ php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --status           
 php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --allocate          # every node not disabled
 php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --node=ncr --allocate   # validate a disabled node
 php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --allocate --write-health   # the cron job
+
+# the launch validation (docs/TURN_VALIDATION_RUNBOOK.md):
+php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --node=mum --allocate --negative --expect-ip=mum=148.135.210.65
+php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --node=mum --transports=tcp --expiry-test=tcp
+php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --node=mum --transports=tls --emit-grant=/tmp/g.json --ttl=900
 ```
 
 `--allocate` mints a credential exactly as the API does and asks the node to allocate a relay over
@@ -92,6 +97,13 @@ each transport, then releases it. It is the test that catches a secret mismatch 
 a full relay range (`insufficient_capacity`), a TLS certificate problem (`tls_failed`) and a firewall
 (`connect_failed`/`timeout`) — none of which a STUN answer would reveal. An allocation granted with no
 credential at all is reported as `open_relay`, a finding rather than a success.
+
+## Selection and failover
+
+Active nodes that are not `down` are served; standby nodes join whenever no active node is fully working;
+if every servable node is down they are all offered, flagged `degraded`. Working nodes lead, then the region
+hint, then priority, and the per-client cap is applied after that. `IceIssuer::status()` reports each node's
+role, condition (`healthy | degraded | unreachable | unknown`), state and whether it is being served.
 
 ## Health rules
 

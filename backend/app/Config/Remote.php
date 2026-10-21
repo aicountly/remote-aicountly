@@ -174,6 +174,14 @@ class Remote extends BaseConfig
      */
     public ?Topology $turnTopology = null;
 
+    /**
+     * Single-pool mode only (node mode reads WEBRTC_TURN_RESTART_ON_RENEWAL / _SESSION_TTL_MAX itself):
+     * whether a relayed connection restarts onto renewed credentials, and the longest credential a
+     * client that cannot renew (the desktop agent) may be given.
+     */
+    public bool $turnRestartOnRenewal = true;
+    public int $turnSessionTtlMax = 28800;
+
     /** Where the scheduled TURN probe records node health (lib/ice-kit/bin/probe.php --write-health). */
     public string $turnHealthFile = '';
 
@@ -311,6 +319,8 @@ class Remote extends BaseConfig
             );
         }
         $this->turnHealthFile = $this->envString('WEBRTC_TURN_HEALTH_FILE', WRITEPATH . 'ice/turn-health.json');
+        $this->turnRestartOnRenewal = $this->envBool('WEBRTC_TURN_RESTART_ON_RENEWAL', $this->turnRestartOnRenewal);
+        $this->turnSessionTtlMax    = max(60, min(86400, $this->envInt('WEBRTC_TURN_SESSION_TTL_MAX', $this->turnSessionTtlMax)));
 
         $this->sessionDefaultMinutes       = $this->envInt('remote.sessionDefaultMinutes', $this->sessionDefaultMinutes);
         $this->inviteDefaultMinutes        = $this->envInt('remote.inviteDefaultMinutes', $this->inviteDefaultMinutes);

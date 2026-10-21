@@ -73,7 +73,10 @@ final class HealthStore
         return $this->state($nodeId, $now) === 'down';
     }
 
-    /** `up`, `down`, `failing` (below the threshold), `stale` or `unknown`. */
+    /**
+     * `up`, `degraded` (the last probe worked, but not on every transport), `failing` (a failed probe,
+     * below the threshold), `down`, `stale` or `unknown`.
+     */
     public function state(string $nodeId, int $now): string
     {
         return $this->states($now)[$nodeId] ?? 'unknown';
@@ -102,13 +105,53 @@ final class HealthStore
             $failures = (int) ($entry['consecutiveFailures'] ?? 0);
 
             $states[(string) $id] = match (true) {
-                $failures === 0                       => 'up',
                 $failures >= $this->failureThreshold => 'down',
-                default                               => 'failing',
+                $failures > 0                        => 'failing',
+                self::hasFailedTransport($entry)     => 'degraded',
+                default                              => 'up',
             };
         }
 
         return $states;
+    }
+
+    /**
+     * What an operator means by a node's health, from a state token: `healthy`, `degraded`,
+     * `unreachable` or `unknown`. `failing` is degraded — one missed probe is not yet an outage but is
+     * already a reason to offer the standby beside it — and `stale` is unknown, because a probe job
+     * that stopped running says nothing about the node.
+     */
+    public static function condition(string $state): string
+    {
+        return match ($state) {
+            'up'                => 'healthy',
+            'degraded', 'failing' => 'degraded',
+            'down'              => 'unreachable',
+            default             => 'unknown',
+        };
+    }
+
+    /**
+     * Whether the last probe worked overall but one of the node's transports did not. TLS on 443 is
+     * the path restrictive networks depend on, so a node that has lost it while UDP still works is
+     * not as good as one that has not — and a bare "ok" would hide that.
+     *
+     * @param array<string, mixed> $entry
+     */
+    private static function hasFailedTransport(array $entry): bool
+    {
+        foreach ((array) ($entry['transports'] ?? []) as $result) {
+            if (! is_array($result)) {
+                continue;
+            }
+
+            // An allocation is the stronger statement; fall back to the binding when none was tried.
+            if (($result['allocation'] ?? $result['binding'] ?? null) === false) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

@@ -1,4 +1,4 @@
-# AICOUNTLY ICE kit — browser half (v1.0.0)
+# AICOUNTLY ICE kit — browser half (v1.1.0)
 
 Plain JavaScript (ES2020 modules) with `index.d.ts` beside it, so Remote (TypeScript) and Connect
 (JavaScript) carry the same files at `web/src/ice-kit`. The server half is `lib/ice-kit` (PHP).

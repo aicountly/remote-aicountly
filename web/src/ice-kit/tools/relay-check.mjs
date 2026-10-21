@@ -20,7 +20,17 @@
  *
  *   npm install --no-save playwright
  *   ICE_GRANT=grant.json [ICE_FRESH_GRANT=grant2.json] [CHROMIUM_PATH=/path/to/chrome] \
+ *     [ICE_EXPECT_NODE=mum] [ICE_EXPECT_PROTOCOL=udp|tcp|tls] \
  *     node src/ice-kit/tools/relay-check.mjs
+ *
+ * ICE_EXPECT_NODE / ICE_EXPECT_PROTOCOL turn "a relay carried it" into "THIS node carried it over THIS
+ * transport": emit a grant for one transport on the API host (`probe.php --transports=tls
+ * --emit-grant=…`) and expect that protocol here. Without them the check proves a relay, not which.
+ *
+ * ICE_TOLERATE_NODES=mum,ncr lists nodes that are EXPECTED to be unreachable (a failover test with the
+ * primary deliberately down): they are left out of "every relay node allocated".
+ *
+ * ICE_REPORT=out.json writes the full result (no credential) for the evidence bundle.
  *
  * Exit 0 only when every step passed. Prints no credential.
  */
@@ -162,11 +172,17 @@ try {
   server.close();
 }
 
+const tolerated = new Set((process.env.ICE_TOLERATE_NODES ?? '').split(',').map((id) => id.trim()).filter(Boolean));
+const expectNode = process.env.ICE_EXPECT_NODE;
+const expectProtocol = process.env.ICE_EXPECT_PROTOCOL;
+
 const checks = [
   ['the API grant names a relay', result.relayAvailable === true],
-  ['every relay node allocated for this browser', result.probe.ok && result.probe.nodes.every((n) => n.relayCandidates > 0)],
+  ['every relay node allocated for this browser', result.probe.ok && result.probe.nodes.filter((n) => !tolerated.has(n.id)).every((n) => n.relayCandidates > 0)],
   ['two relay-only peers connected and exchanged data', result.firstMessage === 'ping-1'],
   ['the selected path is the relay', result.path?.path === 'relay'],
+  ...(expectNode ? [[`the relay that carried it was node '${expectNode}'`, result.path?.relayNode === expectNode]] : []),
+  ...(expectProtocol ? [[`over ${expectProtocol}`, result.path?.relayProtocol === expectProtocol]] : []),
   ...(fresh ? [
     ['fresh credentials were applied to both peers', result.applied === true],
     ['after an ICE restart onto them, data still flows', result.secondMessage === 'ping-2'],
@@ -181,6 +197,17 @@ if (result.path) console.log(`path: ${result.path.path} via ${result.path.relayN
 if (result.pathAfterRestart) console.log(`after restart: ${JSON.stringify(result.pathAfterRestart)}`);
 if (result.error) console.log(`error: ${result.error}`);
 if (result.iceErrors.length) console.log(`ice errors: ${result.iceErrors.map((e) => `${e.category}${e.node ? `@${e.node}` : ''}×${e.count}`).join(', ')}`);
+
+if (process.env.ICE_REPORT) {
+  const { writeFileSync } = await import('node:fs');
+  writeFileSync(process.env.ICE_REPORT, JSON.stringify({
+    at: new Date().toISOString(),
+    expectNode: expectNode ?? null,
+    expectProtocol: expectProtocol ?? null,
+    result,
+    checks: checks.map(([label, ok]) => ({ label, ok })),
+  }, null, 2));
+}
 
 let failed = 0;
 for (const [label, ok] of checks) {

@@ -96,6 +96,12 @@ jobs:
           database.tests.port: '5432'
         run: vendor/bin/phpunit --no-coverage
 
+      # The failover chain on two throwaway local relays (health probe -> health file -> grant), as an
+      # unprivileged user. A test of the selection logic only; it says nothing about the real nodes.
+      - name: ICE failover simulation (local relays, selection logic only)
+        working-directory: backend
+        run: bash lib/ice-kit/tests/simulation/failover.sh
+
       - name: Verify migrations roll back cleanly
         working-directory: backend
         env:

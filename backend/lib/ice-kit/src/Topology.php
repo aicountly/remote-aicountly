@@ -24,6 +24,10 @@ namespace Aicountly\Ice;
  *   WEBRTC_TURN_STATIC_AUTH_SECRET       = <coturn static-auth-secret, shared by every node>
  *   WEBRTC_TURN_TTL                      = 3600                     credential lifetime, 60..86400
  *   WEBRTC_TURN_MAX_NODES                = 2                        relay nodes per client, 1..4
+ *   WEBRTC_TURN_SESSION_TTL_MAX          = 28800                    ceiling for a session-bound credential (a
+ *                                                                   desktop agent, which cannot renew), 60..86400
+ *   WEBRTC_TURN_RESTART_ON_RENEWAL       = true                     whether a relayed connection is restarted
+ *                                                                   onto renewed credentials (see expirySemantics)
  *   WEBRTC_STUN_URLS                     = stun:…                   extra STUN, after the nodes' own
  *   WEBRTC_FORCE_RELAY                   = false                    diagnostics: relay-only ICE
  *   WEBRTC_ICE_CANDIDATE_POOL            = 0                        0..10
@@ -51,7 +55,21 @@ final class Topology
         public readonly int $candidatePoolSize = 0,
         public readonly string $source = 'nodes',
         private readonly array $problems = [],
+        public readonly bool $restartOnRenewal = true,
+        public readonly int $sessionTtlMax = 28800,
     ) {
+    }
+
+    /**
+     * The credential lifetime for a client that cannot renew (a desktop agent): the rest of its session
+     * plus five minutes of slack, never shorter than the ordinary lifetime and never longer than
+     * `sessionTtlMax`. Short-lived is still the rule — it is just measured in sessions, not in hours.
+     */
+    public function sessionBoundTtl(int $secondsRemaining): int
+    {
+        $wanted = max($this->ttlSeconds, $secondsRemaining + 300);
+
+        return CredentialMinter::clampTtl(min($wanted, max($this->ttlSeconds, $this->sessionTtlMax)));
     }
 
     /**
@@ -75,6 +93,8 @@ final class Topology
         $ttl      = CredentialMinter::clampTtl((int) ($get('WEBRTC_TURN_TTL') ?? 3600));
         $maxNodes = max(1, min(self::MAX_NODES_CEILING, (int) ($get('WEBRTC_TURN_MAX_NODES') ?? 2)));
         $force    = self::bool($get('WEBRTC_FORCE_RELAY'), false);
+        $restart  = self::bool($get('WEBRTC_TURN_RESTART_ON_RENEWAL'), true);
+        $sessMax  = CredentialMinter::clampTtl((int) ($get('WEBRTC_TURN_SESSION_TTL_MAX') ?? 28800));
         $pool     = max(0, min(10, (int) ($get('WEBRTC_ICE_CANDIDATE_POOL') ?? 0)));
         $shared   = $get('WEBRTC_TURN_STATIC_AUTH_SECRET') ?? '';
 
@@ -88,7 +108,7 @@ final class Topology
                 $get('WEBRTC_TURN_CREDENTIAL') ?? '',
             );
 
-            return new self($legacy === null ? [] : [$legacy], $stunUrls, $ttl, $maxNodes, $force, $pool, 'legacy');
+            return new self($legacy === null ? [] : [$legacy], $stunUrls, $ttl, $maxNodes, $force, $pool, 'legacy', [], $restart, $sessMax);
         }
 
         $nodes    = [];
@@ -128,7 +148,7 @@ final class Topology
             }
         }
 
-        return new self($nodes, $stunUrls, $ttl, $maxNodes, $force, $pool, 'nodes', $problems);
+        return new self($nodes, $stunUrls, $ttl, $maxNodes, $force, $pool, 'nodes', $problems, $restart, $sessMax);
     }
 
     /**
@@ -190,6 +210,34 @@ final class Topology
     public function problems(): array
     {
         return $this->problems;
+    }
+
+    /**
+     * Things that work but are unsafe or probably unintended. Never fatal, never containing a secret.
+     *
+     * Two nodes sharing a secret is the one that matters: a credential minted for one is valid at the
+     * other, so a relay that is compromised — or simply run by someone else — can replay at its
+     * sibling the credentials it is handed. Disabled nodes are included on purpose: the time to find
+     * out is before a node is switched on, not after.
+     *
+     * @return list<string>
+     */
+    public function warnings(): array
+    {
+        $warnings = [];
+        $rest     = array_values(array_filter($this->nodes, static fn (TurnNode $n): bool => $n->credentialMode() === 'rest'));
+
+        for ($i = 0; $i < count($rest); $i++) {
+            for ($j = $i + 1; $j < count($rest); $j++) {
+                if ($rest[$i]->sharesSecretWith($rest[$j])) {
+                    $warnings[] = "TURN nodes '{$rest[$i]->id}' and '{$rest[$j]->id}' use the same secret: credentials minted for one are "
+                        . 'valid at the other. If each coturn has its own static-auth-secret, set WEBRTC_TURN_NODE_<ID>_SECRET for each '
+                        . 'node (a node without its own inherits WEBRTC_TURN_STATIC_AUTH_SECRET).';
+                }
+            }
+        }
+
+        return $warnings;
     }
 
     /**

@@ -33,6 +33,8 @@ export interface IceConfig {
   readonly refreshAt: number | null
   readonly degraded: boolean
   readonly failover: boolean
+  /** Whether a relayed connection is restarted onto renewed credentials. Default true. */
+  readonly restartOnRenewal: boolean
 }
 
 export declare function normalizeIceConfig(raw: unknown, now?: number): IceConfig

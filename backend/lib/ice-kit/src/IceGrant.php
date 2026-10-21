@@ -30,6 +30,7 @@ final class IceGrant
         public readonly int $candidatePoolSize = 0,
         public readonly bool $degraded = false,
         public readonly bool $failover = false,
+        public readonly bool $restartOnRenewal = true,
     ) {
     }
 
@@ -82,6 +83,10 @@ final class IceGrant
             'relayNodes'           => $this->relayNodes,
             'degraded'             => $this->degraded,
             'failover'             => $this->failover,
+            // Whether a client restarts a relayed connection onto renewed credentials, or just keeps
+            // them for the next time it must gather. Operators turn it off once `probe.php
+            // --expiry-test` has shown their relay keeps established allocations alive.
+            'restartOnRenewal'     => $this->restartOnRenewal,
         ];
     }
 }

@@ -1161,9 +1161,12 @@ export class RemoteSessionEngine {
 
   /**
    * Fresh credentials arrived. A connection whose own side is relayed is still
-   * using an allocation made with the old credential, which the relay will
-   * refuse to refresh once it expires — so it is restarted now, while the old
-   * path still works, rather than dropped later.
+   * using an allocation made with the old credential. A relay always refuses a
+   * NEW allocation on an expired credential, and some builds also drop the old
+   * one — so by default it is restarted now, while the old path still works,
+   * rather than discovering that later. `restartOnRenewal: false` (set once
+   * `probe.php --expiry-test` shows the relay keeps live allocations) keeps the
+   * new credential for the next gathering and skips the restart.
    */
   private async onIceRefreshed(config: IceConfig): Promise<void> {
     if (this.disposed) return
@@ -1171,6 +1174,9 @@ export class RemoteSessionEngine {
 
     for (const entry of this.peers.values()) {
       entry.diagnostics.noteCredentialRefresh()
+      // The new credential is already applied (adoptIce); the restart only moves a relayed connection
+      // onto it, which an operator can switch off once their relay is known to keep live allocations.
+      if (!config.restartOnRenewal) continue
       if (entry.info.connectionState !== 'connected' || entry.supervisor.recovering) continue
 
       const path = await entry.diagnostics.selectedPath()

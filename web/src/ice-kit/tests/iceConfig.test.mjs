@@ -36,6 +36,12 @@ test('every product envelope is accepted', () => {
   assert.equal(normalizeIceConfig(null).iceServers.length, 0);
 });
 
+test('restart-on-renewal is on unless the server turns it off', () => {
+  assert.equal(normalizeIceConfig(grant()).restartOnRenewal, true);
+  assert.equal(normalizeIceConfig(grant({ restartOnRenewal: false })).restartOnRenewal, false);
+  assert.equal(normalizeIceConfig({ iceServers: [] }).restartOnRenewal, true, 'An older server that does not say keeps the safe default.');
+});
+
 test('anything that is not a STUN/TURN server is dropped', () => {
   const config = normalizeIceConfig({
     iceServers: [{ urls: ['https://evil.example', 'stun:ok.example:3478'] }, { urls: 'javascript:alert(1)' }, 'nope', null],

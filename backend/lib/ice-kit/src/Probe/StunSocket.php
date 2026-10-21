@@ -20,6 +20,8 @@ final class StunSocket
         $stream,
         public readonly string $transport,
         private readonly float $timeout,
+        /** The server's certificate as openssl_x509_parse() reads it; TLS only. */
+        public readonly ?array $certificate = null,
     ) {
         $this->stream = $stream;
     }
@@ -48,8 +50,10 @@ final class StunSocket
                 'verify_peer_name'  => $verify,
                 'allow_self_signed' => ! $verify,
                 'cafile'            => $tls['caFile'] ?? null,
+                'capture_peer_cert' => true,
             ], static fn ($v) => $v !== null);
         }
+        $context = stream_context_create($options);
 
         $errno  = 0;
         $errstr = '';
@@ -59,7 +63,7 @@ final class StunSocket
             $errstr,
             $timeout,
             STREAM_CLIENT_CONNECT,
-            stream_context_create($options),
+            $context,
         );
 
         if ($stream === false) {
@@ -75,7 +79,14 @@ final class StunSocket
 
         stream_set_blocking($stream, true);
 
-        return new self($stream, $transport, $timeout);
+        $certificate = null;
+        if ($transport === 'tls') {
+            $captured    = stream_context_get_params($context)['options']['ssl']['peer_certificate'] ?? null;
+            $parsed      = $captured !== null ? openssl_x509_parse($captured) : false;
+            $certificate = is_array($parsed) ? $parsed : null;
+        }
+
+        return new self($stream, $transport, $timeout, $certificate);
     }
 
     /**

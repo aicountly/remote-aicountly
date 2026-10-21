@@ -189,7 +189,10 @@ class DeviceAgentController extends BaseApiController
                 : (array) $participant['capabilities'],
         );
 
-        $grant = Services::iceConfigService()->grant((string) $participant['uuid']);
+        // The agent cannot renew its TURN credential mid-session, so it is issued one for the rest of
+        // the session rather than the browser's ordinary hour (docs/ICE_CONTRACT.md).
+        $remaining = max(0, strtotime((string) ($session['expires_at'] ?? '')) - time());
+        $grant     = Services::iceConfigService()->grantForSession((string) $participant['uuid'], $remaining);
 
         return $this->ok([
             'session'     => Presenter::session($session),

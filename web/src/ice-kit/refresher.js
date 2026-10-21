@@ -1,12 +1,14 @@
 /**
  * Keeps a connection's TURN credentials ahead of their expiry.
  *
- * coturn checks a REST credential's timestamp on every request, Refresh included, so a relay
- * allocation dies at most one refresh interval after its credential expires — in the middle of a call,
- * with nothing on either side to say why. This asks the product's API again at `refreshAt` (80% of the
- * lifetime by default) and hands the fresh config to `onRefreshed`, where the product points its peer
- * connections at it and, if they are relayed, restarts ICE so new allocations replace the old ones
- * before the old credential runs out.
+ * A relay refuses a NEW allocation presented with an expired credential (measured: the first thing
+ * `bin/probe.php --expiry-test` reports). Whether it also drops an allocation that already exists when
+ * its credential expires depends on the relay's build — coturn 4.6.1 did not, in a local test — so
+ * that is measured on the real nodes, not assumed. Either way a long session needs a valid credential
+ * for whatever it must set up AGAIN: an ICE restart that gathers afresh, a reconnect after a network
+ * change. This asks the product's API again at `refreshAt` (80% of the lifetime by default) and hands
+ * the fresh config to `onRefreshed`, where the product points its peer connections at it and — unless
+ * the grant says `restartOnRenewal: false` — moves relayed ones onto it by restarting ICE.
  *
  * A static credential (no expiry) is never refreshed. A failed fetch is retried, with backoff, for as
  * long as the refresher runs.

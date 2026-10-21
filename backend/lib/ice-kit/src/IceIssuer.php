@@ -47,7 +47,8 @@ final class IceIssuer
     /**
      * @param string $subject an opaque reference to the client (participant uuid, user uuid) bound into
      *                        the username so relay usage is attributable. Never an email address.
-     * @param array{preferRegion?: string|null, forceRelay?: bool} $options
+     * @param array{preferRegion?: string|null, forceRelay?: bool, ttl?: int} $options `ttl` overrides the
+     *        credential lifetime for a client that cannot renew; see Topology::sessionBoundTtl()
      */
     public function issue(string $subject, array $options = []): IceGrant
     {
@@ -55,13 +56,14 @@ final class IceIssuer
         $subject = CredentialMinter::subject($subject, $this->subjectFallback);
         $chosen  = $this->select($options['preferRegion'] ?? null, $now);
 
+        $ttl        = isset($options['ttl']) ? CredentialMinter::clampTtl((int) $options['ttl']) : $this->topology->ttlSeconds;
         $iceServers = [];
         $stun       = [];
         $relayNodes = [];
         $expiresAt  = null;
 
         foreach ($chosen['nodes'] as $node) {
-            $credentials = $node->credentialsFor($subject, $this->topology->ttlSeconds, $now);
+            $credentials = $node->credentialsFor($subject, $ttl, $now);
             if ($credentials === null) {
                 continue;
             }
@@ -99,40 +101,68 @@ final class IceIssuer
             candidatePoolSize: $this->topology->candidatePoolSize,
             degraded: $chosen['degraded'],
             failover: $chosen['failover'],
+            restartOnRenewal: $this->topology->restartOnRenewal,
         );
     }
 
     /**
+     * Which nodes a client is given, and why.
+     *
+     *   1. **Active nodes that are not known down.** A node declared down by repeated probes is never
+     *      handed out beside one that works.
+     *   2. **Standby nodes join** whenever no active node is fully healthy — the primary is down, has
+     *      lost a transport, or has just failed a probe. Offering both costs a credential and one more
+     *      allocation attempt; waiting for a second failed probe costs up to ten minutes of dead relay
+     *      for every new session. A fully healthy primary is served alone.
+     *   3. **Last resort.** If everything servable is known down, all of it is offered, active first
+     *      (`degraded`): any of them may have recovered since the last probe, and offering nothing
+     *      cannot be better.
+     *
+     * Fully working nodes lead, then the region hint, then priority, and the cap on nodes per client
+     * is applied after that — so it can never cut a working standby in favour of a degraded primary.
+     * A `disabled` node is not in `servable()` at all, so none of this can ever reach it.
+     *
      * @return array{nodes: list<TurnNode>, degraded: bool, failover: bool, health: array<string, string>}
      */
     public function select(?string $preferRegion, ?int $now = null): array
     {
-        $now       = $now ?? ($this->clock)();
-        $servable  = $this->topology->servableNodes();
-        $health    = $this->health?->states($now) ?? [];
-        $isHealthy = static fn (TurnNode $n): bool => ($health[$n->id] ?? 'unknown') !== 'down';
+        $now      = $now ?? ($this->clock)();
+        $servable = $this->topology->servableNodes();
+        $health   = $this->health?->states($now) ?? [];
+        $state    = static fn (TurnNode $n): string => $health[$n->id] ?? 'unknown';
 
-        $active  = array_filter($servable, static fn (TurnNode $n): bool => $n->status === NodeStatus::Active);
-        $standby = array_filter($servable, static fn (TurnNode $n): bool => $n->status === NodeStatus::Standby);
+        $usable = static fn (TurnNode $n): bool => $state($n) !== 'down';
+        // "No information" counts as working: a probe that has not run says nothing against a node.
+        $working = static fn (TurnNode $n): bool => in_array($state($n), ['up', 'unknown', 'stale'], true);
 
-        $degraded = false;
+        $active  = array_values(array_filter($servable, static fn (TurnNode $n): bool => $n->status === NodeStatus::Active));
+        $standby = array_values(array_filter($servable, static fn (TurnNode $n): bool => $n->status === NodeStatus::Standby));
+
+        $pool     = array_values(array_filter($active, $usable));
         $failover = false;
-        $pool     = array_filter($active, $isHealthy);
+        $degraded = false;
 
-        if ($pool === []) {
-            $pool     = array_filter($standby, $isHealthy);
-            $failover = $pool !== [];
+        if (array_filter($pool, $working) === []) {
+            $reserve = array_values(array_filter($standby, $usable));
+            if ($reserve !== []) {
+                $pool     = [...$pool, ...$reserve];
+                $failover = true;
+            }
         }
 
         if ($pool === [] && $servable !== []) {
-            $pool     = $active !== [] ? $active : $standby;
+            $pool     = [...$active, ...$standby];
             $degraded = true;
         }
 
         $region = strtolower(trim((string) $preferRegion));
-        $pool   = array_values($pool);
 
-        usort($pool, static function (TurnNode $a, TurnNode $b) use ($region): int {
+        usort($pool, static function (TurnNode $a, TurnNode $b) use ($region, $working): int {
+            $byHealth = ($working($b) <=> $working($a));
+            if ($byHealth !== 0) {
+                return $byHealth;
+            }
+
             if ($region !== '') {
                 $byRegion = ($b->region === $region) <=> ($a->region === $region);
                 if ($byRegion !== 0) {
@@ -155,24 +185,42 @@ final class IceIssuer
      * Every configured node and what is known about it — for a health endpoint or an operator.
      * Carries no secret and no credential.
      *
-     * @return array{source: string, relayConfigured: bool, nodes: list<array<string, mixed>>, problems: list<string>}
+     * @return array{source: string, relayConfigured: bool, nodes: list<array<string, mixed>>, problems: list<string>, warnings: list<string>}
      */
     public function status(): array
     {
-        $now    = ($this->clock)();
-        $health = $this->health?->states($now) ?? [];
+        $now     = ($this->clock)();
+        $health  = $this->health?->states($now) ?? [];
+        $serving = array_map(static fn (TurnNode $n): string => $n->id, $this->select(null, $now)['nodes']);
 
         return [
             'source'          => $this->topology->source,
             'relayConfigured' => $this->relayConfigured(),
             'nodes'           => array_map(
-                static fn (TurnNode $n): array => $n->describe() + [
-                    'servable' => $n->isServable(),
-                    'health'   => $health[$n->id] ?? 'unknown',
-                ],
+                static function (TurnNode $n) use ($health, $serving): array {
+                    $token     = $health[$n->id] ?? 'unknown';
+                    $condition = HealthStore::condition($token);
+
+                    return $n->describe() + [
+                        'role'      => $n->status->value,
+                        'servable'  => $n->isServable(),
+                        'health'    => $token,
+                        'condition' => $condition,
+                        // One word for a dashboard: disabled, unreachable, standby, or the condition.
+                        'state'     => match (true) {
+                            $n->status === NodeStatus::Disabled => 'disabled',
+                            $condition === 'unreachable'        => 'unreachable',
+                            $n->status === NodeStatus::Standby  => 'standby',
+                            default                             => $condition,
+                        },
+                        // Whether a client asking right now would be given this node.
+                        'serving'   => in_array($n->id, $serving, true),
+                    ];
+                },
                 $this->topology->nodes(),
             ),
             'problems' => $this->topology->problems(),
+            'warnings' => $this->topology->warnings(),
         ];
     }
 }

@@ -125,8 +125,11 @@ final class IceIssuerTest extends IceKitTestCase
             $this->healthWith(['mum' => 1]),
         )->issue('p');
 
-        $this->assertSame(['mum'], array_column($grant->relayNodes(), 'id'));
-        $this->assertSame('failing', $grant->relayNodes()[0]['health']);
+        // Not removed — one dropped probe is not an outage — but no longer served alone: the standby
+        // (never probed, so no information against it) joins until the primary proves itself again.
+        $this->assertSame(['ncr', 'mum'], array_column($grant->relayNodes(), 'id'), 'The node with no failures leads.');
+        $this->assertSame('failing', $grant->relayNodes()[1]['health']);
+        $this->assertTrue($grant->failover);
     }
 
     public function testStaleHealthIsIgnored(): void
@@ -200,5 +203,161 @@ final class IceIssuerTest extends IceKitTestCase
 
         $this->assertSame(1, substr_count($turn['username'], ':'));
         $this->assertSame('eviluserexample.com', explode(':', $turn['username'], 2)[1]);
+    }
+
+    // ------------------------------------------------------------------ conditions and failover
+
+    private function nodes(\Aicountly\Ice\IceGrant $grant): array
+    {
+        return array_column($grant->relayNodes(), 'id');
+    }
+
+    private function mumActiveNcrStandby(array $extra = []): \Aicountly\Ice\Topology
+    {
+        return $this->topology($this->productionEnv(['WEBRTC_TURN_NODE_NCR_STATUS' => 'standby'] + $extra));
+    }
+
+    public function testAHealthyPrimaryAloneIsServedAndTheStandbyStaysOut(): void
+    {
+        $grant = $this->issuer($this->mumActiveNcrStandby(), $this->healthWith(
+            ['mum' => 0, 'ncr' => 0],
+            self::NOW,
+            ['mum' => self::onlyWorking('udp', 'tcp', 'tls'), 'ncr' => self::onlyWorking('udp', 'tcp', 'tls')],
+        ))->issue('p');
+
+        $this->assertSame(['mum'], $this->nodes($grant));
+        $this->assertFalse($grant->failover);
+        $this->assertFalse($grant->degraded);
+    }
+
+    /** TLS on 443 is what restrictive networks depend on: a primary that has lost it is not "healthy". */
+    public function testAPrimaryThatHasLostATransportIsDegradedAndTheStandbyJoinsIt(): void
+    {
+        $issuer = $this->issuer($this->mumActiveNcrStandby(), $this->healthWith(
+            ['mum' => 0, 'ncr' => 0],
+            self::NOW,
+            ['mum' => self::onlyWorking('udp', 'tcp'), 'ncr' => self::onlyWorking('udp', 'tcp', 'tls')],
+        ));
+        $grant = $issuer->issue('p');
+
+        $this->assertSame(['ncr', 'mum'], $this->nodes($grant), 'The fully working node leads; the degraded one still serves UDP and TCP.');
+        $this->assertTrue($grant->failover);
+        $this->assertFalse($grant->degraded);
+
+        $byId = array_column($issuer->status()['nodes'], null, 'id');
+        $this->assertSame('degraded', $byId['mum']['condition']);
+        $this->assertSame('healthy', $byId['ncr']['condition']);
+    }
+
+    public function testAPrimaryWithOneFailedProbeBringsTheStandbyInBeforeItIsDeclaredDown(): void
+    {
+        // Two 5-minute probes to declare a node down is up to ten minutes of dead relay for new
+        // sessions; one failure is enough to start offering the standby beside it.
+        $grant = $this->issuer($this->mumActiveNcrStandby(), $this->healthWith(['mum' => 1, 'ncr' => 0]))->issue('p');
+
+        $this->assertSame(['ncr', 'mum'], $this->nodes($grant));
+        $this->assertTrue($grant->failover);
+    }
+
+    public function testAPrimaryDeclaredDownIsReplacedByTheStandby(): void
+    {
+        $issuer = $this->issuer($this->mumActiveNcrStandby(), $this->healthWith(['mum' => 3, 'ncr' => 0]));
+        $grant  = $issuer->issue('p');
+
+        $this->assertSame(['ncr'], $this->nodes($grant), 'A known-down relay is not handed out beside a working one.');
+        $this->assertTrue($grant->failover);
+        $this->assertFalse($grant->degraded);
+
+        $byId = array_column($issuer->status()['nodes'], null, 'id');
+        $this->assertSame('unreachable', $byId['mum']['state']);
+        $this->assertSame('standby', $byId['ncr']['state']);
+        $this->assertSame([false, true], [$byId['mum']['serving'], $byId['ncr']['serving']]);
+    }
+
+    public function testWhenEveryRelayIsKnownDownBothAreOfferedNotJustThePrimary(): void
+    {
+        $grant = $this->issuer($this->mumActiveNcrStandby(), $this->healthWith(['mum' => 4, 'ncr' => 4]))->issue('p');
+
+        $this->assertSame(['mum', 'ncr'], $this->nodes($grant), 'Either may have recovered since the last probe.');
+        $this->assertTrue($grant->degraded);
+    }
+
+    public function testTheCapNeverCutsTheWorkingStandbyInFavourOfTheDegradedPrimary(): void
+    {
+        $grant = $this->issuer(
+            $this->mumActiveNcrStandby(['WEBRTC_TURN_MAX_NODES' => '1']),
+            $this->healthWith(['mum' => 1, 'ncr' => 0]),
+        )->issue('p');
+
+        $this->assertSame(['ncr'], $this->nodes($grant));
+    }
+
+    public function testRecoveryReturnsServiceToThePrimaryAlone(): void
+    {
+        $topology = $this->mumActiveNcrStandby();
+
+        $down      = $this->issuer($topology, $this->healthWith(['mum' => 3, 'ncr' => 0]))->issue('p');
+        $recovered = $this->issuer($topology, $this->healthWith(['mum' => 0, 'ncr' => 0]))->issue('p');
+
+        $this->assertSame(['ncr'], $this->nodes($down));
+        $this->assertSame(['mum'], $this->nodes($recovered));
+        $this->assertFalse($recovered->failover);
+    }
+
+    public function testADisabledNodeIsNeverAFailoverTargetWhateverHappensToThePrimary(): void
+    {
+        $grant = $this->issuer($this->topology($this->productionEnv()), $this->healthWith(['mum' => 9, 'ncr' => 0]))->issue('p');
+
+        $this->assertSame(['mum'], $this->nodes($grant));
+        $this->assertTrue($grant->degraded);
+    }
+
+    public function testConditionsAreReportedForEveryNodeWithoutCredentials(): void
+    {
+        $status = $this->issuer($this->mumActiveNcrStandby(), $this->healthWith(
+            ['mum' => 3],
+            self::NOW,
+        ))->status();
+        $byId = array_column($status['nodes'], null, 'id');
+
+        $this->assertSame(['unreachable', 'unknown'], [$byId['mum']['condition'], $byId['ncr']['condition']]);
+        $this->assertSame(['active', 'standby'], [$byId['mum']['role'], $byId['ncr']['role']]);
+        $this->assertStringNotContainsString('shared-coturn-secret', json_encode($status, JSON_THROW_ON_ERROR));
+    }
+
+    // ------------------------------------------------------------------ session-bound credentials
+
+    public function testASessionBoundCredentialCoversTheRestOfTheSessionAndNoMore(): void
+    {
+        $topology = $this->topology($this->productionEnv());
+
+        $this->assertSame(3600, $topology->sessionBoundTtl(600), 'A short session still gets the ordinary lifetime.');
+        $this->assertSame(7500 + 300, $topology->sessionBoundTtl(7500), 'Two hours left: two hours and five minutes.');
+        $this->assertSame(28800, $topology->sessionBoundTtl(86400), 'Capped at WEBRTC_TURN_SESSION_TTL_MAX.');
+        $this->assertSame(3600, $topology->sessionBoundTtl(-50));
+
+        $raised = $this->topology($this->productionEnv(['WEBRTC_TURN_SESSION_TTL_MAX' => '86400']));
+        $this->assertSame(86400, $raised->sessionBoundTtl(86400));
+    }
+
+    public function testATtlOptionLengthensACredentialWithoutTouchingTheOrdinaryOne(): void
+    {
+        $issuer = $this->issuer($this->topology($this->productionEnv()));
+
+        $ordinary = $issuer->issue('p');
+        $bound    = $issuer->issue('p', ['ttl' => 7800]);
+
+        $this->assertSame(3600, $ordinary->expiresIn());
+        $this->assertSame(7800, $bound->expiresIn());
+        $this->assertSame((self::NOW + 7800) . ':p', $bound->iceServers()[1]['username']);
+        $this->assertSame(86400, $issuer->issue('p', ['ttl' => 10 ** 7])->expiresIn(), 'Never beyond the absolute ceiling.');
+    }
+
+    public function testRenewalRestartsAreOnByDefaultAndSwitchableOff(): void
+    {
+        $this->assertTrue($this->issuer($this->topology($this->productionEnv()))->issue('p')->toArray()['restartOnRenewal']);
+        $this->assertFalse(
+            $this->issuer($this->topology($this->productionEnv(['WEBRTC_TURN_RESTART_ON_RENEWAL' => 'false'])))->issue('p')->toArray()['restartOnRenewal'],
+        );
     }
 }
