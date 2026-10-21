@@ -21,6 +21,8 @@ import {
 } from '../../services/api/remote'
 import { RemoteApiError } from '../../services/api/client'
 import { RemoteSessionEngine } from '../../services/webrtc/RemoteSessionEngine'
+import { probeRelay } from '../../ice-kit/index.js'
+import type { RelayProbeResult } from '../../ice-kit/index.js'
 import type { AnnotationShape, EngineSnapshot } from '../../services/webrtc/RemoteSessionEngine'
 import { readCaptureHandle, requestMicrophone, requestScreenShare } from '../../services/webrtc/screenCapture'
 import { RemoteCaptureError } from '../../services/webrtc/screenCapture'
@@ -573,6 +575,19 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
    * the network is the reason they pressed it, waiting would be the worst
    * possible behaviour (§18).
    */
+  /** Try again after the connection gave up: fresh credentials, a fresh round of ICE restarts. */
+  const reconnect = useCallback(() => {
+    engineRef.current?.retryConnection()
+  }, [])
+
+  /** Whether this browser can get a relay at all — gathered locally, nothing sent to a peer. */
+  const checkRelay = useCallback(async (): Promise<RelayProbeResult | null> => {
+    const engine = engineRef.current
+    if (!engine || typeof RTCPeerConnection === 'undefined') return null
+
+    return probeRelay(engine.currentIceConfig())
+  }, [])
+
   const stopControl = useCallback(
     (participantUuid?: string) => {
       engineRef.current?.stopControlling()
@@ -684,6 +699,8 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
       sendControlScroll,
       sendControlKey,
       sendControlClipboard,
+      reconnect,
+      checkRelay,
     },
   }
 }

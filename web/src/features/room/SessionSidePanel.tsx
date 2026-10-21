@@ -7,6 +7,7 @@ import FilesPanel from './FilesPanel'
 import ControlPanel from './ControlPanel'
 import type { ControlPhase } from './ControlPanel'
 import type { EnginePeer, EngineSnapshot } from '../../services/webrtc/RemoteSessionEngine'
+import type { RelayProbeResult } from '../../ice-kit/index.js'
 import type { ChatMessage, SessionControlState, SessionDetail } from '../../types/remote'
 import { describeShareMode, describeSurface, formatTime } from '../../utils/format'
 
@@ -57,6 +58,8 @@ interface Props {
   onSendChat: (body: string) => Promise<void>
   onApprove: (participantUuid: string) => Promise<void>
   onDeny: (participantUuid: string) => Promise<void>
+  /** Ask the browser whether it can reach the relay — the Security panel's check. */
+  onCheckRelay?: () => Promise<RelayProbeResult | null>
 }
 
 const TITLES: Record<Panel, string> = {
@@ -82,6 +85,7 @@ export default function SessionSidePanel({
   onSendChat,
   onApprove,
   onDeny,
+  onCheckRelay,
 }: Props) {
   return (
     <aside className="side-panel" aria-label={TITLES[panel]}>
@@ -122,7 +126,7 @@ export default function SessionSidePanel({
 
         {panel === 'details' ? <DetailsPanel session={session} /> : null}
 
-        {panel === 'security' ? <SecurityPanel session={session} live={live} /> : null}
+        {panel === 'security' ? <SecurityPanel session={session} live={live} onCheckRelay={onCheckRelay} /> : null}
       </div>
     </aside>
   )
@@ -350,7 +354,15 @@ function DetailsPanel({ session }: { session: SessionDetail }) {
  * "military-grade" anything, and where a guarantee is weaker than it looks —
  * an unverified sharing surface — it says so.
  */
-function SecurityPanel({ session, live }: { session: SessionDetail; live: EngineSnapshot | null }) {
+function SecurityPanel({
+  session,
+  live,
+  onCheckRelay,
+}: {
+  session: SessionDetail
+  live: EngineSnapshot | null
+  onCheckRelay?: () => Promise<RelayProbeResult | null>
+}) {
   const surfaceVerified = session.actualDisplaySurface !== null && session.actualDisplaySurface !== 'unknown'
 
   return (
@@ -388,16 +400,82 @@ function SecurityPanel({ session, live }: { session: SessionDetail; live: Engine
         title="Session activity is logged"
         body="Who joined, what was shared and when it ended are recorded. The contents of your screen are not."
       />
-      <SecurityItem
-        good={live?.relayAvailable !== false}
-        title="Direct, encrypted connection"
-        body={
-          live?.relayAvailable === false
-            ? 'Media travels directly between browsers over an encrypted connection. No relay is configured on this deployment, so very restrictive networks may not connect.'
-            : 'Media travels directly between browsers over an encrypted connection, or through AICOUNTLY’s relay when a network requires it.'
-        }
-      />
+      <ConnectionPathItem live={live} />
+      {onCheckRelay && live?.relayAvailable !== false ? <RelayCheck onCheck={onCheckRelay} /> : null}
     </ul>
+  )
+}
+
+/**
+ * How media is actually travelling, read from the browser's own statistics —
+ * not assumed from configuration. A relay never sees the picture: WebRTC media
+ * is encrypted end to end (DTLS-SRTP) and the relay forwards ciphertext.
+ */
+function ConnectionPathItem({ live }: { live: EngineSnapshot | null }) {
+  const network = live?.network
+
+  if (network?.path === 'relay') {
+    const over = network.relayProtocol === 'tls' ? ' over TLS' : network.relayProtocol === 'tcp' ? ' over TCP' : ''
+
+    return (
+      <SecurityItem
+        good
+        title="Encrypted, through AICOUNTLY’s relay"
+        body={`A direct path was not available on this network, so encrypted media is relayed by ${
+          network.relayNode ? `AICOUNTLY’s ${network.relayNode} relay` : 'AICOUNTLY’s relay'
+        }${over}. The relay forwards it without being able to read it.`}
+      />
+    )
+  }
+
+  return (
+    <SecurityItem
+      good={live?.relayAvailable !== false}
+      title="Direct, encrypted connection"
+      body={
+        live?.relayAvailable === false
+          ? 'Media travels directly between browsers over an encrypted connection. No relay is configured on this deployment, so very restrictive networks may not connect.'
+          : 'Media travels directly between browsers over an encrypted connection, or through AICOUNTLY’s relay when a network requires it.'
+      }
+    />
+  )
+}
+
+/** "Can this browser reach the relay?" — one relay-only gathering per node, nothing sent to anyone. */
+function RelayCheck({ onCheck }: { onCheck: () => Promise<RelayProbeResult | null> }) {
+  const [state, setState] = useState<'idle' | 'checking' | 'done'>('idle')
+  const [result, setResult] = useState<RelayProbeResult | null>(null)
+
+  const run = async () => {
+    setState('checking')
+    try {
+      setResult(await onCheck())
+    } catch {
+      setResult(null)
+    }
+    setState('done')
+  }
+
+  return (
+    <li className="relay-check">
+      <button type="button" className="btn btn--secondary btn--sm" onClick={() => void run()} disabled={state === 'checking'}>
+        {state === 'checking' ? 'Checking the relay…' : 'Check relay connection'}
+      </button>
+      {state === 'done' ? (
+        <p className="security-item__body" role="status">
+          {result === null
+            ? 'The check could not run in this browser.'
+            : result.ok
+              ? `The relay is reachable from this network (${result.nodes
+                  .filter((node) => node.relayCandidates > 0)
+                  .map((node) => `${node.label}: ${node.protocols.join(', ') || 'yes'}`)
+                  .join('; ')}).`
+              : result.verdict === 'relay-auth-failed'
+                ? 'The relay refused this browser’s credentials. Reload the session; if it keeps happening, tell your administrator.'
+                : 'The relay could not be reached from this network. A firewall or VPN may be blocking it.'}
+        </p>
+      ) : null}
+    </li>
   )
 }
 

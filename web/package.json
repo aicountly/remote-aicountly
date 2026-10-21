@@ -11,7 +11,8 @@
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "vitest run && npm run test:ice-kit",
+    "test:ice-kit": "node --test \"src/ice-kit/tests/*.test.mjs\"",
     "test:watch": "vitest",
     "lint": "tsc -b"
   },

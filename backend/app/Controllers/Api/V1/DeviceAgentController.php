@@ -189,7 +189,7 @@ class DeviceAgentController extends BaseApiController
                 : (array) $participant['capabilities'],
         );
 
-        $ice = Services::iceConfigService();
+        $grant = Services::iceConfigService()->grant((string) $participant['uuid']);
 
         return $this->ok([
             'session'     => Presenter::session($session),
@@ -200,8 +200,9 @@ class DeviceAgentController extends BaseApiController
                 'room'      => $token['room'],
                 'expiresAt' => gmdate('c', $token['expiresAt']),
             ],
-            'iceServers'     => $ice->iceServers(),
-            'relayAvailable' => $ice->hasRelay(),
+            'iceServers'     => $grant->iceServers(),
+            'relayAvailable' => $grant->relayAvailable(),
+            'ice'            => $grant->toArray(),
         ]);
     }
 

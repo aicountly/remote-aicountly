@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Config;
 
+use Aicountly\Ice\Topology;
 use CodeIgniter\Config\BaseConfig;
 
 /**
@@ -164,6 +165,18 @@ class Remote extends BaseConfig
     public string $turnStaticAuthSecret = '';
     public int $turnCredentialTtlSeconds = 3600;
 
+    /**
+     * Named, prioritised TURN nodes (lib/ice-kit), read from the WEBRTC_TURN_* keys every AICOUNTLY
+     * product shares — so Remote and Connect are pointed at the same relays by one set of lines.
+     *
+     * Null when WEBRTC_TURN_NODES is not set, and then the single-pool `remote.turn*` keys above
+     * apply exactly as before. When it is set it wins, and those keys are ignored.
+     */
+    public ?Topology $turnTopology = null;
+
+    /** Where the scheduled TURN probe records node health (lib/ice-kit/bin/probe.php --write-health). */
+    public string $turnHealthFile = '';
+
     // -----------------------------------------------------------------------
     // Session and invitation lifetimes
     // -----------------------------------------------------------------------
@@ -290,6 +303,14 @@ class Remote extends BaseConfig
         $this->turnCredential       = $this->envString('remote.turnCredential', '');
         $this->turnStaticAuthSecret = $this->envString('remote.turnStaticAuthSecret', '');
         $this->turnCredentialTtlSeconds = $this->envInt('remote.turnCredentialTtl', $this->turnCredentialTtlSeconds);
+
+        if ($this->envString('WEBRTC_TURN_NODES', '') !== '') {
+            $this->turnTopology = Topology::fromEnvironment(
+                static fn (string $key): ?string => is_scalar($v = env($key)) ? (string) $v : null,
+                ['stunUrls' => $this->stunUrls],
+            );
+        }
+        $this->turnHealthFile = $this->envString('WEBRTC_TURN_HEALTH_FILE', WRITEPATH . 'ice/turn-health.json');
 
         $this->sessionDefaultMinutes       = $this->envInt('remote.sessionDefaultMinutes', $this->sessionDefaultMinutes);
         $this->inviteDefaultMinutes        = $this->envInt('remote.inviteDefaultMinutes', $this->inviteDefaultMinutes);

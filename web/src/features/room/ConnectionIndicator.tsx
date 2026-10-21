@@ -19,6 +19,8 @@ import type { SessionStatus } from '../../types/remote'
 interface Props {
   live: EngineSnapshot | null
   sessionStatus: SessionStatus
+  /** Try again after the connection gave up. Absent: no button. */
+  onReconnect?: () => void
 }
 
 interface Presentation {
@@ -70,7 +72,7 @@ function quality(live: EngineSnapshot): Presentation {
   }
 }
 
-export default function ConnectionIndicator({ live, sessionStatus }: Props) {
+export default function ConnectionIndicator({ live, sessionStatus, onReconnect }: Props) {
   const { label, tone, announcement } = present(live, sessionStatus)
   const [announced, setAnnounced] = useState('')
   const previous = useRef('')
@@ -93,11 +95,18 @@ export default function ConnectionIndicator({ live, sessionStatus }: Props) {
         {announced}
       </span>
 
-      {/* No relay configured and the peers cannot reach each other directly:
-          say so rather than showing "reconnecting" forever (§20). */}
-      {live?.connection === 'failed' && live.relayAvailable === false ? (
+      {/* Why it failed, from what the browser actually saw — no relay
+          configured, the relay unreachable or refusing — rather than
+          "reconnecting" forever (§20, docs/ICE_CONTRACT.md). */}
+      {live?.connection === 'failed' ? (
         <span className="connection__hint">
-          A direct connection could not be made on this network.
+          {live.network.message ??
+            (live.relayAvailable === false ? 'A direct connection could not be made on this network.' : null)}
+          {onReconnect ? (
+            <button type="button" className="btn btn--secondary btn--sm connection__retry" onClick={onReconnect}>
+              Reconnect
+            </button>
+          ) : null}
         </span>
       ) : null}
     </>

@@ -7,6 +7,7 @@
  */
 
 import { apiFetch, apiFetchText, apiFetchWithMeta, setGuestToken } from './client'
+import type { ConnectivityReport } from '../../ice-kit/index.js'
 import type {
   AuditEntry,
   AuditFilters,
@@ -205,6 +206,27 @@ export function reportPresence(
 
 export function fetchSignallingCredentials(sessionUuid: string): Promise<SignallingCredentials> {
   return apiFetch<SignallingCredentials>(`/sessions/${sessionUuid}/signalling-token`, { method: 'POST' })
+}
+
+/**
+ * Fresh TURN credentials, without reconnecting to the room (docs/ICE_CONTRACT.md).
+ *
+ * A relayed connection cannot outlive its credential — the relay refuses the allocation's next
+ * refresh once it has expired — so the engine asks again before then and restarts ICE onto the new
+ * one. The answer is the aicountly.ice/1 grant, which the ice-kit normalises.
+ */
+export function fetchIceServers(sessionUuid: string): Promise<unknown> {
+  return apiFetch<unknown>(`/sessions/${sessionUuid}/ice-servers`, { method: 'POST' })
+}
+
+/**
+ * How this participant's connection went — path, relay node, ICE failure categories.
+ *
+ * Best-effort diagnostics: the server keeps only an allow-listed summary in its log, and a report
+ * that fails to send changes nothing for the person in the session.
+ */
+export function reportConnectivity(sessionUuid: string, report: ConnectivityReport): Promise<unknown> {
+  return apiFetch<unknown>(`/sessions/${sessionUuid}/connectivity-report`, { method: 'POST', body: report })
 }
 
 // --- Chat -------------------------------------------------------------------
