@@ -15,6 +15,12 @@ final class LeaseBook
 
     private bool $dirty = false;
 
+    /** @var array<string, true> keys written or removed during this transaction, for stores that write rows */
+    private array $touched = [];
+
+    /** @var array<string, true> */
+    private array $removed = [];
+
     /** @param array<string, Lease> $leases by key */
     public function __construct(private array $leases = [], private readonly int $now = 0)
     {
@@ -40,15 +46,31 @@ final class LeaseBook
     public function put(Lease $lease): void
     {
         $this->leases[$lease->key] = $lease;
+        $this->touched[$lease->key] = true;
+        unset($this->removed[$lease->key]);
         $this->dirty = true;
     }
 
     public function remove(string $key): void
     {
         if (isset($this->leases[$key])) {
-            unset($this->leases[$key]);
+            unset($this->leases[$key], $this->touched[$key]);
+            $this->removed[$key] = true;
             $this->dirty = true;
         }
+    }
+
+    /**
+     * What this transaction changed, for a store that writes rows instead of a whole file.
+     *
+     * @return array{put: list<Lease>, removed: list<string>}
+     */
+    public function changes(): array
+    {
+        return [
+            'put'     => array_values(array_intersect_key($this->leases, $this->touched)),
+            'removed' => array_keys($this->removed),
+        ];
     }
 
     /** @return list<Lease> */
@@ -66,7 +88,8 @@ final class LeaseBook
         $n = 0;
         foreach ($this->leases as $key => $lease) {
             if ($lease->product === $product && $lease->sessionRef === $sessionRef && ($subject === null || $lease->subject === $subject)) {
-                unset($this->leases[$key]);
+                unset($this->leases[$key], $this->touched[$key]);
+                $this->removed[$key] = true;
                 $n++;
             }
         }

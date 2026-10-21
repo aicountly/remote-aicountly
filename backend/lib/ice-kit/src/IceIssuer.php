@@ -54,9 +54,11 @@ final class IceIssuer
         ?\Closure $clock = null,
         private readonly string $subjectFallback = 'aicountly',
         private readonly ?LeaseStore $leases = null,
-        private readonly ?LoadStore $load = null,
+        private readonly ?LoadSource $load = null,
         private readonly ?LatencyStore $latency = null,
         private readonly ?\Closure $audit = null,
+        /** @var list<string> why `enforce` was held back to `observe` (see IceRuntime), shown by status() */
+        private readonly array $enforceBlockedBy = [],
     ) {
         $this->clock = $clock ?? static fn (): int => time();
     }
@@ -96,7 +98,8 @@ final class IceIssuer
         $policy  = $this->topology->admission;
 
         $request = ['tier' => $tier, 'client' => $client, 'profile' => $profile, 'now' => $now];
-        $plan    = null;
+        $plan       = null;
+        $ledgerDown = false;
 
         if ($policy->active() && $this->leases !== null) {
             try {
@@ -110,13 +113,22 @@ final class IceIssuer
                     $this->audit('ledger_repaired', ['repairs' => $this->leases->repairs()]);
                 }
             } catch (\Throwable $e) {
-                // The books are unavailable (disk full, unwritable). Failing closed would take every
-                // relay user down for a bookkeeping fault, so serve as if admission were off and say so.
+                // The books are unavailable (disk full, database down). Paid clients are served unbooked; whether free
+                // ones are is decided below. Say so either way.
                 $this->audit('ledger_error', ['error' => $e::class]);
+                $ledgerDown = true;
             }
         }
 
         $plan ??= $this->plan($request, null, $product, $session, $clean);
+
+        // The books are down and admission is enforced. Paid clients are served unbooked — the reserve exists for
+        // them — but free clients are refused: with no books nobody can say the free share still has room, and
+        // an outage of the bookkeeping must not become a way to exceed it.
+        if ($ledgerDown && $policy->enforcing() && $tier === Tier::Free && $plan['nodes'] !== []) {
+            $plan = ['nodes' => [], 'urls' => [], 'degraded' => false, 'failover' => false, 'wouldDeny' => false, 'decisions' => [], 'proximity' => [], 'health' => $plan['health'],
+                'admission' => ['outcome' => 'denied', 'reason' => 'ledger_unavailable']];
+        }
 
         $iceServers = [];
         $stun       = [];
@@ -313,6 +325,8 @@ final class IceIssuer
             $cost[$node->id]      = $proximity[$node->id]['ms']
                 + Admission::loadPenaltyMs($decisions[$node->id]->utilization, $policy)
                 + (in_array($state($node), ['degraded', 'failing'], true) ? 30.0 : 0.0)
+                // A host's paid-only instance is where a paid client belongs; the shared one is its overflow.
+                - ($node->capacity->exclusiveTo($tier) && $tier === Tier::Paid ? 12.0 : 0.0)
                 - (in_array($node->id, $onNodes, true) ? 20.0 : 0.0);
         }
 
@@ -577,6 +591,9 @@ final class IceIssuer
             'source'          => $this->topology->source,
             'relayConfigured' => $this->relayConfigured(),
             'admission'       => $policy->toArray(),
+            // Non-empty: the operator asked for enforce, but a precondition (licence mapping, feed) is unmet, so the
+            // application is OBSERVING. Nothing is denied until every reason here is gone.
+            'enforceBlockedBy' => $this->enforceBlockedBy,
             // `unavailable` means the usage below is absent, not zero: the lease books could not be read.
             'books'           => $this->leases === null ? 'none' : ($book === null ? 'unavailable' : 'ok'),
             'nodes'           => array_map(

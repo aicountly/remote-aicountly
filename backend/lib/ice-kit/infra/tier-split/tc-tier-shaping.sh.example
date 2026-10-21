@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Egress shaping that makes the paid reserve a property of the network. Run as root on a TURN host, AFTER
+# nftables-tier.nft.example is loaded (it classifies the packets). Staging first; this changes a production NIC's queueing.
+#
+#   IFACE=eth0 LINK_MBIT=1000 RESERVE_PCT=50 bash tc-tier-shaping.sh apply|remove|show
+#
+# Classes (HTB):
+#   1:10  paid-only instance   rate = R * link   (GUARANTEED)   ceil = link   (may use whatever is free)
+#   1:20  shared instance      rate = 5 % link                   ceil = (1 − R) * link   (can NEVER take more)
+#   1:30  everything else (ssh, certificate renewal, monitoring) — small guarantee, may burst
+#
+# So free (and paid overflow on the shared instance) is capped at (1 − R) of the link whatever it offers, and the paid
+# reserve is guaranteed even when the shared class is flat out. Test with tests/loadtest/tier-isolation.sh at a load
+# that actually fills the link.
+set -euo pipefail
+IFACE="${IFACE:?set IFACE}"; LINK="${LINK_MBIT:?set LINK_MBIT (sustainable egress, Mbit/s)}"; R="${RESERVE_PCT:-50}"
+[ "$R" -ge 50 ] || { echo "RESERVE_PCT must be at least 50" >&2; exit 2; }
+PAID=$(( LINK * R / 100 )); SHARED=$(( LINK - PAID )); SMALL=$(( LINK / 20 ))
+
+case "${1:-show}" in
+  apply)
+    tc qdisc replace dev "$IFACE" root handle 1: htb default 30
+    tc class replace dev "$IFACE" parent 1:  classid 1:1  htb rate "${LINK}mbit"
+    tc class replace dev "$IFACE" parent 1:1 classid 1:10 htb rate "${PAID}mbit"  ceil "${LINK}mbit"   prio 0
+    tc class replace dev "$IFACE" parent 1:1 classid 1:20 htb rate "${SMALL}mbit" ceil "${SHARED}mbit" prio 1
+    tc class replace dev "$IFACE" parent 1:1 classid 1:30 htb rate "${SMALL}mbit" ceil "${LINK}mbit"   prio 2
+    # fq_codel keeps latency low inside each class; a kernel without it (some minimal builds) leaves the default FIFO.
+    for c in 10 20 30; do tc qdisc replace dev "$IFACE" parent 1:$c fq_codel 2>/dev/null || true; done
+    # No tc filters: nftables-tier.nft sets each packet's priority to the class id (1:10 / 1:20) and HTB honours it.
+    echo "applied: paid ${PAID} Mbit guaranteed (ceil ${LINK}), shared ceiling ${SHARED} Mbit on ${IFACE}" ;;
+  remove) tc qdisc del dev "$IFACE" root 2>/dev/null && echo removed || echo "nothing to remove" ;;
+  show) tc -s class show dev "$IFACE"; nft list counters inet tierctl 2>/dev/null || true ;;
+  *) echo "usage: IFACE=… LINK_MBIT=… $0 apply|remove|show" >&2; exit 2 ;;
+esac

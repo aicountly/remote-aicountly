@@ -103,6 +103,12 @@ if (isset($opts['status'])) {
         fwrite(STDOUT, json_encode($status, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
     } else {
         $out("source: {$status['source']}   relay configured: " . ($status['relayConfigured'] ? 'yes' : 'NO'));
+        if ($status['enforceBlockedBy'] !== []) {
+            $out('ENFORCEMENT IS HELD BACK (running as observe) because:');
+            foreach ($status['enforceBlockedBy'] as $reason) {
+                $out('  - ' . $reason);
+            }
+        }
         $out(sprintf('admission: %s   paid reserve %d%%   busy at %d%%   free shed at %d%%', $status['admission']['mode'], $status['admission']['paidReservePercent'], $status['admission']['busyAtPercent'], $status['admission']['shedFreeAtPercent']));
         foreach ($status['nodes'] as $node) {
             $out(sprintf(

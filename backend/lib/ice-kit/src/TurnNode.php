@@ -46,6 +46,8 @@ final class TurnNode
         public readonly ?float $lat = null,
         public readonly ?float $lon = null,
         public readonly Capacity $capacity = new Capacity(),
+        /** Nodes of one physical host (e.g. `mum-paid` and `mum-shared` are two coturn instances of group `mum`). */
+        public readonly string $group = '',
     ) {
         if (preg_match('/^[a-z0-9][a-z0-9-]{0,31}$/', $id) !== 1) {
             throw new \InvalidArgumentException("TURN node id '{$id}' must be 1-32 characters of a-z, 0-9 and '-'.");

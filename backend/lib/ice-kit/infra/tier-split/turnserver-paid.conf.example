@@ -1,0 +1,39 @@
+# coturn instance 1 of 2 on a TURN host: PAID-ONLY. Nothing in this repository applies this file; the infrastructure
+# team does, after reading README.md. Replace every <…>; secrets come from the deployment secret store, not from here.
+#
+# Sizing: a host's sustainable relayed throughput B (bytes/s, per direction) and allocations A are MEASURED (runbook F2).
+# This instance gets the paid reserve R (>= 50 %) of both:   bps-capacity = R*B   total-quota = R*A
+
+listening-ip=<public ip>
+relay-ip=<public ip>
+listening-port=3478            # UDP + TCP
+tls-listening-port=<5349 | 443 on its own IP>   # see README § TLS on 443
+min-port=40000
+max-port=44999                 # a range of its own: nftables counts and tc shapes by it
+realm=turn-mum.aicountly.com   # per node
+fingerprint
+use-auth-secret
+static-auth-secret=<paid instance secret — distinct from the shared instance's and from the other node's>
+no-cli
+no-multicast-peers
+stale-nonce
+verbose                         # the usage: lines summarize-usage.php attributes to tiers
+simple-log
+log-file=/var/log/turnserver/paid.log
+
+# Peers: a relay is not a way into the host's network (and not to its own address — Noida's self-IP denial belongs here).
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+denied-peer-ip=127.0.0.0-127.255.255.255
+denied-peer-ip=169.254.0.0-169.254.255.255
+denied-peer-ip=<this host's own public IP>
+
+# Limits (see README § Numbers). R*A, R*B, ceil(1.1 * ...) as a safety net above the application's own limit:
+total-quota=<ceil(1.1 * R * A)>
+user-quota=8
+bps-capacity=<ceil(1.1 * R * B)>
+max-bps=<per-session ceiling, bytes/s — e.g. 1000000>
+
+cert=/etc/letsencrypt/live/turn-mum.aicountly.com/fullchain.pem
+pkey=/etc/letsencrypt/live/turn-mum.aicountly.com/privkey.pem

@@ -16,7 +16,7 @@ declare(strict_types=1);
  * 1 when one was refused, 2 on a usage or configuration error. Prints node ids and outcomes only.
  */
 
-use Aicountly\Ice\LoadStore;
+use Aicountly\Ice\LoadSource;
 
 if (PHP_SAPI !== 'cli') {
     http_response_code(404);
@@ -44,7 +44,7 @@ $store = $kit['load'] ?? null;
 // Only nodes this deployment knows: a report for any other id is refused, so a node (or a typo) cannot
 // evict another node's reading or fill the file.
 $known = isset($kit['topology']) ? array_map(static fn ($n): string => $n->id, $kit['topology']->nodes()) : null;
-if (! $store instanceof LoadStore) {
+if (! $store instanceof LoadSource) {
     fwrite(STDERR, "ingest-load: the bootstrap file returned no 'load' LoadStore\n");
     exit(2);
 }

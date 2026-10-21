@@ -75,6 +75,9 @@ final class ActiveActiveIceApiTest extends RemoteTestCase
             $config->signalUrl        = 'wss://remote.aicountly.test/signal';
             $config->turnTopology     = Topology::fromEnvironment(static fn (string $k): ?string => $env[$k] ?? null, ['stunUrls' => []]);
             $config->turnPaidPlanCodes = ['REMOTE_BUSINESS'];
+            // Enforcement is allowed only once who-is-paid is mapped, attested and fresh (licenceBlockers()).
+            $config->turnLicenceFeedConfirmed   = true;
+            $config->turnEntitlementMaxAgeHours = 48;
         });
     }
 
@@ -168,6 +171,56 @@ final class ActiveActiveIceApiTest extends RemoteTestCase
         $this->assertSame('free', $this->iceFor($free)['admission']['tier']);
     }
 
+    public function testThePlatformDefaultRowNeverMakesACompanyPaid(): void
+    {
+        // The seeded default (company_id NULL) is a feature set for companies nobody set up. Even with its plan
+        // listed as paid, a company without a row of its own is free.
+        $this->db->table('remote_entitlements')->insert(['company_id' => null, 'plan_code' => 'REMOTE_BUSINESS']);
+        $s = $this->sessionOn(483, 'REMOTE_FREE', 'nodefault');
+        $this->db->table('remote_entitlements')->where('company_id', 483)->delete();
+
+        $this->assertSame('free', $this->iceFor($s)['admission']['tier']);
+    }
+
+    public function testAnExpiredNotYetValidOrStaleEntitlementIsFree(): void
+    {
+        $now = static fn (string $mod): string => gmdate('Y-m-d H:i:s', strtotime($mod));
+        $cases = [
+            491 => ['valid_until' => $now('-1 day')],                                  // lapsed
+            492 => ['valid_from' => $now('+1 day')],                                   // future-dated
+            493 => ['updated_at' => $now('-10 days')],                                 // the feed stopped (limit: 48 h)
+        ];
+        foreach ($cases as $companyId => $override) {
+            $s = $this->sessionOn($companyId, 'REMOTE_BUSINESS', 'c' . $companyId);
+            $this->db->table('remote_entitlements')->where('company_id', $companyId)->update($override);
+            $this->assertSame('free', $this->iceFor($s)['admission']['tier'], "company {$companyId}");
+        }
+
+        $live = $this->sessionOn(494, 'REMOTE_BUSINESS', 'live');
+        $this->assertSame('paid', $this->iceFor($live)['admission']['tier'], 'The same plan, current, is paid.');
+    }
+
+    public function testEnforcementIsHeldBackWhileTheLicenceMappingIsIncomplete(): void
+    {
+        Services::remoteConfig()->turnLicenceFeedConfirmed = false;
+        $s = $this->sessionOn(495, 'REMOTE_BUSINESS', 'gate');
+
+        $status = Services::iceConfigService()->status();
+        $this->assertSame('observe', $status['admission']['mode'], 'Asked to enforce, but the feed is not confirmed: observing.');
+        $this->assertStringContainsString('WEBRTC_TURN_LICENCE_FEED', implode(' ', $status['enforceBlockedBy']));
+        $this->assertTrue($this->iceFor($s)['relayAvailable']);
+    }
+
+    public function testAPlanCodeNobodyMappedBlocksEnforcement(): void
+    {
+        $s = $this->sessionOn(496, 'REMOTE_MYSTERY', 'unmapped');
+
+        $blockers = implode(' ', Services::iceConfigService()->licenceBlockers());
+        $this->assertStringContainsString('REMOTE_MYSTERY', $blockers);
+        $this->assertSame('observe', Services::iceConfigService()->status()['admission']['mode']);
+        $this->assertSame('free', $this->iceFor($s)['admission']['tier'], 'And an unmapped plan is not paid.');
+    }
+
     public function testWithNoPaidPlansConfiguredEveryoneIsFree(): void
     {
         $this->configureRemote(static function (RemoteConfig $config): void {
@@ -192,6 +245,11 @@ final class ActiveActiveIceApiTest extends RemoteTestCase
 
     public function testAFullFreePoolRefusesFreeSessionsAndNeverTheReserve(): void
     {
+        // The sessions (and so the companies' entitlement rows) exist before the first grant: the licence check that
+        // lets `enforce` run reads them once, when the issuer is built.
+        $free = $this->sessionOn(482, 'REMOTE_FREE', 'free');
+        $paid = $this->sessionOn(481, 'REMOTE_BUSINESS', 'paid');
+
         // Each node: 6 allocations, 3 reserved for paid, 3 for free — one primary lease (3 URLs).
         $ice = Services::iceConfigService();
         foreach (['mum', 'ncr'] as $i => $node) {
@@ -200,15 +258,13 @@ final class ActiveActiveIceApiTest extends RemoteTestCase
         $this->assertSame(3, $this->node('mum')['allocations']['reserved']['free']);
         $this->assertSame(3, $this->node('ncr')['allocations']['reserved']['free']);
 
-        $free = $this->sessionOn(482, 'REMOTE_FREE', 'free');
         $deny = $this->iceFor($free);
         $this->assertFalse($deny['relayAvailable']);
         $this->assertSame('denied', $deny['admission']['outcome']);
         $this->assertSame('free_pool_full', $deny['admission']['reason']);
         $this->assertSame('', $this->turnUsername($deny), 'A refused client is handed no credential at all.');
 
-        $paid = $this->sessionOn(481, 'REMOTE_BUSINESS', 'paid');
-        $ok   = $this->iceFor($paid);
+        $ok = $this->iceFor($paid);
         $this->assertTrue($ok['relayAvailable']);
         $this->assertSame('admitted', $ok['admission']['outcome']);
     }

@@ -386,7 +386,9 @@ final class ActiveActiveTest extends IceKitTestCase
         $audit  = [];
         $issuer = $this->bookedIssuer($this->topology($this->mumbaiOnly()), null, $broken, null, $audit);
 
-        $this->assertTrue($issuer->issue('c', ['tier' => Tier::Free, 'sessionRef' => 'a'])->relayAvailable());
+        // Paid clients are served unbooked; free ones are refused while enforcing (nobody can say the share has room).
+        $this->assertTrue($issuer->issue('c', ['tier' => Tier::Paid, 'sessionRef' => 'a'])->relayAvailable());
+        $this->assertFalse($issuer->issue('c2', ['tier' => Tier::Free, 'sessionRef' => 'b'])->relayAvailable());
         $this->assertSame('ledger_error', $audit[0][0]);
         $this->assertSame([], $issuer->status()['nodes'][0]['sessions'] === ['paid' => 0, 'free' => 0] ? [] : ['unexpected'], 'status() survives broken books too.');
     }

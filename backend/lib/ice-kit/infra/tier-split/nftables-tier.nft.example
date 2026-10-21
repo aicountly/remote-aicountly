@@ -1,0 +1,37 @@
+#!/usr/sbin/nft -f
+# Counts — and classifies, for the shaper — traffic by tier, from the network's point of view rather than coturn's.
+# The class is set as the packet's priority (`meta priority set 1:10`), which HTB uses directly as the class id — no tc filter
+# (and so no cls_* kernel module) is needed. The counters are the independent evidence that free stayed in its
+# share (read them with: nft list counters inet tierctl). Adjust the port sets to the two conf files.
+#
+# Client leg  : UDP/TCP from the instance's listening port to the client.
+# Peer leg    : UDP from the instance's relay-port range to the peer.
+
+table inet tierctl {
+    set paid_ports   { type inet_service; flags interval; elements = { 3478, 5349, 40000-44999 } }
+    set shared_ports { type inet_service; flags interval; elements = { 3479, 5350, 45000-49999 } }
+
+    counter paid_out   { }
+    counter shared_out { }
+    counter paid_in    { }
+    counter shared_in  { }
+
+    chain egress {
+        type filter hook postrouting priority mangle; policy accept;
+        udp sport @paid_ports   meta priority set 1:10 counter name "paid_out"
+        tcp sport @paid_ports   meta priority set 1:10 counter name "paid_out"
+        udp sport @shared_ports meta priority set 1:20 counter name "shared_out"
+        tcp sport @shared_ports meta priority set 1:20 counter name "shared_out"
+    }
+
+    chain ingress {
+        type filter hook prerouting priority mangle; policy accept;
+        udp dport @paid_ports   counter name "paid_in"
+        tcp dport @paid_ports   counter name "paid_in"
+        udp dport @shared_ports counter name "shared_in"
+        tcp dport @shared_ports counter name "shared_in"
+        # Ingress ceiling for the shared instance (UDP; replace <N> with (1 − R) * B in mbytes/second). Dropping is
+        # crude for TCP, which is why the shared instance's own bps-capacity is the primary control.
+        # udp dport @shared_ports limit rate over <N> mbytes/second drop
+    }
+}

@@ -15,7 +15,7 @@ namespace Aicountly\Ice;
  * A report older than `maxAgeSeconds` is ignored (a dead collector must not freeze a node at its last
  * reading), and one with an implausible timestamp is refused. The file holds counters, never a credential.
  */
-final class LoadStore
+final class LoadStore implements LoadSource
 {
     public const MAX_NODES = 8;
 
@@ -47,39 +47,13 @@ final class LoadStore
      */
     public function ingest(array $raw, int $now, ?array $known = null): array
     {
-        $node = $raw['node'] ?? null;
-        if (! is_string($node) || preg_match('/^[a-z0-9][a-z0-9-]{0,31}\z/', $node) !== 1 || ($known !== null && ! in_array($node, $known, true))) {
-            return ['ok' => false, 'error' => 'bad_node'];
+        $parsed = LoadReport::parse($raw, $now, $known);
+        if (! $parsed['ok']) {
+            return ['ok' => false, 'error' => $parsed['error']];
         }
 
-        $at = $raw['at'] ?? null;
-        if (! is_int($at) && ! (is_string($at) && ctype_digit($at))) {
-            return ['ok' => false, 'error' => 'bad_timestamp'];
-        }
-        $at = (int) $at;
-        if (abs($now - $at) > 300) {
-            return ['ok' => false, 'error' => 'timestamp_out_of_range'];
-        }
-
-        foreach (['allocations', 'rxBps', 'txBps'] as $field) {
-            if (! isset($raw[$field]) || ! is_numeric($raw[$field]) || $raw[$field] < 0 || $raw[$field] > 1e13) {
-                return ['ok' => false, 'error' => 'bad_' . $field];
-            }
-        }
-
-        $entry = [
-            'at'          => $at,
-            'allocations' => (int) $raw['allocations'],
-            'rxBps'       => (int) $raw['rxBps'],
-            'txBps'       => (int) $raw['txBps'],
-        ];
-
-        foreach (['paid', 'free'] as $tier) {
-            if (isset($raw['byTier'][$tier]['bps']) && is_numeric($raw['byTier'][$tier]['bps'])) {
-                $entry['byTier'][$tier] = ['bps' => max(0, (int) $raw['byTier'][$tier]['bps'])];
-            }
-        }
-
+        $node  = $parsed['node'];
+        $entry = $parsed['entry'];
         $this->update(static function (array $nodes) use ($node, $entry): array {
             $nodes[$node] = $entry;
             uasort($nodes, static fn (array $a, array $b): int => (int) ($b['at'] ?? 0) <=> (int) ($a['at'] ?? 0));

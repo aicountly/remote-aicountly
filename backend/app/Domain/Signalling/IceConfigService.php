@@ -95,9 +95,14 @@ class IceConfigService
     }
 
     /**
-     * Paid when the session's company is on one of the configured paid plans. Everything else — no
-     * company, no entitlement row, a plan not on the list, a lookup that throws — is free: the paid
-     * reserve is only ever handed out on positive evidence.
+     * Paid only on positive, current evidence: the session's company has its OWN entitlement row, valid now
+     * (`valid_from`/`valid_until`), updated recently enough (when a limit is set), on a plan the operator listed
+     * as paid. Everything else is free:
+     *
+     *   * no company (a personal session), no row of its own, an expired or not-yet-valid row, a stale row;
+     *   * the platform DEFAULT row (company_id NULL, seeded `REMOTE_PROFESSIONAL`) — it is a feature set for
+     *     companies nobody has set up, not a subscription, and must never make a company paid;
+     *   * a lookup that throws.
      *
      * @param array<string, mixed> $session
      */
@@ -109,12 +114,80 @@ class IceConfigService
         }
 
         try {
-            $plan = strtoupper((string) (Services::policyResolver()->entitlement((int) $session['company_id'])['plan_code'] ?? ''));
+            $row = $this->entitlementRow((int) $session['company_id']);
         } catch (\Throwable) {
             return Tier::Free;
         }
 
-        return in_array($plan, $paid, true) ? Tier::Paid : Tier::Free;
+        if ($row === null) {
+            return Tier::Free;
+        }
+
+        $maxAge = $this->config->turnEntitlementMaxAgeHours;
+        if ($maxAge > 0 && isset($row['updated_at']) && strtotime((string) $row['updated_at']) < time() - $maxAge * 3600) {
+            return Tier::Free;
+        }
+
+        return in_array(strtoupper((string) ($row['plan_code'] ?? '')), $paid, true) ? Tier::Paid : Tier::Free;
+    }
+
+    /**
+     * The company's own entitlement row, valid right now — never the platform default.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function entitlementRow(int $companyId): ?array
+    {
+        return \Config\Database::connect()->table('remote_entitlements')
+            ->select('plan_code, updated_at')
+            ->where('company_id', $companyId)
+            ->groupStart()->where('valid_from', null)->orWhere('valid_from <=', 'NOW()', false)->groupEnd()
+            ->groupStart()->where('valid_until', null)->orWhere('valid_until >', 'NOW()', false)->groupEnd()
+            ->get()
+            ->getRowArray();
+    }
+
+    /**
+     * Why enforcement must not start yet — empty when who-is-paid is known, current and complete. Consulted only when
+     * `WEBRTC_TURN_ADMISSION=enforce`; while this list is not empty the application observes instead.
+     *
+     * @return list<string>
+     */
+    public function licenceBlockers(): array
+    {
+        $c       = $this->config;
+        $reasons = [];
+
+        if ($c->turnPaidPlanCodes === []) {
+            $reasons[] = 'WEBRTC_TURN_PAID_PLAN_CODES is empty: no plan is mapped to paid';
+        }
+        if (! $c->turnLicenceFeedConfirmed) {
+            $reasons[] = 'WEBRTC_TURN_LICENCE_FEED is not "confirmed": nothing attests that company entitlements are fed from the billing system of record';
+        }
+        if ($c->turnEntitlementMaxAgeHours <= 0) {
+            $reasons[] = 'WEBRTC_TURN_ENTITLEMENT_MAX_AGE_HOURS is not set: a stopped feed would leave companies paid forever';
+        }
+        if (in_array('REMOTE_FREE', $c->turnPaidPlanCodes, true)) {
+            $reasons[] = 'REMOTE_FREE is listed as paid';
+        }
+
+        try {
+            $codes = array_map(
+                static fn (array $r): string => strtoupper((string) $r['plan_code']),
+                \Config\Database::connect()->query('SELECT DISTINCT plan_code FROM remote_entitlements WHERE company_id IS NOT NULL')->getResultArray(),
+            );
+            $unmapped = array_values(array_diff($codes, $c->turnPaidPlanCodes, $c->turnFreePlanCodes));
+            if ($unmapped !== []) {
+                $reasons[] = 'plan codes in use with no paid/free mapping: ' . implode(', ', array_slice($unmapped, 0, 10));
+            }
+            if ($codes === []) {
+                $reasons[] = 'no company has an entitlement row: the feed has not populated remote_entitlements';
+            }
+        } catch (\Throwable) {
+            $reasons[] = 'remote_entitlements could not be read';
+        }
+
+        return $reasons;
     }
 
     /** Free what a session (or one participant of it) held on the relays. Best effort: never throws. */
@@ -188,6 +261,9 @@ class IceConfigService
                 log_message('info', 'remote.ice.' . $event . ' {data}', ['data' => json_encode($data, JSON_UNESCAPED_SLASHES)]);
             },
             $this->topology(),
+            null,
+            [],
+            fn (): array => $this->licenceBlockers(),
         );
     }
 

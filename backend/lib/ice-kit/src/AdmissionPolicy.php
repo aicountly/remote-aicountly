@@ -83,6 +83,12 @@ final class AdmissionPolicy
         );
     }
 
+    /** The same policy running in another mode — how `enforce` is held back to `observe` while its preconditions are unmet. */
+    public function withMode(string $mode): self
+    {
+        return new self($mode, $this->busyAt, $this->shedFreeAt, $this->balanceBandMs, $this->paidReservePercent, $this->profilesBps, $this->directChargePercent, $this->invalidMode);
+    }
+
     /** What a client that says it is connected directly is still charged: the claim cannot be checked. */
     public function directBps(string $profile): int
     {

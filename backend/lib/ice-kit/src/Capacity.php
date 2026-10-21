@@ -41,14 +41,22 @@ final class Capacity
         public readonly int $maxBps = 0,
         public readonly int $paidReservePercent = self::MIN_RESERVE_PERCENT,
         ?array $tiers = null,
+        /** The reserve lives in a SEPARATE paid-only node of the same group (Topology checks it): this node needs none of its own. */
+        public readonly bool $structural = false,
     ) {
         $this->tiers = $tiers === null || $tiers === [] ? [Tier::Paid, Tier::Free] : array_values(array_unique($tiers, SORT_REGULAR));
-        $this->effectiveReservePercent = $this->shared() ? max(self::MIN_RESERVE_PERCENT, min(self::MAX_RESERVE_PERCENT, $paidReservePercent)) : 0;
+        $this->effectiveReservePercent = $this->shared() && ! $structural ? max(self::MIN_RESERVE_PERCENT, min(self::MAX_RESERVE_PERCENT, $paidReservePercent)) : 0;
     }
 
     public static function unmetered(): self
     {
         return new self();
+    }
+
+    /** Whether this node serves exactly one tier (and so is itself a slice of the reservation, or of the shared part). */
+    public function exclusiveTo(Tier $tier): bool
+    {
+        return $this->tiers === [$tier];
     }
 
     public function metered(): bool
@@ -81,6 +89,7 @@ final class Capacity
             'maxMbps'            => $this->maxBps / 1_000_000,
             'paidReservePercent' => $this->effectiveReservePercent,
             'tiers'              => array_map(static fn (Tier $t): string => $t->value, $this->tiers),
+            'structural'         => $this->structural,
         ];
     }
 }

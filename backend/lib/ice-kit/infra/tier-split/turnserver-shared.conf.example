@@ -1,0 +1,35 @@
+# coturn instance 2 of 2 on a TURN host: SHARED. Serves free clients and is paid clients' overflow.
+# Free traffic can never exceed this instance's ceilings, and this instance's ceilings are (1 − R) of the host:
+#   bps-capacity = (1 − R)*B     total-quota = (1 − R)*A
+
+listening-ip=<public ip>       # or a second public IP — see README § TLS on 443
+relay-ip=<public ip>
+listening-port=3479            # UDP + TCP
+tls-listening-port=<5350, or 443 on a second IP>
+min-port=45000
+max-port=49999                 # the other half of the relay range
+realm=turn-mum-shared.aicountly.com
+fingerprint
+use-auth-secret
+static-auth-secret=<shared instance secret>
+no-cli
+no-multicast-peers
+stale-nonce
+verbose
+simple-log
+log-file=/var/log/turnserver/shared.log
+
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+denied-peer-ip=127.0.0.0-127.255.255.255
+denied-peer-ip=169.254.0.0-169.254.255.255
+denied-peer-ip=<this host's own public IP>
+
+total-quota=<(1 − R) * A>      # NOT 1.1×: this is the hard end of the free share
+user-quota=8
+bps-capacity=<(1 − R) * B>     # a RESERVATION: new allocations are refused (486) once the reserved total is reached
+max-bps=<per-session ceiling, bytes/s — e.g. 500000>   # and each session is throttled to this
+
+cert=/etc/letsencrypt/live/turn-mum-shared.aicountly.com/fullchain.pem
+pkey=/etc/letsencrypt/live/turn-mum-shared.aicountly.com/privkey.pem

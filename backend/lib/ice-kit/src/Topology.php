@@ -24,7 +24,10 @@ namespace Aicountly\Ice;
  *   WEBRTC_TURN_NODE_MUM_MAX_ALLOCATIONS = 4000                     concurrent allocations it sustains (0 = unmetered)
  *   WEBRTC_TURN_NODE_MUM_MAX_MBPS        = 400                      relayed rx+tx it sustains, Mbit/s (0 = unmetered)
  *   WEBRTC_TURN_NODE_MUM_TIERS           = paid,free                tiers it may serve (default both)
- *   WEBRTC_TURN_NODE_MUM_PAID_RESERVE_PERCENT                       50..90; below 50 only with an explicit _TIERS
+ *   WEBRTC_TURN_NODE_MUM_PAID_RESERVE_PERCENT                       50..90 (a two-tier node never goes below 50)
+ *   WEBRTC_TURN_NODE_MUM_GROUP           = mum                      the physical host this instance belongs to
+ *   WEBRTC_TURN_NODE_MUM_STRUCTURAL_RESERVE = true                  this shared instance's paid reserve is a separate
+ *                                                                   paid-only instance of the same GROUP (see below)
  *   WEBRTC_TURN_ADMISSION and the rest  see AdmissionPolicy         off | observe (default) | enforce
  *   WEBRTC_TURN_NODE_MUM_SECRET          =                          per-node secret; default is the shared one
  *   WEBRTC_TURN_STATIC_AUTH_SECRET       = <coturn static-auth-secret, shared by every node>
@@ -160,17 +163,21 @@ final class Topology
                     secret: $get($key('SECRET')) ?? $shared,
                     lat: ($get($key('LAT')) !== null && $get($key('LON')) !== null) ? (float) $get($key('LAT')) : null,
                     lon: ($get($key('LAT')) !== null && $get($key('LON')) !== null) ? (float) $get($key('LON')) : null,
+                    group: strtolower($get($key('GROUP')) ?? ''),
                     capacity: new Capacity(
                         max(0, (int) ($get($key('MAX_ALLOCATIONS')) ?? 0)),
                         (int) round(max(0.0, (float) ($get($key('MAX_MBPS')) ?? 0)) * 1_000_000),
                         $reserved,
                         $tiers === null ? null : self::tiers($id, $tiers),
+                        self::bool($get($key('STRUCTURAL_RESERVE')), false),
                     ),
                 );
             } catch (\InvalidArgumentException $e) {
                 $problems[] = $e->getMessage();
             }
         }
+
+        $nodes = self::checkStructuralReserves($nodes, $admission, $problems);
 
         foreach ($nodes as $node) {
             if ($node->status !== NodeStatus::Disabled && ! $node->hasCredentials()) {
@@ -227,6 +234,64 @@ final class Topology
             staticUsername: $secret === '' ? $username : '',
             staticCredential: $secret === '' ? $credential : '',
             explicitUrls: $turnUrls,
+        );
+    }
+
+    /**
+     * Tier-split hosts. When a host runs a paid-only coturn instance beside a shared one, the reservation is the
+     * separation itself — and it holds only if the paid-only instance really is at least the reserve fraction of the
+     * whole host, in every dimension that is metered. A shared node declared `STRUCTURAL_RESERVE` therefore stays
+     * in service only while its GROUP satisfies that; otherwise it is left out and the problem named, because a
+     * shared instance with no reserve and no paid-only partner would hand free users the paid half.
+     *
+     * @param list<TurnNode> $nodes
+     * @param list<string>   $problems
+     * @return list<TurnNode>
+     */
+    private static function checkStructuralReserves(array $nodes, AdmissionPolicy $policy, array &$problems): array
+    {
+        $keep = [];
+        foreach ($nodes as $node) {
+            if (! $node->capacity->structural) {
+                $keep[] = $node;
+                continue;
+            }
+
+            if ($node->group === '') {
+                $problems[] = "TURN node '{$node->id}' is STRUCTURAL_RESERVE but has no GROUP; it is left out.";
+                continue;
+            }
+
+            $ok = true;
+            foreach (['maxAllocations', 'maxBps'] as $dim) {
+                $total = 0;
+                $paidOnly = 0;
+                foreach ($nodes as $peer) {
+                    if ($peer->group === $node->group && $peer->status !== NodeStatus::Disabled) {
+                        $total += $peer->capacity->$dim;
+                        $paidOnly += $peer->capacity->exclusiveTo(Tier::Paid) ? $peer->capacity->$dim : 0;
+                    }
+                }
+                if ($total > 0 && $paidOnly < (int) ceil($total * $policy->paidReservePercent / 100)) {
+                    $ok = false;
+                    $problems[] = "TURN group '{$node->group}': paid-only instances hold {$paidOnly} of {$total} ({$dim}), under the {$policy->paidReservePercent}% reserve; '{$node->id}' is left out.";
+                    break;
+                }
+            }
+            if ($ok) {
+                $keep[] = $node;
+            }
+        }
+
+        return $keep;
+    }
+
+    /** This topology under another admission policy; everything else is unchanged. */
+    public function withAdmission(AdmissionPolicy $admission): self
+    {
+        return new self(
+            $this->nodes, $this->stunUrls, $this->ttlSeconds, $this->maxRelayNodes, $this->forceRelay, $this->candidatePoolSize, $this->source,
+            $this->problems, $this->restartOnRenewal, $this->sessionTtlMax, $admission, $this->fallbackTransports, $this->clientRegions,
         );
     }
 
