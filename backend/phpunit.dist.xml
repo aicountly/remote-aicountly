@@ -23,6 +23,8 @@
     <testsuites>
         <testsuite name="App">
             <directory>./tests</directory>
+            <!-- The vendored ICE kit's own suite (lib/ice-kit/tests): the same tests Connect runs. -->
+            <directory>./lib/ice-kit/tests</directory>
         </testsuite>
     </testsuites>
 

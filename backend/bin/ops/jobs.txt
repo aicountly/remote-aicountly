@@ -12,3 +12,6 @@
 company-lifecycle        | */5 * * * * | {php} bin/ops/run-job.php --name=company-lifecycle --every=300 --monitor=remote.company_lifecycle -- {php} lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php
 company-lifecycle-expiry | 37 3 * * *  | {php} bin/ops/run-job.php --name=company-lifecycle-expiry --every=86400 --monitor=remote.company_lifecycle_expiry -- {php} lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php --expire-retained
 lifecycle-archive-drop   | 17 3 * * 0  | {php} lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php --drop-archives-older-than=90 --confirm
+# Probes every TURN node not disabled (a real allocation with a minted credential, over udp/tcp/tls) and
+# records the result in writable/ice/turn-health.json, which the API reads to skip a node that is down.
+turn-probe               | */5 * * * * | {php} bin/ops/run-job.php --name=turn-probe --every=300 -- {php} lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --allocate --write-health

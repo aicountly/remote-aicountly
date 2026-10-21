@@ -4,71 +4,55 @@ declare(strict_types=1);
 
 namespace App\Domain\Signalling;
 
+use Aicountly\Ice\HealthStore;
+use Aicountly\Ice\IceGrant;
+use Aicountly\Ice\IceIssuer;
+use Aicountly\Ice\Topology;
 use Config\Remote as RemoteConfig;
 
 /**
- * The ICE server list handed to the browser (§20).
+ * The ICE configuration handed to a browser or a desktop agent (§20).
  *
- * No credential is ever hardcoded. Two arrangements are supported:
+ * Remote's adapter over the AICOUNTLY ICE kit (lib/ice-kit), which Connect carries verbatim too. The
+ * kit decides which TURN nodes a client gets — status, priority, region hint, probe health — and mints
+ * a coturn REST credential per node; this class only says where Remote's configuration comes from:
  *
- *   * **Static credentials** — `REMOTE_TURN_USERNAME` / `REMOTE_TURN_CREDENTIAL`
- *     from the server `.env`. Simple, and appropriate for a private TURN that
- *     is not reachable from the open internet.
+ *   * **Nodes** — WEBRTC_TURN_NODES and the WEBRTC_TURN_NODE_* keys, shared with every AICOUNTLY
+ *     product. Mumbai active, Greater Noida disabled until it is validated. Preferred.
+ *   * **Single pool** — the original `remote.turnUrls` with `remote.turnStaticAuthSecret` (or a static
+ *     `remote.turnUsername`/`remote.turnCredential` pair), as one node. Used when no nodes are set.
  *
- *   * **Ephemeral credentials** (preferred) — coturn's `use-auth-secret` mode.
- *     The username is an expiry timestamp and the password is its HMAC under a
- *     shared secret, so the credential the browser receives is valid for an hour
- *     and useless afterwards. The secret itself never leaves this server.
- *
- * Long-lived TURN credentials in a JavaScript bundle are how a relay ends up
- * carrying someone else's traffic; the ephemeral form exists to avoid exactly
- * that, and the static form is documented as the fallback it is.
+ * No credential is ever hardcoded, and the shared secret never leaves this server: a client receives
+ * `<expiry>:<subject>` and its HMAC, useless after the TTL. A static pair never expires and reaches
+ * every client, which is why it is only the fallback it always was.
  */
 class IceConfigService
 {
+    private ?IceIssuer $issuer = null;
+
     public function __construct(private readonly RemoteConfig $config)
     {
     }
 
     /**
+     * A credentialed ICE configuration for one client.
+     *
+     * @param string $subject an opaque reference bound into the TURN username — a participant uuid, or
+     *                        `device-<uuid>` — so relay usage is attributable without an email address
+     */
+    public function grant(string $subject, ?string $preferRegion = null): IceGrant
+    {
+        return $this->issuer()->issue($subject, ['preferRegion' => $preferRegion]);
+    }
+
+    /**
+     * Just the RTCIceServer list, for callers that predate the grant.
+     *
      * @return list<array{urls: list<string>, username?: string, credential?: string}>
      */
-    public function iceServers(): array
+    public function iceServers(string $subject = 'remote'): array
     {
-        $servers = [];
-
-        if ($this->config->stunUrls !== []) {
-            $servers[] = ['urls' => array_values($this->config->stunUrls)];
-        }
-
-        if ($this->config->turnUrls === []) {
-            return $servers;
-        }
-
-        if ($this->config->turnStaticAuthSecret !== '') {
-            $expiry   = time() + $this->config->turnCredentialTtlSeconds;
-            $username = (string) $expiry;
-
-            $servers[] = [
-                'urls'       => array_values($this->config->turnUrls),
-                'username'   => $username,
-                'credential' => base64_encode(
-                    hash_hmac('sha1', $username, $this->config->turnStaticAuthSecret, true),
-                ),
-            ];
-
-            return $servers;
-        }
-
-        if ($this->config->turnUsername !== '' && $this->config->turnCredential !== '') {
-            $servers[] = [
-                'urls'       => array_values($this->config->turnUrls),
-                'username'   => $this->config->turnUsername,
-                'credential' => $this->config->turnCredential,
-            ];
-        }
-
-        return $servers;
+        return $this->grant($subject)->iceServers();
     }
 
     /**
@@ -80,8 +64,48 @@ class IceConfigService
      */
     public function hasRelay(): bool
     {
-        return $this->config->turnUrls !== []
-            && ($this->config->turnStaticAuthSecret !== ''
-                || ($this->config->turnUsername !== '' && $this->config->turnCredential !== ''));
+        return $this->issuer()->relayConfigured();
+    }
+
+    /**
+     * Every node and its probe health, for the health endpoint. No secret, no credential.
+     *
+     * @return array<string, mixed>
+     */
+    public function status(): array
+    {
+        return $this->issuer()->status();
+    }
+
+    public function issuer(): IceIssuer
+    {
+        return $this->issuer ??= new IceIssuer(
+            $this->topology(),
+            new HealthStore($this->config->turnHealthFile !== '' ? $this->config->turnHealthFile : WRITEPATH . 'ice/turn-health.json'),
+            null,
+            'remote',
+        );
+    }
+
+    public function topology(): Topology
+    {
+        if ($this->config->turnTopology !== null) {
+            return $this->config->turnTopology;
+        }
+
+        $legacy = Topology::legacyNode(
+            $this->config->turnUrls,
+            $this->config->turnStaticAuthSecret,
+            $this->config->turnUsername,
+            $this->config->turnCredential,
+        );
+
+        return new Topology(
+            $legacy === null ? [] : [$legacy],
+            $this->config->stunUrls,
+            ttlSeconds: max(60, min(86400, $this->config->turnCredentialTtlSeconds)),
+            maxRelayNodes: 1,
+            source: 'legacy',
+        );
     }
 }

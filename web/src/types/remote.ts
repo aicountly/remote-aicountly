@@ -515,6 +515,8 @@ export interface SignallingCredentials {
   iceServers: RTCIceServer[];
   /** False when no TURN is configured — the UI says so instead of hanging. */
   relayAvailable: boolean;
+  /** The whole aicountly.ice/1 grant: expiry, refresh time, relay nodes. Absent from older APIs. */
+  ice?: unknown;
 }
 
 /** The permission names the frontend actually gates on. */

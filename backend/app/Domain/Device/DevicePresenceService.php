@@ -164,7 +164,7 @@ class DevicePresenceService
             'device'   => $device,
             'policy'   => $policy,
             'capabilities' => $this->devices->effectiveCapabilities($device, $policy),
-            'iceServers'   => $this->ice->iceServers(),
+            'iceServers'   => $this->ice->iceServers('device-' . $principal->deviceUuid),
             'relayAvailable' => $this->ice->hasRelay(),
             'minimumAgentVersion' => $this->config->desktopMinimumAgentVersion,
             'updateFeedUrl'       => $this->config->desktopUpdateFeedUrl !== ''

@@ -69,9 +69,30 @@ class HealthController extends Controller
                 // secret is set, never what it is.
                 'signalling' => Services::signallingTokenService()->isConfigured() ? 'configured' : 'unconfigured',
                 'relay'      => Services::iceConfigService()->hasRelay() ? 'configured' : 'unconfigured',
+                // Which relay nodes exist, whether each would be served, and what the scheduled probe
+                // last said about it — ids and states only: no host, no secret, no credential.
+                'relayNodes' => $this->relayNodes(),
                 'launchContext' => $this->launchContext(),
                 'time'       => gmdate('c'),
             ]);
+    }
+
+    /** @return list<array{id: string, status: string, servable: bool, health: string}> */
+    private function relayNodes(): array
+    {
+        try {
+            return array_map(
+                static fn (array $node): array => [
+                    'id'       => $node['id'],
+                    'status'   => $node['status'],
+                    'servable' => $node['servable'],
+                    'health'   => $node['health'],
+                ],
+                Services::iceConfigService()->status()['nodes'],
+            );
+        } catch (Throwable) {
+            return [];
+        }
     }
 
     /**

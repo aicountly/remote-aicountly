@@ -245,7 +245,7 @@ export default function SessionRoomPage() {
         </div>
 
         <div className="room__status">
-          <ConnectionIndicator live={live} sessionStatus={session.status} />
+          <ConnectionIndicator live={live} sessionStatus={session.status} onReconnect={actions.reconnect} />
           {session.startedAt ? (
             <span className="room__clock mono" aria-label="Session duration">
               {formatClock(elapsed)}
@@ -415,6 +415,7 @@ export default function SessionRoomPage() {
             panel={panel}
             session={session}
             live={live}
+            onCheckRelay={actions.checkRelay}
             messages={messages}
             canChat={canChat}
             canInviteExternal={canInviteExternal}

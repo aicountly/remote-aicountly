@@ -39,6 +39,8 @@ class Autoload extends AutoloadConfig
      */
     public $psr4 = [
         APP_NAMESPACE => APPPATH,
+        // The AICOUNTLY ICE kit (lib/ice-kit), vendored verbatim — the same copy Connect carries.
+        'Aicountly\\Ice' => ROOTPATH . 'lib/ice-kit/src',
     ];
 
     /**

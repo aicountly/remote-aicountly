@@ -372,6 +372,39 @@ describe('signalling server', () => {
     viewer.close();
   });
 
+  // The ICE-restart request (docs/ICE_CONTRACT.md) is a `renegotiate` with a
+  // payload. The relay must carry the payload untouched to the named peer — the
+  // non-driving side of a pair has no other way to ask for a restart.
+  it('relays a renegotiate with its ICE-restart payload to the named peer only', async () => {
+    const room = '99999999-8888-4777-8666-444444444444';
+
+    const driver = await connect(mintToken({ room, sub: 'aaaa-driver-0001', role: 'SHARER' }));
+    await nextMessage(driver, (m) => m.type === 'joined');
+    const other = await connect(mintToken({ room, sub: 'zzzz-other-0001', role: 'VIEWER' }));
+    await nextMessage(other, (m) => m.type === 'joined');
+    const bystander = await connect(mintToken({ room, sub: 'mmmm-bystander-0001', role: 'VIEWER' }));
+    await nextMessage(bystander, (m) => m.type === 'joined');
+
+    const delivered = nextMessage(driver, (m) => m.type === 'renegotiate');
+
+    other.send(JSON.stringify({
+      type: 'renegotiate',
+      to: 'aaaa-driver-0001',
+      payload: { iceRestart: true, reason: 'failed' },
+    }));
+
+    const request = await delivered;
+    assert.equal(request.from, 'zzzz-other-0001');
+    assert.deepEqual(request.payload, { iceRestart: true, reason: 'failed' });
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(bystander.received.some((m) => m.type === 'renegotiate'), false);
+
+    driver.close();
+    other.close();
+    bystander.close();
+  });
+
   it('does not deliver across rooms', async () => {
     const insider = await connect(mintToken({ room: 'room-aaaa-1111-2222-3333', sub: 'inside-uuid-001' }));
     await nextMessage(insider, (m) => m.type === 'joined');

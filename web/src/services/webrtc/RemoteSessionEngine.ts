@@ -10,21 +10,45 @@
  * torn down exactly once. `useRemoteSession` is a thin adapter over this.
  *
  * Negotiation rule: **the peer already in the room offers to the one that just
- * arrived.** There is no tie to break, so both sides never offer at once and no
- * rollback handling is needed.
+ * arrived**, and a renegotiation is asked for rather than offered.
+ *
+ * ICE recovery (the ice-kit's ConnectionSupervisor) is the one case where both
+ * sides notice the same thing at the same moment, so it has its own rule: for
+ * each pair exactly one side *drives* — the browser when the peer is a desktop
+ * agent (the agent answers restart offers but never makes one), otherwise the
+ * lower participant id. The driver restarts ICE itself; the other side asks it
+ * to. Fresh TURN credentials are fetched before they expire, and a relayed
+ * connection is restarted onto them (docs/ICE_CONTRACT.md).
  */
 
+import {
+  ConnectionSupervisor,
+  CredentialRefresher,
+  IceDiagnostics,
+  describeVerdict,
+  isRestartDriver,
+  normalizeIceConfig,
+} from '../../ice-kit/index.js'
+import type {
+  ConnectivityOutcome,
+  IceConfig,
+  IceVerdict,
+  SelectedPath,
+  SupervisorState,
+} from '../../ice-kit/index.js'
 import {
   abortFileTransfer,
   acceptFileTransfer,
   completeFileTransfer,
   declineFileTransfer,
+  fetchIceServers,
   fetchSignallingCredentials,
   fetchTransfers,
   markParticipantJoined,
   offerFileTransfer,
   reportPresence,
   reportShareStarted,
+  reportConnectivity,
   reportShareStopped,
   reportTransferProgress,
 } from '../api/remote'
@@ -89,6 +113,30 @@ export interface EnginePeer {
   controlChannelReady: boolean
 }
 
+/**
+ * How media is reaching the other side, and why it is not when it is not.
+ *
+ * Facts from the browser's own statistics — never assumed from configuration.
+ * "Relay" is what the Security panel and support need to see: it is the
+ * difference between "your network blocked a direct path and AICOUNTLY's relay
+ * carried it" and "nothing could carry it".
+ */
+export interface NetworkStatus {
+  path: SelectedPath['path']
+  /** The relay node's label (e.g. "Mumbai") when the path is relayed. */
+  relayNode: string | null
+  relayProtocol: SelectedPath['relayProtocol']
+  /** ICE is being restarted on at least one connection. */
+  recovering: boolean
+  /** ICE restarts since the session opened, recovery and credential renewal alike. */
+  restarts: number
+  /** Why a connection could not be recovered, once one has given up. */
+  verdict: IceVerdict | null
+  message: string | null
+  /** When the TURN credentials in use stop working (ms epoch), if they expire at all. */
+  credentialsExpireAt: number | null
+}
+
 export interface EngineSnapshot {
   connection: LiveConnectionState
   signalling: SignallingStatus
@@ -113,6 +161,7 @@ export interface EngineSnapshot {
    * counts.
    */
   controllingPeerId: string | null
+  network: NetworkStatus
   lastError: string | null
 }
 
@@ -138,6 +187,12 @@ const POINTER_THROTTLE_MS = 50
 const PRESENCE_INTERVAL_MS = 20_000
 
 const QUALITY_INTERVAL_MS = 5_000
+
+/**
+ * A request to restart ICE that arrives this soon after one already started is
+ * the other side noticing the same failure — answered by the restart in flight.
+ */
+const RESTART_DEDUPE_MS = 3_000
 
 /** Distinct, accessible-on-dark colours for each remote pointer. */
 const POINTER_COLOURS = ['#25b003', '#2563eb', '#b76e00', '#d92d20', '#7c3aed']
@@ -185,9 +240,24 @@ function sameKey(a: ControlKey, b: ControlKey): boolean {
   return 'c' in a && 'c' in b ? a.c === b.c : true
 }
 
+/** Everything the engine keeps for one peer; only `info` reaches React. */
+interface PeerEntry {
+  connection: RemotePeerConnection
+  info: EnginePeer
+  supervisor: ConnectionSupervisor
+  diagnostics: IceDiagnostics
+  /** The supervisor's view: connected, unstable, recovering, failed. */
+  recovery: SupervisorState
+  /** The path last read from getStats, while connected. */
+  path: SelectedPath | null
+  lastRestartAt: number
+  /** Whether the first successful connection has been reported. */
+  reportedConnected: boolean
+}
+
 export class RemoteSessionEngine {
   private signalling: RemoteSignallingClient | null = null
-  private peers = new Map<string, { connection: RemotePeerConnection; info: EnginePeer }>()
+  private peers = new Map<string, PeerEntry>()
   private localStream: MediaStream | null = null
   private microphoneStream: MediaStream | null = null
   private remoteStream: MediaStream | null = null
@@ -222,10 +292,22 @@ export class RemoteSessionEngine {
     transfers: [],
     relayAvailable: false,
     controllingPeerId: null,
+    network: {
+      path: 'unknown',
+      relayNode: null,
+      relayProtocol: null,
+      recovering: false,
+      restarts: 0,
+      verdict: null,
+      message: null,
+      credentialsExpireAt: null,
+    },
     lastError: null,
   }
 
-  private iceServers: RTCIceServer[] = []
+  /** The ICE configuration new and restarted connections use (aicountly.ice/1). */
+  private ice: IceConfig = normalizeIceConfig(null)
+  private refresher: CredentialRefresher | null = null
 
   constructor(private readonly options: EngineOptions) {}
 
@@ -256,15 +338,23 @@ export class RemoteSessionEngine {
       return
     }
 
-    this.iceServers = credentials.iceServers
+    this.adoptIce(normalizeIceConfig(credentials))
     this.patch({ relayAvailable: credentials.relayAvailable })
+
+    // Credentials are renewed before they expire, not when a relay starts
+    // refusing them in the middle of somebody's session.
+    this.refresher = new CredentialRefresher({
+      fetch: () => fetchIceServers(this.options.sessionUuid),
+      onRefreshed: (config) => void this.onIceRefreshed(config),
+    }).start(this.ice)
 
     this.signalling = new RemoteSignallingClient({
       url: credentials.url,
       token: credentials.token,
       refreshToken: async () => {
         const fresh = await fetchSignallingCredentials(this.options.sessionUuid)
-        this.iceServers = fresh.iceServers
+        this.adoptIce(normalizeIceConfig(fresh))
+        this.refresher?.start(this.ice)
 
         return { url: fresh.url, token: fresh.token }
       },
@@ -737,7 +827,14 @@ export class RemoteSessionEngine {
     }
     this.transfers.clear()
 
-    for (const { connection } of this.peers.values()) {
+    this.refresher?.stop()
+    this.refresher = null
+
+    for (const { connection, supervisor, diagnostics } of this.peers.values()) {
+      // The watchers first, so tearing the connection down is not seen as a
+      // failure to recover from.
+      supervisor.dispose()
+      diagnostics.dispose()
       connection.dispose()
     }
     this.peers.clear()
@@ -807,6 +904,10 @@ export class RemoteSessionEngine {
         const entry = this.ensurePeer(message.from)
         const answer = await entry.connection.acceptOffer(message.payload as RTCSessionDescriptionInit)
 
+        // Our own offer crossed theirs and we are the side that keeps it;
+        // they will answer ours.
+        if (answer === null) break
+
         // Attach whatever we are already sharing before answering, so the
         // answer describes the media we intend to send.
         await entry.connection.setLocalStream(this.localStream ?? this.microphoneStream)
@@ -838,7 +939,20 @@ export class RemoteSessionEngine {
 
       case 'renegotiate': {
         if (!message.from) break
-        await this.offerTo(message.from)
+
+        // `iceRestart`: the peer's connection is failing and we drive restarts
+        // for this pair. An older client sends no payload and gets a plain
+        // renegotiation, exactly as before.
+        const iceRestart = (message.payload as { iceRestart?: unknown } | null)?.iceRestart === true
+        if (iceRestart) {
+          const entry = this.peers.get(message.from)
+          if (!entry || Date.now() - entry.lastRestartAt < RESTART_DEDUPE_MS) break
+
+          entry.lastRestartAt = Date.now()
+          entry.diagnostics.noteRestart()
+        }
+
+        await this.offerTo(message.from, { iceRestart })
 
         break
       }
@@ -916,17 +1030,19 @@ export class RemoteSessionEngine {
       name: peer.name,
       capabilities: peer.capabilities ?? {},
     }
+    // Capabilities are what say a peer is an agent, and so who drives.
+    entry.connection.polite = !this.drivesRestartsFor(entry.info)
 
     this.publishPeers()
 
     return entry.info
   }
 
-  private ensurePeer(peerId: string): { connection: RemotePeerConnection; info: EnginePeer } {
+  private ensurePeer(peerId: string): PeerEntry {
     const existing = this.peers.get(peerId)
     if (existing) return existing
 
-    const connection = new RemotePeerConnection(peerId, this.iceServers, {
+    const connection = new RemotePeerConnection(peerId, this.ice, {
       onIceCandidate: (candidate) => {
         this.signalling?.send({ type: 'ice-candidate', to: peerId, payload: candidate })
       },
@@ -951,17 +1067,35 @@ export class RemoteSessionEngine {
       },
     })
 
-    const entry = {
+    const info: EnginePeer = {
+      participantUuid: peerId,
+      role: 'VIEWER',
+      name: 'Participant',
+      capabilities: {},
+      connectionState: 'new' as const,
+      dataChannelReady: false,
+      controlChannelReady: false,
+    }
+    connection.polite = !this.drivesRestartsFor(info)
+
+    const pc = connection.peerConnection
+    const entry: PeerEntry = {
       connection,
-      info: {
-        participantUuid: peerId,
-        role: 'VIEWER',
-        name: 'Participant',
-        capabilities: {},
-        connectionState: 'new' as const,
-        dataChannelReady: false,
-        controlChannelReady: false,
-      },
+      info,
+      diagnostics: new IceDiagnostics(pc, { config: this.ice }),
+      supervisor: new ConnectionSupervisor({
+        pc,
+        restart: ({ reason }) => this.restartIce(peerId, reason),
+        refreshCredentials: () => this.refresher?.refreshNow() ?? Promise.resolve(null),
+        getConfig: () => this.ice,
+        onStateChange: (state) => this.handleRecoveryState(peerId, state),
+        onGiveUp: () => this.handleGiveUp(peerId),
+        onRecovered: () => void this.sendReport(peerId, 'recovered'),
+      }),
+      recovery: 'new',
+      path: null,
+      lastRestartAt: 0,
+      reportedConnected: false,
     }
 
     this.peers.set(peerId, entry)
@@ -969,13 +1103,134 @@ export class RemoteSessionEngine {
     return entry
   }
 
-  private async offerTo(peerId: string): Promise<void> {
+  private async offerTo(peerId: string, options: { iceRestart?: boolean } = {}): Promise<void> {
     const entry = this.ensurePeer(peerId)
 
     await entry.connection.setLocalStream(this.localStream ?? this.microphoneStream)
 
-    const offer = await entry.connection.createOffer()
+    const offer = await entry.connection.createOffer(options)
     this.signalling?.send({ type: 'offer', to: peerId, payload: offer })
+  }
+
+  /**
+   * Whether this browser restarts ICE for the pair, or asks the other side to.
+   *
+   * A desktop agent answers a restart offer but never makes one, so with an
+   * agent the browser always drives. Between two browsers the lower id does —
+   * both compute the same answer without asking each other.
+   */
+  private drivesRestartsFor(peer: EnginePeer): boolean {
+    if (peer.capabilities.remote_control === true) return true
+
+    return isRestartDriver(this.options.participantUuid, peer.participantUuid)
+  }
+
+  /** The supervisor's `restart`: offer with new ICE credentials, or ask the driver to. */
+  private async restartIce(peerId: string, reason: string): Promise<void> {
+    const entry = this.peers.get(peerId)
+    if (!entry || this.disposed) return
+
+    entry.lastRestartAt = Date.now()
+    entry.diagnostics.noteRestart()
+    this.publishNetwork()
+
+    if (!this.drivesRestartsFor(entry.info)) {
+      this.signalling?.send({ type: 'renegotiate', to: peerId, payload: { iceRestart: true, reason } })
+
+      return
+    }
+
+    // Nothing negotiated yet means nothing to restart: the first offer is
+    // still on its way and will gather with the current servers anyway.
+    if (!entry.connection.negotiated) return
+
+    await this.offerTo(peerId, { iceRestart: true })
+  }
+
+  /** Point every connection at a newer grant. Used for the next gathering. */
+  private adoptIce(config: IceConfig): void {
+    this.ice = config
+
+    for (const entry of this.peers.values()) {
+      entry.connection.applyIceConfig(config)
+      entry.diagnostics.setConfig(config)
+    }
+
+    this.publishNetwork()
+  }
+
+  /**
+   * Fresh credentials arrived. A connection whose own side is relayed is still
+   * using an allocation made with the old credential, which the relay will
+   * refuse to refresh once it expires — so it is restarted now, while the old
+   * path still works, rather than dropped later.
+   */
+  private async onIceRefreshed(config: IceConfig): Promise<void> {
+    if (this.disposed) return
+    this.adoptIce(config)
+
+    for (const entry of this.peers.values()) {
+      entry.diagnostics.noteCredentialRefresh()
+      if (entry.info.connectionState !== 'connected' || entry.supervisor.recovering) continue
+
+      const path = await entry.diagnostics.selectedPath()
+      if (path.localCandidateType === 'relay') void entry.supervisor.requestRestart('credential_refresh')
+    }
+  }
+
+  private handleRecoveryState(peerId: string, state: SupervisorState): void {
+    const entry = this.peers.get(peerId)
+    if (!entry) return
+
+    entry.recovery = state
+    this.recomputeConnection()
+  }
+
+  /** The supervisor ran out of attempts: say why, in words, and report it. */
+  private handleGiveUp(peerId: string): void {
+    const entry = this.peers.get(peerId)
+    if (!entry) return
+
+    entry.recovery = 'failed'
+    const message = describeVerdict(entry.diagnostics.verdict())
+
+    this.patch({ lastError: message || 'The connection could not be re-established.' })
+    this.recomputeConnection()
+    void this.sendReport(peerId, 'failed')
+  }
+
+  /**
+   * Try again after giving up — the "Reconnect" button. Fresh credentials and
+   * a fresh round of ICE restarts for every connection that had failed.
+   */
+  retryConnection(): void {
+    let retried = false
+    for (const entry of this.peers.values()) {
+      if (entry.recovery !== 'failed') continue
+      entry.supervisor.retry('manual')
+      retried = true
+    }
+
+    if (retried) {
+      this.patch({ lastError: null })
+      this.recomputeConnection()
+    }
+  }
+
+  /** The ICE configuration in use, for a relay connectivity check. */
+  currentIceConfig(): IceConfig {
+    return this.ice
+  }
+
+  private async sendReport(peerId: string, outcome: ConnectivityOutcome): Promise<void> {
+    const entry = this.peers.get(peerId)
+    if (!entry) return
+
+    try {
+      await reportConnectivity(this.options.sessionUuid, await entry.diagnostics.report(outcome))
+    } catch {
+      /* diagnostics are best-effort */
+    }
   }
 
   /**
@@ -995,6 +1250,8 @@ export class RemoteSessionEngine {
     const entry = this.peers.get(peerId)
     if (!entry) return
 
+    entry.supervisor.dispose()
+    entry.diagnostics.dispose()
     entry.connection.dispose()
     this.peers.delete(peerId)
 
@@ -1029,21 +1286,70 @@ export class RemoteSessionEngine {
     if (entry) {
       entry.info = { ...entry.info, connectionState: state }
       this.publishPeers()
+
+      if (state === 'connected') {
+        void this.refreshPath(entry)
+
+        if (!entry.reportedConnected) {
+          entry.reportedConnected = true
+          void this.sendReport(peerId, 'connected')
+        }
+      }
     }
 
-    // The overall state is the best of the peers: with two viewers, one poor
-    // connection should not make the session read as broken.
-    const states = [...this.peers.values()].map((peer) => peer.info.connectionState)
+    this.recomputeConnection()
+  }
+
+  /**
+   * The overall state is the best of the peers: with two viewers, one poor
+   * connection should not make the session read as broken. A connection that
+   * is being recovered reads as reconnecting, and one that has given up as
+   * failed — the browser's own `failed` is no longer the last word, because
+   * the supervisor restarts ICE after it.
+   */
+  private recomputeConnection(): void {
+    const entries = [...this.peers.values()]
+    const states = entries.map((peer) => peer.info.connectionState)
 
     let connection: LiveConnectionState = this.snapshot.connection
     if (states.includes('connected')) connection = 'connected'
+    else if (entries.some((peer) => peer.recovery === 'recovering')) connection = 'reconnecting'
     else if (states.includes('connecting') || states.includes('new')) connection = 'connecting'
     else if (states.includes('disconnected')) connection = 'interrupted'
-    else if (states.includes('failed')) connection = 'failed'
+    else if (states.includes('failed') || entries.some((peer) => peer.recovery === 'failed')) connection = 'failed'
 
     this.patch({ connection })
+    this.publishNetwork()
 
     void this.reportConnectionState(connection)
+  }
+
+  private async refreshPath(entry: PeerEntry): Promise<void> {
+    entry.path = await entry.diagnostics.selectedPath()
+    this.publishNetwork()
+  }
+
+  /** Fold every connection's path and recovery into the one status the UI shows. */
+  private publishNetwork(): void {
+    const entries = [...this.peers.values()]
+    const carrying = entries.find((peer) => peer.info.connectionState === 'connected' && peer.path !== null)
+    const failed = entries.find((peer) => peer.recovery === 'failed')
+    const verdict = failed ? failed.diagnostics.verdict() : null
+    const path = carrying?.path ?? null
+    const node = path?.relayNode ? this.ice.relayNodes.find((n) => n.id === path.relayNode) : null
+
+    this.patch({
+      network: {
+        path: path?.path ?? 'unknown',
+        relayNode: node?.label ?? path?.relayNode ?? null,
+        relayProtocol: path?.relayProtocol ?? null,
+        recovering: entries.some((peer) => peer.recovery === 'recovering'),
+        restarts: entries.reduce((total, peer) => total + peer.diagnostics.restarts, 0),
+        verdict,
+        message: verdict ? describeVerdict(verdict) || null : null,
+        credentialsExpireAt: this.ice.expiresAt,
+      },
+    })
   }
 
   private handleDataMessage(peerId: string, payload: unknown): void {
@@ -1502,6 +1808,13 @@ export class RemoteSessionEngine {
     const readings = await Promise.all(
       [...this.peers.values()].map(({ connection }) => connection.readQuality()),
     )
+
+    // A path changes under a live connection — an ICE restart, a relay
+    // replacing a direct path that broke — so it is re-read with the quality.
+    for (const entry of this.peers.values()) {
+      if (entry.info.connectionState === 'connected') entry.path = await entry.diagnostics.selectedPath()
+    }
+    this.publishNetwork()
 
     const worst: PeerConnectionQuality = readings.includes('poor')
       ? 'poor'

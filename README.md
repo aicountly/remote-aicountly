@@ -175,7 +175,9 @@ Only `VITE_`-prefixed variables reach the browser bundle, and Vite inlines them
 at build time, so **treat every one of them as public**. Never put a secret in
 one. The signalling URL and the ICE servers are deliberately not build-time
 values: the browser receives them from the API, per session, so a TURN
-credential never ends up in a JavaScript bundle.
+credential never ends up in a JavaScript bundle. TURN relay nodes are the
+`WEBRTC_TURN_*` keys Remote shares with Connect — see
+[docs/ICE_CONTRACT.md](docs/ICE_CONTRACT.md).
 
 Manage's company lifecycle (an organisation read-only after its subscription lapsed, then purged) needs
 `LIFECYCLE_WEBHOOK_SECRET` and `MANAGE_API_URL` in `backend/.env`; its cron jobs are installed by the production deploy — see
@@ -231,6 +233,7 @@ everywhere; until then the header shows the plain wordmark. See
 | [desktop/WINDOWS_AGENT.md](docs/desktop/WINDOWS_AGENT.md) | Windows specifics, and what Windows forbids |
 | [desktop/WINDOWS_RELEASE.md](docs/desktop/WINDOWS_RELEASE.md) | Building, signing and releasing the agent |
 | [desktop/TESTING.md](docs/desktop/TESTING.md) | Coverage, and its gaps |
+| [ICE_CONTRACT.md](docs/ICE_CONTRACT.md) | TURN relay nodes, credential renewal, ICE recovery, connectivity diagnostics |
 | [BROWSER_SUPPORT.md](docs/BROWSER_SUPPORT.md) | What works where, and what degrades |
 | [BRANDING.md](docs/BRANDING.md) | Logo, colour, typography, icons |
 | [auth/AICOUNTLY_AUTH_WORKFLOW.md](docs/auth/AICOUNTLY_AUTH_WORKFLOW.md) | Sign-in |

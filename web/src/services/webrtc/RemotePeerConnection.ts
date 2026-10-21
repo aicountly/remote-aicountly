@@ -7,11 +7,15 @@
  * capture after unmount (§56).
  *
  * Who offers is decided by the caller, not here: the peer already in the room
- * offers to the one that just arrived. That rule has no tie to break, so the
- * "glare" case (both sides offering at once) never arises and there is no need
- * for perfect-negotiation rollback.
+ * offers to the one that just arrived, and a renegotiation is *asked for*
+ * rather than offered. Offers can still cross — two people starting to share
+ * in the same second — so each side is told whether it is `polite`: the
+ * polite side rolls its own offer back and answers, the other ignores the
+ * collision. Both converge on one negotiation instead of erroring.
  */
 
+import { applyIceConfig, rtcConfiguration } from '../../ice-kit/index.js'
+import type { IceConfig } from '../../ice-kit/index.js'
 import { BUFFER_LOW_WATER } from './fileTransfer'
 import { CONTROL_CHANNEL_LABEL } from './remoteControl'
 
@@ -55,16 +59,21 @@ export class RemotePeerConnection {
 
   constructor(
     readonly peerId: string,
-    iceServers: RTCIceServer[],
+    ice: IceConfig,
     private readonly events: PeerEvents,
+    /**
+     * Yields when offers cross. Exactly one side of a pair is polite; the
+     * engine sets it once it knows who the peer is.
+     */
+    public polite = false,
   ) {
-    this.pc = new RTCPeerConnection({
-      iceServers,
-      // Trickle ICE with a small pool: gathering starts before the offer is
-      // created, which measurably shortens time-to-first-frame.
-      iceCandidatePoolSize: 2,
-      bundlePolicy: 'max-bundle',
-    })
+    this.pc = new RTCPeerConnection(
+      rtcConfiguration(ice, {
+        // Trickle ICE with a small pool: gathering starts before the offer is
+        // created, which measurably shortens time-to-first-frame.
+        iceCandidatePoolSize: Math.max(2, ice.iceCandidatePoolSize),
+      }),
+    )
 
     this.pc.onicecandidate = (event) => {
       if (event.candidate && !this.disposed) {
@@ -101,6 +110,19 @@ export class RemotePeerConnection {
     return this.pc.connectionState
   }
 
+  /**
+   * The underlying connection, for the ICE kit's supervisor and diagnostics —
+   * which only listen to it. Everything that changes it stays in this class.
+   */
+  get peerConnection(): RTCPeerConnection {
+    return this.pc
+  }
+
+  /** Whether an offer/answer exchange has completed at least once. */
+  get negotiated(): boolean {
+    return this.pc.remoteDescription !== null
+  }
+
   get dataChannelReady(): boolean {
     return this.channel?.readyState === 'open'
   }
@@ -110,34 +132,60 @@ export class RemotePeerConnection {
     return this.controlChannel?.readyState === 'open'
   }
 
-  /** Create the offer, and with it the two channels this pair will use. */
-  async createOffer(): Promise<RTCSessionDescriptionInit> {
-    this.attachChannel(
-      this.pc.createDataChannel(DATA_CHANNEL_LABEL, {
-        // Ordered and reliable: chat and annotation events are meaningless out
-        // of order, and pointer updates are throttled rather than dropped.
-        ordered: true,
-      }),
-    )
+  /**
+   * Create an offer — the first one with the two channels this pair will use,
+   * a later one (a renegotiation, an ICE restart) over the channels that
+   * already exist. Creating them again on every offer would open a fresh pair
+   * of channels each time somebody started sharing.
+   */
+  async createOffer(options: { iceRestart?: boolean } = {}): Promise<RTCSessionDescriptionInit> {
+    if (!this.channel) {
+      this.attachChannel(
+        this.pc.createDataChannel(DATA_CHANNEL_LABEL, {
+          // Ordered and reliable: chat and annotation events are meaningless out
+          // of order, and pointer updates are throttled rather than dropped.
+          ordered: true,
+        }),
+      )
+    }
 
     // The control channel is opened whether or not this peer turns out to be
     // controllable. Opening it later would need a renegotiation at the moment
     // somebody asks for control, which is the worst possible moment for one.
-    this.attachControlChannel(
-      this.pc.createDataChannel(CONTROL_CHANNEL_LABEL, {
-        // An input event applied out of order is a click somewhere nobody
-        // intended, so this is ordered and reliable too.
-        ordered: true,
-      }),
-    )
+    if (!this.controlChannel) {
+      this.attachControlChannel(
+        this.pc.createDataChannel(CONTROL_CHANNEL_LABEL, {
+          // An input event applied out of order is a click somewhere nobody
+          // intended, so this is ordered and reliable too.
+          ordered: true,
+        }),
+      )
+    }
 
-    const offer = await this.pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true })
+    // An ICE restart is an offer with new ICE credentials: both sides gather
+    // again — with whatever ICE servers they now hold — while media keeps
+    // flowing on the old path until a new one is selected.
+    const offer = await this.pc.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: true,
+      iceRestart: options.iceRestart === true,
+    })
     await this.pc.setLocalDescription(offer)
 
     return offer
   }
 
-  async acceptOffer(offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit> {
+  /**
+   * Answer an offer, or return null when it collided with ours and we are the
+   * side that keeps its own (see `polite`).
+   */
+  async acceptOffer(offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit | null> {
+    if (this.pc.signalingState === 'have-local-offer') {
+      if (!this.polite) return null
+
+      await this.pc.setLocalDescription({ type: 'rollback' })
+    }
+
     await this.pc.setRemoteDescription(new RTCSessionDescription(offer))
     await this.drainCandidates()
 
@@ -176,6 +224,14 @@ export class RemotePeerConnection {
       // A candidate the browser cannot use is normal during trickle; the
       // connection succeeds on another one.
     }
+  }
+
+  /**
+   * Point this connection at fresh ICE servers. They are used from the next
+   * gathering on — an ICE restart — and the current path is left alone.
+   */
+  applyIceConfig(ice: IceConfig): boolean {
+    return !this.disposed && applyIceConfig(this.pc, ice)
   }
 
   /** Attach (or replace) the outgoing media for this connection. */

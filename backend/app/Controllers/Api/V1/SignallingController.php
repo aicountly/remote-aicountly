@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controllers\Api\V1;
 
+use Aicountly\Ice\ConnectivityReport;
 use App\Controllers\BaseApiController;
 use App\Domain\Audit\EventType;
 use App\Domain\Session\SessionStatus;
@@ -33,39 +34,7 @@ class SignallingController extends BaseApiController
 {
     public function token(string $uuid): ResponseInterface
     {
-        $guest        = $this->context()->guest();
-        $participants = Services::participantService();
-
-        if ($guest !== null) {
-            // `allowPreview`: a person awaiting admission is answered below with
-            // AWAITING_APPROVAL and their participant status, which is how the
-            // waiting room learns it is still waiting.
-            $session     = Services::sessionService()->findForGuest($guest, $uuid, true);
-            $participant = $participants->findByUuidOrFail($guest->participantUuid);
-        } else {
-            $identity    = $this->identity();
-            $session     = Services::sessionService()->findForUser($uuid, $identity, true);
-            $participant = $participants->findByUser((int) $session['id'], $identity->id);
-
-            if ($participant === null) {
-                throw ApiException::forbidden(
-                    'NOT_A_PARTICIPANT',
-                    'You are not part of this Remote session.',
-                );
-            }
-        }
-
-        if (! SessionStatus::isLive((string) $session['status'])) {
-            throw ApiException::conflict('SESSION_ALREADY_ENDED', 'This Remote session has already finished.');
-        }
-
-        if (! in_array((string) $participant['status'], ['APPROVED', 'JOINED'], true)) {
-            throw ApiException::forbidden(
-                'AWAITING_APPROVAL',
-                'The host has not admitted you to this session yet.',
-                ['participantStatus' => $participant['status']],
-            );
-        }
+        [$session, $participant] = $this->admittedParticipant($uuid);
 
         $capabilities = $participant['capabilities'] ?? '{}';
         if (is_string($capabilities)) {
@@ -90,7 +59,7 @@ class SignallingController extends BaseApiController
             (int) $participant['id'],
         );
 
-        $ice = Services::iceConfigService();
+        $grant = Services::iceConfigService()->grant((string) $participant['uuid'], $this->regionHint());
 
         return $this->ok([
             'token'     => $token['token'],
@@ -99,10 +68,109 @@ class SignallingController extends BaseApiController
             'expiresAt' => gmdate('c', $token['expiresAt']),
             'participantUuid' => (string) $participant['uuid'],
             'role'      => (string) $participant['participant_role'],
-            'iceServers' => $ice->iceServers(),
+            'iceServers' => $grant->iceServers(),
             // The UI uses this to explain an unreachable peer honestly instead
             // of showing "reconnecting" forever (§49).
-            'relayAvailable' => $ice->hasRelay(),
+            'relayAvailable' => $grant->relayAvailable(),
+            // The whole aicountly.ice/1 grant: expiry, when to refresh, and which
+            // relay node each URL belongs to (docs/ICE_CONTRACT.md).
+            'ice' => $grant->toArray(),
         ]);
+    }
+
+    /**
+     * `POST /sessions/{uuid}/ice-servers` — fresh TURN credentials, without a signalling token.
+     *
+     * A relayed connection cannot outlive its credential: coturn refuses the allocation's next refresh
+     * once the username's timestamp has passed. The browser therefore asks again at `refreshAfter` and
+     * restarts ICE onto the new credential, and it asks here rather than re-minting a signalling token
+     * so that renewing a relay is not also a reconnection to the room. Same admission rule as the token.
+     */
+    public function iceServers(string $uuid): ResponseInterface
+    {
+        [, $participant] = $this->admittedParticipant($uuid);
+
+        return $this->ok(
+            Services::iceConfigService()->grant((string) $participant['uuid'], $this->regionHint())->toArray(),
+        );
+    }
+
+    /**
+     * `POST /sessions/{uuid}/connectivity-report` — how this participant's connection went.
+     *
+     * Diagnostics, not audit: written to the application log as one structured line so an operator can
+     * answer "is the Mumbai relay carrying calls, and where does ICE fail" across sessions. The body is
+     * reduced to an allow-list of enumerations and counts before anything is written — no SDP, no
+     * candidate, no IP address and no credential can pass through, whatever a client sends.
+     */
+    public function connectivityReport(string $uuid): ResponseInterface
+    {
+        [$session, $participant] = $this->admittedParticipant($uuid, false);
+
+        $report = ConnectivityReport::sanitize($this->body());
+
+        log_message('info', 'remote.ice.report {report}', [
+            'report' => json_encode([
+                'session'     => (string) $session['uuid'],
+                'participant' => (string) $participant['uuid'],
+            ] + $report, JSON_UNESCAPED_SLASHES),
+        ]);
+
+        return $this->ok(['recorded' => true]);
+    }
+
+    /**
+     * The session and the caller's participant row, refused unless the session is live and the
+     * participant has been admitted. This is the load-bearing check described above.
+     *
+     * @return array{0: array<string, mixed>, 1: array<string, mixed>}
+     */
+    private function admittedParticipant(string $uuid, bool $requireLive = true): array
+    {
+        $guest        = $this->context()->guest();
+        $participants = Services::participantService();
+
+        if ($guest !== null) {
+            // `allowPreview`: a person awaiting admission is answered below with
+            // AWAITING_APPROVAL and their participant status, which is how the
+            // waiting room learns it is still waiting.
+            $session     = Services::sessionService()->findForGuest($guest, $uuid, true);
+            $participant = $participants->findByUuidOrFail($guest->participantUuid);
+        } else {
+            $identity    = $this->identity();
+            $session     = Services::sessionService()->findForUser($uuid, $identity, true);
+            $participant = $participants->findByUser((int) $session['id'], $identity->id);
+
+            if ($participant === null) {
+                throw ApiException::forbidden(
+                    'NOT_A_PARTICIPANT',
+                    'You are not part of this Remote session.',
+                );
+            }
+        }
+
+        // A report about how a connection ended may arrive after the session has.
+        if ($requireLive && ! SessionStatus::isLive((string) $session['status'])) {
+            throw ApiException::conflict('SESSION_ALREADY_ENDED', 'This Remote session has already finished.');
+        }
+
+        if (! in_array((string) $participant['status'], ['APPROVED', 'JOINED', ...($requireLive ? [] : ['LEFT'])], true)) {
+            throw ApiException::forbidden(
+                'AWAITING_APPROVAL',
+                'The host has not admitted you to this session yet.',
+                ['participantStatus' => $participant['status']],
+            );
+        }
+
+        return [$session, $participant];
+    }
+
+    /** The client's region hint for relay ordering (`in-west`, `in-north`); a hint, never a filter. */
+    private function regionHint(): ?string
+    {
+        $body   = $this->body();
+        $region = strtolower(trim((string) ($body['region'] ?? '')));
+
+        return preg_match('/^[a-z0-9-]{2,32}$/', $region) === 1 ? $region : null;
     }
 }

@@ -112,6 +112,17 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
         'filter' => ['api-auth:guest', 'rate-limit:signalling-token,60,60'],
     ]);
 
+    // Fresh TURN credentials for a relayed connection about to outlive its own (lib/ice-kit). Once
+    // at 80% of a credential's life per peer, plus recovery after an ICE failure — 30 a minute is
+    // far above either, and far below a loop.
+    $routes->post('sessions/(:segment)/ice-servers', 'SignallingController::iceServers/$1', [
+        'filter' => ['api-auth:guest', 'rate-limit:ice-servers,30,60'],
+    ]);
+    // How a connection went: path, relay node, ICE failure categories. Logged, never stored.
+    $routes->post('sessions/(:segment)/connectivity-report', 'SignallingController::connectivityReport/$1', [
+        'filter' => ['api-auth:guest', 'rate-limit:connectivity-report,20,60'],
+    ]);
+
     // --- Chat --------------------------------------------------------------
     $routes->get('sessions/(:segment)/messages', 'ChatController::index/$1', ['filter' => 'api-auth:guest']);
     $routes->post('sessions/(:segment)/messages', 'ChatController::create/$1', [

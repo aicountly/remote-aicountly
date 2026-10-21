@@ -149,8 +149,15 @@
 }
 
 .connection__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   color: var(--text-stage-muted);
   font-size: var(--text-xs);
+}
+
+.connection__retry {
+  flex: none;
 }
 
 /* --- Banners -------------------------------------------------------------- */
@@ -567,6 +574,14 @@
   margin-top: 2px;
   color: var(--text-stage-muted);
   font-size: var(--text-xs);
+}
+
+.relay-check {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding-left: calc(15px + var(--space-3));
 }
 
 /* --- Toolbar -------------------------------------------------------------- */
