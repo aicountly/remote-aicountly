@@ -7,7 +7,8 @@
 # line per relay node it holds a repository secret for; nothing else ever carries a TURN secret to a host.
 #
 #   * STDIN only. A secret in an argument is in `ps`, in shell history and in a workflow log.
-#   * Only these keys are accepted — WEBRTC_TURN_STATIC_AUTH_SECRET and WEBRTC_TURN_NODE_<ID>_SECRET.
+#   * Only these keys are accepted — WEBRTC_TURN_STATIC_AUTH_SECRET, WEBRTC_TURN_NODE_<ID>_SECRET and
+#     WEBRTC_TURN_LEDGER_PASSWORD (the shared capacity ledger's database password; it may never equal a TURN secret).
 #     Anything else is refused, so this cannot be turned into a general .env writer.
 #   * A value must look like a secret: 16..256 characters of [A-Za-z0-9._~+/=:@%-]. That refuses a
 #     placeholder ("changeme", "<secret>"), and every character that would make CodeIgniter's .env
@@ -31,7 +32,7 @@ for arg in "$@"; do
   case "$arg" in
     --env=*) env_file="${arg#--env=}" ;;
     --allow-shared) allow_shared=1 ;;
-    -h | --help) sed -n '2,24p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,25p' "$0"; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -42,7 +43,7 @@ if [ -t 0 ]; then
 fi
 [ -f "$env_file" ] || { echo "No .env at $env_file — create it from .env.example first." >&2; exit 3; }
 
-key_re='^WEBRTC_TURN_(STATIC_AUTH_SECRET|NODE_[A-Z0-9_]+_SECRET)$'
+key_re='^WEBRTC_TURN_(STATIC_AUTH_SECRET|LEDGER_PASSWORD|NODE_[A-Z0-9_]+_SECRET)$'
 value_re='^[A-Za-z0-9._~+/=:@%-]{16,256}$'
 
 keys=()
@@ -56,7 +57,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   value="${line#*=}"
 
   if ! [[ "$key" =~ $key_re ]]; then
-    echo "Refused: '$key' is not a TURN secret key (WEBRTC_TURN_STATIC_AUTH_SECRET or WEBRTC_TURN_NODE_<ID>_SECRET)." >&2
+    echo "Refused: '$key' is not an injectable key (WEBRTC_TURN_STATIC_AUTH_SECRET, WEBRTC_TURN_NODE_<ID>_SECRET or WEBRTC_TURN_LEDGER_PASSWORD)." >&2
     exit 2
   fi
   if [ -z "$value" ]; then
@@ -89,6 +90,18 @@ if [ "$allow_shared" -eq 0 ]; then
     done
   done
 fi
+
+# The ledger password protects a database, not a relay: it must differ from every TURN secret (no override).
+for i in "${!keys[@]}"; do
+  [ "${keys[$i]}" = "WEBRTC_TURN_LEDGER_PASSWORD" ] || continue
+  for j in "${!keys[@]}"; do
+    [ "$j" -eq "$i" ] && continue
+    if [ "${values[$i]}" = "${values[$j]}" ]; then
+      echo "Refused: WEBRTC_TURN_LEDGER_PASSWORD and ${keys[$j]} carry the same value; the ledger password must be its own." >&2
+      exit 2
+    fi
+  done
+done
 
 [ "${#keys[@]}" -gt 0 ] || { echo "No TURN secret supplied; .env left alone."; exit 0; }
 

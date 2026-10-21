@@ -199,6 +199,13 @@ Configuration keys: `WEBRTC_TURN_ADMISSION` (`off` | `observe` default | `enforc
 `WEBRTC_TURN_BUSY_AT`, `WEBRTC_TURN_SHED_FREE_AT`, `WEBRTC_TURN_BALANCE_BAND_MS`, `WEBRTC_TURN_PROFILE_<NAME>_KBPS`,
 `WEBRTC_TURN_FALLBACK_TRANSPORTS`, per node `_LAT`, `_LON`, `_MAX_ALLOCATIONS`, `_MAX_MBPS`, `_TIERS`, `_PAID_RESERVE_PERCENT`,
 files `WEBRTC_TURN_LEASE_FILE`, `_LOAD_FILE`, `_LOAD_MAX_AGE`, `_LATENCY_FILE`, and optional edge geography `WEBRTC_GEO_*`.
+
+Shared-ledger and licence settings (kit 1.3.0): `WEBRTC_TURN_LEDGER_DSN`, `WEBRTC_TURN_LEDGER_USER` (non-secret) and `WEBRTC_TURN_LEDGER_PASSWORD`
+(a secret — injected by `bin/ops/inject-turn-secrets.sh`, never `.env.example`), `WEBRTC_TURN_LEDGER_TIMEOUT_MS`; `WEBRTC_TURN_LICENCE_FEED` (`confirmed` is an
+operator attestation) and `WEBRTC_TURN_ENTITLEMENT_MAX_AGE_HOURS` (an entitlement the feed has not refreshed within this stops counting as paid);
+Remote also `WEBRTC_TURN_FREE_PLAN_CODES`. A node run as two coturn instances sets `WEBRTC_TURN_NODE_<ID>_GROUP` and `_STRUCTURAL_RESERVE`
+(`docs/TURN_BANDWIDTH_ENFORCEMENT.md`). `admission.reason` also takes `ledger_unavailable` (free user refused because the shared ledger could not be
+reached while enforcing). While the licence readiness gate is not satisfied the effective `admission.mode` is `observe` even if `enforce` is configured.
 A client that is **renewing** keeps its place under overload, and a renewal the hard limits still refuse is not adopted: the client keeps
 the credentials it has.
 

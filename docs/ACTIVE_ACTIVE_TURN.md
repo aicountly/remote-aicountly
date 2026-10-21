@@ -251,3 +251,25 @@ Paid clients prefer their own instance (lower `priority`) and spill into the sha
 | 15 ms balance band, 20 ms stickiness | stability vs sharing | G1, G3 |
 | The edge can supply visitor location | edge geography | infrastructure answer |
 | Real coturn's usage-log format equals 4.6.1's | L4 | F6 |
+
+## 13. Shared ledger, licence gate and bandwidth layers (kit 1.3.0, 2026-10-21)
+
+*Implemented and tested locally unless stated.* Details and commands: `docs/STAGING_TURN_DEPLOYMENT.md`,
+`docs/TURN_BANDWIDTH_ENFORCEMENT.md`, `docs/LICENCE_ENTITLEMENT_AUDIT.md`.
+
+* **One set of books for every product.** With `WEBRTC_TURN_LEDGER_DSN` set, leases and measured load live in PostgreSQL
+  (`PdoLeaseStore`, `PdoLoadStore`; `sql/turn_capacity.sql`), updated in one transaction under an advisory lock
+  (`pg_advisory_xact_lock`), so Remote and Connect admit against the **same** node rows: the paid reserve is one guarantee. Without the
+  DSN the per-product files (§3) are used, as before. `CapacityRegistry` records each product's view of each node's capacity so a
+  disagreement is detected (`reconcile.php` → `config_mismatch`).
+* **Ledger down.** While `enforce`: paid is served unbooked (a customer is never refused over our bookkeeping), free is refused
+  (`reason = ledger_unavailable`). In `observe` nobody is refused.
+* **Reconciliation.** `bin/reconcile.php` compares the books with the collector's measurement and with the relay's own per-tier byte
+  counts (report-only; leaked leases lapse with their credentials rather than being dropped).
+* **Licence readiness gate.** `enforce` runs as `observe` — and `status.enforceBlockedBy` says why — until the product reports no
+  blockers (feed attested, freshness bounded, every plan mapped, the entitlement table populated and recently written).
+* **Bandwidth.** §9's optional hard separation is now a concrete, locally exercised design (`infra/tier-split/`): two coturn instances
+  per host, and an nftables-classified HTB shaper that guarantees the paid class its share of the NIC whatever the shared class
+  offers. **Proposal for the infrastructure team; untested on the real nodes.**
+* **What §12's list gained:** the sustainable rate of the real NIC (not the advertised port speed), whether coturn 4.18.0-1.el9 matches the
+  4.6.1 behaviour recorded here, whether the OVH host has an upstream limiter, and whether a second public IP exists for TLS on 443.

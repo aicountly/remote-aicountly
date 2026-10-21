@@ -99,6 +99,10 @@ jobs:
               ;;
           esac
 
+          # The sandbox must never be pointed at the production account (it shares the WHM server with it):
+          # a --delete deploy there would overwrite the live application. See scripts/ci/sandbox-target-guard.sh.
+          bash scripts/ci/sandbox-target-guard.sh "$SSH_USER" "$REMOTE_ROOT"
+
           case "$REMOTE_ROOT" in
             /*) echo "Deploy target validated (absolute path)." ;;
             *)  echo "Deploy target validated ('$REMOTE_ROOT', relative to the SSH user's home directory)." ;;
@@ -475,11 +479,14 @@ jobs:
           REMOTE_ROOT: ${{ secrets.SANDBOX_SSH_REMOTE_ROOT }}
           TURN_MUM_SECRET: ${{ secrets.SANDBOX_TURN_MUM_SECRET }}
           TURN_NCR_SECRET: ${{ secrets.SANDBOX_TURN_NCR_SECRET }}
+          TURN_LEDGER_PASSWORD: ${{ secrets.SANDBOX_TURN_LEDGER_PASSWORD }}
         run: |
           root="${REMOTE_ROOT#\~/}"
           {
             printf 'WEBRTC_TURN_NODE_MUM_SECRET=%s\n' "$TURN_MUM_SECRET"
             printf 'WEBRTC_TURN_NODE_NCR_SECRET=%s\n' "$TURN_NCR_SECRET"
+            # The shared capacity ledger's database password (docs/STAGING_TURN_DEPLOYMENT.md). Empty = not set = left alone.
+            printf 'WEBRTC_TURN_LEDGER_PASSWORD=%s\n' "$TURN_LEDGER_PASSWORD"
           } | ssh deploy-target "bash '$root/api/bin/ops/inject-turn-secrets.sh'"
 
       # Is the live site really Remote, and the build just deployed? The host's

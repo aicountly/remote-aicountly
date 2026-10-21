@@ -50,6 +50,24 @@ The design, with what is implemented, proposed and assumed, is `docs/ACTIVE_ACTI
 4. **What is tested vs assumed:** tested locally — the arithmetic, the selection, the books under concurrency, the clients, the HTTP paths, and everything against real coturn
    *processes* on one machine. Assumed — every number in the capacity model, the real nodes' behaviour, their log format, the edge's geography, the licence feed.
 
+## 1b. Round 3 — shared capacity ledger, bandwidth enforcement, licence gate, staging (2026-10-21)
+
+Added after the confirmed decisions: observe-mode staging first; one capacity ledger for every product that shares the relays; a
+technical (not estimated) guarantee for the paid bandwidth; paid status only from trusted, current entitlements. Status labels as in
+`docs/ACTIVE_ACTIVE_TURN.md` §0. **Draft PRs only — nothing merged, nothing deployed, no production change.**
+
+| # | Item | Status | Evidence / what remains |
+|---|---|---|---|
+| B1 | **Cross-product accounting.** Remote and Connect share the same physical nodes; separate file ledgers cannot jointly guarantee the 50 % reserve | **Implemented, tested locally** | `PdoLeaseStore` / `PdoLoadStore` / `CapacityRegistry` over PostgreSQL (`sql/turn_capacity.sql`, one advisory lock): six processes from two "products" racing for a node admit **exactly** its capacity; `reconcile.php` reports `config_mismatch` when products disagree. Ledger outage while enforcing: paid served unbooked, free refused. **Remaining:** create the database/role (staging: `docs/STAGING_TURN_DEPLOYMENT.md` §4), then production adopts the same ledger |
+| B2 | Reconcile books with real Coturn usage | **Implemented, tested locally** | `bin/reconcile.php` (report-only): books vs. collector measurement vs. the relay's own usage lines per tier. **Remaining:** runs against real nodes (needs the collector transport and the real log format) |
+| B3 | **Bandwidth enforcement** — application estimates alone are insufficient | **Designed; artifacts exercised locally; real nodes untested** | Three layers (admission → two coturn instances with quotas → nftables+HTB shaper). Namespace test: free flood leaves paid at 30.0 of 30 offered; free capped at ~20 of a 40 Mbit link. `docs/TURN_BANDWIDTH_ENFORCEMENT.md`. **Remaining:** infrastructure applies it on a staging node; the three-phase load test with fixed pass criteria; TLS-443 isolation (second IP vs SNI proxy) is an **open decision** |
+| B4 | **Licence → tier trusted and current** | **Partially resolved** | Current-entitlement-only reads, validity window and freshness limit in both products; **readiness gate holds `enforce` at `observe`** until the feed is attested and complete. Authoritative source identified (Manage `ghm_subscription`, backed by Engage licences) but **no product-facing endpoint exists** and **no Remote paid plan code exists in any repository** (`docs/LICENCE_ENTITLEMENT_AUDIT.md`). Enforcement stays off |
+| B5 | Secure secret/config delivery; staging isolated from production | **Implemented, tested** | `inject-turn-secrets.sh` now also carries the ledger password (never equal to a TURN secret); `apply-turn-config.sh` for everything non-secret (refuses secrets, refuses `enforce` without a flag, can keep Noida out); both sandbox workflows now **refuse a production account/path** (`sandbox-target-guard.sh`) |
+| B6 | Infrastructure statement: Mumbai and Noida run coturn **4.18.0-1.el9**, reachable over valid TLS on 443; Noida's self-IP peer denial corrected and coturn restarted | **Reported by infrastructure; not verified by this work** | First verification from the API host: `docs/STAGING_TURN_DEPLOYMENT.md` §7.1(b). The `usage:` log format and `max-bps`/`bps-capacity` semantics were observed on **4.6.1** and are **assumed** to hold on 4.18 |
+| B7 | A13 above (one API host assumed) | **Superseded by B1** | The shared ledger removes the single-file limitation |
+
+Still gating `enforce`: A3 (measured capacities), B3 (shaper + load test on a real node), B4 (mappings and feed). Still gating Noida in production: A11.
+
 ## 1. Launch-blocker matrix
 
 Status key — **Resolved**: verified, with the evidence named. **Partially resolved**: code or tooling done and

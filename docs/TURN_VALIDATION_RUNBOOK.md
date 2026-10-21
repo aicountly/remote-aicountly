@@ -9,6 +9,12 @@ short-lived credentials, changes nothing on a TURN server, and needs no root.
 > *allocate* a relay for it, open the relay port range, and *forward* a peer's packets. Those are the four
 > things below, and only a real allocation, then real data through it, shows them.
 
+> **Update 2026-10-21.** The staging deployment sequence, the observe-mode configuration and the first authenticated API-host commands for
+> Remote desktop sessions, Connect calls, regional selection, bandwidth measurement and failover are in `docs/STAGING_TURN_DEPLOYMENT.md` §7
+> (they use the commands of Parts A–G below). Infrastructure reports coturn **4.18.0-1.el9** on both nodes, valid TLS on 443, and Noida's
+> self-IP peer denial corrected — A2 is the first test that verifies this from the API host. Denial/spill tests (Part D2, F5) need `enforce`,
+> which is held back by the licence readiness gate until the mappings and feed are complete; in `observe` they are read from the audit log.
+
 ## What is already known, and what is not
 
 | | Status |

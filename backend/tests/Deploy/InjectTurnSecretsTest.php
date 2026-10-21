@@ -156,4 +156,21 @@ final class InjectTurnSecretsTest extends TestCase
         $this->assertSame(3, $code);
         $this->assertFileDoesNotExist($this->env);
     }
+
+    public function testTheLedgerPasswordIsInjectableButNeverEqualToATurnSecret(): void
+    {
+        $ledger = 'ledger-password-0123456789abcdef';
+
+        [$code, $out] = $this->inject('WEBRTC_TURN_LEDGER_PASSWORD=' . $ledger . "\n");
+        $this->assertSame(0, $code, $out);
+        $this->assertStringContainsString('WEBRTC_TURN_LEDGER_PASSWORD: written.', $out);
+        $this->assertStringNotContainsString($ledger, $out);
+        $this->assertStringContainsString('WEBRTC_TURN_LEDGER_PASSWORD=' . $ledger, (string) file_get_contents($this->env));
+
+        // Not even --allow-shared lets a database password double as a relay secret.
+        [$code, $out] = $this->inject('WEBRTC_TURN_LEDGER_PASSWORD=' . self::MUM . "\nWEBRTC_TURN_NODE_MUM_SECRET=" . self::MUM . "\n", '--allow-shared');
+        $this->assertSame(2, $code);
+        $this->assertStringContainsString('ledger password must be its own', $out);
+        $this->assertStringNotContainsString(self::MUM, $out);
+    }
 }

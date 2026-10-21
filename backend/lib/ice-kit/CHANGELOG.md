@@ -1,5 +1,24 @@
 # Changelog — AICOUNTLY ICE kit
 
+## 1.3.0 — 2026-10-21
+
+Shared capacity accounting, licence readiness and bandwidth-enforcement artifacts. Backward compatible: with no
+ledger DSN the file stores behave exactly as in 1.2.0.
+
+- **One ledger for every product.** `PdoLeaseStore` / `PdoLoadStore` / `CapacityRegistry` over PostgreSQL
+  (`sql/turn_capacity.sql`, `LedgerConnection`, env `WEBRTC_TURN_LEDGER_*`): Remote and Connect book against the same
+  node-level rows under one advisory lock, so the paid reserve is one guarantee, not two. Ledger down while
+  enforcing: paid is served unbooked, free is refused (`ledger_unavailable`).
+- **Reconciliation.** `bin/reconcile.php` compares the ledger with the relay's own usage log and the node
+  collector, and reports configuration drift between products, over-booking, leaked leases and traffic that
+  free users carried beyond their share.
+- **Licence readiness gate.** `IceRuntime::issuer(..., $licenceReadiness)`: while the product reports blockers
+  (unmapped plans, an unattested feed, stale entitlements) `enforce` runs as `observe` and `status` lists
+  `enforceBlockedBy`.
+- **Tier-split relays.** `TurnNode::group` / `Capacity::structural` and the `Topology` invariant for a node that
+  is two coturn instances (paid-only and shared); `infra/tier-split/` holds the coturn, nftables and tc artifacts;
+  `tests/loadtest/` the netns shaping check and the tier-isolation load test.
+
 ## 1.2.0 — 2026-10-21
 
 Active-active routing and licence-aware admission (docs/ACTIVE_ACTIVE_TURN.md). Backward compatible: with

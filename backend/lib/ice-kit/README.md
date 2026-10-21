@@ -1,4 +1,4 @@
-# AICOUNTLY ICE kit (v1.2.0)
+# AICOUNTLY ICE kit (v1.3.0)
 
 The one way an AICOUNTLY product decides **which TURN relays a client may use** and **mints the
 short-lived credential for each**. Remote (`backend/lib/ice-kit`) and Connect
