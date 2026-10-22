@@ -1,5 +1,11 @@
 # TURN launch readiness — AICOUNTLY Remote
 
+> **Decision 2026-10-22 — Greater Noida joins production as Mumbai's regional peer.** Both nodes passed authenticated relay tests
+> (allocation over UDP/TCP/TLS-443; wrong-secret, expired and anonymous credentials refused; valid certificates) from the OVH application
+> server (`docs/STAGING_TURN_DEPLOYMENT.md` §12). Production now runs **active-active**: each client is offered the node nearest to it first
+> and the other as its fallback (TLS 443); a node the 5-minute probe finds down is skipped. Admission stays `observe`. Statements below that
+> keep Noida `disabled` in production describe the state before this decision.
+
 Status of the WebRTC/TURN integration against the real Mumbai (`turn-mum.aicountly.com`, 148.135.210.65) and
 Greater Noida (`turn-ncr.aicountly.com`, 103.69.196.150) relays. Companion documents: `docs/ICE_CONTRACT.md`
 (contract and behaviour) and `docs/TURN_VALIDATION_RUNBOOK.md` (the commands whose output this document is waiting for).
@@ -35,8 +41,8 @@ The design, with what is implemented, proposed and assumed, is `docs/ACTIVE_ACTI
 | A7 | Measured node load reaches the API (`turn-node-load.sh` → `ingest-load.php`) | **Partially resolved** | Collector and ingest tested locally (counted 4 of 4 real allocations). The transport — a forced-command, read-only SSH login per node — is a **proposal** nobody has built. Without it admission runs on the books alone, which drift if clients misreport or sessions leak | recommended before `enforce` |
 | A8 | Relay-side attribution of traffic to tiers (the audit that free traffic stayed in its share) | **Partially resolved** | Parser tested on real coturn 4.6.1 lines; a real Chromium's bytes attributed to paid and free locally. The real nodes' log format is unverified (the version is reported as "4.18") — Runbook F6 | recommended |
 | A9 | Regional routing quality: edge geography unknown; measured-RTT loop implemented | **Pending test** | Runbook G1. Not a blocker while Noida is out of production (one node = nothing to choose between) | enabling Noida |
-| A10 | Regional fallback and capacity spill between Mumbai and Noida | **Blocked** | Needs Noida cleared (A11). Local simulation passes; staging Part D1/D2 are written | enabling Noida |
-| A11 | **Greater Noida in production** | **Blocked** | Authenticated tests (Runbook A, B, F1–F3 for ncr) **and** the security review of its historical privileged-access concern, signed off and recorded (G5). Production config keeps `STATUS=disabled` and holds no Noida secret | enabling Noida |
+| A10 | Regional fallback and capacity spill between Mumbai and Noida | **Unblocked by A11; pending real-network test** | Routing and node-down fallback verified against the production configuration (simulation); real-network checks Runbook D/G. Was: needs Noida cleared (A11). Local simulation passes; staging Part D1/D2 are written | enabling Noida |
+| A11 | **Greater Noida in production** | **Decided 2026-10-22: in production as a regional peer** (authenticated relay tests passed from the OVH application server, §12 of the staging doc). Was: **Blocked** | Authenticated tests (Runbook A, B, F1–F3 for ncr) **and** the security review of its historical privileged-access concern, signed off and recorded (G5). Production config keeps `STATUS=disabled` and holds no Noida secret | enabling Noida |
 | A12 | Renewals near overload keep a session alive | **Pending test** | Runbook G4. Logic and client behaviour (a denied renewal is never adopted) tested locally | `enforce` |
 | A13 | One API host per product assumed (the lease books are a locked file) | **Limitation** | A second API host sharing the same relays needs a shared lease store behind `LeaseStore`; not built. Not a blocker for the current single-host deployment | scaling out |
 
@@ -178,13 +184,13 @@ Each API environment (production, then sandbox/staging) — tick every line; non
 
 **Before deploying**
 - [ ] Coturn: `turnserver --version` recorded for each node; `use-auth-secret` with that node's **own** `static-auth-secret`; no `no-auth`, no `cli-password` default, `no-cli` set; hardening list above agreed.
-- [ ] GitHub secrets created: production `TURN_MUM_SECRET`; sandbox `SANDBOX_TURN_MUM_SECRET`, `SANDBOX_TURN_NCR_SECRET`. **No Noida secret in production.** Values 16–256 chars of `[A-Za-z0-9._~+/=:@%-]`, different per node.
-- [ ] `.env` on each host: `CI_ENVIRONMENT=production`, `WEBRTC_TURN_NODES=mum,ncr`, Mumbai `active`, Noida `disabled` (production) / `standby` (sandbox, only for isolated tests), lists comma-separated with **no spaces**, `WEBRTC_TURN_STATIC_AUTH_SECRET` **unset** when per-node secrets are used, `WEBRTC_FORCE_RELAY` unset/false.
+- [ ] GitHub secrets created: production `TURN_MUM_SECRET` **and `TURN_NCR_SECRET`** (since 2026-10-22); sandbox `SANDBOX_TURN_MUM_SECRET`, `SANDBOX_TURN_NCR_SECRET`. Values 16–256 chars of `[A-Za-z0-9._~+/=:@%-]`, different per node.
+- [ ] `.env` on each host: `CI_ENVIRONMENT=production`, `WEBRTC_TURN_NODES=mum,ncr`, Mumbai `active`, Noida `active` (production, since 2026-10-22, via `docs/production/turn-production.*.env`) / `active` (sandbox) — was `disabled` / `standby` (isolated tests), lists comma-separated with **no spaces**, `WEBRTC_TURN_STATIC_AUTH_SECRET` **unset** when per-node secrets are used, `WEBRTC_FORCE_RELAY` unset/false.
 - [ ] Not in any repository, workflow log or ticket: the secrets. `git grep -n -i 'static-auth-secret\|TURN_.*SECRET='` shows only key names and examples.
 
 **After deploying**
 - [ ] `.env` mode `600`/owner = the PHP account (`ls -l .env`); `writable/ice/` writable by PHP, not web-readable.
-- [ ] `php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --status` — warnings empty; production lists Mumbai `active`, Noida `disabled`.
+- [ ] `php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --status` — warnings empty; production lists Mumbai `active`, Noida `active`, both SERVING.
 - [ ] Runbook **A1–A4 pass on Mumbai from the API host** (UDP, TCP, TLS allocation; wrong-secret, expired and missing-credential refusals; DNS = 148.135.210.65; certificate valid).
 - [ ] `crontab -l` shows `turn-probe`; `writable/ice/turn-health.json` mtime advances every 5 minutes; `GET /api/health` shows `relayNodes` Mumbai `healthy`.
 - [ ] Runbook **B** passes from at least one restrictive network (TLS 443 only) and one normal network.

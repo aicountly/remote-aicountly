@@ -480,7 +480,7 @@ jobs:
       # coturn. Sent on STDIN to bin/ops/inject-turn-secrets.sh, which writes only
       # allow-listed WEBRTC_TURN_* keys into api/.env and prints key names, never
       # values; a secret never travels in an argument, an artifact or a log line.
-      # The sandbox receives both: Greater Noida is validated here, in isolation, before it is ever considered for production.
+      # The sandbox receives both node secrets, as production does since 2026-10-22 (Mumbai and Greater Noida as regional peers).
       # --------------------------------------------------------------------
 
       - name: TURN relay secrets (stdin only)

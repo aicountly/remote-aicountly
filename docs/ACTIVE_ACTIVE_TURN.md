@@ -1,5 +1,11 @@
 # Active-active TURN routing and licence-aware admission — AICOUNTLY Remote
 
+> **Decision 2026-10-22 — Greater Noida joins production as Mumbai's regional peer.** Both nodes passed authenticated relay tests
+> (allocation over UDP/TCP/TLS-443; wrong-secret, expired and anonymous credentials refused; valid certificates) from the OVH application
+> server (`docs/STAGING_TURN_DEPLOYMENT.md` §12). Production now runs **active-active**: each client is offered the node nearest to it first
+> and the other as its fallback (TLS 443); a node the 5-minute probe finds down is skipped. Admission stays `observe`. Statements below that
+> keep Noida `disabled` in production describe the state before this decision.
+
 Mumbai (`mum`) and Greater Noida (`ncr`) are **regional peers**. This document is the design of how a client
 is routed between them, how at least half of each node is kept for paid customers, and how both are
 enforced and *verified* — written so the parts that exist, the parts that are proposed and the parts that

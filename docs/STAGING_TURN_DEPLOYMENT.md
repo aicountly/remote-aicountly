@@ -164,8 +164,8 @@ licence mapping. Applied by `api/bin/ops/apply-turn-config.sh` (Done — tested,
 
 * **Distinct node secrets**: `WEBRTC_TURN_NODE_MUM_SECRET` and `WEBRTC_TURN_NODE_NCR_SECRET`, never `WEBRTC_TURN_STATIC_AUTH_SECRET`
   (which would give both nodes one secret). `probe.php --status` prints a `warning:` if two nodes share one.
-* **Noida stays out of production.** In the *staging* file Noida is `active`, so it can be validated; the production `.env`
-  is not changed by anything here, and the production deploy must pass `--keep-out=ncr`.
+* **Noida in production (decided 2026-10-22).** Noida is `active` in the staging file and, since the authenticated tests passed, in the
+  production file too (`docs/production/turn-production.*.env`, §13). `--keep-out=ncr` remains available to take it out deliberately.
 * **Capacities are placeholders** (assumption). In observe they only size the books and the reconciliation report.
 * **Licence**: no central API exists yet, so `WEBRTC_LICENCE_API_URL` is unset and nothing syncs. The staging file sets
   `WEBRTC_LICENCE_COMPAT=allow` (the legacy mapping may label the books) and leaves `WEBRTC_TURN_LICENCE_FEED` unset, so even if someone
@@ -484,5 +484,47 @@ Note: the deploy's secret-injection step still received **empty** values ("empty
 
 Not yet run (needs people, browsers or longer windows): Runbook A3 (what an established allocation does when its credential expires), Part B (Chromium
 relay checks from ordinary and restrictive networks), Part C (Remote sessions and the desktop agent end to end), Connect calls/rooms with `company_id`,
-Part D/G (failover and regional routing from real networks), Part F (capacity measurements). Noida remains out of production.
+Part D/G (failover and regional routing from real networks), Part F (capacity measurements). (Noida was then still out of production; see §13.)
+
+## 13. Production rollout — Mumbai and Greater Noida as regional peers (decided 2026-10-22)
+
+**What production will do.** Both nodes `active`, equal priority, two relay nodes per client. Each client is offered the node **nearest to it
+first** — by its own measured round trip to each node (the browser's latency meter), else the edge's geography if configured, else what other
+clients in its region measured, else its region hint — and **the other node second, over TLS 443, as its fallback**. The 5-minute probe job
+(`bin/ops/jobs.txt`, installed by the production deploy) records node health; a node it finds down is not offered, so every client then gets the
+other. Admission stays **observe**. Config: `docs/production/turn-production.remote.env` / `turn-production.connect.env` (non-secret, reviewed).
+
+Checked against that exact configuration (kit simulation, no network):
+
+| Client | Offered |
+|---|---|
+| Mumbai (measured 9 ms / 38 ms) | `mum` first, `ncr` fallback (TLS 443) |
+| Delhi NCR (34 / 6 ms) | `ncr` first, `mum` fallback |
+| Kolkata (41 / 27 ms) | `ncr` first, `mum` fallback |
+| Region hint `in-west` / `in-north` only | `mum` / `ncr` first |
+| Nothing known | `mum` first (priority tie, stable order), `ncr` fallback |
+| Mumbai down (2 failed probes) — any client | `ncr` only |
+| Noida down — any client | `mum` only |
+
+**Sequence** (production workflows deploy from `main`, so step 2 needs your approval):
+
+| # | Step | Who |
+|---|---|---|
+| 1 | Add repository secret **`TURN_NCR_SECRET`** (Noida's coturn `static-auth-secret`) in **both** repositories, beside `TURN_MUM_SECRET`; the two must differ | you |
+| 2 | Approve and merge [aicountly/remote-aicountly#29](https://github.com/aicountly/remote-aicountly/pull/29) and [aicountly/connect-aicountly#33](https://github.com/aicountly/connect-aicountly/pull/33) | you |
+| 3 | Deploy production with the TURN config and the read-only TURN check (below) | operator, or Claude on request |
+| 4 | Annotations: both nodes **PASS** from the production API host; `relay configured: yes`; both `SERVING`; admission `observe` | operator |
+| 5 | Real networks: Runbook Part G (a Mumbai-region and an NCR-region client each get their own node) and Part B from a restrictive network (TLS 443) | people with browsers |
+
+```bash
+gh workflow run deploy-production.yml  --repo aicountly/remote-aicountly  --ref main -f migrate=apply -f turn_config=apply -f turn_check=true
+gh workflow run deploy-prod-cpanel.yml --repo aicountly/connect-aicountly --ref main -f turn_config=apply -f turn_check=true
+```
+
+**Rollback** (seconds, no deploy): `printf 'WEBRTC_TURN_NODE_NCR_STATUS=disabled\n' | ssh <prod> "bash <ROOT>/api/bin/ops/apply-turn-config.sh"` takes
+Noida out of rotation and every client goes to Mumbai; `active` restores it. The same for Mumbai (`MUM`). Nothing on either TURN server changes.
+
+**Recorded alongside the decision:** the earlier plan also asked for a security review of Noida's historical privileged-access concern before
+production. These repositories hold no record of that review; the decision to proceed is AICOUNTLY's (2026-10-22). Noida relays only
+DTLS-SRTP-encrypted media, has its own secret, and can be removed from rotation in seconds as above.
 

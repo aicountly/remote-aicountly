@@ -13,8 +13,8 @@
 #   * Values: no spaces, quotes, '#' or '$' (each would break CodeIgniter's .env parser or expand).
 #   * WEBRTC_TURN_ADMISSION=enforce is refused unless --allow-enforce is given: first real-server and product testing
 #     runs in `observe`, and enforcement waits for the licence mappings and feed (docs/STAGING_TURN_DEPLOYMENT.md).
-#   * A node's status may not be `active` for a node named in --keep-out (e.g. --keep-out=ncr keeps Noida out of
-#     a production .env). The deploy for production passes it; the sandbox does not.
+#   * A node named in --keep-out (e.g. --keep-out=ncr) may not be made `active` — for taking a node out of an environment
+#     deliberately. Production no longer passes it: Greater Noida is a production peer since 2026-10-22.
 #   * An empty value is ignored. Output names keys and outcomes, and echoes the value of non-secret keys.
 #
 # Exit: 0 done · 2 refused · 3 no .env to write into.

@@ -25,6 +25,15 @@ on:
         type: choice
         options: [apply, skip]
         default: apply
+      turn_config:
+        description: apply = write the reviewed non-secret OBSERVE-mode TURN settings in docs/production/turn-production.remote.env (Mumbai + Greater Noida as regional peers) into api/.env (bin/ops/apply-turn-config.sh; refuses enforce and secrets) · skip = leave them as they are
+        type: choice
+        options: [skip, apply]
+        default: skip
+      turn_check:
+        description: After the deploy, run the read-only TURN checks on the server (probe status, authenticated allocation and negative tests per node) and report them as annotations
+        type: boolean
+        default: false
 
 # Never let two deploys to the same target overlap.
 concurrency:
@@ -468,21 +477,41 @@ jobs:
       # coturn. Sent on STDIN to bin/ops/inject-turn-secrets.sh, which writes only
       # allow-listed WEBRTC_TURN_* keys into api/.env and prints key names, never
       # values; a secret never travels in an argument, an artifact or a log line.
-      # Production receives Mumbai's secret only: Greater Noida stays out of production's .env until it is cleared for service.
+      # Mumbai and Greater Noida are regional peers in production (decision 2026-10-22, after both passed authenticated relay tests from
+      # the OVH application server): each node's own secret, TURN_MUM_SECRET and TURN_NCR_SECRET. The injector refuses two equal secrets.
       # --------------------------------------------------------------------
 
       - name: TURN relay secrets (stdin only)
         env:
           REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
           TURN_MUM_SECRET: ${{ secrets.TURN_MUM_SECRET }}
+          TURN_NCR_SECRET: ${{ secrets.TURN_NCR_SECRET }}
         run: |
           root="${REMOTE_ROOT#\~/}"
-          if [ -z "$TURN_MUM_SECRET" ]; then
-            echo "::warning::The TURN_MUM_SECRET repository secret is empty: api/.env keeps whatever Mumbai secret it has, and relaying is unavailable if it has none."
-            exit 0
-          fi
-          printf 'WEBRTC_TURN_NODE_MUM_SECRET=%s\n' "$TURN_MUM_SECRET" \
-            | ssh deploy-target "bash '$root/api/bin/ops/inject-turn-secrets.sh'"
+          [ -n "$TURN_MUM_SECRET" ] || echo "::warning::The TURN_MUM_SECRET repository secret is empty: api/.env keeps whatever Mumbai secret it has, and Mumbai is not served if it has none."
+          [ -n "$TURN_NCR_SECRET" ] || echo "::warning::The TURN_NCR_SECRET repository secret is empty: api/.env keeps whatever Greater Noida secret it has, and Noida is not served if it has none."
+          {
+            printf 'WEBRTC_TURN_NODE_MUM_SECRET=%s\n' "$TURN_MUM_SECRET"
+            printf 'WEBRTC_TURN_NODE_NCR_SECRET=%s\n' "$TURN_NCR_SECRET"
+          } | ssh deploy-target "bash '$root/api/bin/ops/inject-turn-secrets.sh'" > /tmp/turn-secrets.txt 2>&1
+          rc=$?
+          cat /tmp/turn-secrets.txt
+          # Key names and outcomes only - the injector never prints a value.
+          python3 scripts/ci/annotate-sections.py /tmp/turn-secrets.txt "TURN secrets"
+          exit $rc
+
+      # The non-secret observe-mode TURN settings, from a reviewed file in the repository (docs/production/turn-production.remote.env).
+      - name: TURN observe configuration
+        if: ${{ inputs.turn_config == 'apply' }}
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
+        run: |
+          root="${REMOTE_ROOT#\~/}"
+          ssh deploy-target "bash '$root/api/bin/ops/apply-turn-config.sh'" < docs/production/turn-production.remote.env > /tmp/turn-config.txt 2>&1
+          rc=$?
+          cat /tmp/turn-config.txt
+          python3 scripts/ci/annotate-sections.py /tmp/turn-config.txt "TURN observe configuration"
+          exit $rc
 
       # --------------------------------------------------------------------
       # Scheduled jobs (E8-OPS F160 — a README cron is not a worker)
@@ -551,6 +580,19 @@ jobs:
             echo "If this is the first deploy, check that the subdomain's document root is the one in PROD_SSH_REMOTE_ROOT, that api/.env exists and that the migrations are applied (the Database migrations step above; with migrate = skip they were not). Otherwise this is a regression: check writable/logs/log-$(date +%Y-%m-%d).log on the server for the real exception."
             exit 1
           fi
+
+      # Read-only TURN checks from the production API host (scripts/ci/turn-staging-check.sh): probe status, then an authenticated
+      # allocation and the wrong / expired / missing credential refusals per node, released at once. Results are annotations.
+      - name: TURN check (read-only)
+        if: ${{ inputs.turn_check && !cancelled() }}
+        continue-on-error: true
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
+          PHP_CLI: ${{ vars.PROD_PHP_CLI }}
+        run: |
+          ssh deploy-target "bash -s -- $(printf '%q ' "$REMOTE_ROOT" "${PHP_CLI:-}" remote)" < scripts/ci/turn-staging-check.sh > /tmp/turn-check.txt 2>&1
+          cat /tmp/turn-check.txt
+          python3 scripts/ci/annotate-sections.py /tmp/turn-check.txt "TURN check (production)"
 
       - name: Clean up SSH credentials
         if: always()

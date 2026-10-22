@@ -1,5 +1,11 @@
 # TURN validation runbook — AICOUNTLY Remote
 
+> **Decision 2026-10-22 — Greater Noida joins production as Mumbai's regional peer.** Both nodes passed authenticated relay tests
+> (allocation over UDP/TCP/TLS-443; wrong-secret, expired and anonymous credentials refused; valid certificates) from the OVH application
+> server (`docs/STAGING_TURN_DEPLOYMENT.md` §12). Production now runs **active-active**: each client is offered the node nearest to it first
+> and the other as its fallback (TLS 443); a node the 5-minute probe finds down is skipped. Admission stays `observe`. Statements below that
+> keep Noida `disabled` in production describe the state before this decision.
+
 How to prove, on the real infrastructure, that the relays carry traffic for Remote — and to hand back
 the evidence. Everything here is **non-disruptive**: it allocates and releases a few relay sessions with
 short-lived credentials, changes nothing on a TURN server, and needs no root.
@@ -42,7 +48,7 @@ short-lived credentials, changes nothing on a TURN server, and needs no root.
 $PHP lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --status
 ```
 
-Expect: `relay configured: yes`; `mum  active`; in production `ncr  disabled`, in staging `ncr  standby`; **no
+Expect: `relay configured: yes`; `mum  active` and `ncr  active`, both SERVING (production since 2026-10-22, and staging); **no
 `warning:` lines** (a warning about two nodes sharing a secret means NCR is using Mumbai's — fix that before
 going on). Probe state is `unknown` until the first probe runs.
 

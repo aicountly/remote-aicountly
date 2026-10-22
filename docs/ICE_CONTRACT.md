@@ -1,5 +1,11 @@
 # ICE, TURN and connection recovery — AICOUNTLY Remote
 
+> **Decision 2026-10-22 — Greater Noida joins production as Mumbai's regional peer.** Both nodes passed authenticated relay tests
+> (allocation over UDP/TCP/TLS-443; wrong-secret, expired and anonymous credentials refused; valid certificates) from the OVH application
+> server (`docs/STAGING_TURN_DEPLOYMENT.md` §12). Production now runs **active-active**: each client is offered the node nearest to it first
+> and the other as its fallback (TLS 443); a node the 5-minute probe finds down is skipped. Admission stays `observe`. Statements below that
+> keep Noida `disabled` in production describe the state before this decision.
+
 How a Remote participant gets its STUN/TURN servers, how the connection survives a network that changes under
 it, and how an operator knows whether the relays work. The shared pieces are the **ICE kit**:
 `backend/lib/ice-kit` (PHP, identical in Connect) and `web/src/ice-kit` (browser, identical in Connect).
@@ -28,7 +34,7 @@ WEBRTC_TURN_NODE_MUM_REGION = in-west
 WEBRTC_TURN_NODE_MUM_LABEL = Mumbai
 WEBRTC_TURN_NODE_MUM_TLS_PORT = 443
 WEBRTC_TURN_NODE_NCR_HOST = turn-ncr.aicountly.com
-WEBRTC_TURN_NODE_NCR_STATUS = disabled          # standby in staging only
+WEBRTC_TURN_NODE_NCR_STATUS = active            # a regional peer in production since 2026-10-22
 WEBRTC_TURN_NODE_NCR_PRIORITY = 20
 WEBRTC_TURN_NODE_NCR_REGION = in-north
 WEBRTC_TURN_NODE_NCR_LABEL = "Greater Noida"
@@ -218,8 +224,8 @@ A node run as two coturn instances sets `WEBRTC_TURN_NODE_<ID>_GROUP` and `_STRU
   a placeholder or a value the `.env` parser would choke on, and two nodes given the same secret. It prints key
   names and "written / already current", never a value, and keeps the file's owner and mode.
 * **Repository secrets** the deploy workflows read: production — `TURN_MUM_SECRET`; sandbox —
-  `SANDBOX_TURN_MUM_SECRET`, `SANDBOX_TURN_NCR_SECRET`. **There is no production secret for Noida**, so
-  production's `.env` cannot hold one; add it only when Noida is cleared.
+  `SANDBOX_TURN_MUM_SECRET`, `SANDBOX_TURN_NCR_SECRET`. Production holds **both** node secrets since 2026-10-22: `TURN_MUM_SECRET` and `TURN_NCR_SECRET`
+  (each node's own; the injector refuses two equal values).
 * **Why per-node secrets matter here:** with one shared secret, a relay that is compromised (or simply run by
   someone else) could replay at its sibling the credentials it is handed. Noida carries an unresolved
   privileged-access concern; its secret must be treated as exposed if that machine is.
