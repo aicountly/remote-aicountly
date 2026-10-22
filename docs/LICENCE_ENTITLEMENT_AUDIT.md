@@ -58,7 +58,7 @@ own plan codes and their `plan_class`; Remote's `plan_code` becomes a mirror of 
 | L8 | Central signing-key custody and rotation; per-product AIC-S2S client ids and secrets | **Pending** | licensing + ops |
 | L9 | Scheduled `sync-entitlements` job on the API hosts; `SANDBOX_LICENCE_S2S_SECRET` repository secrets | **Not installed** (nothing to sync; the workflows already carry the secret through stdin when it is set) | ops, after L6 |
 | L10 | Mapping the document's `entitlements` onto `remote_entitlements` feature columns | **Pending** (not a TURN item) | needs the central entitlement-code catalogue |
-| L11 | ~~Connect's unit~~ **Decided:** contextual, company-scoped (company-wide membership or assigned seat; personal licence separate; guests under the host's meeting). **Still open (business):** trial/complimentary kinds (default: not paid capacity); a personal licence inside a company context (default: not applied); default guest and participant limits | **Decision made; three defaults pending** | contract §1, §9, §14 |
+| L11 | ~~Connect's unit~~ **Decided:** contextual, company-scoped (company-wide membership or assigned seat; personal licence separate; guests under the host's meeting). **Confirmed 2026-10-22:** trial/complimentary kinds are not paid capacity; a personal licence is not applied inside a company context; up to 5 guests per meeting at paid quality, no participant cap unless the plan sets one | **Decided and built** | contract §1, §9, §14 |
 | L15 | Central backend publishes **member-level** documents (membership, seat) and a changes feed with `(company, user)` entries — or Connect gains its own Manage membership check | **Pending — licensing team** (hardening: Connect-side membership verification) | contract §6, §13 |
 | L12 | Optional signed revocation push to the products | **Not built; optional** | the poll is the guarantee |
 | L13 | Runtime database role of each product: SELECT-only on any compat table | **Not done**; matters less now (central documents are signed, compat rows are not trusted for enforcement) | ops |
@@ -68,7 +68,8 @@ own plan codes and their `plan_class`; Remote's `plan_code` becomes a mirror of 
 
 - [ ] L6–L8: the central backend exists, signs documents, products hold its public key and an AIC-S2S secret
 - [ ] L9: sync job installed on each API host; `lastSyncAt` fresh
-- [ ] L11/L15: trial/complimentary, personal-in-company and guest defaults decided; member-level documents published
+- [x] L11: trial/complimentary, personal-in-company and guest defaults decided (2026-10-22)
+- [ ] L15: member-level documents published by the central backend
 - [ ] L14: shadow comparison clean; `WEBRTC_LICENCE_COMPAT=deny`
 - [ ] `WEBRTC_TURN_ENTITLEMENT_MAX_AGE_HOURS` set; `probe.php --status` shows `enforceBlockedBy: []` in each product in staging with real data
 - [ ] Capacities measured and the bandwidth shaper load-tested (`docs/TURN_BANDWIDTH_ENFORCEMENT.md`)

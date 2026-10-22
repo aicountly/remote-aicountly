@@ -282,7 +282,7 @@ everywhere, and enforcement also waits for the shared ledger and measured real-n
 | Signing-key custody/rotation; per-product S2S credentials; sync job installed | **Pending** |
 | Connect product-side membership verification against Manage (hardening; the member-level document already states membership) | **Pending / optional** |
 | Entitlement-code catalogue; mapping to `remote_entitlements` feature columns | **Pending** |
-| Business: personal licence inside a company context (default: not applied), trial/complimentary kinds (default: not paid capacity), guest/participant defaults | **Pending decisions** |
+| Business: personal licence inside a company context — **not applied**; trial and complimentary kinds — **not paid capacity**; guests — **up to 5 at paid quality per meeting, no participant cap unless the plan sets one** | **Confirmed 2026-10-22** (built as the defaults) |
 | Optional revocation push | **Not built; optional** |
 
 ## 14. Questions for the licensing team
@@ -292,4 +292,4 @@ everywhere, and enforcement also waits for the shared ledger and measured real-n
 3. Confirm Ed25519, key custody and rotation, and per-product AIC-S2S client ids (`remote`, `chat`).
 4. Changes feed: `(company, user)` entries for member removals and seat changes, retention, and `410` behaviour.
 5. Which entitlement codes carry the meeting limits (`meeting.max_guests`, `meeting.max_participants`, `meeting.guests_paid_quality`)? Are guests part of the plan?
-6. Should a personal licence apply inside a company context the user works in? (Built: **no**.) How are trial/complimentary kinds treated?
+6. ~~Personal licence inside a company; trial/complimentary; guest defaults~~ — **confirmed by AICOUNTLY on 2026-10-22:** a personal licence is not applied inside a company context; trial and complimentary kinds are not paid capacity; up to 5 guests per meeting at paid quality with no participant cap unless the plan sets one. A plan's own `meeting.*` entitlements still override the guest defaults.

@@ -25,6 +25,15 @@ on:
         type: choice
         options: [apply, skip]
         default: apply
+      turn_config:
+        description: apply = write the non-secret OBSERVE-mode TURN settings in docs/staging/turn-observe.remote.env into api/.env (bin/ops/apply-turn-config.sh; refuses enforce and secrets) · skip = leave them as they are
+        type: choice
+        options: [skip, apply]
+        default: skip
+      turn_check:
+        description: After the deploy, run the read-only TURN checks on the server (probe status, authenticated allocation and negative tests per node) and report them as annotations
+        type: boolean
+        default: false
 
 # Never let two deploys to the same target overlap.
 concurrency:
@@ -491,7 +500,25 @@ jobs:
             # This product's AIC-S2S v1 secret for the CENTRAL licence API (docs/LICENCE_ENTITLEMENT_CONTRACT.md). The API is
             # not built yet: while the secret is unset this line is empty and ignored.
             printf 'WEBRTC_LICENCE_S2S_SECRET=%s\n' "$LICENCE_S2S_SECRET"
-          } | ssh deploy-target "bash '$root/api/bin/ops/inject-turn-secrets.sh'"
+          } | ssh deploy-target "bash '$root/api/bin/ops/inject-turn-secrets.sh'" > /tmp/turn-secrets.txt 2>&1
+          rc=$?
+          cat /tmp/turn-secrets.txt
+          # Key names and outcomes only ("written", "already current", "empty, ignored") - the injector never prints a value.
+          python3 scripts/ci/annotate-sections.py /tmp/turn-secrets.txt "TURN secrets"
+          exit $rc
+
+      # The non-secret observe-mode TURN settings, from a reviewed file in the repository (docs/STAGING_TURN_DEPLOYMENT.md §5).
+      - name: TURN observe configuration
+        if: ${{ inputs.turn_config == 'apply' }}
+        env:
+          REMOTE_ROOT: ${{ secrets.SANDBOX_SSH_REMOTE_ROOT }}
+        run: |
+          root="${REMOTE_ROOT#\~/}"
+          ssh deploy-target "bash '$root/api/bin/ops/apply-turn-config.sh'" < docs/staging/turn-observe.remote.env > /tmp/turn-config.txt 2>&1
+          rc=$?
+          cat /tmp/turn-config.txt
+          python3 scripts/ci/annotate-sections.py /tmp/turn-config.txt "TURN observe configuration"
+          exit $rc
 
       # Is the live site really Remote, and the build just deployed? The host's
       # anti-bot page ("One moment, please...") answers some requests from
@@ -517,6 +544,19 @@ jobs:
             echo "If this is the first deploy, check that the subdomain's document root is the one in SANDBOX_SSH_REMOTE_ROOT, that api/.env exists and that the migrations are applied (the Database migrations step above; with migrate = skip they were not). Otherwise this is a regression: check writable/logs/log-$(date +%Y-%m-%d).log on the server for the real exception."
             exit 1
           fi
+
+      # The first real-server TURN tests, from the API host itself: read-only, non-disruptive (scripts/ci/turn-staging-check.sh). Results
+      # are annotations, so they can be read without the raw log; a failing node is a result, not a failed deploy.
+      - name: TURN staging check (read-only)
+        if: ${{ inputs.turn_check && !cancelled() }}
+        continue-on-error: true
+        env:
+          REMOTE_ROOT: ${{ secrets.SANDBOX_SSH_REMOTE_ROOT }}
+          PHP_CLI: ${{ vars.SANDBOX_PHP_CLI }}
+        run: |
+          ssh deploy-target "bash -s -- $(printf '%q ' "$REMOTE_ROOT" "${PHP_CLI:-}" remote)" < scripts/ci/turn-staging-check.sh > /tmp/turn-check.txt 2>&1
+          cat /tmp/turn-check.txt
+          python3 scripts/ci/annotate-sections.py /tmp/turn-check.txt "TURN staging check"
 
       - name: Clean up SSH credentials
         if: always()

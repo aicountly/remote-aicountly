@@ -193,14 +193,19 @@ Every step says who runs it and how to tell it worked. **Stop at the first failu
 # Step 4 — Remote. Starts the workflow for the branch (does not merge anything). Add -f migrate=skip for a first deploy
 # before api/.env exists. run_ci_gate=true runs the full suite on GitHub first.
 gh workflow run deploy-sandbox.yml --repo aicountly/remote-aicountly --ref claude/webrtc-turn-ice-integration \
-   -f run_ci_gate=false -f migrate=apply
+   -f run_ci_gate=false -f migrate=apply -f turn_config=apply -f turn_check=true
+# turn_config=apply writes docs/staging/turn-observe.remote.env (non-secret, observe) into api/.env — steps 5/7 below, done by the workflow;
+# turn_check=true runs scripts/ci/turn-staging-check.sh on the server after the deploy (probe status + authenticated allocation and negative
+# tests per node). Each result is an ANNOTATION on the run, readable without the raw log:
+#   gh api repos/aicountly/remote-aicountly/check-runs/<job id>/annotations --jq '.[] | "\(.annotation_level) \(.title)\n\(.message)\n"'
 gh run watch --repo aicountly/remote-aicountly
 
 # Step 5 — Remote observe config (run from a checkout of the branch; stdin only; <ROOT> = the sandbox document root)
 ssh <sandbox-user>@<sandbox-host> "bash <ROOT>/api/bin/ops/apply-turn-config.sh" < docs/staging/turn-observe.remote.env
 
 # Step 6 — Connect
-gh workflow run deploy-sandbox-cpanel.yml --repo aicountly/connect-aicountly --ref claude/webrtc-turn-ice-integration
+gh workflow run deploy-sandbox-cpanel.yml --repo aicountly/connect-aicountly --ref claude/webrtc-turn-ice-integration \
+   -f turn_config=apply -f turn_check=true      # waits for approval of the protected `sandbox` environment
 gh run watch --repo aicountly/connect-aicountly
 
 # Step 7 — Connect observe config
