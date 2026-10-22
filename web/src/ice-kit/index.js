@@ -21,6 +21,7 @@ export { CANDIDATE_TYPES, IceDiagnostics, classifyIceError, describeVerdict, par
 export { ConnectionSupervisor, defaultClock } from './supervisor.js';
 export { CredentialRefresher } from './refresher.js';
 export { probeRelay } from './probe.js';
+export { LatencyMeter } from './latency.js';
 
 /**
  * Who restarts ICE for a pair of peers, when the product has no perfect negotiation to settle it.

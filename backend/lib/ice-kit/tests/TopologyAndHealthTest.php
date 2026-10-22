@@ -69,7 +69,7 @@ final class TopologyAndHealthTest extends IceKitTestCase
 
         $this->assertSame('legacy', $topology->source);
         $this->assertSame(['turn:turn.example.com:3478?transport=udp', 'turns:turn.example.com:5349?transport=tcp'], $turn['urls']);
-        $this->assertSame((self::NOW + 600) . ':user-42', $turn['username']);
+        $this->assertSame((self::NOW + 600) . ':f.user-42', $turn['username']);
         $this->assertSame(base64_encode(hash_hmac('sha1', $turn['username'], 'legacy-secret', true)), $turn['credential']);
         $this->assertSame(600, $grant->expiresIn());
     }
@@ -103,7 +103,10 @@ final class TopologyAndHealthTest extends IceKitTestCase
 
     public function testAnEmptySubjectFallsBackToTheProductName(): void
     {
-        $this->assertSame('connect', CredentialMinter::subject('!!!', 'connect'));
+        $this->assertSame('connect', CredentialMinter::subject('', 'connect'));
+        $stand = CredentialMinter::subject('é', 'connect');
+        $this->assertMatchesRegularExpression('/^x[0-9a-f]{16}$/', $stand, 'Nothing usable survived: a stable stand-in, not a shared name.');
+        $this->assertNotSame($stand, CredentialMinter::subject('ü', 'connect'), 'Two different clients must not merge into one lease.');
         $this->assertSame(64, strlen(CredentialMinter::subject(str_repeat('a', 200))));
     }
 
@@ -159,5 +162,65 @@ final class TopologyAndHealthTest extends IceKitTestCase
         $this->assertSame('/tmp/x.json', $store->path());
         $this->assertSame(3, $store->failureThreshold);
         $this->assertSame('/default.json', HealthStore::fromEnvironment(static fn () => null, '/default.json')->path());
+    }
+
+    public function testNodesSharingASecretAreFlaggedWithoutRevealingIt(): void
+    {
+        $shared = $this->topology($this->productionEnv());
+        $this->assertCount(1, $shared->warnings());
+        $this->assertStringContainsString("'mum' and 'ncr' use the same secret", $shared->warnings()[0]);
+        $this->assertStringNotContainsString('shared-coturn-secret', implode(' ', $shared->warnings()));
+
+        $separate = $this->topology($this->productionEnv([
+            'WEBRTC_TURN_STATIC_AUTH_SECRET' => null,
+            'WEBRTC_TURN_NODE_MUM_SECRET'    => 'mumbai-only-secret',
+            'WEBRTC_TURN_NODE_NCR_SECRET'    => 'noida-only-secret',
+        ]));
+        $this->assertSame([], $separate->warnings());
+        $this->assertSame([], $separate->problems());
+    }
+
+    public function testASingleNodeOrAStaticPairCannotShareASecretWithAnything(): void
+    {
+        $this->assertSame([], $this->topology([
+            'WEBRTC_TURN_URLS' => 'turn:t.example:3478', 'WEBRTC_TURN_STATIC_AUTH_SECRET' => 's',
+        ])->warnings());
+    }
+
+    public function testHealthDistinguishesAPartiallyWorkingNodeFromAHealthyOneAndADeadOne(): void
+    {
+        $store = new HealthStore($this->tempPath(), 900, 2);
+
+        $store->record(['mum' => ['ok' => true, 'transports' => [
+            'udp' => ['binding' => true, 'allocation' => true],
+            'tls' => ['binding' => true, 'allocation' => false],
+        ]]], self::NOW);
+        $this->assertSame('degraded', $store->state('mum', self::NOW));
+        $this->assertSame('degraded', HealthStore::condition('degraded'));
+
+        $store->record(['mum' => ['ok' => true, 'transports' => ['udp' => ['binding' => true, 'allocation' => true]]]], self::NOW + 300);
+        $this->assertSame('up', $store->state('mum', self::NOW + 300));
+        $this->assertSame('healthy', HealthStore::condition('up'));
+
+        $this->assertSame('degraded', HealthStore::condition('failing'));
+        $this->assertSame('unreachable', HealthStore::condition('down'));
+        $this->assertSame('unknown', HealthStore::condition('stale'));
+        $this->assertSame('unknown', HealthStore::condition('unknown'));
+    }
+
+    public function testASlowAllocationMarksANodeDegradedBeforeItRefusesAnything(): void
+    {
+        $path = $this->tempPath();
+        $file = static fn (int $ms): string => json_encode(['version' => 1, 'nodes' => [
+            'mum' => ['ok' => true, 'checkedAt' => self::NOW, 'consecutiveFailures' => 0, 'transports' => ['udp' => ['binding' => true, 'allocation' => true, 'allocationMs' => $ms]]],
+        ]]);
+
+        file_put_contents($path, $file(300));
+        $health = new HealthStore($path, 900, 2, 1500);
+        $this->assertSame('up', $health->state('mum', self::NOW));
+
+        file_put_contents($path, $file(2400));
+        $this->assertSame('degraded', $health->state('mum', self::NOW), 'Allocating takes 2.4 s: alive, but a peer should lead.');
+        $this->assertSame('healthy', HealthStore::condition((new HealthStore($path, 900, 2, 3000))->state('mum', self::NOW)), 'The bound is configurable.');
     }
 }

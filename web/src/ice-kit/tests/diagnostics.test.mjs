@@ -91,7 +91,7 @@ test('a report holds only what the server allow-list accepts — no address anyw
   const encoded = JSON.stringify(report);
 
   assert.deepEqual(Object.keys(report).sort(), [
-    'credentialRefreshes', 'durationMs', 'gathered', 'iceErrors', 'localCandidateType', 'outcome', 'path',
+    'admission', 'credentialRefreshes', 'durationMs', 'gathered', 'iceErrors', 'localCandidateType', 'outcome', 'path',
     'relayNode', 'relayProtocol', 'remoteCandidateType', 'restarts', 'timeToConnectMs',
   ]);
   assert.deepEqual(report.iceErrors, [{ category: 'turn_unreachable', node: 'mum', code: 701 }], 'Repeated errors are counted once.');

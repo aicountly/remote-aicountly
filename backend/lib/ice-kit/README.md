@@ -1,4 +1,4 @@
-# AICOUNTLY ICE kit (v1.0.0)
+# AICOUNTLY ICE kit (v1.5.0)
 
 The one way an AICOUNTLY product decides **which TURN relays a client may use** and **mints the
 short-lived credential for each**. Remote (`backend/lib/ice-kit`) and Connect
@@ -85,6 +85,11 @@ php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --status           
 php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --allocate          # every node not disabled
 php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --node=ncr --allocate   # validate a disabled node
 php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --allocate --write-health   # the cron job
+
+# the launch validation (docs/TURN_VALIDATION_RUNBOOK.md):
+php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --node=mum --allocate --negative --expect-ip=mum=148.135.210.65
+php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --node=mum --transports=tcp --expiry-test=tcp
+php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --node=mum --transports=tls --emit-grant=/tmp/g.json --ttl=900
 ```
 
 `--allocate` mints a credential exactly as the API does and asks the node to allocate a relay over
@@ -92,6 +97,29 @@ each transport, then releases it. It is the test that catches a secret mismatch 
 a full relay range (`insufficient_capacity`), a TLS certificate problem (`tls_failed`) and a firewall
 (`connect_failed`/`timeout`) — none of which a STUN answer would reveal. An allocation granted with no
 credential at all is reported as `open_relay`, a finding rather than a success.
+
+## Active-active routing and admission
+
+Nodes are regional peers. `IceIssuer::issue()` takes the client's `tier` (`paid`/`free`, unknown = free), a usage
+`profile`, a `sessionRef` and a `ClientContext`; ranks the nodes by proximity, load and health; checks each
+against its capacity and the paid reserve (`Admission`); and writes the lease in the same locked step.
+`release()` frees a finished session, `noteConnection()` moves the bandwidth charge to where the traffic is,
+`learnLatency()` folds a client's measured round trips into its region's average. See
+`docs/ACTIVE_ACTIVE_TURN.md` in the product for the design, thresholds and what is proposed rather than built.
+
+```bash
+php lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --status --explain   # capacity, load, what each tier is offered
+php lib/ice-kit/bin/summarize-usage.php /var/log/turnserver/*.log --window=3600   # traffic per tier, from the relay's log
+bash lib/ice-kit/bin/turn-node-load.sh --node=mum | php lib/ice-kit/bin/ingest-load.php --bootstrap=config/ice-kit.php
+bash lib/ice-kit/tests/simulation/active-active.sh                                 # local relays; logic only
+```
+
+## Selection and failover
+
+Active nodes that are not `down` are served; standby nodes join whenever no active node is fully working;
+if every servable node is down they are all offered, flagged `degraded`. Working nodes lead, then the region
+hint, then priority, and the per-client cap is applied after that. `IceIssuer::status()` reports each node's
+role, condition (`healthy | degraded | unreachable | unknown`), state and whether it is being served.
 
 ## Health rules
 
@@ -115,3 +143,12 @@ The CI of both products starts a throwaway coturn for these. A local one:
 turnserver -o --listening-ip=127.0.0.1 --relay-ip=127.0.0.1 --realm=test --use-auth-secret \
   --static-auth-secret=local --cert=cert.pem --pkey=key.pem --no-cli --allow-loopback-peers
 ```
+
+## Licence entitlements (v1.4)
+
+Who is *paid* is decided by the **central licensing backend**; products only consume its signed entitlements through `Aicountly\Ice\Licence`
+(`docs/LICENCE_ENTITLEMENT_CONTRACT.md`). `LicenceResolver::forContext(LicenceContext)` (user + active company + product) returns a `Resolution` — state
+(free / paid / expired / suspended / unknown), reason, evidence (`central` / `compat` / `none`) — and only a valid, fresh, unrevoked,
+signature-verified, tenant-matched `paid` is `Tier::Paid`. `bin/sync-entitlements.php` keeps the cache current from the backend's snapshot and
+changes feed; `bin/entitlement-fixture.php` signs and loads test entitlements for staging; `tests/contract/licence-v1-vectors.json` are the
+conformance vectors. `LicenceReadiness` keeps `WEBRTC_TURN_ADMISSION=enforce` at `observe` until the central source is operational.

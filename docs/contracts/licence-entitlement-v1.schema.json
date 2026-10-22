@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.aicountly.org/contracts/licence-entitlement-v1.schema.json",
+  "title": "AICOUNTLY licence entitlement envelope (aicountly.licence/1)",
+  "description": "PROPOSAL. What the central licensing backend returns for one company's licence, one user's eligibility inside a company, or one user's personal licence, for one product. The signature covers the canonical JSON of `document` (docs/LICENCE_ENTITLEMENT_CONTRACT.md \u00a73). The schema checks shape; the cross-field rules are enforced by the consumer's Entitlement::fromDocument and listed in `x-rules`.",
+  "type": "object",
+  "required": [
+    "document",
+    "signature"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "document": {
+      "$ref": "#/$defs/document"
+    },
+    "signature": {
+      "type": "object",
+      "required": [
+        "alg",
+        "kid",
+        "value"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "alg": {
+          "const": "ed25519"
+        },
+        "kid": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]{1,64}$"
+        },
+        "value": {
+          "type": "string",
+          "description": "base64 of the 64-byte detached Ed25519 signature",
+          "pattern": "^[A-Za-z0-9+/]{86}==$"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
+    },
+    "time": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "description": "RFC 3339, UTC, seconds precision, no offset or fraction"
+    },
+    "document": {
+      "type": "object",
+      "required": [
+        "contract",
+        "scope",
+        "customer_id",
+        "product_id",
+        "subject",
+        "plan_class",
+        "kind",
+        "state",
+        "eligibility",
+        "entitlements",
+        "revision",
+        "issued_at"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "contract": {
+          "const": "aicountly.licence/1"
+        },
+        "customer_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Manage cmp_id as a decimal string; null only for a personal (user-scoped) entitlement"
+        },
+        "product_id": {
+          "$ref": "#/$defs/id",
+          "description": "Manage app_key: remote | chat"
+        },
+        "subject": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "the user this answer is about; null on a company-level document"
+        },
+        "licence_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Engage licence_ref; required when state is paid"
+        },
+        "plan_code": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "central catalogue plan code; required when state is paid"
+        },
+        "plan_class": {
+          "enum": [
+            "free",
+            "paid"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "free",
+            "paid",
+            "trial",
+            "complimentary"
+          ]
+        },
+        "state": {
+          "enum": [
+            "free",
+            "paid",
+            "expired",
+            "suspended",
+            "unknown"
+          ]
+        },
+        "valid_from": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "valid_until": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/time"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "exclusive"
+        },
+        "entitlements": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "required": [
+              "code",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.]{0,63}$"
+              },
+              "value": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "issued_at": {
+          "$ref": "#/$defs/time"
+        },
+        "scope": {
+          "enum": [
+            "company",
+            "user"
+          ],
+          "description": "company = a company's licence (company-level or member-level); user = a person's own licence"
+        },
+        "eligibility": {
+          "type": "object",
+          "required": [
+            "model",
+            "member",
+            "seat"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "enum": [
+                "company_wide",
+                "seat",
+                "personal"
+              ],
+              "description": "how the licence grants access"
+            },
+            "member": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "whether subject is a CURRENT member of customer_id; null when there is no subject"
+            },
+            "seat": {
+              "enum": [
+                "assigned",
+                "unassigned",
+                "revoked",
+                "not_applicable"
+              ],
+              "description": "the subject's seat; stated exactly when model is seat and a subject is named"
+            }
+          }
+        }
+      }
+    }
+  },
+  "x-rules": [
+    "scope user: customer_id is null, subject is set, eligibility is {model personal, member null, seat not_applicable}",
+    "scope company, subject null (company-level): eligibility.member is null and seat is not_applicable; model is company_wide or seat",
+    "scope company, subject set (member-level): member is true|false; seat is assigned|unassigned|revoked exactly when model is seat, otherwise not_applicable",
+    "state = paid requires licence_id, plan_code and plan_class = paid",
+    "valid_until, when both are present, is after valid_from",
+    "entitlement codes are unique within a document",
+    "no floating-point number may appear anywhere in the document",
+    "the signed bytes are the canonical JSON of `document` (lib/ice-kit src/Licence/Canonical.php)"
+  ]
+}

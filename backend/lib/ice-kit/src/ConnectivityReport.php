@@ -18,6 +18,7 @@ final class ConnectivityReport
     public const PATHS           = ['direct', 'relay', 'unknown'];
     public const CANDIDATE_TYPES = ['host', 'srflx', 'prflx', 'relay'];
     public const RELAY_PROTOCOLS = ['udp', 'tcp', 'tls'];
+    public const ADMISSIONS      = ['admitted', 'unmetered', 'denied', 'unconfigured'];
     public const ERROR_CATEGORIES = [
         'turn_unreachable', 'turn_auth_failed', 'turn_forbidden', 'turn_capacity', 'turn_error',
         'stun_unreachable', 'ice_failed', 'no_relay_candidates', 'credentials_expired', 'signalling_lost',
@@ -54,6 +55,7 @@ final class ConnectivityReport
             'remoteCandidateType' => self::oneOf($raw['remoteCandidateType'] ?? null, self::CANDIDATE_TYPES),
             'relayProtocol'       => self::oneOf($raw['relayProtocol'] ?? null, self::RELAY_PROTOCOLS),
             'relayNode'           => self::nodeId($raw['relayNode'] ?? null),
+            'admission'           => self::oneOf($raw['admission'] ?? null, self::ADMISSIONS),
             'gathered'            => $gathered,
             'iceErrors'           => $errors,
             'restarts'            => self::count($raw['restarts'] ?? 0, 99),

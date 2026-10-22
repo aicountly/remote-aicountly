@@ -174,6 +174,32 @@ class Remote extends BaseConfig
      */
     public ?Topology $turnTopology = null;
 
+    /**
+     * Single-pool mode only (node mode reads WEBRTC_TURN_RESTART_ON_RENEWAL / _SESSION_TTL_MAX itself):
+     * whether a relayed connection restarts onto renewed credentials, and the longest credential a
+     * client that cannot renew (the desktop agent) may be given.
+     */
+    public bool $turnRestartOnRenewal = true;
+    public int $turnSessionTtlMax = 28800;
+
+    /**
+     * LEGACY / COMPATIBILITY ONLY. Who is paid is decided by the central licensing backend (docs/LICENCE_ENTITLEMENT_CONTRACT.md):
+     * its signed entitlement says the plan class and the state, and the common adapter (lib/ice-kit, Licence\LicenceResolver)
+     * reads it. Until that backend exists, and only while WEBRTC_LICENCE_COMPAT is not `deny`, a company's own
+     * `remote_entitlements.plan_code` on this list is accepted as PAID with evidence `compat` — enough to label the books in
+     * `observe` mode, never enough to enforce (the readiness gate refuses enforcement while compat is on). Plan codes are
+     * expected to become the central catalogue's codes. Upper-case, comma separated.
+     *
+     * @var list<string>
+     */
+    public array $turnPaidPlanCodes = [];
+
+    /**
+     * Compat only: a legacy entitlement row not updated for this many hours is not accepted as paid. The central path has its
+     * own, stricter limit (the same WEBRTC_TURN_ENTITLEMENT_MAX_AGE_HOURS bounds the age of a signed central document). 0 = no limit.
+     */
+    public int $turnEntitlementMaxAgeHours = 0;
+
     /** Where the scheduled TURN probe records node health (lib/ice-kit/bin/probe.php --write-health). */
     public string $turnHealthFile = '';
 
@@ -311,6 +337,10 @@ class Remote extends BaseConfig
             );
         }
         $this->turnHealthFile = $this->envString('WEBRTC_TURN_HEALTH_FILE', WRITEPATH . 'ice/turn-health.json');
+        $this->turnPaidPlanCodes    = array_map('strtoupper', $this->envList('WEBRTC_TURN_PAID_PLAN_CODES'));
+        $this->turnEntitlementMaxAgeHours = max(0, $this->envInt('WEBRTC_TURN_ENTITLEMENT_MAX_AGE_HOURS', 0));
+        $this->turnRestartOnRenewal = $this->envBool('WEBRTC_TURN_RESTART_ON_RENEWAL', $this->turnRestartOnRenewal);
+        $this->turnSessionTtlMax    = max(60, min(86400, $this->envInt('WEBRTC_TURN_SESSION_TTL_MAX', $this->turnSessionTtlMax)));
 
         $this->sessionDefaultMinutes       = $this->envInt('remote.sessionDefaultMinutes', $this->sessionDefaultMinutes);
         $this->inviteDefaultMinutes        = $this->envInt('remote.inviteDefaultMinutes', $this->inviteDefaultMinutes);

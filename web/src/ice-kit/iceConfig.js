@@ -58,6 +58,13 @@ export function normalizeIceConfig(raw, now = Date.now()) {
     refreshAt,
     degraded: src.degraded === true,
     failover: src.failover === true,
+    // On unless the server says otherwise: restarting a relayed connection onto renewed credentials is
+    // safe whatever the relay does with an expired one, and an operator turns it off only after
+    // measuring (probe.php --expiry-test) that established allocations survive their credential.
+    restartOnRenewal: src.restartOnRenewal !== false,
+    // Why this client got the relays it did, or none. `denied` means capacity (for its licence tier) —
+    // not a misconfiguration — and a product should say so.
+    admission: sanitizeAdmission(src.admission),
   });
 }
 
@@ -175,8 +182,23 @@ function sanitizeNodes(value) {
     priority: Number.isFinite(node.priority) ? node.priority : 100,
     status: String(node.status ?? ''),
     health: String(node.health ?? 'unknown'),
+    // normal | busy | overloaded | full — the node's load as the server sees it.
+    load: String(node.load ?? 'normal'),
     urls: Object.freeze(Array.isArray(node.urls) ? node.urls.filter((u) => typeof u === 'string') : []),
   })).filter((node) => node.id !== ''));
+}
+
+const ADMISSION_OUTCOMES = ['admitted', 'unmetered', 'denied', 'unconfigured'];
+
+function sanitizeAdmission(value) {
+  const src = isObject(value) ? value : {};
+
+  return Object.freeze({
+    tier: src.tier === 'paid' ? 'paid' : 'free',
+    outcome: ADMISSION_OUTCOMES.includes(src.outcome) ? src.outcome : 'unmetered',
+    reason: typeof src.reason === 'string' ? src.reason.slice(0, 40) : 'ok',
+    mode: typeof src.mode === 'string' ? src.mode.slice(0, 12) : 'off',
+  });
 }
 
 export function urlsOf(server) {

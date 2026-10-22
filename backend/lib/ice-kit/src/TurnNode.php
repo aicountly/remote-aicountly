@@ -43,6 +43,11 @@ final class TurnNode
         private readonly string $staticUsername = '',
         #[\SensitiveParameter] private readonly string $staticCredential = '',
         private readonly ?array $explicitUrls = null,
+        public readonly ?float $lat = null,
+        public readonly ?float $lon = null,
+        public readonly Capacity $capacity = new Capacity(),
+        /** Nodes of one physical host (e.g. `mum-paid` and `mum-shared` are two coturn instances of group `mum`). */
+        public readonly string $group = '',
     ) {
         if (preg_match('/^[a-z0-9][a-z0-9-]{0,31}$/', $id) !== 1) {
             throw new \InvalidArgumentException("TURN node id '{$id}' must be 1-32 characters of a-z, 0-9 and '-'.");
@@ -68,6 +73,10 @@ final class TurnNode
         }
 
         $this->transports = $clean;
+
+        if (($lat === null) !== ($lon === null) || ($lat !== null && (abs($lat) > 90 || abs($lon) > 180))) {
+            throw new \InvalidArgumentException("TURN node '{$id}' needs both a latitude (-90..90) and a longitude (-180..180), or neither.");
+        }
     }
 
     public static function isValidHost(string $host): bool
@@ -93,6 +102,15 @@ final class TurnNode
         return $this->staticUsername !== '' && $this->staticCredential !== '' ? 'static' : 'none';
     }
 
+    /**
+     * Whether two nodes would mint credentials with the very same secret. Compared in constant time
+     * and never printed: the answer is all a configuration check needs.
+     */
+    public function sharesSecretWith(self $other): bool
+    {
+        return $this->secret !== '' && hash_equals($this->secret, $other->secret);
+    }
+
     public function hasCredentials(): bool
     {
         return $this->credentialMode() !== 'none';
@@ -112,6 +130,21 @@ final class TurnNode
      */
     public function turnUrls(): array
     {
+        return $this->urlsFor(self::TRANSPORTS);
+    }
+
+    /**
+     * The URLs for a node in a given role. A node that is a client's *fallback* (its second choice)
+     * needs only enough to be a way out if the first fails — by default just TURN/TLS on 443, which
+     * works on every network the first node's UDP and TCP do. That costs one allocation on the
+     * fallback node instead of three, and a browser allocates on every URL it is given, so the
+     * difference is a third of the fallback node's capacity per client.
+     *
+     * @param list<string> $transports the transports wanted; a node with none of them gives all it has
+     * @return list<string>
+     */
+    public function urlsFor(array $transports): array
+    {
         if ($this->explicitUrls !== null) {
             return array_values(array_filter(
                 $this->explicitUrls,
@@ -119,16 +152,21 @@ final class TurnNode
             ));
         }
 
+        $wanted = array_values(array_intersect($this->transports, $transports));
+        if ($wanted === []) {
+            $wanted = $this->transports;
+        }
+
         $host = $this->urlHost();
         $urls = [];
 
-        if (in_array('udp', $this->transports, true)) {
+        if (in_array('udp', $wanted, true)) {
             $urls[] = "turn:{$host}:{$this->port}?transport=udp";
         }
-        if (in_array('tcp', $this->transports, true)) {
+        if (in_array('tcp', $wanted, true)) {
             $urls[] = "turn:{$host}:{$this->port}?transport=tcp";
         }
-        if (in_array('tls', $this->transports, true)) {
+        if (in_array('tls', $wanted, true)) {
             $urls[] = "turns:{$host}:{$this->tlsPort}?transport=tcp";
         }
 
@@ -157,6 +195,28 @@ final class TurnNode
             'static' => ['username' => $this->staticUsername, 'credential' => $this->staticCredential, 'expiresAt' => null],
             default  => null,
         };
+    }
+
+    /**
+     * A credential this node must REFUSE, for `bin/probe.php --negative`: `wrong-secret` is signed
+     * with a secret the relay does not hold, `expired` with the right one but a timestamp in the past.
+     * A relay that allocates for either is misconfigured, whatever its other tests say.
+     *
+     * @return array{username: string, credential: string}|null null when the node has no REST secret
+     */
+    public function refusableCredential(string $kind, string $subject, int $now): ?array
+    {
+        if ($this->secret === '') {
+            return null;
+        }
+
+        $minted = match ($kind) {
+            'wrong-secret' => CredentialMinter::mint(hash('sha256', 'not-' . $this->secret), $subject, 300, $now),
+            'expired'      => CredentialMinter::mintExpired($this->secret, $subject, 120, $now),
+            default        => throw new \InvalidArgumentException("Unknown credential kind {$kind}."),
+        };
+
+        return ['username' => $minted['username'], 'credential' => $minted['credential']];
     }
 
     /**

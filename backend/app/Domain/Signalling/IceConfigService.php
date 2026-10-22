@@ -4,11 +4,20 @@ declare(strict_types=1);
 
 namespace App\Domain\Signalling;
 
-use Aicountly\Ice\HealthStore;
+use Aicountly\Ice\ClientContext;
+use Aicountly\Ice\GeoHeaders;
 use Aicountly\Ice\IceGrant;
 use Aicountly\Ice\IceIssuer;
+use Aicountly\Ice\IceRuntime;
+use Aicountly\Ice\Licence\LicenceContext;
+use Aicountly\Ice\Licence\LicenceResolver;
+use Aicountly\Ice\Licence\LicenceRuntime;
+use Aicountly\Ice\Licence\LicenceState;
+use Aicountly\Ice\Licence\Resolution;
+use Aicountly\Ice\Tier;
 use Aicountly\Ice\Topology;
 use Config\Remote as RemoteConfig;
+use Config\Services;
 
 /**
  * The ICE configuration handed to a browser or a desktop agent (§20).
@@ -22,6 +31,15 @@ use Config\Remote as RemoteConfig;
  *   * **Single pool** — the original `remote.turnUrls` with `remote.turnStaticAuthSecret` (or a static
  *     `remote.turnUsername`/`remote.turnCredential` pair), as one node. Used when no nodes are set.
  *
+ * Nodes are regional peers (Mumbai, Greater Noida): each client is offered the best of them for it, and
+ * every grant is accounted to a licence tier so the paid reserve of each node holds across fallback
+ * (docs/ACTIVE_ACTIVE_TURN.md). Remote's tier is the licence state of the company that owns the session, as the
+ * CENTRAL licensing backend states it (docs/LICENCE_ENTITLEMENT_CONTRACT.md): a signed entitlement read through the common
+ * adapter (lib/ice-kit, Licence\LicenceResolver). Remote keeps no licensing authority of its own. Until that backend exists,
+ * a company's own `remote_entitlements.plan_code` on `WEBRTC_TURN_PAID_PLAN_CODES` is accepted as a development-time
+ * compatibility mapping (evidence `compat`, honoured only while WEBRTC_LICENCE_COMPAT is not `deny`); any other plan, an
+ * unknown company, a stale or unverifiable document, or a failed lookup is free.
+ *
  * No credential is ever hardcoded, and the shared secret never leaves this server: a client receives
  * `<expiry>:<subject>` and its HMAC, useless after the TTL. A static pair never expires and reaches
  * every client, which is why it is only the fallback it always was.
@@ -30,19 +48,240 @@ class IceConfigService
 {
     private ?IceIssuer $issuer = null;
 
-    public function __construct(private readonly RemoteConfig $config)
-    {
+    /**
+     * @param LicenceResolver|null          $licence   the common licence adapter; defaults to one built from the environment
+     * @param (\Closure(): list<string>)|null $readiness why paid status cannot be trusted yet (empty = ready); defaults to the
+     *        adapter's central-source check. Seams for tests.
+     */
+    public function __construct(
+        private readonly RemoteConfig $config,
+        private ?LicenceResolver $licence = null,
+        private readonly ?\Closure $readiness = null,
+    ) {
     }
+
+    /** The product id Remote is known by at the central licensing backend (Manage's app_key). */
+    public const LICENCE_PRODUCT = 'remote';
 
     /**
      * A credentialed ICE configuration for one client.
      *
      * @param string $subject an opaque reference bound into the TURN username — a participant uuid, or
      *                        `device-<uuid>` — so relay usage is attributable without an email address
+     * @param array{tier?: Tier, sessionRef?: string, profile?: string, client?: ClientContext} $context
+     *        from contextFor(): who is asking, for which session, from where
      */
-    public function grant(string $subject, ?string $preferRegion = null): IceGrant
+    public function grant(string $subject, ?string $preferRegion = null, ?int $ttl = null, array $context = []): IceGrant
     {
-        return $this->issuer()->issue($subject, ['preferRegion' => $preferRegion]);
+        return $this->issuer()->issue(
+            $subject,
+            ['preferRegion' => $preferRegion, 'profile' => 'remote'] + $context + ($ttl !== null ? ['ttl' => $ttl] : []),
+        );
+    }
+
+    /**
+     * A grant for a client that cannot renew — the desktop agent builds its ICE configuration once, at
+     * join. Valid for the rest of the session (plus five minutes), so anything the agent has to gather
+     * again during it — after a network change, or a restart the browser asks for — still authenticates.
+     *
+     * @param int $secondsRemaining how long the session has left
+     * @param array<string, mixed> $context see grant()
+     */
+    public function grantForSession(string $subject, int $secondsRemaining, array $context = []): IceGrant
+    {
+        return $this->grant($subject, null, $this->topology()->sessionBoundTtl($secondsRemaining), $context);
+    }
+
+    /**
+     * What the issuer needs to know about one request: the licence tier of the company that owns the
+     * session, the session the capacity is reserved for, and where the client is.
+     *
+     * @param array<string, mixed>  $session
+     * @param array<string, mixed>  $body    the request body (`region`, `rtt`)
+     * @param callable(string): (string|null) $header reads one request header
+     * @return array{tier: Tier, licence: array<string, mixed>, sessionRef: string, profile: string, client: ClientContext}
+     */
+    public function contextFor(array $session, array $body, callable $header): array
+    {
+        $geo = GeoHeaders::fromEnvironment(static fn (string $key): ?string => is_scalar($v = env($key)) ? (string) $v : null);
+
+        $licence = $this->licenceForSession($session);
+
+        return [
+            'tier'       => $licence->tier(),
+            'licence'    => $licence->audit(),
+            'sessionRef' => (string) ($session['uuid'] ?? ''),
+            'profile'    => 'remote',
+            'client'     => ClientContext::fromRequest($body, $geo->extract($header)),
+        ];
+    }
+
+    /**
+     * Paid only on trusted server-side evidence: the central backend's signed, fresh, unrevoked entitlement for the
+     * company that owns the session, in state `paid` (Licence\LicenceResolver states every condition). Everything else is
+     * free — a personal session with no company, no entitlement, an expired or suspended licence, a stale or unverifiable
+     * document, a lookup that fails. Nothing the client sent is consulted.
+     *
+     * @param array<string, mixed> $session
+     */
+    public function tierForSession(array $session): Tier
+    {
+        return $this->licenceForSession($session)->tier();
+    }
+
+    /**
+     * The licence resolution for a session, CONTEXTUALLY: the company that owns it (the active company context — a server-side
+     * fact, never a request field), the session's owner as the acting user, and product `remote`. The owner's CURRENT membership of
+     * that company is Remote's own evidence (the access projection, confirmed against Manage within the grace period); the central
+     * entitlement must also state it, and for a seat licence name the owner's seat. State (free / paid / expired / suspended /
+     * unknown), the reason, the basis (company-wide, seat) and how much the evidence is worth (`central` / `compat` / `none`).
+     *
+     * Every participant of the session — the technician, the customer, a guest viewer — is accounted to this one licensed session;
+     * none of them is classified on their own account here.
+     *
+     * @param array<string, mixed> $session
+     */
+    public function licenceForSession(array $session): Resolution
+    {
+        $company = $session['company_id'] ?? null;
+        if ($company === null || $company === '') {
+            return Resolution::unknown('no_customer');
+        }
+
+        try {
+            [$subject, $member] = $this->owner((int) $company, $session['owner_user_id'] ?? null);
+
+            return $this->licence()->forContext(
+                new LicenceContext((string) (int) $company, self::LICENCE_PRODUCT, $subject, $member),
+                fn (): ?Resolution => $this->compatResolution((int) $company),
+            );
+        } catch (\Throwable) {
+            return Resolution::unknown('lookup_failed');
+        }
+    }
+
+    /**
+     * The session owner as a licence subject, and whether Remote can vouch that they are CURRENTLY a member of the company:
+     * true (an access row exists, and — where membership is enforced — Manage confirmed it within the grace period), false (no
+     * access row: not a member), null (cannot be confirmed: treated as not verified, never as a member).
+     *
+     * @return array{0: string|null, 1: bool|null}
+     */
+    private function owner(int $companyId, mixed $ownerIdentityId): array
+    {
+        if ($ownerIdentityId === null || $ownerIdentityId === '') {
+            return [null, null];
+        }
+        $db       = \Config\Database::connect();
+        $identity = $db->table('remote_identities')->select('platform_uuid')->where('id', (int) $ownerIdentityId)->get()->getRowArray();
+        if ($identity === null) {
+            return [null, null];
+        }
+        $subject = (string) $identity['platform_uuid'];
+
+        $row = $db->table('remote_user_company_access')->select('verified_at')->where('user_id', (int) $ownerIdentityId)->where('company_id', $companyId)->get()->getRowArray();
+        if ($row === null) {
+            return [$subject, false];
+        }
+        if (! $this->config->membershipEnforcement) {
+            return [$subject, true];
+        }
+        $verified = $row['verified_at'] ?? null;
+        $fresh    = $verified !== null && strtotime((string) $verified) >= time() - $this->config->membershipGraceSeconds;
+
+        return [$subject, $fresh ? true : null];
+    }
+
+    public function licence(): LicenceResolver
+    {
+        return $this->licence ??= LicenceRuntime::resolver(
+            static fn (string $key): ?string => is_scalar($v = env($key)) ? (string) $v : null,
+            WRITEPATH,
+        );
+    }
+
+    /**
+     * DEVELOPMENT-TIME COMPATIBILITY: the company's own `remote_entitlements` row, valid now and recently updated, on a plan
+     * the operator listed as paid. Evidence `compat` — never accepted for enforcement. The platform DEFAULT row
+     * (company_id NULL, seeded `REMOTE_PROFESSIONAL`) is a feature set for companies nobody has set up, not a subscription, and
+     * never makes a company paid. Returns null when there is nothing to say (so the answer stays `unknown`).
+     */
+    private function compatResolution(int $companyId): ?Resolution
+    {
+        $paid = $this->config->turnPaidPlanCodes;
+        if ($paid === []) {
+            return null;
+        }
+
+        $row = \Config\Database::connect()->table('remote_entitlements')
+            ->select('plan_code, updated_at')
+            ->where('company_id', $companyId)
+            ->groupStart()->where('valid_from', null)->orWhere('valid_from <=', 'NOW()', false)->groupEnd()
+            ->groupStart()->where('valid_until', null)->orWhere('valid_until >', 'NOW()', false)->groupEnd()
+            ->get()
+            ->getRowArray();
+
+        if ($row === null) {
+            return null;
+        }
+
+        $maxAge = $this->config->turnEntitlementMaxAgeHours;
+        if ($maxAge > 0 && isset($row['updated_at']) && strtotime((string) $row['updated_at']) < time() - $maxAge * 3600) {
+            return LicenceResolver::compat(LicenceState::Unknown, 'compat_stale');
+        }
+
+        $plan = strtoupper((string) ($row['plan_code'] ?? ''));
+
+        return in_array($plan, $paid, true)
+            ? LicenceResolver::compat(LicenceState::Paid, 'compat_plan_paid', $plan)
+            : LicenceResolver::compat(LicenceState::Free, 'compat_plan_not_paid', $plan);
+    }
+
+    /**
+     * Why hard enforcement must not start yet — empty only when the central licence source is operational and validated.
+     * Consulted only when `WEBRTC_TURN_ADMISSION=enforce`; while this list is not empty the application observes instead.
+     *
+     * @return list<string>
+     */
+    public function licenceBlockers(): array
+    {
+        if ($this->readiness !== null) {
+            return ($this->readiness)();
+        }
+
+        return (LicenceRuntime::readiness(
+            static fn (string $key): ?string => is_scalar($v = env($key)) ? (string) $v : null,
+            WRITEPATH,
+            self::LICENCE_PRODUCT,
+        ))();
+    }
+
+    /** Free what a session (or one participant of it) held on the relays. Best effort: never throws. */
+    public function releaseSession(string $sessionUuid, ?string $participantUuid = null): void
+    {
+        try {
+            $this->issuer()->release($sessionUuid, $participantUuid);
+        } catch (\Throwable) {
+            // Capacity frees itself when the credentials expire; teardown must not fail over bookkeeping.
+        }
+    }
+
+    /** A client said how it connected: charge the bandwidth where the traffic really is. */
+    public function noteConnection(string $participantUuid, string $sessionUuid, string $path, ?string $nodeId): void
+    {
+        try {
+            $this->issuer()->noteConnection($participantUuid, $sessionUuid, $path, $nodeId);
+        } catch (\Throwable) {
+        }
+    }
+
+    /** @param string $clientKey an opaque, stable reference to the client (the participant uuid); kept only as a hash */
+    public function learnLatency(ClientContext $client, string $clientKey = ''): void
+    {
+        try {
+            $this->issuer()->learnLatency($client, $clientKey);
+        } catch (\Throwable) {
+        }
     }
 
     /**
@@ -79,11 +318,18 @@ class IceConfigService
 
     public function issuer(): IceIssuer
     {
-        return $this->issuer ??= new IceIssuer(
-            $this->topology(),
-            new HealthStore($this->config->turnHealthFile !== '' ? $this->config->turnHealthFile : WRITEPATH . 'ice/turn-health.json'),
-            null,
+        return $this->issuer ??= IceRuntime::issuer(
+            static fn (string $key): ?string => is_scalar($v = env($key)) ? (string) $v : null,
+            WRITEPATH,
             'remote',
+            // One log line per decision: tier, profile, outcome, nodes and their load. No subject, no credential.
+            static function (string $event, array $data): void {
+                log_message('info', 'remote.ice.' . $event . ' {data}', ['data' => json_encode($data, JSON_UNESCAPED_SLASHES)]);
+            },
+            $this->topology(),
+            null,
+            [],
+            fn (): array => $this->licenceBlockers(),
         );
     }
 
@@ -106,6 +352,8 @@ class IceConfigService
             ttlSeconds: max(60, min(86400, $this->config->turnCredentialTtlSeconds)),
             maxRelayNodes: 1,
             source: 'legacy',
+            restartOnRenewal: $this->config->turnRestartOnRenewal,
+            sessionTtlMax: $this->config->turnSessionTtlMax,
         );
     }
 }

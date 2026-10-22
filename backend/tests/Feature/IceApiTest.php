@@ -117,7 +117,7 @@ final class IceApiTest extends RemoteTestCase
 
         $turn = $grant['iceServers'][1];
         $this->assertContains('turns:turn-mum.aicountly.com:443?transport=tcp', $turn['urls']);
-        $this->assertStringEndsWith(':' . $s['viewerUuid'], $turn['username'], 'The relay can attribute usage to a participant, never to an email address.');
+        $this->assertStringEndsWith('.' . $s['viewerUuid'], $turn['username'], 'The relay can attribute usage to a tier and a participant, never to an email address.');
         $this->assertSame(base64_encode(hash_hmac('sha1', $turn['username'], self::SECRET, true)), $turn['credential']);
 
         $this->assertStringNotContainsString(self::SECRET, (string) $raw);
@@ -228,7 +228,10 @@ final class IceApiTest extends RemoteTestCase
 
         $this->assertSame('configured', $data['relay']);
         $this->assertSame(
-            [['id' => 'mum', 'status' => 'active', 'servable' => true, 'health' => 'unknown'], ['id' => 'ncr', 'status' => 'disabled', 'servable' => false, 'health' => 'unknown']],
+            [
+                ['id' => 'mum', 'status' => 'active', 'servable' => true, 'health' => 'unknown', 'condition' => 'unknown', 'state' => 'unknown', 'serving' => true, 'load' => 'normal', 'servingBy' => ['paid' => true, 'free' => true]],
+                ['id' => 'ncr', 'status' => 'disabled', 'servable' => false, 'health' => 'unknown', 'condition' => 'unknown', 'state' => 'disabled', 'serving' => false, 'load' => 'normal', 'servingBy' => ['paid' => false, 'free' => false]],
+            ],
             $data['relayNodes'],
         );
         $this->assertStringNotContainsString(self::SECRET, $body);
@@ -248,5 +251,40 @@ final class IceApiTest extends RemoteTestCase
         $this->assertSame('legacy', Services::iceConfigService()->status()['source']);
         $this->assertSame(['default'], array_column($grant->relayNodes(), 'id'));
         $this->assertSame(600, $grant->expiresIn());
+    }
+
+    public function testADiagnosticReportFromAViewerTheHostHasNotAdmittedIsRefused(): void
+    {
+        $s = $this->sessionWithViewer(false);
+
+        $refused = $this->withHeaders($s['viewer'])->withBodyFormat('json')
+            ->post("v1/remote/sessions/{$s['session']['uuid']}/connectivity-report", ['outcome' => 'connected']);
+
+        $refused->assertStatus(403);
+        $this->assertFalse(\CodeIgniter\Test\TestLogger::didLog('info', $s['viewerUuid'], false), 'Nothing from an unadmitted caller reaches the log.');
+    }
+
+    public function testADiagnosticReportWithoutCredentialsIsRefused(): void
+    {
+        $s = $this->sessionWithViewer();
+
+        $this->withHeaders([])->withBodyFormat('json')
+            ->post("v1/remote/sessions/{$s['session']['uuid']}/connectivity-report", ['outcome' => 'connected'])
+            ->assertStatus(401);
+    }
+
+    public function testCredentialIssuanceIsRateLimited(): void
+    {
+        $s = $this->sessionWithViewer();
+        cache()->clean();
+
+        $statuses = [];
+        for ($i = 0; $i < 32; $i++) {
+            $statuses[] = $this->withHeaders($s['viewer'])->post("v1/remote/sessions/{$s['session']['uuid']}/ice-servers")->response()->getStatusCode();
+        }
+
+        $this->assertSame(200, $statuses[0]);
+        $this->assertSame(429, end($statuses), 'The 30-a-minute budget is enforced, not just configured.');
+        $this->assertLessThanOrEqual(31, count(array_filter($statuses, static fn (int $c): bool => $c === 200)));
     }
 }

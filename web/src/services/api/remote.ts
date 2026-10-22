@@ -8,6 +8,7 @@
 
 import { apiFetch, apiFetchText, apiFetchWithMeta, setGuestToken } from './client'
 import type { ConnectivityReport } from '../../ice-kit/index.js'
+import { latencyBody } from './iceLatency'
 import type {
   AuditEntry,
   AuditFilters,
@@ -205,18 +206,19 @@ export function reportPresence(
 // --- Signalling -------------------------------------------------------------
 
 export function fetchSignallingCredentials(sessionUuid: string): Promise<SignallingCredentials> {
-  return apiFetch<SignallingCredentials>(`/sessions/${sessionUuid}/signalling-token`, { method: 'POST' })
+  return apiFetch<SignallingCredentials>(`/sessions/${sessionUuid}/signalling-token`, { method: 'POST', body: latencyBody() })
 }
 
 /**
  * Fresh TURN credentials, without reconnecting to the room (docs/ICE_CONTRACT.md).
  *
- * A relayed connection cannot outlive its credential — the relay refuses the allocation's next
- * refresh once it has expired — so the engine asks again before then and restarts ICE onto the new
- * one. The answer is the aicountly.ice/1 grant, which the ice-kit normalises.
+ * A relay refuses a new allocation on an expired credential, so anything a long session must set up
+ * again (an ICE restart, a reconnect) needs a valid one: the engine asks again before expiry and, by
+ * default, restarts relayed connections onto it. The answer is the aicountly.ice/1 grant, which the
+ * ice-kit normalises.
  */
 export function fetchIceServers(sessionUuid: string): Promise<unknown> {
-  return apiFetch<unknown>(`/sessions/${sessionUuid}/ice-servers`, { method: 'POST' })
+  return apiFetch<unknown>(`/sessions/${sessionUuid}/ice-servers`, { method: 'POST', body: latencyBody() })
 }
 
 /**

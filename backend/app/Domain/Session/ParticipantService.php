@@ -292,6 +292,9 @@ class ParticipantService
             (int) $participant['id'],
             (string) $participant['uuid'],
         );
+
+        // Someone who has left holds no relay capacity.
+        \Config\Services::iceConfigService()->releaseSession((string) $session['uuid'], (string) $participant['uuid']);
     }
 
     public function closeAll(int $sessionId): void

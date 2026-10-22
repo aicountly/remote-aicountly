@@ -11,7 +11,17 @@ export interface RelayNode {
   readonly priority: number
   readonly status: string
   readonly health: string
+  /** normal | busy | overloaded | full */
+  readonly load: string
   readonly urls: readonly string[]
+}
+
+export interface IceAdmission {
+  readonly tier: 'paid' | 'free'
+  /** `denied` means no relay was available for this tier because of capacity — not a misconfiguration. */
+  readonly outcome: 'admitted' | 'unmetered' | 'denied' | 'unconfigured'
+  readonly reason: string
+  readonly mode: string
 }
 
 export interface IceServer {
@@ -33,6 +43,9 @@ export interface IceConfig {
   readonly refreshAt: number | null
   readonly degraded: boolean
   readonly failover: boolean
+  /** Whether a relayed connection is restarted onto renewed credentials. Default true. */
+  readonly restartOnRenewal: boolean
+  readonly admission: IceAdmission
 }
 
 export declare function normalizeIceConfig(raw: unknown, now?: number): IceConfig
@@ -71,6 +84,7 @@ export declare function classifyIceError(event: {
 export type IceVerdict =
   | 'ok'
   | 'no-relay-configured'
+  | 'relay-capacity-limited'
   | 'relay-auth-failed'
   | 'relay-unreachable'
   | 'relay-refused'
@@ -161,6 +175,8 @@ export declare class CredentialRefresher {
   constructor(options: {
     fetch: () => Promise<unknown>
     onRefreshed?: (config: IceConfig) => void
+    /** A renewal was refused for capacity; the previous configuration stays in use. */
+    onDenied?: (config: IceConfig) => void
     onError?: (error: unknown) => void
     clock?: Clock
     minDelayMs?: number
@@ -174,7 +190,7 @@ export declare class CredentialRefresher {
 
 export interface RelayProbeResult {
   ok: boolean
-  verdict: 'ok' | 'unsupported' | 'no-relay-configured' | 'relay-auth-failed' | 'relay-unreachable'
+  verdict: 'ok' | 'unsupported' | 'no-relay-configured' | 'relay-capacity-limited' | 'relay-auth-failed' | 'relay-unreachable'
   relayAvailable: boolean
   nodes: Array<{
     id: string
@@ -193,3 +209,18 @@ export declare function probeRelay(
 ): Promise<RelayProbeResult>
 
 export declare function isRestartDriver(selfId: string, peerId: string): boolean
+
+export declare class LatencyMeter {
+  constructor(options?: {
+    storage?: Pick<Storage, 'getItem' | 'setItem'> | null
+    now?: () => number
+    createConnection?: (config: RTCConfiguration) => RTCPeerConnection
+    timeoutMs?: number
+    samples?: number
+    ttlMs?: number
+  })
+  /** The last fresh measurement as `{nodeId: ms}` — what to send as `rtt` with the next credentials request. */
+  latest(): Record<string, number> | undefined
+  /** Time each relay node in a config (after a call has connected, never during setup). */
+  measure(config: IceConfig | null): Promise<Record<string, number>>
+}

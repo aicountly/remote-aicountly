@@ -59,7 +59,7 @@ class SignallingController extends BaseApiController
             (int) $participant['id'],
         );
 
-        $grant = Services::iceConfigService()->grant((string) $participant['uuid'], $this->regionHint());
+        $grant = $this->grantFor($session, $participant);
 
         return $this->ok([
             'token'     => $token['token'],
@@ -81,18 +81,16 @@ class SignallingController extends BaseApiController
     /**
      * `POST /sessions/{uuid}/ice-servers` — fresh TURN credentials, without a signalling token.
      *
-     * A relayed connection cannot outlive its credential: coturn refuses the allocation's next refresh
-     * once the username's timestamp has passed. The browser therefore asks again at `refreshAfter` and
-     * restarts ICE onto the new credential, and it asks here rather than re-minting a signalling token
-     * so that renewing a relay is not also a reconnection to the room. Same admission rule as the token.
+     * A relay refuses a new allocation on an expired credential, so whatever a long session must set up
+     * again (an ICE restart, a reconnect after a network change) needs a valid one. The browser asks again
+     * at `refreshAfter`, and asks here rather than re-minting a signalling token so that renewing a relay
+     * is not also a reconnection to the room. Same admission rule as the token.
      */
     public function iceServers(string $uuid): ResponseInterface
     {
-        [, $participant] = $this->admittedParticipant($uuid);
+        [$session, $participant] = $this->admittedParticipant($uuid);
 
-        return $this->ok(
-            Services::iceConfigService()->grant((string) $participant['uuid'], $this->regionHint())->toArray(),
-        );
+        return $this->ok($this->grantFor($session, $participant)->toArray());
     }
 
     /**
@@ -108,6 +106,12 @@ class SignallingController extends BaseApiController
         [$session, $participant] = $this->admittedParticipant($uuid, false);
 
         $report = ConnectivityReport::sanitize($this->body());
+
+        // How the connection really went tells the capacity books where the traffic is: nothing on the
+        // relays for a direct connection, and the bandwidth on the node it says it relays through.
+        if (in_array($report['path'], ['direct', 'relay'], true)) {
+            Services::iceConfigService()->noteConnection((string) $participant['uuid'], (string) $session['uuid'], $report['path'], $report['relayNode']);
+        }
 
         log_message('info', 'remote.ice.report {report}', [
             'report' => json_encode([
@@ -163,6 +167,22 @@ class SignallingController extends BaseApiController
         }
 
         return [$session, $participant];
+    }
+
+    /**
+     * The grant for one admitted participant: accounted to the session's licence tier, ordered by where the
+     * client is (a region hint, edge geography, the round trips it measured), and capacity-checked.
+     *
+     * @param array<string, mixed> $session
+     * @param array<string, mixed> $participant
+     */
+    private function grantFor(array $session, array $participant): \Aicountly\Ice\IceGrant
+    {
+        $ice     = Services::iceConfigService();
+        $context = $ice->contextFor($session, $this->body(), fn (string $name): string => $this->request->getHeaderLine($name));
+        $ice->learnLatency($context['client'], (string) $participant['uuid']);
+
+        return $ice->grant((string) $participant['uuid'], $this->regionHint(), null, $context);
     }
 
     /** The client's region hint for relay ordering (`in-west`, `in-north`); a hint, never a filter. */

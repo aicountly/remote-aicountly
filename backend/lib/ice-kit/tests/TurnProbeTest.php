@@ -147,4 +147,69 @@ final class TurnProbeTest extends IceKitTestCase
         $this->assertFalse($result['ok']);
         $this->assertSame('auth_rejected', $result['error']);
     }
+
+    // ------------------------------------------------------------------ negative checks and certificates
+
+    public function testRefusableCredentialsAreWronglySignedOrExpiredAndNeverTheRealOne(): void
+    {
+        $node = new TurnNode('n', 'turn.example', NodeStatus::Active, secret: 'real-secret');
+
+        $wrong = $node->refusableCredential('wrong-secret', 'probe', self::NOW);
+        $this->assertGreaterThan(self::NOW, (int) $wrong['username'], 'Not expired: it is the signature that is wrong.');
+        $this->assertNotSame(base64_encode(hash_hmac('sha1', $wrong['username'], 'real-secret', true)), $wrong['credential']);
+
+        $expired = $node->refusableCredential('expired', 'probe', self::NOW);
+        $this->assertLessThan(self::NOW, (int) $expired['username'], 'Expired: the timestamp has passed.');
+        $this->assertSame(base64_encode(hash_hmac('sha1', $expired['username'], 'real-secret', true)), $expired['credential'], 'Signed correctly, so only the time can be why it is refused.');
+
+        $this->assertNull((new TurnNode('s', 'turn.example', NodeStatus::Active, staticUsername: 'u', staticCredential: 'c'))->refusableCredential('expired', 'p', self::NOW));
+        $this->expectException(\InvalidArgumentException::class);
+        $node->refusableCredential('nonsense', 'p', self::NOW);
+    }
+
+    public function testACertificateIsSummarisedWithItsNamesIssuerAndDaysLeft(): void
+    {
+        $summary = TurnProbe::summarizeCertificate([
+            'subject' => ['CN' => 'turn-mum.aicountly.com'],
+            'issuer' => ['O' => "Let's Encrypt", 'CN' => 'R11'],
+            'extensions' => ['subjectAltName' => 'DNS:turn-mum.aicountly.com, DNS:turn.aicountly.com, IP Address:148.135.210.65'],
+            'validFrom_time_t' => self::NOW - 86400 * 30,
+            'validTo_time_t' => self::NOW + 86400 * 9 + 3600,
+        ], self::NOW, true);
+
+        $this->assertSame('turn-mum.aicountly.com', $summary['subject']);
+        $this->assertSame(['turn-mum.aicountly.com', 'turn.aicountly.com'], $summary['san']);
+        $this->assertSame("Let's Encrypt R11", $summary['issuer']);
+        $this->assertSame(9, $summary['daysRemaining']);
+        $this->assertTrue($summary['verified']);
+    }
+
+    public function testALiveRelayRefusesForgedExpiredAndAnonymousRequestsOnEveryTransport(): void
+    {
+        [$host, $secret, $tls, $tlsPort] = $this->liveRelay();
+
+        $node   = new TurnNode('live', $host, NodeStatus::Active, tlsPort: $tlsPort, secret: $secret);
+        $result = (new TurnProbe(3.0, $tls))->probeNode($node, null, true, 300, 'probe', true);
+
+        $this->assertTrue($result['ok'], json_encode($result, JSON_PRETTY_PRINT) ?: '');
+        $this->assertTrue($result['negativeOk']);
+        foreach (['udp', 'tcp', 'tls'] as $transport) {
+            foreach (['wrongSecret', 'expired', 'anonymous'] as $check) {
+                $this->assertSame('rejected', $result['transports'][$transport]['negative'][$check]['verdict'], "{$transport} {$check}");
+            }
+        }
+    }
+
+    public function testALiveRelayPresentsACertificateThatVerifiesForItsName(): void
+    {
+        [$host, $secret, $tls, $tlsPort] = $this->liveRelay();
+
+        $node   = new TurnNode('live', $host, NodeStatus::Active, transports: ['tls'], tlsPort: $tlsPort, secret: $secret);
+        $result = (new TurnProbe(3.0, $tls))->probeNode($node);
+        $cert   = $result['transports']['tls']['binding']['certificate'] ?? null;
+
+        $this->assertNotNull($cert);
+        $this->assertSame(($tls['verifyPeer'] ?? true) === true, $cert['verified']);
+        $this->assertNotSame('', $cert['subject'] . implode('', $cert['san']));
+    }
 }

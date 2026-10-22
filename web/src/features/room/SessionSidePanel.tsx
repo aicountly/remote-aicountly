@@ -433,7 +433,9 @@ function ConnectionPathItem({ live }: { live: EngineSnapshot | null }) {
       good={live?.relayAvailable !== false}
       title="Direct, encrypted connection"
       body={
-        live?.relayAvailable === false
+        live?.relayDenied
+          ? 'Media travels directly between browsers over an encrypted connection. AICOUNTLY’s relay capacity for this account is fully used right now, so very restrictive networks may not connect until it frees up.'
+          : live?.relayAvailable === false
           ? 'Media travels directly between browsers over an encrypted connection. No relay is configured on this deployment, so very restrictive networks may not connect.'
           : 'Media travels directly between browsers over an encrypted connection, or through AICOUNTLY’s relay when a network requires it.'
       }

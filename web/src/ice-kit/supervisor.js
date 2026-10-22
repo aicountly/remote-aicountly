@@ -152,8 +152,8 @@ export class ConnectionSupervisor {
   }
 
   /**
-   * Restart now, outside the failure path — the peer asked, or fresh credentials have to replace a
-   * relay allocation before the old ones expire. Not counted against the recovery budget.
+   * Restart now, outside the failure path — the peer asked, or renewed credentials should replace a
+   * relayed connection's allocation. Not counted against the recovery budget.
    */
   async requestRestart(reason) {
     if (this.disposed || this.recovering) return;

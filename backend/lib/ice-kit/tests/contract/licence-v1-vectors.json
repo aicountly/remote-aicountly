@@ -1,0 +1,2603 @@
+{
+    "contract": "aicountly.licence/1",
+    "note": "TEST VECTORS ONLY. The key below is derived from a published seed and signs nothing real. Regenerate with tests/contract/generate-vectors.php.",
+    "public_key": {
+        "kid": "contract-test-1",
+        "alg": "ed25519",
+        "value": "MDX9QYRLfjf4d6YIkxbLe8YQLkcXYWTGsPtVklCuLAY="
+    },
+    "policy": {
+        "max_age_seconds": 172800,
+        "paid_kinds": [
+            "paid"
+        ]
+    },
+    "cases": [
+        {
+            "name": "company_wide_member_verified_by_product",
+            "why": "A company-wide subscription qualifies a current member the product has verified.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "yKEdetUy8FLguYU4vvqrn3S6zrsC6kB8BQ+pQSjV1TCbk1K3U5cLmzcpDZlG0ouOyHvKWAjUq57+GT986aoXBw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "paid",
+                "tier": "paid",
+                "reason": "paid",
+                "basis": "company_wide"
+            }
+        },
+        {
+            "name": "company_wide_no_membership_evidence",
+            "why": "The company is paid but nothing says this user belongs to it: not paid.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "yKEdetUy8FLguYU4vvqrn3S6zrsC6kB8BQ+pQSjV1TCbk1K3U5cLmzcpDZlG0ouOyHvKWAjUq57+GT986aoXBw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "free",
+                "tier": "free",
+                "reason": "membership_unverified",
+                "basis": "company_wide"
+            }
+        },
+        {
+            "name": "company_wide_user_removed_per_product",
+            "why": "The product knows the user is no longer a member.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": false
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "yKEdetUy8FLguYU4vvqrn3S6zrsC6kB8BQ+pQSjV1TCbk1K3U5cLmzcpDZlG0ouOyHvKWAjUq57+GT986aoXBw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "free",
+                "tier": "free",
+                "reason": "not_a_member",
+                "basis": "company_wide"
+            }
+        },
+        {
+            "name": "company_wide_member_document",
+            "why": "The backend states current membership in a member-level document.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u2",
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "member",
+                    "ref": "A|u2",
+                    "envelope": {
+                        "document": {
+                            "customer_id": "A",
+                            "subject": "u2",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": true,
+                                "seat": "not_applicable"
+                            },
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "eT01aLsmlp67dGaQgIrrm5sOwIX6+vzbTUGLB7JfJU6iwecM+pD/0K7SIaQw+UiYqjQgJojnj5scfQcuY44EBQ=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "paid",
+                "tier": "paid",
+                "reason": "paid",
+                "basis": "company_wide"
+            }
+        },
+        {
+            "name": "member_document_not_a_member",
+            "why": "The backend states the user is not (or no longer) a member.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u3",
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "member",
+                    "ref": "A|u3",
+                    "envelope": {
+                        "document": {
+                            "customer_id": "A",
+                            "subject": "u3",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": false,
+                                "seat": "not_applicable"
+                            },
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "uwiuHfVAL01lKdpVPYVTsnEDKHGp1pBRZe1eS/+J/pAeeuk0Z3LqvxErqqaGnPvB7sdaqcUqUIDTPa8Nou7YAw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "free",
+                "tier": "free",
+                "reason": "not_a_member",
+                "basis": "company_wide"
+            }
+        },
+        {
+            "name": "company_level_question_without_user",
+            "why": "A company-level question (e.g. a Remote session accounted to its company) is answered by a company-wide licence.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": null,
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "yKEdetUy8FLguYU4vvqrn3S6zrsC6kB8BQ+pQSjV1TCbk1K3U5cLmzcpDZlG0ouOyHvKWAjUq57+GT986aoXBw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "paid",
+                "tier": "paid",
+                "reason": "paid",
+                "basis": "company_wide"
+            }
+        },
+        {
+            "name": "seat_assigned",
+            "why": "Individually assigned seat: the holder is paid.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "S",
+                "subject": "holder",
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "S",
+                    "envelope": {
+                        "document": {
+                            "eligibility": {
+                                "model": "seat",
+                                "member": null,
+                                "seat": "not_applicable"
+                            },
+                            "customer_id": "S",
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "qXxgNe4/VatWgCXEI+S9vQMO4WPBJZUtjKclNmmRArFRgPU7Cq35IEITeMCqvCBykmW7yOqkpLPhAm8miBOOCg=="
+                        }
+                    }
+                },
+                {
+                    "scope": "member",
+                    "ref": "S|holder",
+                    "envelope": {
+                        "document": {
+                            "customer_id": "S",
+                            "subject": "holder",
+                            "eligibility": {
+                                "model": "seat",
+                                "member": true,
+                                "seat": "assigned"
+                            },
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "XIfwdjcSA7CEjkKZtzOc+uO+mCtlBccQIhL1zm6T++1mtF43nVsc+oCnhkGXTQ2HwXVDXdi1DiiMja8jqmY+Dw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "paid",
+                "tier": "paid",
+                "reason": "paid",
+                "basis": "seat"
+            }
+        },
+        {
+            "name": "seat_unassigned",
+            "why": "A member of a seat-licensed company without a seat.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "S",
+                "subject": "spare",
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "S",
+                    "envelope": {
+                        "document": {
+                            "eligibility": {
+                                "model": "seat",
+                                "member": null,
+                                "seat": "not_applicable"
+                            },
+                            "customer_id": "S",
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "qXxgNe4/VatWgCXEI+S9vQMO4WPBJZUtjKclNmmRArFRgPU7Cq35IEITeMCqvCBykmW7yOqkpLPhAm8miBOOCg=="
+                        }
+                    }
+                },
+                {
+                    "scope": "member",
+                    "ref": "S|spare",
+                    "envelope": {
+                        "document": {
+                            "customer_id": "S",
+                            "subject": "spare",
+                            "eligibility": {
+                                "model": "seat",
+                                "member": true,
+                                "seat": "unassigned"
+                            },
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "1+EouctE9KlXgjTqTHPuRN4+fFLOYzJPocTkBgxCqgDD9reRFULzMjfz9+xWh2NPbsHG5Z85kIg7X1bZZEHGCw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "free",
+                "tier": "free",
+                "reason": "seat_unassigned",
+                "basis": "seat"
+            }
+        },
+        {
+            "name": "seat_revoked",
+            "why": "A seat that has been revoked.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "S",
+                "subject": "former",
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "member",
+                    "ref": "S|former",
+                    "envelope": {
+                        "document": {
+                            "customer_id": "S",
+                            "subject": "former",
+                            "eligibility": {
+                                "model": "seat",
+                                "member": true,
+                                "seat": "revoked"
+                            },
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "OPL8BZmBWqNtK2trzQXOlTc7Yvh30oa3sLxqa+Wiw8IsViP+hZNsmKccDGsBMATEbv9c48R2jlRU+9ID3g/FDw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "free",
+                "tier": "free",
+                "reason": "seat_revoked",
+                "basis": "seat"
+            }
+        },
+        {
+            "name": "seat_licence_company_document_only",
+            "why": "A seat licence cannot be satisfied by the company document and a membership claim.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "S",
+                "subject": "stranger",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "S",
+                    "envelope": {
+                        "document": {
+                            "eligibility": {
+                                "model": "seat",
+                                "member": null,
+                                "seat": "not_applicable"
+                            },
+                            "customer_id": "S",
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "qXxgNe4/VatWgCXEI+S9vQMO4WPBJZUtjKclNmmRArFRgPU7Cq35IEITeMCqvCBykmW7yOqkpLPhAm8miBOOCg=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "free",
+                "tier": "free",
+                "reason": "seat_not_assigned",
+                "basis": "seat"
+            }
+        },
+        {
+            "name": "seat_licence_question_without_user",
+            "why": "A seat licence needs a user.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "S",
+                "subject": null,
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "S",
+                    "envelope": {
+                        "document": {
+                            "eligibility": {
+                                "model": "seat",
+                                "member": null,
+                                "seat": "not_applicable"
+                            },
+                            "customer_id": "S",
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "qXxgNe4/VatWgCXEI+S9vQMO4WPBJZUtjKclNmmRArFRgPU7Cq35IEITeMCqvCBykmW7yOqkpLPhAm8miBOOCg=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "free",
+                "tier": "free",
+                "reason": "seat_requires_subject",
+                "basis": "seat"
+            }
+        },
+        {
+            "name": "seat_revoked_by_feed",
+            "why": "The changes feed revoked this (company, user) pair at the document's revision.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "S",
+                "subject": "u1",
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "member",
+                    "ref": "S|u1",
+                    "envelope": {
+                        "document": {
+                            "customer_id": "S",
+                            "subject": "u1",
+                            "eligibility": {
+                                "model": "seat",
+                                "member": true,
+                                "seat": "assigned"
+                            },
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "5YPxiW4ELXS9TqkVpH85lChh8fvuJtN8MqOYT/7W4Uwx+HqLVS6lin/GATwhbT0kQOEbLZEnc/utsUWypS8ADA=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [
+                {
+                    "customer": "S",
+                    "subject": "u1",
+                    "revision": 5
+                }
+            ],
+            "expect": {
+                "state": "suspended",
+                "tier": "free",
+                "reason": "revoked",
+                "basis": "seat"
+            }
+        },
+        {
+            "name": "seat_revocation_of_another_user",
+            "why": "Revoking another user's seat does not touch this one.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "S",
+                "subject": "u2",
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "member",
+                    "ref": "S|u2",
+                    "envelope": {
+                        "document": {
+                            "customer_id": "S",
+                            "subject": "u2",
+                            "eligibility": {
+                                "model": "seat",
+                                "member": true,
+                                "seat": "assigned"
+                            },
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "dj4MvRu3+q8lAaeKDZh9KEemqgp8FrCIOtJbo2dReMGeaWVevPMFKwaFnaUUsDm5p9Uepq0+NOXT4wqLoTKxAQ=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [
+                {
+                    "customer": "S",
+                    "subject": "u1",
+                    "revision": 5
+                }
+            ],
+            "expect": {
+                "state": "paid",
+                "tier": "paid",
+                "reason": "paid",
+                "basis": "seat"
+            }
+        },
+        {
+            "name": "company_lapse_beats_seat_document",
+            "why": "The company licence is suspended; a seat document that has not caught up does not help.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "S",
+                "subject": "u1",
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "S",
+                    "envelope": {
+                        "document": {
+                            "eligibility": {
+                                "model": "seat",
+                                "member": null,
+                                "seat": "not_applicable"
+                            },
+                            "customer_id": "S",
+                            "state": "suspended",
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "bmfujwNnbzDrryxgWAiFad8tSnDUw3LLzDwC6Yq97+XzSL5JKhPG7zkLYwX046GyJpWS6uS75nxS3LiNoiJuDA=="
+                        }
+                    }
+                },
+                {
+                    "scope": "member",
+                    "ref": "S|u1",
+                    "envelope": {
+                        "document": {
+                            "customer_id": "S",
+                            "subject": "u1",
+                            "eligibility": {
+                                "model": "seat",
+                                "member": true,
+                                "seat": "assigned"
+                            },
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "5YPxiW4ELXS9TqkVpH85lChh8fvuJtN8MqOYT/7W4Uwx+HqLVS6lin/GATwhbT0kQOEbLZEnc/utsUWypS8ADA=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "suspended",
+                "tier": "free",
+                "reason": "suspended",
+                "basis": "seat"
+            }
+        },
+        {
+            "name": "switching_company_no_entitlement",
+            "why": "The same user in company B, which has no licence for them: nothing carries over from A.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "B",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "yKEdetUy8FLguYU4vvqrn3S6zrsC6kB8BQ+pQSjV1TCbk1K3U5cLmzcpDZlG0ouOyHvKWAjUq57+GT986aoXBw=="
+                        }
+                    }
+                },
+                {
+                    "scope": "member",
+                    "ref": "A|u1",
+                    "envelope": {
+                        "document": {
+                            "customer_id": "A",
+                            "subject": "u1",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": true,
+                                "seat": "not_applicable"
+                            },
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "SLB+BW8Co71INQS54VyQ3Q2XPUXjM8vgtSdXLUiAXr9CK3+mc8EkLCY96kATUCbxWP6RfDCwS/4ITH/h9K0eBw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "no_entitlement",
+                "basis": null
+            }
+        },
+        {
+            "name": "switching_company_expired",
+            "why": "The same user in company B whose subscription has expired.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "B",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "B",
+                    "envelope": {
+                        "document": {
+                            "state": "expired",
+                            "customer_id": "B",
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "GfjEL6MgezkZqdcZ4eHod46KaxRnxzKJQf83QW+yeeH9B8ZbDwaUA8/9FNaT0VjQRqTX34iV6+QW7ABRU7DGDw=="
+                        }
+                    }
+                },
+                {
+                    "scope": "member",
+                    "ref": "A|u1",
+                    "envelope": {
+                        "document": {
+                            "customer_id": "A",
+                            "subject": "u1",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": true,
+                                "seat": "not_applicable"
+                            },
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "SLB+BW8Co71INQS54VyQ3Q2XPUXjM8vgtSdXLUiAXr9CK3+mc8EkLCY96kATUCbxWP6RfDCwS/4ITH/h9K0eBw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "expired",
+                "tier": "free",
+                "reason": "expired",
+                "basis": "company_wide"
+            }
+        },
+        {
+            "name": "misfiled_member_document",
+            "why": "A genuine paid member document of company A filed under company B.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "B",
+                "subject": "u1",
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "member",
+                    "ref": "B|u1",
+                    "envelope": {
+                        "document": {
+                            "customer_id": "A",
+                            "subject": "u1",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": true,
+                                "seat": "not_applicable"
+                            },
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "SLB+BW8Co71INQS54VyQ3Q2XPUXjM8vgtSdXLUiAXr9CK3+mc8EkLCY96kATUCbxWP6RfDCwS/4ITH/h9K0eBw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "identity_mismatch",
+                "basis": null
+            }
+        },
+        {
+            "name": "misfiled_company_document",
+            "why": "A genuine paid company document of A filed under B.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "B",
+                "subject": null,
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "B",
+                    "envelope": {
+                        "document": {
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "yKEdetUy8FLguYU4vvqrn3S6zrsC6kB8BQ+pQSjV1TCbk1K3U5cLmzcpDZlG0ouOyHvKWAjUq57+GT986aoXBw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "identity_mismatch",
+                "basis": null
+            }
+        },
+        {
+            "name": "member_document_of_another_user",
+            "why": "u1's member document filed under u9.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u9",
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "member",
+                    "ref": "A|u9",
+                    "envelope": {
+                        "document": {
+                            "customer_id": "A",
+                            "subject": "u1",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": true,
+                                "seat": "not_applicable"
+                            },
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "SLB+BW8Co71INQS54VyQ3Q2XPUXjM8vgtSdXLUiAXr9CK3+mc8EkLCY96kATUCbxWP6RfDCwS/4ITH/h9K0eBw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "identity_mismatch",
+                "basis": null
+            }
+        },
+        {
+            "name": "wrong_product",
+            "why": "A genuine paid document for another product.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "product_id": "remote",
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "kN+4zy/AgknMOPPPmMwGZ2slgyWYeyypqgSNwrHEaxdh7KYfoWnR8XVbGOjMgWm7W8rQ8SETIFk9HHA8VT+dAw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "identity_mismatch",
+                "basis": null
+            }
+        },
+        {
+            "name": "personal_licence_in_personal_context",
+            "why": "A personal, user-scoped licence applies in a personal context.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": null,
+                "subject": "u1",
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "user",
+                    "ref": "u1",
+                    "envelope": {
+                        "document": {
+                            "scope": "user",
+                            "customer_id": null,
+                            "subject": "u1",
+                            "plan_code": "CHAT_PERSONAL",
+                            "eligibility": {
+                                "model": "personal",
+                                "member": null,
+                                "seat": "not_applicable"
+                            },
+                            "contract": "aicountly.licence/1",
+                            "product_id": "chat",
+                            "licence_id": "LIC-000123",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "eR27j3peYV3LGzIjP23dVkxKfboIByfWKOr+a4Jfn6fNqUxcSW2F2WsfJihJfWNp+Y37Y0r2UDE2kKzHg7w0Bg=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "paid",
+                "tier": "paid",
+                "reason": "paid",
+                "basis": "personal"
+            }
+        },
+        {
+            "name": "personal_licence_not_carried_into_a_company",
+            "why": "It is not carried into a company context where the company has no licence for the user.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "Z",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "user",
+                    "ref": "u1",
+                    "envelope": {
+                        "document": {
+                            "scope": "user",
+                            "customer_id": null,
+                            "subject": "u1",
+                            "plan_code": "CHAT_PERSONAL",
+                            "eligibility": {
+                                "model": "personal",
+                                "member": null,
+                                "seat": "not_applicable"
+                            },
+                            "contract": "aicountly.licence/1",
+                            "product_id": "chat",
+                            "licence_id": "LIC-000123",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "eR27j3peYV3LGzIjP23dVkxKfboIByfWKOr+a4Jfn6fNqUxcSW2F2WsfJihJfWNp+Y37Y0r2UDE2kKzHg7w0Bg=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "no_entitlement",
+                "basis": null
+            }
+        },
+        {
+            "name": "company_licence_is_not_personal",
+            "why": "A company licence does not make a personal context paid.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": null,
+                "subject": "u1",
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "yKEdetUy8FLguYU4vvqrn3S6zrsC6kB8BQ+pQSjV1TCbk1K3U5cLmzcpDZlG0ouOyHvKWAjUq57+GT986aoXBw=="
+                        }
+                    }
+                },
+                {
+                    "scope": "member",
+                    "ref": "A|u1",
+                    "envelope": {
+                        "document": {
+                            "customer_id": "A",
+                            "subject": "u1",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": true,
+                                "seat": "not_applicable"
+                            },
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "product_id": "chat",
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "SLB+BW8Co71INQS54VyQ3Q2XPUXjM8vgtSdXLUiAXr9CK3+mc8EkLCY96kATUCbxWP6RfDCwS/4ITH/h9K0eBw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "no_entitlement",
+                "basis": null
+            }
+        },
+        {
+            "name": "personal_context_without_user",
+            "why": "No company and no user: nothing to evaluate.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": null,
+                "subject": null,
+                "membership_verified": null
+            },
+            "envelopes": [],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "no_context",
+                "basis": null
+            }
+        },
+        {
+            "name": "free_plan",
+            "why": "The company is on a free plan.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "state": "free",
+                            "licence_id": null,
+                            "plan_class": "free",
+                            "kind": "free",
+                            "valid_until": null,
+                            "plan_code": "CHAT_FREE",
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "y1XnxBEZ3KffAnx15IomWMe8oflYhJ2dk7B8mxUTbznYVxgLZLBqM2eB/mmXCRgiP4ZoHUYkipn7Jy0XGQUfDQ=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "free",
+                "tier": "free",
+                "reason": "free",
+                "basis": "company_wide"
+            }
+        },
+        {
+            "name": "state_expired",
+            "why": "The backend states the licence has expired.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "state": "expired",
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "SwrCGn4OT26TGRLOtyswEz+OGPJzFRmEUxIjP2K+oUEVaWiCCXFNFZPPIphKOIbYVW5zMkj5c0Z7pNXRg/NLCg=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "expired",
+                "tier": "free",
+                "reason": "expired",
+                "basis": "company_wide"
+            }
+        },
+        {
+            "name": "valid_until_passed",
+            "why": "State still says paid but valid_until has passed by the time of use.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "valid_until": "2027-01-15T07:59:00Z",
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "RTkISmpORScEAZXSWnLJHNemqMz9DMyjFYMBJxzd/T8jarusHxFzSD7s9j9csZZmmiSNHSlcYR0zikmBhD0ADQ=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "expired",
+                "tier": "free",
+                "reason": "valid_until_passed",
+                "basis": "company_wide"
+            }
+        },
+        {
+            "name": "state_suspended",
+            "why": "The backend states the licence is suspended.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "state": "suspended",
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "0521zW3ZICohvCG0oUs8vPZTd/fxqRz3SJLwV4GoSlX6s3XO1bJQWGtYOltmPPx0sGYjujCp+vTB7JlCX6RmBw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "suspended",
+                "tier": "free",
+                "reason": "suspended",
+                "basis": "company_wide"
+            }
+        },
+        {
+            "name": "state_unknown",
+            "why": "The backend itself does not know.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "state": "unknown",
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "sPtJVT68WHQZojF9NmIA6b+jCRB453Y371kd1C/RP9KpkRsPBltAmFpVVt0Vb0H23k/IfrmbTUSTgq6537ClAg=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "central_unknown",
+                "basis": "company_wide"
+            }
+        },
+        {
+            "name": "stale_document",
+            "why": "Issued more than the maximum age (48 h) before use.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "issued_at": "2027-01-12T08:00:00Z",
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "CRBe0X4iIVXjGTEdCZ71aOt9Ux+mhhfANsIeCcvr3O4P8HRyn4H287j1o6Y8jn9atC+/DnPCbo0K/1gP++WyAA=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "stale",
+                "basis": null
+            }
+        },
+        {
+            "name": "issued_in_future",
+            "why": "Issued after \"now\" by more than the clock-skew allowance.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "issued_at": "2027-01-15T09:00:00Z",
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "Wa/ND/IMN2jG0Q/mZbeZH5ZR6tWg3WDCUSYlERJ1XLXzYpWkFr5ueOzE87yZxiKrUaqy8VV8qNW1aNajvQYvCQ=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "issued_in_future",
+                "basis": null
+            }
+        },
+        {
+            "name": "not_yet_valid",
+            "why": "valid_from is in the future.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "valid_from": "2027-01-15T09:00:00Z",
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "TYxP0CKvUFXG4OI2oGjXqD+WiLHJu4aLeFn7fnBYK1WD0cIeqbY3dvTuXQ4JGJiL8B1qv0b5PRZjPayCIkvrCw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "not_yet_valid",
+                "basis": "company_wide"
+            }
+        },
+        {
+            "name": "trial_is_not_paid_capacity",
+            "why": "A paid-state trial: the default policy admits kind \"paid\" only.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "kind": "trial",
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "+AlOitK8gahML3Fb+IIJaqGBH51NtDLew0RW2gE8RJ5sVhSXGCPAo9SnzSrbsk9dO5jo46mL172Hh2R6X0L8Cw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "free",
+                "tier": "free",
+                "reason": "kind_not_paid",
+                "basis": "company_wide"
+            }
+        },
+        {
+            "name": "company_revoked",
+            "why": "A revocation of the company document at its revision.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": null,
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "yKEdetUy8FLguYU4vvqrn3S6zrsC6kB8BQ+pQSjV1TCbk1K3U5cLmzcpDZlG0ouOyHvKWAjUq57+GT986aoXBw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [
+                {
+                    "customer": "A",
+                    "subject": null,
+                    "revision": 5
+                }
+            ],
+            "expect": {
+                "state": "suspended",
+                "tier": "free",
+                "reason": "revoked",
+                "basis": "company_wide"
+            }
+        },
+        {
+            "name": "company_revocation_of_older_revision",
+            "why": "A revocation of an OLDER revision does not affect a newer document.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": null,
+                "membership_verified": null
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "yKEdetUy8FLguYU4vvqrn3S6zrsC6kB8BQ+pQSjV1TCbk1K3U5cLmzcpDZlG0ouOyHvKWAjUq57+GT986aoXBw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [
+                {
+                    "customer": "A",
+                    "subject": null,
+                    "revision": 4
+                }
+            ],
+            "expect": {
+                "state": "paid",
+                "tier": "paid",
+                "reason": "paid",
+                "basis": "company_wide"
+            }
+        },
+        {
+            "name": "tampered_field",
+            "why": "A field edited after signing.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_ENTERPRISE",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "yKEdetUy8FLguYU4vvqrn3S6zrsC6kB8BQ+pQSjV1TCbk1K3U5cLmzcpDZlG0ouOyHvKWAjUq57+GT986aoXBw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "signature_invalid",
+                "basis": null
+            }
+        },
+        {
+            "name": "unsigned",
+            "why": "No signature at all.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "signature_invalid",
+                "basis": null
+            }
+        },
+        {
+            "name": "signed_by_another_key",
+            "why": "Signed by a key the product does not hold, under a known key id.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "K3nJ46CyGN+tH5iJYcqujVzlngxW3I5LHCXv7iAC2fyMpWtpzzhLuqZK2kp+RsGpBUEb0bN4ytPb7+Nga7wIDA=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "signature_invalid",
+                "basis": null
+            }
+        },
+        {
+            "name": "unknown_key_id",
+            "why": "Signed correctly but under a key id the product does not hold.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "rotated-away-key",
+                            "value": "yKEdetUy8FLguYU4vvqrn3S6zrsC6kB8BQ+pQSjV1TCbk1K3U5cLmzcpDZlG0ouOyHvKWAjUq57+GT986aoXBw=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "signature_invalid",
+                "basis": null
+            }
+        },
+        {
+            "name": "malformed_paid_without_licence",
+            "why": "State paid but no licence_id: refused as malformed.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "licence_id": null,
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z",
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": null,
+                                "seat": "not_applicable"
+                            }
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "EwHZGcPNbtCnFrfZlHlZhBihOR0dfpB4hsWsrUWz5hGmqQQ4znHWV+WW1jixKy7Lne9GbncNUb0moilpNeZyCA=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "malformed",
+                "basis": null
+            }
+        },
+        {
+            "name": "malformed_member_claim_on_company_document",
+            "why": "A company-level document that claims a membership: refused as malformed.",
+            "now": 1800000000,
+            "product": "chat",
+            "context": {
+                "customer": "A",
+                "subject": "u1",
+                "membership_verified": true
+            },
+            "envelopes": [
+                {
+                    "scope": "customer",
+                    "ref": "A",
+                    "envelope": {
+                        "document": {
+                            "eligibility": {
+                                "model": "company_wide",
+                                "member": true,
+                                "seat": "not_applicable"
+                            },
+                            "contract": "aicountly.licence/1",
+                            "scope": "company",
+                            "customer_id": "A",
+                            "product_id": "chat",
+                            "subject": null,
+                            "licence_id": "LIC-000123",
+                            "plan_code": "CHAT_TEAM",
+                            "plan_class": "paid",
+                            "kind": "paid",
+                            "state": "paid",
+                            "valid_from": "2027-01-14T08:00:00Z",
+                            "valid_until": "2027-02-14T08:00:00Z",
+                            "entitlements": [
+                                {
+                                    "code": "meeting.max_guests",
+                                    "value": 10
+                                }
+                            ],
+                            "revision": 5,
+                            "issued_at": "2027-01-15T07:50:00Z"
+                        },
+                        "signature": {
+                            "alg": "ed25519",
+                            "kid": "contract-test-1",
+                            "value": "/47ICPay/3ZzE8+R63i5TIWQc/ogdywo58/+4fsWLK6c1Am8eCaq90Ha8nHRtmCY6DlewJokAYrDOTegoEZCDg=="
+                        }
+                    }
+                }
+            ],
+            "revocations": [],
+            "expect": {
+                "state": "unknown",
+                "tier": "free",
+                "reason": "malformed",
+                "basis": null
+            }
+        }
+    ]
+}
