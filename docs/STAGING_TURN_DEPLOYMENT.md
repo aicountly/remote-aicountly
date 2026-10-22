@@ -455,3 +455,34 @@ wrong on the relays: they answer, present valid certificates, and refuse anonymo
 
 **Next run** (after the two node secrets are set — §3): `gh workflow run deploy-sandbox.yml --repo aicountly/remote-aicountly --ref claude/webrtc-turn-ice-integration -f migrate=apply -f turn_config=skip -f turn_check=true`
 and the same for Connect. The check then performs the authenticated allocation and the wrong-secret / expired-credential refusals on both nodes.
+
+### 2026-10-22 (later) — authenticated relay tests, with the node secrets in place
+
+| Run | Result |
+|---|---|
+| Remote [39824388385](https://github.com/aicountly/remote-aicountly/actions/runs/39824388385) (`4861b6f`, turn_check=true) | **Success** |
+| Connect [39824392161](https://github.com/aicountly/connect-aicountly/actions/runs/39824392161) (`3a9b7e2`, turn_check=true) | **Success** (live app verified from the server after the runner met the anti-bot page — the fallback working as intended) |
+
+Measured from the sandbox API host, identical for both products (`relay configured: yes`, both nodes `SERVING (paid yes, free yes)`, admission `observe`,
+no shared-secret warning — the two nodes have distinct secrets):
+
+| Runbook A2 check | Mumbai | Noida |
+|---|---|---|
+| Name → expected address | ✅ 148.135.210.65 | ✅ 103.69.196.150 |
+| Authenticated **allocation** UDP 3478 | ✅ 7–8 ms | ✅ 103–115 ms |
+| Authenticated **allocation** TCP 3478 | ✅ 5–10 ms | ✅ 137–158 ms |
+| Authenticated **allocation** TLS 443 | ✅ 21–28 ms | ✅ 298–309 ms |
+| Certificate on 443 | ✅ verified, Let's Encrypt YE2, to 2027-01-19 | ✅ verified, Let's Encrypt YE2, to 2027-01-19 |
+| Wrong-secret credential refused (all transports) | ✅ REJECTED | ✅ REJECTED |
+| Expired credential refused (all transports) | ✅ REJECTED | ✅ REJECTED |
+| No credential refused (all transports) | ✅ REJECTED | ✅ REJECTED |
+| Probe exit code | ✅ 0 (PASS) | ✅ 0 (PASS) |
+
+Note: the deploy's secret-injection step still received **empty** values ("empty, ignored") — the node secrets were already in the sandbox's
+`api/.env`, which the injector keeps. If they were also added as repository secrets, the names or scope differ from `SANDBOX_TURN_MUM_SECRET` /
+`SANDBOX_TURN_NCR_SECRET` (repository-level), so a future rotation through the workflow would not reach the server until that is aligned.
+
+Not yet run (needs people, browsers or longer windows): Runbook A3 (what an established allocation does when its credential expires), Part B (Chromium
+relay checks from ordinary and restrictive networks), Part C (Remote sessions and the desktop agent end to end), Connect calls/rooms with `company_id`,
+Part D/G (failover and regional routing from real networks), Part F (capacity measurements). Noida remains out of production.
+
