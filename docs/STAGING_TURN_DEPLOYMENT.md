@@ -418,3 +418,40 @@ complete; in `observe` the books show what *would* have been refused (`reason` i
 See the PR descriptions and `docs/LAUNCH_READINESS_TURN.md` §1a. In short: the central licensing backend and its connection to both products (`docs/LICENCE_ENTITLEMENT_CONTRACT.md`, `docs/LICENCE_ENTITLEMENT_AUDIT.md` §3);
 measured capacities (Runbook F); tier-split relays + shaper + TLS-443 decision (`docs/TURN_BANDWIDTH_ENFORCEMENT.md`); Noida security
 clearance; production ledger adoption; the node-side collector and probe cron jobs installed.
+
+## 12. Staging run log
+
+### 2026-10-22 — first deployment of the integration branch to the OVH sandbox (Server 1, `server1`)
+
+| Run | Result |
+|---|---|
+| Remote [39806100771](https://github.com/aicountly/remote-aicountly/actions/runs/39806100771) (`b867a43`, turn_config=apply, turn_check=true) | Deployed (web, API, migrations, observe config). **Verify the live app failed**: the runner was refused by Imunify360 bot-protection (HTTP 403), which `verify-live.sh` did not recognise as the anti-bot page → fixed in `7f2372b` |
+| Remote [39806767658](https://github.com/aicountly/remote-aicountly/actions/runs/39806767658) (`7f2372b`) | **Success** — live app verified from the server; TURN check ran |
+| Connect [39806772545](https://github.com/aicountly/connect-aicountly/actions/runs/39806772545) (`5f418fe`, turn_config=apply, turn_check=true) | **Success** — web, API, migrations (incl. 16: `connect_license_tier`, `connect_rooms.licence_customer_id`), observe config, live app verified; TURN check ran |
+
+The production-target guard passed in all three runs. Production was not touched.
+
+**Measured from the sandbox API host** (`scripts/ci/turn-staging-check.sh`; identical results from both products):
+
+| | Mumbai `turn-mum.aicountly.com` | Noida `turn-ncr.aicountly.com` |
+|---|---|---|
+| DNS → expected address | ✅ 148.135.210.65 | ✅ 103.69.196.150 |
+| STUN binding UDP 3478 / TCP 3478 / TLS 443 | ✅ 6–14 ms / 5–12 ms / 12–20 ms | ✅ 55–59 ms / 100–116 ms / 232–251 ms |
+| TLS certificate on 443 | ✅ verified, Let's Encrypt YE2, valid to 2027-01-19 (88 days) | ✅ verified, Let's Encrypt YE2, valid to 2027-01-19 (88 days) |
+| Anonymous allocation refused (UDP/TCP/TLS) | ✅ REJECTED | ✅ REJECTED |
+| **Authenticated allocation** | ❌ not run — `no_credentials` | ❌ not run — `no_credentials` |
+| Wrong-secret / expired credential refused | ⏸ inconclusive (needs the node secret) | ⏸ inconclusive |
+
+**Why allocation did not run:** the repository secrets `SANDBOX_TURN_MUM_SECRET` and `SANDBOX_TURN_NCR_SECRET` are not set in either
+repository (the injector reported "empty, ignored"), so the API has no node secret to mint a credential with (`relay configured: NO`). Nothing was
+wrong on the relays: they answer, present valid certificates, and refuse anonymous use.
+
+**Other findings:**
+* The sandbox's PHP (ea-php83 8.3.35) has **no `sodium` extension**. TURN does not need it; central licence verification does. Fixed in the kit by a
+  fallback to `paragonie/sodium_compat` (verified to agree with ext-sodium on all 45 signed vector envelopes) — but neither product installs that
+  package yet. Preferred fix: enable `ea-php83-php-sodium` in WHM → EasyApache 4 (one extension, no code change).
+* `WEBRTC_LICENCE_PUBLIC_KEYS` unset, ledger DSN unset (by design until §4), licence resolution `unknown/free` — expected: observe mode, no central source.
+* The licence gate holds observe as designed.
+
+**Next run** (after the two node secrets are set — §3): `gh workflow run deploy-sandbox.yml --repo aicountly/remote-aicountly --ref claude/webrtc-turn-ice-integration -f migrate=apply -f turn_config=skip -f turn_check=true`
+and the same for Connect. The check then performs the authenticated allocation and the wrong-secret / expired-credential refusals on both nodes.
