@@ -5,6 +5,8 @@
 # request is being verified...") answers some requests from GitHub's runners with HTTP 200 and
 # an HTML challenge. A check that looks only at the status code passes on it without ever
 # reaching the app; a check that looks at the body fails on it although the app is fine.
+# Imunify360 may instead refuse a runner outright (HTTP 403, "Access denied by Imunify360 bot-protection"): that is the
+# same situation, so it is treated as the splash and the request is repeated from the server itself.
 #
 # So every check here needs the real answer: JSON that matches a jq filter, a page that
 # contains a string only this build has, or — for a path that must not be served — a refusal.
@@ -85,7 +87,7 @@ if [ "$force_server" = 1 ] && [ -z "$ssh_prefix" ]; then
   echo "::error title=Post-deploy check::${label}: VERIFY_FORCE_SERVER=1 needs VERIFY_SSH" >&2
   exit 2
 fi
-splash='request is being verified|<title>One moment, please'
+splash='request is being verified|<title>One moment, please|Access denied by Imunify360 bot-protection'
 range="" # absent: never fetch more of a file than it takes to judge it
 [ "$mode" = absent ] && range=0-65535
 tmp="$(mktemp -d)"

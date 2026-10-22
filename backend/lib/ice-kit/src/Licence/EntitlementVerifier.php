@@ -43,10 +43,29 @@ final class EntitlementVerifier
         return new self($keys);
     }
 
-    /** Whether a signature can be checked at all: libsodium present and at least one key configured. */
+    /**
+     * Whether a signature can be checked at all: Ed25519 verification present and at least one key configured.
+     *
+     * The PHP `sodium` extension is preferred. Some hosting PHP builds ship without it (the OVH/WHM sandbox's ea-php83 does —
+     * found by the first staging check); there, paragonie/sodium_compat, if the product has installed it, verifies the same
+     * signatures in pure PHP. With neither, nothing is ever central-paid (`verifier_unavailable`) and the readiness gate says so.
+     */
     public function available(): bool
     {
-        return function_exists('sodium_crypto_sign_verify_detached') && $this->publicKeys !== [];
+        return self::ed25519() !== null && $this->publicKeys !== [];
+    }
+
+    /** @return (\Closure(string, string, string): bool)|null verify(signature, message, publicKey) */
+    private static function ed25519(): ?\Closure
+    {
+        if (function_exists('sodium_crypto_sign_verify_detached')) {
+            return static fn (string $sig, string $msg, string $key): bool => sodium_crypto_sign_verify_detached($sig, $msg, $key);
+        }
+        if (class_exists('ParagonIE_Sodium_Compat') && method_exists('ParagonIE_Sodium_Compat', 'crypto_sign_verify_detached')) {
+            return static fn (string $sig, string $msg, string $key): bool => (bool) \ParagonIE_Sodium_Compat::crypto_sign_verify_detached($sig, $msg, $key);
+        }
+
+        return null;
     }
 
     /** @return list<string> */
@@ -68,11 +87,11 @@ final class EntitlementVerifier
         }
         $key = $this->publicKeys[$sig['kid']] ?? null;
         $raw = base64_decode($sig['value'], true);
-        if ($key === null || $raw === false || strlen($raw) !== SODIUM_CRYPTO_SIGN_BYTES) {
+        if ($key === null || $raw === false || strlen($raw) !== 64) {
             return false;
         }
         try {
-            return sodium_crypto_sign_verify_detached($raw, Canonical::json($doc), $key);
+            return (self::ed25519())($raw, Canonical::json($doc), $key);
         } catch (\Throwable) {
             return false;
         }

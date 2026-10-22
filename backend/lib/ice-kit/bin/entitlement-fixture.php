@@ -50,8 +50,10 @@ $fail = static function (string $msg): never {
     fwrite(STDERR, "entitlement-fixture: {$msg}\n");
     exit(2);
 };
-if (! function_exists('sodium_crypto_sign_keypair')) {
-    $fail('libsodium is required');
+// Making keys and signing happen on an admin machine and need libsodium; loading, revoking and resolving run on the API host
+// and need only verification (the sodium extension, or paragonie/sodium_compat where the host's PHP has no sodium).
+if (in_array($cmd, ['keys', 'sign'], true) && ! function_exists('sodium_crypto_sign_keypair')) {
+    $fail('libsodium is required to make keys and sign (run this on an admin machine with the PHP sodium extension)');
 }
 $iso = static fn (int $t): string => gmdate('Y-m-d\TH:i:s\Z', $t);
 

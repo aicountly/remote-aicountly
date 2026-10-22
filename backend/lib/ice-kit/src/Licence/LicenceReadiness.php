@@ -27,7 +27,7 @@ final class LicenceReadiness
             $why[] = 'the central licence API is not configured (WEBRTC_LICENCE_API_URL, _KEY_ID, _ENVIRONMENT and the _S2S_SECRET): it does not exist yet or this product has not been connected to it';
         }
         if (! $verifier->available()) {
-            $why[] = 'entitlement signatures cannot be verified (WEBRTC_LICENCE_PUBLIC_KEYS empty or libsodium missing)';
+            $why[] = 'entitlement signatures cannot be verified (WEBRTC_LICENCE_PUBLIC_KEYS empty, or neither the PHP sodium extension nor paragonie/sodium_compat is available)';
         }
         if (! $policy->explicitMaxAge) {
             $why[] = 'WEBRTC_TURN_ENTITLEMENT_MAX_AGE_HOURS is not set: a stopped feed would leave customers paid for the default period unreviewed';
