@@ -37,6 +37,7 @@ final class ActiveActiveIceApiTest extends RemoteTestCase
 
     private MemoryEntitlementCache $central;
     private string $centralKey = '';
+    private string $centralPub = '';
 
     /** @var list<string> what the licence readiness check reports; empty = the central source is operational and validated */
     private array $licenceBlockers = [];
@@ -93,6 +94,7 @@ final class ActiveActiveIceApiTest extends RemoteTestCase
         // test controls. Legacy plan mapping (above) is the compatibility path while no central entitlement exists.
         $pair             = sodium_crypto_sign_keypair();
         $this->centralKey = sodium_crypto_sign_secretkey($pair);
+        $this->centralPub = sodium_crypto_sign_publickey($pair);
         $this->central    = new MemoryEntitlementCache();
         Services::injectMock('iceConfigService', new IceConfigService(
             Services::remoteConfig(),
@@ -254,7 +256,8 @@ final class ActiveActiveIceApiTest extends RemoteTestCase
     {
         $now = time();
         $doc = $over + [
-            'contract' => 'aicountly.licence/1', 'customer_id' => (string) $companyId, 'product_id' => 'remote', 'subject' => null,
+            'contract' => 'aicountly.licence/1', 'scope' => 'company', 'customer_id' => (string) $companyId, 'product_id' => 'remote', 'subject' => null,
+            'eligibility' => ['model' => 'company_wide', 'member' => null, 'seat' => 'not_applicable'],
             'licence_id' => 'LIC-000' . $companyId, 'plan_code' => 'CENTRAL_PRO', 'plan_class' => 'paid', 'kind' => 'paid', 'state' => 'paid',
             'valid_from' => gmdate('Y-m-d\TH:i:s\Z', $now - 86400), 'valid_until' => gmdate('Y-m-d\TH:i:s\Z', $now + 86400 * 30),
             'entitlements' => [], 'revision' => 3, 'issued_at' => gmdate('Y-m-d\TH:i:s\Z', $now - 60),
@@ -323,6 +326,69 @@ final class ActiveActiveIceApiTest extends RemoteTestCase
         $this->central->put('customer', '502', 'remote', $this->centralEnvelope(502, ['issued_at' => gmdate('Y-m-d\TH:i:s\Z', time() - 4 * 86400)]), time());
         $this->assertSame('free', $this->iceFor($stale)['admission']['tier']);
         $this->assertSame('stale', Services::iceConfigService()->licenceForSession(['company_id' => 502])->reason);
+    }
+
+    /** The platform uuid of the identity that owns the session — the licence subject. */
+    private function ownerUuid(array $s): string
+    {
+        $row = $this->db->table('remote_identities')->select('platform_uuid')->where('id', (int) $s['session']['owner_user_id'])->get()->getRowArray();
+
+        return (string) $row['platform_uuid'];
+    }
+
+    public function testASessionIsLicensedInItsCompanyContextAndOnlyForACurrentOwnerMember(): void
+    {
+        $s = $this->sessionOn(510, 'REMOTE_FREE', 'ctx');
+        $this->central->put('customer', '510', 'remote', $this->centralEnvelope(510), time());
+        $this->assertSame('paid', $this->iceFor($s)['admission']['tier'], 'a company-wide licence, and the owner is a current member');
+
+        // The owner is removed from the company (Manage says so; the projection row is gone): the session is no longer licensed.
+        $this->db->table('remote_user_company_access')->where('company_id', 510)->where('user_id', (int) $s['session']['owner_user_id'])->delete();
+        $this->assertSame('free', $this->iceFor($s)['admission']['tier']);
+        $this->assertSame('not_a_member', Services::iceConfigService()->licenceForSession($s['session'])->reason);
+    }
+
+    public function testAnOwnerWhoseMembershipCannotBeConfirmedIsNotTreatedAsAMember(): void
+    {
+        $this->configureRemote(static function (RemoteConfig $config): void {
+            $config->membershipEnforcement  = true;
+            $config->membershipGraceSeconds = 3600;
+        });
+        Services::injectMock('iceConfigService', new IceConfigService(Services::remoteConfig(), new LicenceResolver($this->central, new EntitlementVerifier(['central-test' => $this->centralPub]), new LicencePolicy(172800, ['paid'], true, true)), fn (): array => $this->licenceBlockers));
+
+        $s = $this->sessionOn(511, 'REMOTE_FREE', 'unconfirmed');
+        $this->central->put('customer', '511', 'remote', $this->centralEnvelope(511), time());
+        $uid = (int) $s['session']['owner_user_id'];
+
+        // Manage has never confirmed the owner's membership (verified_at is NULL): paid company, unverified member = not paid.
+        $this->db->table('remote_user_company_access')->where('company_id', 511)->where('user_id', $uid)->update(['verified_at' => null]);
+        $this->assertSame('membership_unverified', Services::iceConfigService()->licenceForSession($s['session'])->reason);
+
+        // Confirmed just now: paid. Confirmed longer ago than the grace period: not confirmed again.
+        $this->db->table('remote_user_company_access')->where('company_id', 511)->where('user_id', $uid)->update(['verified_at' => gmdate('Y-m-d H:i:s')]);
+        $this->assertSame('paid', Services::iceConfigService()->licenceForSession($s['session'])->state->value);
+        $this->db->table('remote_user_company_access')->where('company_id', 511)->where('user_id', $uid)->update(['verified_at' => gmdate('Y-m-d H:i:s', time() - 7200)]);
+        $this->assertSame('membership_unverified', Services::iceConfigService()->licenceForSession($s['session'])->reason);
+    }
+
+    public function testASeatLicenceNeedsTheOwnerToHoldASeatAndOtherCompaniesSeatsDoNotCount(): void
+    {
+        $s = $this->sessionOn(512, 'REMOTE_FREE', 'seat');
+        $owner = $this->ownerUuid($s);
+        $seatCompany = $this->centralEnvelope(512, ['eligibility' => ['model' => 'seat', 'member' => null, 'seat' => 'not_applicable']]);
+        $this->central->put('customer', '512', 'remote', $seatCompany, time());
+        $this->assertSame('free', $this->iceFor($s)['admission']['tier'], 'a seat licence is not satisfied by membership alone');
+
+        $assigned = $this->centralEnvelope(512, ['subject' => $owner, 'eligibility' => ['model' => 'seat', 'member' => true, 'seat' => 'assigned']]);
+        $this->central->put('member', '512|' . $owner, 'remote', $assigned, time());
+        $this->assertSame('paid', $this->iceFor($s)['admission']['tier']);
+        $this->assertSame('seat', Services::iceConfigService()->licenceForSession($s['session'])->basis);
+
+        // The same owner's seat in ANOTHER company (513) does nothing for this session, and revoking it here ends this one's.
+        $other = $this->sessionOn(513, 'REMOTE_FREE', 'seat-other');
+        $this->assertSame('free', $this->iceFor($other)['admission']['tier']);
+        $this->central->revoke('512', 'remote', 3, time(), $owner);
+        $this->assertSame('free', $this->iceFor($s)['admission']['tier'], 'seat revoked');
     }
 
     public function testAPersonalSessionWithNoCompanyIsFree(): void

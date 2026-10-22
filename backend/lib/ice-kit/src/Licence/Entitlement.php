@@ -15,12 +15,15 @@ namespace Aicountly\Ice\Licence;
 final class Entitlement
 {
     public const CONTRACT = 'aicountly.licence/1';
+    public const COMPANY  = 'company';
+    public const USER     = 'user';
 
     private const TIME = '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/';
 
     /** @param list<array{code: string, value: string|int|bool}> $entitlements */
     private function __construct(
-        public readonly string $customerId,
+        public readonly string $scope,
+        public readonly ?string $customerId,
         public readonly string $productId,
         public readonly ?string $subject,
         public readonly ?string $licenceId,
@@ -33,6 +36,9 @@ final class Entitlement
         public readonly array $entitlements,
         public readonly int $revision,
         public readonly int $issuedAt,
+        public readonly string $model,
+        public readonly ?bool $member,
+        public readonly string $seat,
     ) {
     }
 
@@ -46,9 +52,44 @@ final class Entitlement
             throw new \InvalidArgumentException('contract must be ' . self::CONTRACT);
         }
 
-        $customer = self::id($doc['customer_id'] ?? null, 'customer_id', 64);
+        $scope = $doc['scope'] ?? null;
+        if (! in_array($scope, [self::COMPANY, self::USER], true)) {
+            throw new \InvalidArgumentException('scope must be company or user');
+        }
+        $customer = ($doc['customer_id'] ?? null) === null ? null : self::id($doc['customer_id'], 'customer_id', 64);
         $product  = self::id($doc['product_id'] ?? null, 'product_id', 32);
         $subject  = ($doc['subject'] ?? null) === null ? null : self::id($doc['subject'], 'subject', 64);
+
+        if ($scope === self::COMPANY && $customer === null) {
+            throw new \InvalidArgumentException('a company-scoped entitlement needs a customer_id');
+        }
+        if ($scope === self::USER && ($customer !== null || $subject === null)) {
+            throw new \InvalidArgumentException('a user-scoped (personal) entitlement has a subject and no customer_id');
+        }
+
+        $elig = $doc['eligibility'] ?? null;
+        if (! is_array($elig) || array_is_list($elig)) {
+            throw new \InvalidArgumentException('eligibility must be an object {model, member, seat}');
+        }
+        $model  = $elig['model'] ?? null;
+        $member = $elig['member'] ?? null;
+        $seat   = $elig['seat'] ?? null;
+        if (! in_array($model, ['company_wide', 'seat', 'personal'], true) || ! ($member === null || is_bool($member))
+            || ! in_array($seat, ['assigned', 'unassigned', 'revoked', 'not_applicable'], true)) {
+            throw new \InvalidArgumentException('eligibility needs model company_wide|seat|personal, member true|false|null and seat assigned|unassigned|revoked|not_applicable');
+        }
+        if ($scope === self::USER && ($model !== 'personal' || $member !== null || $seat !== 'not_applicable')) {
+            throw new \InvalidArgumentException('a personal entitlement has model personal, member null and seat not_applicable');
+        }
+        if ($scope === self::COMPANY && $model === 'personal') {
+            throw new \InvalidArgumentException('model personal belongs to a user-scoped entitlement');
+        }
+        if ($scope === self::COMPANY && $subject === null && ($member !== null || $seat !== 'not_applicable')) {
+            throw new \InvalidArgumentException('a company-level entitlement (no subject) states no membership or seat');
+        }
+        if ($scope === self::COMPANY && $subject !== null && ($member === null || ($model === 'seat') === ($seat === 'not_applicable'))) {
+            throw new \InvalidArgumentException('a member-level entitlement states membership, and a seat status exactly when the model is seat');
+        }
 
         $licence = ($doc['licence_id'] ?? null) === null ? null : self::id($doc['licence_id'], 'licence_id', 64);
         $plan    = ($doc['plan_code'] ?? null) === null ? null : self::id($doc['plan_code'], 'plan_code', 64);
@@ -102,7 +143,13 @@ final class Entitlement
             throw new \InvalidArgumentException('issued_at is required');
         }
 
-        return new self($customer, $product, $subject, $licence, $plan, $planClass, $kind, $state, $from, $until, $ents, $revision, $issued);
+        return new self($scope, $customer, $product, $subject, $licence, $plan, $planClass, $kind, $state, $from, $until, $ents, $revision, $issued, $model, $member, $seat);
+    }
+
+    /** The cache ref of a member-level entitlement. Ids never contain `|`, so the pair cannot be forged by concatenation. */
+    public static function memberRef(string $customerId, string $subject): string
+    {
+        return $customerId . '|' . $subject;
     }
 
     /** The value of one named entitlement, or null. */

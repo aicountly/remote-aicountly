@@ -9,6 +9,7 @@ use Aicountly\Ice\GeoHeaders;
 use Aicountly\Ice\IceGrant;
 use Aicountly\Ice\IceIssuer;
 use Aicountly\Ice\IceRuntime;
+use Aicountly\Ice\Licence\LicenceContext;
 use Aicountly\Ice\Licence\LicenceResolver;
 use Aicountly\Ice\Licence\LicenceRuntime;
 use Aicountly\Ice\Licence\LicenceState;
@@ -129,8 +130,14 @@ class IceConfigService
     }
 
     /**
-     * The licence resolution for the company that owns the session: state (free / paid / expired / suspended / unknown),
-     * the reason, and how much the evidence is worth (`central` / `compat` / `none`).
+     * The licence resolution for a session, CONTEXTUALLY: the company that owns it (the active company context — a server-side
+     * fact, never a request field), the session's owner as the acting user, and product `remote`. The owner's CURRENT membership of
+     * that company is Remote's own evidence (the access projection, confirmed against Manage within the grace period); the central
+     * entitlement must also state it, and for a seat licence name the owner's seat. State (free / paid / expired / suspended /
+     * unknown), the reason, the basis (company-wide, seat) and how much the evidence is worth (`central` / `compat` / `none`).
+     *
+     * Every participant of the session — the technician, the customer, a guest viewer — is accounted to this one licensed session;
+     * none of them is classified on their own account here.
      *
      * @param array<string, mixed> $session
      */
@@ -142,14 +149,47 @@ class IceConfigService
         }
 
         try {
-            return $this->licence()->forCustomer(
-                (string) (int) $company,
-                self::LICENCE_PRODUCT,
+            [$subject, $member] = $this->owner((int) $company, $session['owner_user_id'] ?? null);
+
+            return $this->licence()->forContext(
+                new LicenceContext((string) (int) $company, self::LICENCE_PRODUCT, $subject, $member),
                 fn (): ?Resolution => $this->compatResolution((int) $company),
             );
         } catch (\Throwable) {
             return Resolution::unknown('lookup_failed');
         }
+    }
+
+    /**
+     * The session owner as a licence subject, and whether Remote can vouch that they are CURRENTLY a member of the company:
+     * true (an access row exists, and — where membership is enforced — Manage confirmed it within the grace period), false (no
+     * access row: not a member), null (cannot be confirmed: treated as not verified, never as a member).
+     *
+     * @return array{0: string|null, 1: bool|null}
+     */
+    private function owner(int $companyId, mixed $ownerIdentityId): array
+    {
+        if ($ownerIdentityId === null || $ownerIdentityId === '') {
+            return [null, null];
+        }
+        $db       = \Config\Database::connect();
+        $identity = $db->table('remote_identities')->select('platform_uuid')->where('id', (int) $ownerIdentityId)->get()->getRowArray();
+        if ($identity === null) {
+            return [null, null];
+        }
+        $subject = (string) $identity['platform_uuid'];
+
+        $row = $db->table('remote_user_company_access')->select('verified_at')->where('user_id', (int) $ownerIdentityId)->where('company_id', $companyId)->get()->getRowArray();
+        if ($row === null) {
+            return [$subject, false];
+        }
+        if (! $this->config->membershipEnforcement) {
+            return [$subject, true];
+        }
+        $verified = $row['verified_at'] ?? null;
+        $fresh    = $verified !== null && strtotime((string) $verified) >= time() - $this->config->membershipGraceSeconds;
+
+        return [$subject, $fresh ? true : null];
     }
 
     public function licence(): LicenceResolver

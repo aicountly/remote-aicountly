@@ -68,21 +68,30 @@ final class EntitlementSync
         return $stats;
     }
 
-    /** @param array<string, mixed> $change {customer_id, product_id, revision, revoked?} */
+    /**
+     * @param array<string, mixed> $change {customer_id|null, subject|null, product_id, revision, revoked?}: a company-level change
+     *        (subject null), one member's or seat holder's (both set — a member removed, a seat revoked), or a personal one (customer null)
+     */
     private function applyChange(array $change, int $now, array &$stats): void
     {
         $customer = $change['customer_id'] ?? null;
+        $subject  = $change['subject'] ?? null;
         $revision = $change['revision'] ?? null;
-        if (($change['product_id'] ?? null) !== $this->product || ! is_string($customer) || ! is_int($revision)) {
+        if (($change['product_id'] ?? null) !== $this->product || ! is_int($revision) || ! ($customer === null || is_string($customer))
+            || ! ($subject === null || is_string($subject)) || ($customer === null && $subject === null)) {
             $stats['rejected']++;
 
             return;
         }
         if (($change['revoked'] ?? false) === true) {
-            $this->cache->revoke($customer, $this->product, $revision, $now);
+            $this->cache->revoke($customer, $this->product, $revision, $now, $subject);
             $stats['revoked']++;
         }
-        $this->store($this->client->customer($customer, $this->product), $now, $stats);
+        $this->store(match (true) {
+            $customer === null => $this->client->personal((string) $subject, $this->product),
+            $subject === null  => $this->client->customer($customer, $this->product),
+            default            => $this->client->member($customer, $subject, $this->product),
+        }, $now, $stats);
     }
 
     /** @param array<string, mixed> $envelope */
@@ -100,8 +109,12 @@ final class EntitlementSync
 
             return;
         }
-        $scope = $e->subject === null ? EntitlementCache::CUSTOMER : EntitlementCache::SUBJECT;
-        $this->cache->put($scope, $e->subject ?? $e->customerId, $this->product, $envelope, $now);
+        [$scope, $ref] = match (true) {
+            $e->scope === Entitlement::USER => [EntitlementCache::USER, (string) $e->subject],
+            $e->subject !== null            => [EntitlementCache::MEMBER, Entitlement::memberRef((string) $e->customerId, $e->subject)],
+            default                         => [EntitlementCache::CUSTOMER, (string) $e->customerId],
+        };
+        $this->cache->put($scope, $ref, $this->product, $envelope, $now);
         $stats['stored']++;
     }
 }

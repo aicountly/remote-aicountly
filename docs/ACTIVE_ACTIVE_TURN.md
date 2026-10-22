@@ -268,7 +268,7 @@ Paid clients prefer their own instance (lower `priority`) and spill into the sha
   counts (report-only; leaked leases lapse with their credentials rather than being dropped).
 * **Licence entitlements (kit 1.4.0).** Who is paid is decided by the **central licensing backend**, not by Remote or Connect
   (`docs/LICENCE_ENTITLEMENT_CONTRACT.md`). A common adapter reads its Ed25519-signed entitlements — states free / paid / expired /
-  suspended / unknown, tenant-checked, fresh, revocable — and only a valid `paid` yields the paid capacity class; every doubt is free.
+  suspended / unknown, tenant-checked, fresh, revocable — and only a valid `paid` yields the paid capacity class; every doubt is free. Eligibility is **contextual and company-scoped**: the authenticated user, the active company, the product, verified current membership (and an assigned seat for seat licences); a company's licence never makes a user paid anywhere else, switching company recalculates, a personal licence is a separate user-scoped entitlement, and an external meeting guest is accounted to the paid host's licensed meeting (within plan limits) without any account being upgraded.
   The old per-product mappings (Remote's `WEBRTC_TURN_PAID_PLAN_CODES`, Connect's `connect_license_tier`) are a **development-time
   compatibility path** with weaker evidence. **Licence readiness gate:** `enforce` runs as `observe` — and `status.enforceBlockedBy` says why —
   until the central API is configured and syncing, keys are present, the maximum age is set, compat is denied and an operator has attested

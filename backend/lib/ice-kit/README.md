@@ -1,4 +1,4 @@
-# AICOUNTLY ICE kit (v1.4.0)
+# AICOUNTLY ICE kit (v1.5.0)
 
 The one way an AICOUNTLY product decides **which TURN relays a client may use** and **mints the
 short-lived credential for each**. Remote (`backend/lib/ice-kit`) and Connect
@@ -147,7 +147,7 @@ turnserver -o --listening-ip=127.0.0.1 --relay-ip=127.0.0.1 --realm=test --use-a
 ## Licence entitlements (v1.4)
 
 Who is *paid* is decided by the **central licensing backend**; products only consume its signed entitlements through `Aicountly\Ice\Licence`
-(`docs/LICENCE_ENTITLEMENT_CONTRACT.md`). `LicenceResolver::forCustomer()` / `forSubject()` return a `Resolution` — state
+(`docs/LICENCE_ENTITLEMENT_CONTRACT.md`). `LicenceResolver::forContext(LicenceContext)` (user + active company + product) returns a `Resolution` — state
 (free / paid / expired / suspended / unknown), reason, evidence (`central` / `compat` / `none`) — and only a valid, fresh, unrevoked,
 signature-verified, tenant-matched `paid` is `Tier::Paid`. `bin/sync-entitlements.php` keeps the cache current from the backend's snapshot and
 changes feed; `bin/entitlement-fixture.php` signs and loads test entitlements for staging; `tests/contract/licence-v1-vectors.json` are the

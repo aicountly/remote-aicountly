@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Aicountly\Ice\Tests;
 
 use Aicountly\Ice\Licence\EntitlementVerifier;
+use Aicountly\Ice\Licence\LicenceContext;
 use Aicountly\Ice\Licence\LicencePolicy;
 use Aicountly\Ice\Licence\LicenceResolver;
 use Aicountly\Ice\Licence\MemoryEntitlementCache;
@@ -34,16 +35,19 @@ final class LicenceContractVectorsTest extends TestCase
         $key      = $case['_key'];
         $verifier = new EntitlementVerifier([$key['kid'] => base64_decode($key['value'], true)]);
         $cache    = new MemoryEntitlementCache();
-        $cache->put($case['scope'], $case['ref'], $case['product'], $case['envelope'], $case['now']);
-        if ($case['revoked_revision'] >= 0) {
-            $cache->revoke((string) ($case['envelope']['document']['customer_id'] ?? ''), $case['product'], $case['revoked_revision'], $case['now']);
+        foreach ($case['envelopes'] as $f) {
+            $cache->put($f['scope'], $f['ref'], $case['product'], $f['envelope'], $case['now']);
+        }
+        foreach ($case['revocations'] as $r) {
+            $cache->revoke($r['customer'], $case['product'], $r['revision'], $case['now'], $r['subject']);
         }
 
         $policy   = new LicencePolicy($case['_policy']['max_age_seconds'], $case['_policy']['paid_kinds'], false, true);
         $resolver = new LicenceResolver($cache, $verifier, $policy, static fn (): int => $case['now']);
-        $r        = $case['scope'] === 'subject' ? $resolver->forSubject($case['ref'], $case['product']) : $resolver->forCustomer($case['ref'], $case['product']);
+        $c        = $case['context'];
+        $r        = $resolver->forContext(new LicenceContext($c['customer'], $case['product'], $c['subject'], $c['membership_verified']));
 
-        $this->assertSame($case['expect'], ['state' => $r->state->value, 'tier' => $r->tier()->value, 'reason' => $r->reason], $case['why']);
+        $this->assertSame($case['expect'], ['state' => $r->state->value, 'tier' => $r->tier()->value, 'reason' => $r->reason, 'basis' => $r->basis], $case['why']);
     }
 
     public function testTheVectorFileIsReproducibleFromItsGenerator(): void

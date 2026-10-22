@@ -201,9 +201,9 @@ Configuration keys: `WEBRTC_TURN_ADMISSION` (`off` | `observe` default | `enforc
 files `WEBRTC_TURN_LEASE_FILE`, `_LOAD_FILE`, `_LOAD_MAX_AGE`, `_LATENCY_FILE`, and optional edge geography `WEBRTC_GEO_*`.
 
 Shared-ledger and licence settings (kit 1.3.0 / 1.4.0): `WEBRTC_TURN_LEDGER_DSN`, `WEBRTC_TURN_LEDGER_USER` (non-secret) and `WEBRTC_TURN_LEDGER_PASSWORD`
-(a secret — injected by `bin/ops/inject-turn-secrets.sh`, never `.env.example`), `WEBRTC_TURN_LEDGER_TIMEOUT_MS`. Who is paid comes from the **central licensing backend**
+(a secret — injected by `bin/ops/inject-turn-secrets.sh`, never `.env.example`), `WEBRTC_TURN_LEDGER_TIMEOUT_MS`. Who is paid comes from the **central licensing backend**, decided per user in the active company's context
 through the common adapter (`docs/LICENCE_ENTITLEMENT_CONTRACT.md`): `WEBRTC_LICENCE_API_URL`, `_ENVIRONMENT`, `_KEY_ID`, `_PUBLIC_KEYS` (non-secret), `WEBRTC_LICENCE_S2S_SECRET` (a secret,
-same injector), `WEBRTC_TURN_ENTITLEMENT_MAX_AGE_HOURS` (a signed entitlement issued longer ago stops counting as paid), `WEBRTC_LICENCE_PAID_KINDS`, `WEBRTC_LICENCE_COMPAT`
+same injector), `WEBRTC_TURN_ENTITLEMENT_MAX_AGE_HOURS` (a signed entitlement issued longer ago stops counting as paid), `WEBRTC_LICENCE_PAID_KINDS`, `WEBRTC_LICENCE_DEFAULT_MAX_GUESTS` / `WEBRTC_LICENCE_GUESTS_PAID_QUALITY` (meeting-guest defaults), `WEBRTC_LICENCE_FETCH_ON_MISS` (fetch a missing member-level entitlement on demand), `WEBRTC_LICENCE_COMPAT`
 (`allow` default = the product's legacy mapping may stand in where the backend is silent; `deny` = central evidence only) and `WEBRTC_TURN_LICENCE_FEED=confirmed` (an operator's attestation).
 A node run as two coturn instances sets `WEBRTC_TURN_NODE_<ID>_GROUP` and `_STRUCTURAL_RESERVE` (`docs/TURN_BANDWIDTH_ENFORCEMENT.md`). `admission.reason` also takes `ledger_unavailable`
 (free user refused because the shared ledger could not be reached while enforcing). While the licence readiness gate is not satisfied the effective `admission.mode` is `observe` even if `enforce` is configured.

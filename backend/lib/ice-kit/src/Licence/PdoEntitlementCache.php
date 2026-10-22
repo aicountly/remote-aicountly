@@ -44,21 +44,21 @@ final class PdoEntitlementCache implements EntitlementCache
         ]);
     }
 
-    public function revokedRevision(string $customerId, string $product): int
+    public function revokedRevision(?string $customerId, string $product, ?string $subject = null): int
     {
-        $stmt = $this->connection->pdo()->prepare('SELECT revision FROM aic_entitlement_revoked WHERE customer_id = :c AND product_id = :p');
-        $stmt->execute(['c' => $customerId, 'p' => $product]);
+        $stmt = $this->connection->pdo()->prepare('SELECT revision FROM aic_entitlement_revoked WHERE customer_id = :c AND subject = :s AND product_id = :p');
+        $stmt->execute(['c' => $customerId ?? '', 's' => $subject ?? '', 'p' => $product]);
         $v = $stmt->fetchColumn();
 
         return $v === false ? -1 : (int) $v;
     }
 
-    public function revoke(string $customerId, string $product, int $revision, int $now): void
+    public function revoke(?string $customerId, string $product, int $revision, int $now, ?string $subject = null): void
     {
         $this->connection->pdo()->prepare(
-            'INSERT INTO aic_entitlement_revoked (customer_id, product_id, revision, at) VALUES (:c, :p, :r, :now)
-             ON CONFLICT (customer_id, product_id) DO UPDATE SET revision = GREATEST(aic_entitlement_revoked.revision, EXCLUDED.revision), at = EXCLUDED.at',
-        )->execute(['c' => $customerId, 'p' => $product, 'r' => $revision, 'now' => $now]);
+            'INSERT INTO aic_entitlement_revoked (customer_id, subject, product_id, revision, at) VALUES (:c, :s, :p, :r, :now)
+             ON CONFLICT (customer_id, subject, product_id) DO UPDATE SET revision = GREATEST(aic_entitlement_revoked.revision, EXCLUDED.revision), at = EXCLUDED.at',
+        )->execute(['c' => $customerId ?? '', 's' => $subject ?? '', 'p' => $product, 'r' => $revision, 'now' => $now]);
     }
 
     public function syncState(string $product): array

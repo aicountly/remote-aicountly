@@ -10,13 +10,18 @@ namespace Aicountly\Ice\Licence;
  * The cache is NOT trusted: every envelope is re-verified against the central public key when it is used
  * (LicenceResolver), so a tampered row is simply ignored. What the cache does own is local facts the central
  * document cannot carry: when an envelope was fetched, which revisions have been revoked, and how far the
- * changes feed has been read. Keyed by (scope, ref, product): `customer` entries by customer id, `subject`
- * entries (a product that asks "what is this user entitled to?") by the subject id.
+ * changes feed has been read. Keyed by (scope, ref, product), one scope per kind of entitlement so that no
+ * lookup in one tenant's context can ever read another's:
+ *
+ *   customer   the company-level entitlement, ref = customer id
+ *   member     one user's eligibility INSIDE one company (company-wide membership or an assigned seat), ref = "customer|subject"
+ *   user       a personal, user-scoped entitlement, ref = subject
  */
 interface EntitlementCache
 {
     public const CUSTOMER = 'customer';
-    public const SUBJECT  = 'subject';
+    public const MEMBER   = 'member';
+    public const USER     = 'user';
 
     /** @return array{envelope: array<string, mixed>, fetchedAt: int}|null */
     public function get(string $scope, string $ref, string $product): ?array;
@@ -28,10 +33,13 @@ interface EntitlementCache
      */
     public function put(string $scope, string $ref, string $product, array $envelope, int $now): void;
 
-    /** The highest revision revoked for this customer and product, or -1. A document at or below it is not trusted. */
-    public function revokedRevision(string $customerId, string $product): int;
+    /**
+     * The highest revision revoked for this customer (null = a personal entitlement), product and — for member-level and
+     * personal entitlements — subject, or -1. A document at or below it is not trusted.
+     */
+    public function revokedRevision(?string $customerId, string $product, ?string $subject = null): int;
 
-    public function revoke(string $customerId, string $product, int $revision, int $now): void;
+    public function revoke(?string $customerId, string $product, int $revision, int $now, ?string $subject = null): void;
 
     /** @return array{cursor: int, lastSyncAt: int|null, lastFullAt: int|null} */
     public function syncState(string $product): array;

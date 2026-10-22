@@ -55,7 +55,8 @@ final class LicenceTest extends TestCase
     private function doc(array $over = []): array
     {
         return $over + [
-            'contract' => 'aicountly.licence/1', 'customer_id' => '42', 'product_id' => 'remote', 'subject' => null,
+            'contract' => 'aicountly.licence/1', 'scope' => 'company', 'customer_id' => '42', 'product_id' => 'remote', 'subject' => null,
+            'eligibility' => ['model' => 'company_wide', 'member' => null, 'seat' => 'not_applicable'],
             'licence_id' => 'LIC-000123', 'plan_code' => 'REMOTE_BUSINESS', 'plan_class' => 'paid', 'kind' => 'paid', 'state' => 'paid',
             'valid_from' => self::iso(self::NOW - 86400), 'valid_until' => self::iso(self::NOW + 30 * 86400),
             'entitlements' => [['code' => 'max_session_minutes', 'value' => 480], ['code' => 'recording', 'value' => true]],
@@ -134,6 +135,16 @@ final class LicenceTest extends TestCase
             'duplicate code' => ['entitlements' => [['code' => 'x', 'value' => 1], ['code' => 'x', 'value' => 2]]],
             'negative revision' => ['revision' => -1],
             'no issued_at' => ['issued_at' => null],
+            'no scope' => ['scope' => 'tenant'],
+            'company scope without customer' => ['customer_id' => null],
+            'personal with a customer' => ['scope' => 'user', 'subject' => 'u-1', 'eligibility' => ['model' => 'personal', 'member' => null, 'seat' => 'not_applicable']],
+            'personal without a subject' => ['scope' => 'user', 'customer_id' => null, 'eligibility' => ['model' => 'personal', 'member' => null, 'seat' => 'not_applicable']],
+            'no eligibility' => ['eligibility' => null],
+            'company-level doc claiming membership' => ['eligibility' => ['model' => 'company_wide', 'member' => true, 'seat' => 'not_applicable']],
+            'member doc without membership' => ['subject' => 'u-1', 'eligibility' => ['model' => 'company_wide', 'member' => null, 'seat' => 'not_applicable']],
+            'seat model without a seat status' => ['subject' => 'u-1', 'eligibility' => ['model' => 'seat', 'member' => true, 'seat' => 'not_applicable']],
+            'company-wide with a seat status' => ['subject' => 'u-1', 'eligibility' => ['model' => 'company_wide', 'member' => true, 'seat' => 'assigned']],
+            'personal model on a company doc' => ['eligibility' => ['model' => 'personal', 'member' => null, 'seat' => 'not_applicable']],
         ];
         foreach ($bad as $label => $over) {
             try {
@@ -237,12 +248,12 @@ final class LicenceTest extends TestCase
         $chat = $this->envelope(['product_id' => 'chat']);
         $this->assertSame('identity_mismatch', $this->resolver($this->cacheWith($chat))->forCustomer('42', 'remote')->reason);
 
-        // A subject-scoped document does not answer a customer lookup, and the reverse.
-        $sub = $this->envelope(['subject' => 'u-7']);
-        $this->assertSame('identity_mismatch', $this->resolver($this->cacheWith($sub))->forCustomer('42', 'remote')->reason);
-        $this->assertSame(LicenceState::Paid, $this->resolver($this->cacheWith($sub, 'subject', 'u-7'))->forSubject('u-7', 'remote')->state);
-        $this->assertSame('identity_mismatch', $this->resolver($this->cacheWith($this->envelope(), 'subject', 'u-7'))->forSubject('u-7', 'remote')->reason);
-        $this->assertSame('no_entitlement', $this->resolver($this->cacheWith($sub, 'subject', 'u-7'))->forSubject('u-8', 'remote')->reason);
+        // A member-level document does not answer a company-level lookup, and the reverse.
+        $member = $this->envelope(['subject' => 'u-7', 'eligibility' => ['model' => 'company_wide', 'member' => true, 'seat' => 'not_applicable']]);
+        $this->assertSame('identity_mismatch', $this->resolver($this->cacheWith($member))->forCustomer('42', 'remote')->reason);
+        $this->assertSame('identity_mismatch', $this->resolver($this->cacheWith($this->envelope(), 'member', '42|u-7'))->forContext(new \Aicountly\Ice\Licence\LicenceContext('42', 'remote', 'u-7', true))->reason);
+        $this->assertSame('paid', $this->resolver($this->cacheWith($member, 'member', '42|u-7'))->forContext(new \Aicountly\Ice\Licence\LicenceContext('42', 'remote', 'u-7'))->state->value);
+        $this->assertSame('no_entitlement', $this->resolver($this->cacheWith($member, 'member', '42|u-7'))->forContext(new \Aicountly\Ice\Licence\LicenceContext('42', 'remote', 'u-8'))->reason);
     }
 
     public function testRevocationBeatsAValidLookingDocumentUntilANewerOneArrives(): void

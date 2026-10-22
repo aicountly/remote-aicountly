@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS turn_capacity_config (
 -- product and host. NOT trusted storage: each envelope carries the central backend's Ed25519 signature and is
 -- re-verified when used, so a forged or edited row is ignored. Tenant isolation is by product_id in every key.
 CREATE TABLE IF NOT EXISTS aic_entitlement_cache (
-    scope       text   NOT NULL CHECK (scope IN ('customer', 'subject')),
+    scope       text   NOT NULL CHECK (scope IN ('customer', 'member', 'user')),
     ref         text   NOT NULL,
     product_id  text   NOT NULL,
     revision    bigint NOT NULL,
@@ -68,12 +68,15 @@ CREATE TABLE IF NOT EXISTS aic_entitlement_cache (
     PRIMARY KEY (scope, ref, product_id)
 );
 -- Revisions the central backend has revoked: a cached document at or below the revision is not trusted until a newer one arrives.
+-- customer_id is '' for a personal (user-scoped) entitlement; subject is '' for a company-level one. A seat revoked or a member
+-- removed is a revocation of that (customer, subject) pair only.
 CREATE TABLE IF NOT EXISTS aic_entitlement_revoked (
     customer_id text   NOT NULL,
+    subject     text   NOT NULL DEFAULT '',
     product_id  text   NOT NULL,
     revision    bigint NOT NULL,
     at          bigint NOT NULL,
-    PRIMARY KEY (customer_id, product_id)
+    PRIMARY KEY (customer_id, subject, product_id)
 );
 -- How far each product has read the central changes feed, and when it last synced (the feed's heartbeat).
 CREATE TABLE IF NOT EXISTS aic_entitlement_sync (

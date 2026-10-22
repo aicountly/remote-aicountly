@@ -28,15 +28,20 @@ final class MemoryEntitlementCache implements EntitlementCache
         $this->entries[$key] = ['envelope' => $envelope, 'fetchedAt' => $now];
     }
 
-    public function revokedRevision(string $customerId, string $product): int
+    public function revokedRevision(?string $customerId, string $product, ?string $subject = null): int
     {
-        return $this->revoked["{$customerId}|{$product}"] ?? -1;
+        return $this->revoked[self::revokeKey($customerId, $product, $subject)] ?? -1;
     }
 
-    public function revoke(string $customerId, string $product, int $revision, int $now): void
+    public function revoke(?string $customerId, string $product, int $revision, int $now, ?string $subject = null): void
     {
-        $key                = "{$customerId}|{$product}";
+        $key                 = self::revokeKey($customerId, $product, $subject);
         $this->revoked[$key] = max($this->revoked[$key] ?? -1, $revision);
+    }
+
+    public static function revokeKey(?string $customerId, string $product, ?string $subject): string
+    {
+        return ($customerId ?? '') . '|' . ($subject ?? '') . '|' . $product;
     }
 
     public function syncState(string $product): array

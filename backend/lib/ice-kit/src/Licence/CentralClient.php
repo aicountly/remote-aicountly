@@ -49,16 +49,22 @@ final class CentralClient
         return new self($url, $client, $keyId, $secret, $env, $transport);
     }
 
-    /** @return array<string, mixed> one envelope */
+    /** @return array<string, mixed> the company-level envelope */
     public function customer(string $customerId, string $product): array
     {
         return $this->get('/v1/entitlements/' . rawurlencode($customerId), ['product_id' => $product])['data'];
     }
 
-    /** @return array<string, mixed> one envelope: the best entitlement among the subject's customers */
-    public function subject(string $subject, string $product): array
+    /** @return array<string, mixed> one user's eligibility INSIDE one company: membership and, for a seat licence, the seat */
+    public function member(string $customerId, string $subject, string $product): array
     {
-        return $this->get('/v1/entitlements/by-subject/' . rawurlencode($subject), ['product_id' => $product])['data'];
+        return $this->get('/v1/entitlements/' . rawurlencode($customerId), ['product_id' => $product, 'subject' => $subject])['data'];
+    }
+
+    /** @return array<string, mixed> a user's personal (user-scoped) envelope */
+    public function personal(string $subject, string $product): array
+    {
+        return $this->get('/v1/entitlements/personal/' . rawurlencode($subject), ['product_id' => $product])['data'];
     }
 
     /** @return array{items: list<array<string, mixed>>, nextCursor: string|null, seq: int} one page of the product's entitlements */

@@ -1,5 +1,19 @@
 # Changelog — AICOUNTLY ICE kit
 
+## 1.5.0 — 2026-10-22
+
+Contextual, company-scoped licensing (docs/LICENCE_ENTITLEMENT_CONTRACT.md §1, §4, §9). **No global upgrades.**
+
+- `LicenceContext` (user, active company or none, product, the product's membership evidence) and `LicenceResolver::forContext()`: paid only for a
+  CURRENT member of the company whose subscription permits them — company-wide, or an ASSIGNED seat — with a separate user-scoped personal
+  entitlement for the personal context. Switching company recalculates; nothing transfers across tenants.
+- Document gains `scope` (company | user) and `eligibility` {model company_wide|seat|personal, member, seat}; three shapes (company-level, member-level, personal).
+- Cache scopes `customer` / `member` / `user` (the earlier "best across the user's companies" subject scope is removed); revocation is per (company, user, product),
+  so a removed member or a revoked seat ends that pair only. Ledger table `aic_entitlement_revoked` gains `subject`.
+- `MeetingGuests`: external guests served under a paid host's licensed meeting within `meeting.max_guests` / `meeting.max_participants` / `meeting.guests_paid_quality`.
+- Optional fetch-through for a missing member-level document (`WEBRTC_LICENCE_FETCH_ON_MISS`); `CentralClient::member()/personal()`; sync handles `(company, user)` feed entries.
+- 41 conformance vectors; `entitlement-fixture.php` signs/loads member-level and personal documents and resolves a context.
+
 ## 1.4.0 — 2026-10-21
 
 The common licence-entitlement adapter (`Aicountly\Ice\Licence`, docs/LICENCE_ENTITLEMENT_CONTRACT.md). Remote and Connect consume

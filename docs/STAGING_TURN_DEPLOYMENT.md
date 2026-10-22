@@ -74,6 +74,19 @@ ssh <sandbox-user>@<sandbox-host> 'id -un; echo "$HOME"; readlink -f "<SANDBOX_*
 
 If the first line is a production account, stop and fix the `SANDBOX_*` secrets — the workflow would now refuse anyway.
 
+### 2.3 Preflight (read-only; run this first)
+
+`scripts/staging/turn-preflight.sh` checks, changing nothing, that the repository secrets exist (by name), that the target is not production, that the sandbox API
+host has what the kit needs (PHP with sodium, pdo_pgsql, openssl, curl; `api/.env`; admission not `enforce`; the kit deployed; `probe.php --status` showing a configured relay
+and no warnings) and that both TURN nodes resolve, accept TCP on 3478 and 443 and present a verified TLS certificate with at least 14 days left. `--print` shows what it would run.
+
+```bash
+scripts/staging/turn-preflight.sh --repo aicountly/remote-aicountly --product remote  --ssh <sandbox-user>@<sandbox-host> --root <SANDBOX_SSH_REMOTE_ROOT>
+scripts/staging/turn-preflight.sh --repo aicountly/connect-aicountly --product chat   --ssh <sandbox-user>@<sandbox-host> --root <SANDBOX_SFTP_REMOTE_ROOT>
+```
+
+Before the first deploy, §3–§4 items will FAIL (secrets, ledger, kit not yet deployed) — that is the to-do list. After §6 step 7 every line must PASS.
+
 ## 3. Secrets (names only — never write values into a repository, chat or log)
 
 | Secret (both repos) | What | Notes |
@@ -165,7 +178,7 @@ Every step says who runs it and how to tell it worked. **Stop at the first failu
 
 | # | Step | Who | Check |
 |---|---|---|---|
-| 1 | Confirm the sandbox location (§2.2) | operator | not a production account |
+| 1 | Confirm the sandbox location (§2.2) and run the preflight (§2.3) | operator | not a production account; the preflight's to-do list is what steps 2–7 clear |
 | 2 | Create the staging ledger database and schema (§4) | DB admin | `psql … -c '\dt'` lists `turn_leases`, `turn_node_load`, `turn_capacity_config` |
 | 3 | Generate and store the secrets (§3); put Noida's new secret on the Noida coturn and restart it | infra + operator | `gh secret list --repo …` shows the three names |
 | 4 | **Deploy Remote sandbox** from the branch (below) | operator | workflow green; guard step passed; *Verify the live app* passed |
@@ -205,38 +218,58 @@ Prerequisites: SSH to the sandbox API host. In every command: `PHP=/opt/cpanel/e
 
 ### 7.0 Paid and free test identities — signed fixtures (no central backend needed)
 
-The real licence path (Ed25519 signature, freshness, tenant check, revocation) can be exercised before the licensing module exists with
-**signed staging fixtures**. Generate a staging key pair on an admin machine — the private half never goes to the API host — and give the API host
-only the public half:
+Licensing is **contextual**: a test identity is a *user in a company*, not a user. The real path (Ed25519 signature, freshness, tenant check,
+membership, seat, revocation) can be exercised before the licensing module exists with **signed staging fixtures**. Generate a staging key pair
+on an admin machine — the private half never goes to the API host — and give the API host only the public half:
 
 ```bash
 # admin machine (needs PHP with libsodium)
 php backend/lib/ice-kit/bin/entitlement-fixture.php keys --out=$HOME/.aic-staging-keys --kid=stg-1
 #   prints:  WEBRTC_LICENCE_PUBLIC_KEYS entry: stg-1=<base64>
 printf 'WEBRTC_LICENCE_PUBLIC_KEYS=stg-1=<base64>\n' | ssh <sandbox> "bash <ROOT>/api/bin/ops/apply-turn-config.sh"
+K="--secret-key-file=$HOME/.aic-staging-keys/stg-1.secret --kid=stg-1"
+F=backend/lib/ice-kit/bin/entitlement-fixture.php
 
-# a PAID test entitlement for Remote company 481 (product remote) and for Connect user 7 (product chat; --subject makes it a by-subject answer)
-php backend/lib/ice-kit/bin/entitlement-fixture.php sign --secret-key-file=$HOME/.aic-staging-keys/stg-1.secret --kid=stg-1 \
-    --customer=481 --product=remote --state=paid --plan=STAGING_PAID_TEST --out=/tmp/paid-remote-481.json
-php backend/lib/ice-kit/bin/entitlement-fixture.php sign --secret-key-file=$HOME/.aic-staging-keys/stg-1.secret --kid=stg-1 \
-    --customer=42 --subject=7 --product=chat --state=paid --plan=STAGING_PAID_TEST --out=/tmp/paid-chat-7.json
-scp /tmp/paid-*.json <sandbox>:/tmp/        # signed, not secret; delete afterwards
+# REMOTE: company 481 holds a company-wide paid licence (a session is licensed in its company, owner = the acting user)
+php $F sign $K --product=remote --customer=481 --state=paid --plan=STAGING_PAID_TEST --out=/tmp/remote-481.json
+# CONNECT, company-wide: company 42 is paid; user 7 is a CURRENT member of 42 (a member-level document states membership)
+php $F sign $K --product=chat --customer=42 --subject=7 --member=true --state=paid --out=/tmp/chat-42-u7.json
+# CONNECT, seat licence: company 43 has seats; user 8 holds one, user 9 is a member without a seat
+php $F sign $K --product=chat --customer=43 --state=paid --model=seat --out=/tmp/chat-43.json
+php $F sign $K --product=chat --customer=43 --subject=8 --member=true --state=paid --model=seat --seat=assigned --out=/tmp/chat-43-u8.json
+php $F sign $K --product=chat --customer=43 --subject=9 --member=true --state=paid --model=seat --seat=unassigned --out=/tmp/chat-43-u9.json
+# CONNECT, personal licence: user 10's own, separate from any company
+php $F sign $K --product=chat --scope=user --subject=10 --state=paid --plan=STAGING_PERSONAL --out=/tmp/chat-personal-u10.json
+scp /tmp/{remote,chat}-*.json <sandbox>:/tmp/        # signed, not secret; delete afterwards
 
 # on the API host
-$PHP lib/ice-kit/bin/entitlement-fixture.php load --bootstrap=config/ice-kit.php --file=/tmp/paid-remote-481.json
-$PHP lib/ice-kit/bin/entitlement-fixture.php resolve --bootstrap=config/ice-kit.php --customer=481 --product=remote
-#   state paid · tier paid · reason paid · evidence central · plan STAGING_PAID_TEST
-$PHP lib/ice-kit/bin/entitlement-fixture.php resolve --bootstrap=config/ice-kit.php --customer=999 --product=remote
-#   state unknown · tier free · reason no_entitlement · evidence none        (a free test company needs no fixture)
-
-# revocation and the other states, all through the same code the real feed will use
-$PHP lib/ice-kit/bin/entitlement-fixture.php revoke --bootstrap=config/ice-kit.php --customer=481 --product=remote --revision=1
-$PHP lib/ice-kit/bin/entitlement-fixture.php resolve --bootstrap=config/ice-kit.php --customer=481 --product=remote   # state suspended · reason revoked
+for f in /tmp/remote-481.json /tmp/chat-42-u7.json /tmp/chat-43.json /tmp/chat-43-u8.json /tmp/chat-43-u9.json /tmp/chat-personal-u10.json; do
+  $PHP lib/ice-kit/bin/entitlement-fixture.php load --bootstrap=config/ice-kit.php --file=$f; done
 ```
 
-`sign --state=` also takes `free`, `expired`, `suspended`, `unknown`, and `--kind=trial` shows a trial being refused the paid reserve. Fixtures are
-`evidence central` because they are genuinely signed; they prove the consumer, not the backend. The alternative for a quick check is the compat
-mapping (§7.2/§7.3 notes), which is labelled `evidence compat` and can never support enforcement.
+Then **resolve contexts** — the decision a credential request would make, with no network and no session:
+
+```bash
+R="$PHP lib/ice-kit/bin/entitlement-fixture.php resolve --bootstrap=config/ice-kit.php"
+$R --product=chat --customer=42 --subject=7            # state paid  · tier paid · reason paid · basis company_wide · evidence central
+$R --product=chat --customer=44 --subject=7            # company 44 (user 7 "switched"): state unknown · tier free · no_entitlement   <- nothing carries over
+$R --product=chat --subject=7                          # personal context: unknown · free                                              <- company 42's licence is not 7's personal licence
+$R --product=chat --customer=43 --subject=8            # seat assigned: paid · basis seat
+$R --product=chat --customer=43 --subject=9            # seat_unassigned: free
+$R --product=chat --customer=43 --subject=7            # user 7 is not in company 43: no_entitlement / seat_not_assigned: free
+$R --product=chat --subject=10                         # personal licence: paid · basis personal
+$R --product=chat --customer=42 --subject=10           # user 10 inside company 42: their personal licence is NOT carried in: free
+$R --product=remote --customer=481                     # a Remote session's company: paid · company_wide
+
+# revocation: a seat revoked / a member removed ends THAT pair only, immediately
+$PHP lib/ice-kit/bin/entitlement-fixture.php revoke --bootstrap=config/ice-kit.php --product=chat --customer=43 --subject=8 --revision=1
+$R --product=chat --customer=43 --subject=8            # suspended · reason revoked
+```
+
+`sign --state=` also takes `free`, `expired`, `suspended`, `unknown`; `--kind=trial` shows a trial refused the paid reserve; `--member=false` a
+removed member; `--entitlement=meeting.max_guests=1` sets a meeting limit. Fixtures are `evidence central` because they are genuinely signed; they
+prove the consumer, not the backend. The alternative for a quick check is the compat mapping, labelled `evidence compat`, which can never support enforcement
+(Remote: a `remote_entitlements` row on `WEBRTC_TURN_PAID_PLAN_CODES`; Connect: a `connect_license_tier` row, honoured **only in a personal context**).
 
 ### 7.1 First executable commands — configuration, ledger and authenticated allocation
 
@@ -262,7 +295,7 @@ security finding: stop.
 
 ### 7.2 Remote desktop sessions (authenticated, end to end)
 
-Needs a staging company with a **paid test entitlement** and a **free** one: load the signed fixture for the paid company (§7.0) — or, for a quick
+Needs a staging company with a **paid test entitlement** and a **free** one: load the signed fixture for the paid company (§7.0). The session is licensed in **its company's context with its owner as the acting user**, so the owner must be a current member of that company in Remote (an access row, confirmed by Manage within the grace period — in staging `remote.membershipEnforcement` decides) — or, for a quick
 check only, give it a compat row (`WEBRTC_TURN_PAID_PLAN_CODES=STAGING_PAID_TEST` is in the staging file, and a staging `remote_entitlements` row with
 that `plan_code` and the company id is accepted as *compat*). The free company needs nothing. The company ids must be the real staging company ids.
 
@@ -289,16 +322,20 @@ $PHP lib/ice-kit/bin/summarize-reports.php writable/logs/log-$(date +%F).log
 
 ### 7.3 Connect calls and rooms (authenticated)
 
-A paid test user: load the signed by-subject fixture for user `7` (§7.0, product `chat`). For a quick check only, a row in the temporary compat table
-`connect_license_tier` (`user_uuid`, `tier = 'paid'`, `source = 'manual'`) is accepted as *compat*. The free user needs nothing.
+A paid test user is a user **in a company**: load the signed member-level fixtures of §7.0 (user 7 in company 42; user 8 holds a seat in company 43).
+The client names its company with `?company_id=` — a *claim* the document must confirm; omit it for the personal context. The same user asking under a
+different `company_id` is recalculated from that company's own evidence (the switching check below). For a quick check only, a `connect_license_tier` row
+(`user_uuid`, `tier = 'paid'`, `source = 'manual'`) is accepted as *compat* **in the personal context only**.
 
 ```bash
 # AIC_TOKEN = the staging bearer token of that user (the portal session); read -rs, never an argument.
-curl -sS "https://connect.gh.aicountly.com/api/calls/config?region=in-west&rtt%5Bmum%5D=12&rtt%5Bncr%5D=41" \
+curl -sS "https://connect.gh.aicountly.com/api/calls/config?company_id=42&region=in-west&rtt%5Bmum%5D=12&rtt%5Bncr%5D=41" \
      -H "Authorization: Bearer $AIC_TOKEN" \
   | jq '.data | {contract, turnConfigured, expiresIn, relayNodes: [.relayNodes[]|{id,proximity,load}], admission}'
-#   paid user -> admission.tier "paid"; free user -> "free"; mum first for this client; outcome "admitted"; mode "observe"
-# A meeting room: the participant token the room join returned (header X-Room-Participant), not the bearer; a guest is accounted to the HOST's tier:
+#   user 7 with company_id=42 -> admission.tier "paid"; the SAME user with company_id=44 (a switch) or with no company_id -> "free";
+#   mum first for this client; outcome "admitted"; mode "observe".  `connect.ice.issue` in writable/logs records licence/licenceReason/licenceBasis/licenceEvidence.
+# A meeting room is licensed under the company it was created with (POST /api/v1/rooms {..., "company_id": "42"}); the HOST is evaluated in that company,
+# and an external guest is served under the host's licensed meeting (no account upgraded). The participant token the room join returned (header X-Room-Participant), not the bearer; a guest is accounted to the HOST's tier:
 curl -sS -X POST "https://connect.gh.aicountly.com/api/rooms/$ROOM/ice" -H "X-Room-Participant: $ROOM_PARTICIPANT_TOKEN" -H 'Content-Type: application/json' -d '{"region":"in-north"}' | jq '.data | {contract, relayNodes: [.relayNodes[]|{id}], admission}'
 # The client reports how it connected (moves the bandwidth charge to the relay it really uses; zero for a direct path):
 curl -sS -X POST "https://connect.gh.aicountly.com/api/calls/$CALL/connectivity-report" -H "Authorization: Bearer $AIC_TOKEN" \

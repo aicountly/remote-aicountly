@@ -22,9 +22,19 @@ final class LicenceRuntime
     }
 
     /** @param callable(string): (string|null) $read */
-    public static function resolver(callable $read, string $dir, ?\Closure $clock = null, ?EntitlementCache $cache = null): LicenceResolver
+    public static function resolver(callable $read, string $dir, ?\Closure $clock = null, ?EntitlementCache $cache = null, ?string $product = null): LicenceResolver
     {
-        return new LicenceResolver($cache ?? self::cache($read, $dir), EntitlementVerifier::fromEnvironment($read), LicencePolicy::fromEnvironment($read), $clock);
+        $client = $product !== null && in_array(strtolower(trim((string) ($read('WEBRTC_LICENCE_FETCH_ON_MISS') ?? ''))), ['1', 'true', 'yes', 'on'], true)
+            ? CentralClient::fromEnvironment($read, $product)
+            : null;
+
+        return new LicenceResolver(
+            $cache ?? self::cache($read, $dir),
+            EntitlementVerifier::fromEnvironment($read),
+            LicencePolicy::fromEnvironment($read),
+            $clock,
+            $client === null ? null : static fn (string $customer, string $subject, string $p): array => $client->member($customer, $subject, $p),
+        );
     }
 
     /**

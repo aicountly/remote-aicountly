@@ -7,12 +7,17 @@ declare(strict_types=1);
  *
  *   keys     --out=DIR --kid=ID                 generate an Ed25519 key pair. DIR/ID.secret (0600) STAYS on the admin machine;
  *                                               the printed `ID=<base64>` line is the public key for WEBRTC_LICENCE_PUBLIC_KEYS.
- *   sign     --secret-key-file=F --kid=ID --customer=ID --product=remote --state=paid|free|expired|suspended|unknown
- *            [--plan=CODE --licence=REF --kind=paid|trial|complimentary --valid-days=30 --subject=U --revision=1 --out=FILE]
+ *   sign     --secret-key-file=F --kid=ID --product=remote|chat --state=paid|free|expired|suspended|unknown
+ *            company-level:  --customer=ID                      (the company's licence; model company_wide by default)
+ *            member-level:   --customer=ID --subject=U --member=true|false [--model=seat --seat=assigned|unassigned|revoked]
+ *            personal:       --scope=user --subject=U           (the user's own licence; no customer)
+ *            [--plan=CODE --licence=REF --kind=paid|trial|complimentary --valid-days=30 --revision=1 --entitlement=code=value ... --out=FILE]
  *                                               write a SIGNED envelope exactly as the central backend would (contract §3).
  *   load     --bootstrap=config/ice-kit.php --file=ENVELOPE      verify against this host's public keys and store in the cache
- *   revoke   --bootstrap=... --customer=ID --product=remote --revision=N      record a revocation (what the changes feed does)
- *   resolve  --bootstrap=... --customer=ID --product=remote [--subject=U]     print what a credential request would see (state, tier, reason, evidence)
+ *   revoke   --bootstrap=... --product=remote [--customer=ID] [--subject=U] --revision=N     record a revocation (what the changes feed does):
+ *                                               company-level (--customer), a member's/seat holder's (both), or personal (--subject only)
+ *   resolve  --bootstrap=... --product=chat [--customer=ID] [--subject=U] [--member-verified=true|false]
+ *                                               print what a credential request in that CONTEXT would see (state, tier, reason, basis, evidence)
  *
  * This is how the REAL path (signature check, freshness, revocation, state mapping) is exercised on a staging host while the
  * central licensing module is still under development. A fixture is signed with a STAGING key whose private half is never on
@@ -81,11 +86,23 @@ if ($cmd === 'sign') {
     $now   = isset($opts['issued-at']) ? (int) strtotime((string) $opts['issued-at']) : time();
     $days  = max(1, (int) ($opts['valid-days'] ?? 30));
     $paid  = $state === 'paid';
+    $scope = (string) ($opts['scope'] ?? 'company');
+    $subj  = isset($opts['subject']) ? (string) $opts['subject'] : null;
+    $model = $scope === 'user' ? 'personal' : (string) ($opts['model'] ?? 'company_wide');
+    $memberOpt = isset($opts['member']) ? filter_var($opts['member'], FILTER_VALIDATE_BOOLEAN) : null;
+    $ents = [];
+    foreach ((array) ($argv ?? []) as $a) {
+        if (preg_match('/^--entitlement=([a-z][a-z0-9_.]*)=(.*)$/', (string) $a, $m) === 1) {
+            $v = $m[2];
+            $ents[] = ['code' => $m[1], 'value' => $v === 'true' ? true : ($v === 'false' ? false : (ctype_digit($v) ? (int) $v : $v))];
+        }
+    }
     $doc   = [
         'contract'     => 'aicountly.licence/1',
-        'customer_id'  => (string) ($opts['customer'] ?? ''),
+        'scope'        => $scope,
+        'customer_id'  => $scope === 'user' ? null : (string) ($opts['customer'] ?? ''),
         'product_id'   => (string) ($opts['product'] ?? ''),
-        'subject'      => isset($opts['subject']) ? (string) $opts['subject'] : null,
+        'subject'      => $subj,
         'licence_id'   => isset($opts['licence']) ? (string) $opts['licence'] : ($paid ? 'LIC-FIXTURE-1' : null),
         'plan_code'    => isset($opts['plan']) ? (string) $opts['plan'] : ($paid ? 'STAGING_PAID_TEST' : null),
         'plan_class'   => $paid ? 'paid' : 'free',
@@ -93,9 +110,14 @@ if ($cmd === 'sign') {
         'state'        => $state,
         'valid_from'   => $iso($now - 86400),
         'valid_until'  => $paid || $state === 'expired' ? $iso($state === 'expired' ? $now - 60 : $now + $days * 86400) : null,
-        'entitlements' => [],
+        'entitlements' => $ents,
         'revision'     => (int) ($opts['revision'] ?? 1),
         'issued_at'    => $iso($now),
+        'eligibility'  => [
+            'model'  => $model,
+            'member' => $scope === 'company' && $subj !== null ? ($memberOpt ?? true) : null,
+            'seat'   => $model === 'seat' && $subj !== null ? (string) ($opts['seat'] ?? 'assigned') : 'not_applicable',
+        ],
     ];
     try {
         \Aicountly\Ice\Licence\Entitlement::fromDocument($doc);
@@ -133,19 +155,30 @@ switch ($cmd) {
             $fail('the envelope is unreadable or its signature does not verify against WEBRTC_LICENCE_PUBLIC_KEYS - not stored');
         }
         $e = \Aicountly\Ice\Licence\Entitlement::fromDocument((array) $env['document']);
-        $cache->put($e->subject === null ? EntitlementCache::CUSTOMER : EntitlementCache::SUBJECT, $e->subject ?? $e->customerId, $e->productId, $env, time());
-        echo "stored: state {$e->state->value}, revision {$e->revision}\n";
+        [$scopeName, $ref] = match (true) {
+            $e->scope === \Aicountly\Ice\Licence\Entitlement::USER => [EntitlementCache::USER, (string) $e->subject],
+            $e->subject !== null => [EntitlementCache::MEMBER, \Aicountly\Ice\Licence\Entitlement::memberRef((string) $e->customerId, $e->subject)],
+            default => [EntitlementCache::CUSTOMER, (string) $e->customerId],
+        };
+        $cache->put($scopeName, $ref, $e->productId, $env, time());
+        echo "stored: {$scopeName}-level, state {$e->state->value}, model {$e->model}, revision {$e->revision}\n";
         exit(0);
 
     case 'revoke':
-        $cache->revoke((string) ($opts['customer'] ?? ''), $product, (int) ($opts['revision'] ?? 0), time());
+        $cache->revoke(isset($opts['customer']) ? (string) $opts['customer'] : null, $product, (int) ($opts['revision'] ?? 0), time(), isset($opts['subject']) ? (string) $opts['subject'] : null);
         echo "revocation recorded\n";
         exit(0);
 
     case 'resolve':
         $resolver = LicenceRuntime::resolver($read, $dir, null, $cache);
-        $r = isset($opts['subject']) ? $resolver->forSubject((string) $opts['subject'], $product) : $resolver->forCustomer((string) ($opts['customer'] ?? ''), $product);
-        echo sprintf("state %s · tier %s · reason %s · evidence %s%s\n", $r->state->value, $r->tier()->value, $r->reason, $r->evidence, $r->planCode !== null ? " · plan {$r->planCode}" : '');
+        $verified = isset($opts['member-verified']) ? filter_var($opts['member-verified'], FILTER_VALIDATE_BOOLEAN) : null;
+        $r = $resolver->forContext(new \Aicountly\Ice\Licence\LicenceContext(
+            isset($opts['customer']) ? (string) $opts['customer'] : null,
+            $product,
+            isset($opts['subject']) ? (string) $opts['subject'] : null,
+            $verified,
+        ));
+        echo sprintf("state %s · tier %s · reason %s · basis %s · evidence %s%s\n", $r->state->value, $r->tier()->value, $r->reason, $r->basis ?? '-', $r->evidence, $r->planCode !== null ? " · plan {$r->planCode}" : '');
         exit(0);
 }
 $fail('unknown command (keys | sign | load | revoke | resolve)');

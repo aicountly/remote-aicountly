@@ -30,15 +30,15 @@ final class FileEntitlementCache implements EntitlementCache
         });
     }
 
-    public function revokedRevision(string $customerId, string $product): int
+    public function revokedRevision(?string $customerId, string $product, ?string $subject = null): int
     {
-        return (int) ($this->read()['revoked']["{$customerId}|{$product}"] ?? -1);
+        return (int) ($this->read()['revoked'][MemoryEntitlementCache::revokeKey($customerId, $product, $subject)] ?? -1);
     }
 
-    public function revoke(string $customerId, string $product, int $revision, int $now): void
+    public function revoke(?string $customerId, string $product, int $revision, int $now, ?string $subject = null): void
     {
-        $this->update(static function (array &$d) use ($customerId, $product, $revision): void {
-            $key                = "{$customerId}|{$product}";
+        $this->update(static function (array &$d) use ($customerId, $product, $revision, $subject): void {
+            $key                = MemoryEntitlementCache::revokeKey($customerId, $product, $subject);
             $d['revoked'][$key] = max((int) ($d['revoked'][$key] ?? -1), $revision);
         });
     }

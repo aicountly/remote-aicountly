@@ -9,8 +9,11 @@ Identical in `aicountly/remote-aicountly` and `aicountly/connect-aicountly`.
 > entitlements" endpoint feeding per-product mirror tables; that proposal is **withdrawn** — it would have created a second licensing
 > path beside the central one.
 
-**Rule (unchanged).** A user is *paid* for relay capacity only if a **trusted, current, server-side entitlement** says so — never
-from anything the client sends. Every doubt resolves to **free**.
+**Rule.** A user is *paid* for relay capacity only if a **trusted, current, server-side entitlement** says so — never from anything the
+client sends — and only **in context**: for the authenticated user, under the active company, for the product, with verified membership
+(and an assigned seat where the licence is seat-based). **Not** because some other company the user belongs to is paid; switching company
+recalculates; a personal licence is a separate user-scoped entitlement. Every doubt resolves to **free**. Final decision and rules:
+`docs/LICENCE_ENTITLEMENT_CONTRACT.md` §1, §4.
 
 **Enforcement.** `WEBRTC_TURN_ADMISSION` is `observe` everywhere during development. A readiness gate forces `observe` even if
 `enforce` is configured, until the central source is operational and validated (`enforceBlockedBy` in `probe.php --status`, and an
@@ -45,17 +48,18 @@ own plan codes and their `plan_class`; Remote's `plan_code` becomes a mirror of 
 
 | # | Integration | Status | Notes |
 |---|---|---|---|
-| L1 | **Common licence-entitlement adapter** in the shared kit (`Aicountly\Ice\Licence`): states `free/paid/expired/suspended/unknown`, document validation, Ed25519 verification, resolver, caches (memory/file/PostgreSQL), AIC-S2S client, snapshot+changes sync with revocation, readiness | **Built, tested** | `LicenceTest`, `LicenceContractVectorsTest` (21 vectors) |
+| L1 | **Common licence-entitlement adapter** in the shared kit (`Aicountly\Ice\Licence`): states `free/paid/expired/suspended/unknown`; **contextual** resolver (user + active company + product → company-wide membership, assigned seat, or personal licence); Ed25519 verification; caches (memory/file/PostgreSQL) with per-company / per-member / per-user scopes; AIC-S2S client; snapshot+changes sync with **per-subject** revocation; fetch-through; meeting-guest policy; readiness | **Built, tested** | `LicenceTest`, `LicenceContextTest`, `LicenceContractVectorsTest` (41 vectors) |
 | L2 | Wire contract, JSON Schema, conformance vectors for the licensing team | **Built** (a proposal for them to accept or change) | `docs/LICENCE_ENTITLEMENT_CONTRACT.md`, `docs/contracts/licence-entitlement-v1.schema.json`, `tests/contract/` |
-| L3 | **Remote** consumes it: company → product `remote`; central evidence overrides the legacy mapping; `plan_code` mirror semantics documented | **Built, tested** | `ActiveActiveIceApiTest` (central paid, central suspended beats compat paid, revocation, cross-tenant, forged, stale) |
-| L4 | **Connect** consumes it: user → product `chat`; meeting guest → host; `connect_license_tier` demoted to a temporary compat cache | **Built, tested** | `LicenceTierResolverTest`, `IceConfigServiceAdmissionTest` |
+| L3 | **Remote** consumes it: a session is licensed in its **company context** (owner as the subject, owner's current membership as evidence, product `remote`); central evidence overrides the legacy mapping; `plan_code` mirror semantics documented | **Built, tested** | `ActiveActiveIceApiTest` (central paid, suspended beats compat, revocation, cross-tenant, forged, stale, owner removed, membership unconfirmed, seat assigned/revoked) |
+| L4 | **Connect** consumes it: **company-scoped** — `?company_id=` claim on calls (confirmed by the member document), rooms licensed under a stated company (`licence_customer_id`), host evaluated in that company, **external guests under the paid host's meeting within plan limits**; `connect_license_tier` demoted to a temporary compat cache read in the personal context only | **Built, tested** | `LicenceTierResolverTest`, `RoomIceAdmissionTest`, `IceConfigServiceAdmissionTest` |
 | L5 | Staging without the central module: signed fixtures (`bin/entitlement-fixture.php keys/sign/load/revoke/resolve`) exercising the real signature, freshness and revocation path | **Built, tested** | staging key's private half never on the API host |
 | L6 | **Central licensing backend** (server side of the contract) | **Pending — not built** | the licensing module team |
 | L7 | Engage writes / Manage reads the central backend | **Pending** | licensing module |
 | L8 | Central signing-key custody and rotation; per-product AIC-S2S client ids and secrets | **Pending** | licensing + ops |
 | L9 | Scheduled `sync-entitlements` job on the API hosts; `SANDBOX_LICENCE_S2S_SECRET` repository secrets | **Not installed** (nothing to sync; the workflows already carry the secret through stdin when it is set) | ops, after L6 |
 | L10 | Mapping the document's `entitlements` onto `remote_entitlements` feature columns | **Pending** (not a TURN item) | needs the central entitlement-code catalogue |
-| L11 | Connect's unit (user vs seat) and trial/complimentary treatment (default: not paid capacity) | **Pending — business decision** | contract §4, §13 |
+| L11 | ~~Connect's unit~~ **Decided:** contextual, company-scoped (company-wide membership or assigned seat; personal licence separate; guests under the host's meeting). **Still open (business):** trial/complimentary kinds (default: not paid capacity); a personal licence inside a company context (default: not applied); default guest and participant limits | **Decision made; three defaults pending** | contract §1, §9, §14 |
+| L15 | Central backend publishes **member-level** documents (membership, seat) and a changes feed with `(company, user)` entries — or Connect gains its own Manage membership check | **Pending — licensing team** (hardening: Connect-side membership verification) | contract §6, §13 |
 | L12 | Optional signed revocation push to the products | **Not built; optional** | the poll is the guarantee |
 | L13 | Runtime database role of each product: SELECT-only on any compat table | **Not done**; matters less now (central documents are signed, compat rows are not trusted for enforcement) | ops |
 | L14 | Shadow comparison of central vs compat for every paying customer; then `WEBRTC_LICENCE_COMPAT=deny` | **Pending** (needs L6) | contract §11 phase 2–3 |
@@ -64,7 +68,7 @@ own plan codes and their `plan_class`; Remote's `plan_code` becomes a mirror of 
 
 - [ ] L6–L8: the central backend exists, signs documents, products hold its public key and an AIC-S2S secret
 - [ ] L9: sync job installed on each API host; `lastSyncAt` fresh
-- [ ] L11: Connect unit and trial/complimentary decided
+- [ ] L11/L15: trial/complimentary, personal-in-company and guest defaults decided; member-level documents published
 - [ ] L14: shadow comparison clean; `WEBRTC_LICENCE_COMPAT=deny`
 - [ ] `WEBRTC_TURN_ENTITLEMENT_MAX_AGE_HOURS` set; `probe.php --status` shows `enforceBlockedBy: []` in each product in staging with real data
 - [ ] Capacities measured and the bandwidth shaper load-tested (`docs/TURN_BANDWIDTH_ENFORCEMENT.md`)
