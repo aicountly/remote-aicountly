@@ -92,7 +92,7 @@ jobs:
       signed: ${{ steps.sign.outputs.signed }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # The version is one authoritative value in desktop/Cargo.toml, and the
       # input has to match it. Without this a release could be tagged 1.2.0 and
@@ -100,7 +100,15 @@ jobs:
       # notices until a support call.
       - name: Check the version matches the workspace
         shell: pwsh
+        # The free-text input reaches the script through the environment, never
+        # interpolated into it: a version such as 1.0.0'; <command> would
+        # otherwise run inside a job holding contents: write.
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
+          if ($env:REQUESTED_VERSION -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$') {
+            throw 'The version input must look like 1.2.3 or 1.2.3-beta.1.'
+          }
           $cargo = Get-Content desktop/Cargo.toml -Raw
           if ($cargo -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
             throw 'The workspace version could not be read from desktop/Cargo.toml.'
@@ -113,24 +121,24 @@ jobs:
           Write-Host "workspace: $workspace"
           Write-Host "tauri.conf.json: $($conf.version)"
           Write-Host "package.json: $($package.version)"
-          Write-Host "requested: ${{ inputs.version }}"
+          Write-Host "requested: $env:REQUESTED_VERSION"
 
-          if ($workspace -ne '${{ inputs.version }}') {
-            throw "desktop/Cargo.toml is $workspace but this run asked for ${{ inputs.version }}."
+          if ($workspace -ne $env:REQUESTED_VERSION) {
+            throw "desktop/Cargo.toml is $workspace but this run asked for $env:REQUESTED_VERSION."
           }
           if ($conf.version -ne $workspace) { throw 'tauri.conf.json disagrees with the workspace version.' }
           if ($package.version -ne $workspace) { throw 'package.json disagrees with the workspace version.' }
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: x86_64-pc-windows-msvc
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: desktop
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: npm
@@ -259,7 +267,7 @@ jobs:
           }
 
       - name: Upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: aicountly-remote-windows-${{ inputs.version }}-${{ inputs.channel }}
           path: desktop/release/*
@@ -272,7 +280,7 @@ jobs:
       # branch here that could publish an unsigned artifact as a release.
       - name: Publish a GitHub release
         if: inputs.channel != 'sandbox'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: desktop-v${{ inputs.version }}${{ inputs.channel == 'beta' && '-beta' || '' }}
           name: AICOUNTLY Remote for Windows ${{ inputs.version }}

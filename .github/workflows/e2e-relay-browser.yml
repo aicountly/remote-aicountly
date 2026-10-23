@@ -37,10 +37,10 @@ jobs:
           [ "$GITHUB_REF" = "refs/heads/main" ] || { echo "::error::Run the production target from main (this run is on $GITHUB_REF)."; exit 1; }
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
 
@@ -96,7 +96,7 @@ jobs:
       # Per-case JSON (paths, candidates, stats, timings; relay-check writes no credential).
       - name: Upload the reports
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: relay-e2e-remote-${{ inputs.target }}
           path: ${{ runner.temp }}/relay-e2e-reports
