@@ -1,0 +1,86 @@
+name: TURN check — Production (read-only)
+
+# Read-only verification of production TURN authentication, WITHOUT a deploy: no build, no rsync, no migration, no .env write.
+# On the production API host it runs scripts/ci/turn-secret-presence.sh (key names + set/MISSING, never a value) and
+# scripts/ci/turn-staging-check.sh in strict mode (probe status; per node an authenticated allocation over UDP/TCP 3478 and TLS 443,
+# the wrong / expired / anonymous credential refusals and the expected relay IP; each allocation released at once).
+# Results are annotations; the job FAILS unless the relay is configured and both nodes pass. Nothing it prints contains a secret.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: TURN check (production, read-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Production checks come from main only
+        run: |
+          [ "$GITHUB_REF" = "refs/heads/main" ] || { echo "::error::Run this from main (this run is on $GITHUB_REF)."; exit 1; }
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" | sed 's/\r$//' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keygen -y -f ~/.ssh/deploy_key > /dev/null 2>&1 || { echo "::error::PROD_SSH_PRIVATE_KEY is not a usable OpenSSH private key."; exit 1; }
+          ssh-keyscan -p "${SSH_PORT:-22}" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || { echo "::error::ssh-keyscan could not reach the host."; exit 1; }
+          [ -s ~/.ssh/known_hosts ] || { echo "::error::The host returned no SSH host key."; exit 1; }
+          chmod 600 ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<CFG
+          Host deploy-target
+            HostName $SSH_HOST
+            User $SSH_USER
+            Port ${SSH_PORT:-22}
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            PubkeyAcceptedAlgorithms +ssh-rsa
+            HostKeyAlgorithms +ssh-rsa
+            BatchMode yes
+          CFG
+          chmod 600 ~/.ssh/config
+
+      - name: TURN secret presence (names only)
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
+        run: |
+          rc=0
+          { echo "=== presence"; ssh deploy-target "bash -s -- $(printf '%q' "$REMOTE_ROOT")" < scripts/ci/turn-secret-presence.sh 2>&1 || rc=$?; } > /tmp/presence.txt
+          cat /tmp/presence.txt
+          python3 scripts/ci/annotate-sections.py /tmp/presence.txt "TURN secrets (production)"
+          [ "$rc" -eq 0 ] || echo "::error title=TURN credentials missing::api/.env lacks a secret for an active relay node. See docs/production/TURN_PRODUCTION_SECRETS.md."
+          exit $rc
+
+      - name: TURN check (strict)
+        if: ${{ !cancelled() }}
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
+          PHP_CLI: ${{ vars.PROD_PHP_CLI }}
+        run: |
+          rc=0
+          ssh deploy-target "bash -s -- $(printf '%q ' "$REMOTE_ROOT" "${PHP_CLI:-}" remote strict)" < scripts/ci/turn-staging-check.sh > /tmp/turn-check.txt 2>&1 || rc=$?
+          cat /tmp/turn-check.txt
+          python3 scripts/ci/annotate-sections.py /tmp/turn-check.txt "TURN check (production)"
+          [ "$rc" -eq 0 ] || echo "::error title=TURN check (production)::authenticated relay checks failed (exit $rc) - see the annotations."
+          exit $rc
+
+      - name: Clean up SSH credentials
+        if: always()
+        run: rm -f ~/.ssh/deploy_key ~/.ssh/config

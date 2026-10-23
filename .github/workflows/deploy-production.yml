@@ -488,16 +488,27 @@ jobs:
           TURN_NCR_SECRET: ${{ secrets.TURN_NCR_SECRET }}
         run: |
           root="${REMOTE_ROOT#\~/}"
-          [ -n "$TURN_MUM_SECRET" ] || echo "::warning::The TURN_MUM_SECRET repository secret is empty: api/.env keeps whatever Mumbai secret it has, and Mumbai is not served if it has none."
-          [ -n "$TURN_NCR_SECRET" ] || echo "::warning::The TURN_NCR_SECRET repository secret is empty: api/.env keeps whatever Greater Noida secret it has, and Noida is not served if it has none."
+          rc=0
+          # Not set in GitHub = keep the host's value (the host .env is the system of record; docs/production/TURN_PRODUCTION_SECRETS.md).
+          [ -n "$TURN_MUM_SECRET" ] || echo "TURN_MUM_SECRET is not set for this job: api/.env keeps its Mumbai secret, checked below."
+          [ -n "$TURN_NCR_SECRET" ] || echo "TURN_NCR_SECRET is not set for this job: api/.env keeps its Noida secret, checked below."
+          echo "=== result" > /tmp/turn-secrets.txt
           {
             printf 'WEBRTC_TURN_NODE_MUM_SECRET=%s\n' "$TURN_MUM_SECRET"
             printf 'WEBRTC_TURN_NODE_NCR_SECRET=%s\n' "$TURN_NCR_SECRET"
-          } | ssh deploy-target "bash '$root/api/bin/ops/inject-turn-secrets.sh'" > /tmp/turn-secrets.txt 2>&1
-          rc=$?
+          } | ssh deploy-target "bash '$root/api/bin/ops/inject-turn-secrets.sh'" >> /tmp/turn-secrets.txt 2>&1 || rc=$?
+          # Then: does api/.env now hold a secret for every ACTIVE node (key names and set/MISSING only)? A gap no longer passes
+          # silently: it is an error here, and the job fails at its end (after the live-app check, so the release is still verified).
+          echo "=== presence" >> /tmp/turn-secrets.txt
+          present=0
+          ssh deploy-target "bash -s -- $(printf '%q' "$REMOTE_ROOT")" < scripts/ci/turn-secret-presence.sh >> /tmp/turn-secrets.txt 2>&1 || present=$?
           cat /tmp/turn-secrets.txt
-          # Key names and outcomes only - the injector never prints a value.
+          # Key names and outcomes only - the injector and the presence check never print a value.
           python3 scripts/ci/annotate-sections.py /tmp/turn-secrets.txt "TURN secrets"
+          if [ "$present" -ne 0 ]; then
+            echo "::error title=TURN credentials missing::api/.env has no secret for an active relay node (see the TURN secrets annotations). Production cannot mint TURN credentials. Fix: docs/production/TURN_PRODUCTION_SECRETS.md."
+            echo "TURN_SECRETS_MISSING=1" >> "$GITHUB_ENV"
+          fi
           exit $rc
 
       # The non-secret observe-mode TURN settings, from a reviewed file in the repository (docs/production/turn-production.remote.env).
@@ -581,18 +592,27 @@ jobs:
             exit 1
           fi
 
-      # Read-only TURN checks from the production API host (scripts/ci/turn-staging-check.sh): probe status, then an authenticated
-      # allocation and the wrong / expired / missing credential refusals per node, released at once. Results are annotations.
+      # Read-only TURN checks from the production API host (scripts/ci/turn-staging-check.sh … strict): probe status, then an
+      # authenticated allocation and the wrong / expired / missing credential refusals per node, released at once. Results are
+      # annotations, and the step FAILS unless the relay is configured and both nodes pass (no more green beside a failing probe).
       - name: TURN check (read-only)
         if: ${{ inputs.turn_check && !cancelled() }}
-        continue-on-error: true
         env:
           REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
           PHP_CLI: ${{ vars.PROD_PHP_CLI }}
         run: |
-          ssh deploy-target "bash -s -- $(printf '%q ' "$REMOTE_ROOT" "${PHP_CLI:-}" remote)" < scripts/ci/turn-staging-check.sh > /tmp/turn-check.txt 2>&1
+          rc=0
+          ssh deploy-target "bash -s -- $(printf '%q ' "$REMOTE_ROOT" "${PHP_CLI:-}" remote strict)" < scripts/ci/turn-staging-check.sh > /tmp/turn-check.txt 2>&1 || rc=$?
           cat /tmp/turn-check.txt
           python3 scripts/ci/annotate-sections.py /tmp/turn-check.txt "TURN check (production)"
+          [ "$rc" -eq 0 ] || echo "::error title=TURN check (production)::authenticated relay checks failed (exit $rc) - see the annotations above."
+          exit $rc
+
+      - name: Fail when production TURN credentials are missing
+        if: ${{ !cancelled() && env.TURN_SECRETS_MISSING == '1' }}
+        run: |
+          echo "::error::The deploy finished, but api/.env lacks a secret for an active TURN node, so production serves no relay. See docs/production/TURN_PRODUCTION_SECRETS.md."
+          exit 1
 
       - name: Clean up SSH credentials
         if: always()
