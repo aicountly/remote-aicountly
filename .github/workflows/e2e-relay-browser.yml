@@ -84,12 +84,13 @@ jobs:
           SSH: ssh deploy-target
           REMOTE_ROOT: ${{ inputs.target == 'production' && secrets.PROD_SSH_REMOTE_ROOT || secrets.SANDBOX_SSH_REMOTE_ROOT }}
           PHP_CLI: ${{ inputs.target == 'production' && vars.PROD_PHP_CLI || vars.SANDBOX_PHP_CLI }}
+          INPUT_TARGET: ${{ inputs.target }}
         run: |
           rc=0
           PW_DIR="$RUNNER_TEMP/pw" OUT="$RUNNER_TEMP/relay-e2e.txt" REPORT_DIR="$RUNNER_TEMP/relay-e2e-reports" \
             bash scripts/ci/relay-e2e.sh || rc=$?
           cat "$RUNNER_TEMP/relay-e2e.txt"
-          python3 scripts/ci/annotate-sections.py "$RUNNER_TEMP/relay-e2e.txt" "Relay E2E (${{ inputs.target }}, remote)"
+          python3 scripts/ci/annotate-sections.py "$RUNNER_TEMP/relay-e2e.txt" "Relay E2E (${INPUT_TARGET}, remote)"
           [ "$rc" -eq 0 ] || echo "::error title=Relay E2E::at least one case failed - see the annotations."
           exit $rc
 
