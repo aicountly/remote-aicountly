@@ -12,6 +12,7 @@ use App\Domain\Auth\SourceContext;
 use App\Domain\Policy\EffectivePolicy;
 use App\Domain\Policy\EffectivePolicyResolver;
 use App\Domain\Policy\PermissionCatalog;
+use App\Domain\Policy\PlanEntitlements;
 use App\Domain\Support\ApiException;
 use App\Domain\Support\Clock;
 use App\Domain\Support\Ids;
@@ -885,6 +886,22 @@ class SessionService
      */
     private function enforceMonthlySessionQuota(?int $companyId): void
     {
+        // The company's Manage plan first (remote.max_sessions_per_month, CONTRACTS §3.6): 402
+        // PLAN_LIMIT_REACHED. Absent = unlimited; Remote's own entitlement row below still applies.
+        if ($companyId !== null) {
+            PlanEntitlements::assertRoom(
+                $this->db,
+                $companyId,
+                PlanEntitlements::MAX_SESSIONS_PER_MONTH,
+                fn (): int => $this->db->table('remote_sessions')
+                    ->where('created_at >=', gmdate('Y-m-01 00:00:00') . '+00')
+                    ->where('company_id', $companyId)
+                    ->countAllResults(),
+                'session a month',
+                'sessions a month',
+            );
+        }
+
         $entitlement = $this->policies->entitlement($companyId);
         $allowance   = $entitlement['max_monthly_sessions'];
 

@@ -84,7 +84,8 @@ final class ManageRegistryRelayTest extends CIUnitTestCase
 
     public function testTheAllowListIsNoWiderThanTheClient(): void
     {
-        $calls = self::clientCalls();
+        // The plan reads are relayed by contract (CONTRACTS §3.5) although the client does not call them.
+        $calls = array_merge(self::clientCalls(), array_map(static fn (string $c): array => explode(' ', $c, 2), ManageRegistryRelay::CONTRACT_ONLY));
         foreach (ManageRegistryRelay::ROUTES as $method => $patterns) {
             foreach ($patterns as $pattern) {
                 $used = array_filter($calls, static fn (array $c): bool => $c[0] === $method && preg_match($pattern, $c[1]) === 1);
@@ -93,11 +94,23 @@ final class ManageRegistryRelayTest extends CIUnitTestCase
         }
     }
 
+    public function testCompanyAccess120AndTheFleetContractRoutesAreRelayed(): void
+    {
+        $this->assertSame('1.2.0', trim((string) file_get_contents(dirname(ROOTPATH) . '/web/src/company-access/VERSION')));
+        foreach ([['GET', 'v1/app-roles'], ['GET', 'v1/company-creation-targets'], ['PATCH', 'v1/workspaces/12'],
+            ['PATCH', 'v1/workspaces/12/members/1f2e-uuid'], ['POST', 'v1/companies/74/creator-access/retry'],
+            ['GET', 'v1/companies/74/plan'], ['GET', 'v1/me/plan'], ['GET', 'v1/me/pending']] as [$method, $path]) {
+            $this->assertTrue(ManageRegistryRelay::isRegistryRoute($method, $path), "{$method} {$path} is relayed");
+        }
+    }
+
     public function testOnlyTheRegistryCallsAreRelayed(): void
     {
         $this->assertFalse(ManageRegistryRelay::isRegistryRoute('DELETE', 'v1/companies/74/permissions'), 'right path, wrong method');
         $this->assertFalse(ManageRegistryRelay::isRegistryRoute('POST', 'v1/workspaces'));
-        $this->assertFalse(ManageRegistryRelay::isRegistryRoute('PATCH', 'v1/workspaces/3'), 'this client does not rename workspaces');
+        $this->assertFalse(ManageRegistryRelay::isRegistryRoute('PATCH', 'v1/workspaces'), 'no workspace id');
+        $this->assertFalse(ManageRegistryRelay::isRegistryRoute('PATCH', 'v1/workspaces/3/members'), 'no member');
+        $this->assertFalse(ManageRegistryRelay::isRegistryRoute('POST', 'v1/companies/74/plan'), 'plans are read-only');
         $this->assertFalse(ManageRegistryRelay::isRegistryRoute('GET', 'v1/audit-log'));
         $this->assertFalse(ManageRegistryRelay::isRegistryRoute('GET', 'v1/companies/74/permissions/extra/level'));
         $this->assertFalse(ManageRegistryRelay::isRegistryRoute('OPTIONS', 'v1/workspaces'));

@@ -25,6 +25,10 @@
  *                            can_open_in_current_app=false; without app, as before
  *   mgr-evalnoapp-<cmp>      companyinfo that says nothing, and a list that marks
  *                            <cmp> not openable in Remote
+ *   mgr-ws-<cmp>             a workspace member of <cmp> (not the owner) with access to every
+ *                            company of the workspace: asked for app=remote, companyinfo carries
+ *                            app_access_source 'workspace', app_role_key 'company_admin' and the
+ *                            company's plan (CONTRACTS §1, §3.5; entitlements as a list)
  */
 
 $path   = (string) parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
@@ -83,7 +87,7 @@ if ($path === '/api/userprofile') {
 
 // ------------------------------------------------------------------- manage
 
-$ownedCompany = preg_match('/^mgr-(?:ok|eval|noapp|evalnoapp)-(\d+)$/', $bearer, $m) ? (int) $m[1] : 0;
+$ownedCompany = preg_match('/^mgr-(?:ok|eval|noapp|evalnoapp|ws)-(\d+)$/', $bearer, $m) ? (int) $m[1] : 0;
 $evaluated    = str_starts_with($bearer, 'mgr-ok-') || str_starts_with($bearer, 'mgr-noapp-');
 // Company registry: asked for Remote, a member whose access excludes it is refused.
 $askedRemote  = ($query['app'] ?? '') === 'remote';
@@ -102,6 +106,17 @@ if ($path === '/api/companyinfo') {
     if ($evaluated) {
         $company['ownership'] = 'owner';
         $company['access_type'] = 1;
+    }
+    if (str_starts_with($bearer, 'mgr-ws-')) {
+        $company += ['ownership' => 'shared', 'access_type' => 0];
+        if ($askedRemote) {
+            $company += [
+                'app_access_source' => 'workspace',
+                'app_role_key'      => 'company_admin',
+                'plan'              => ['code' => 'remote-basic', 'label' => 'Basic', 'is_default' => true, 'status' => 'active', 'ends_at' => null,
+                    'entitlements' => [['code' => 'remote.max_sessions_per_month', 'value' => 3], ['code' => 'remote.max_devices', 'value' => 1]]],
+            ];
+        }
     }
     reply(200, ['success' => '1', 'data' => $company]);
 }

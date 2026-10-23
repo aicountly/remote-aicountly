@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Domain\Directory;
 
 use App\Domain\Auth\RemoteIdentity;
+use App\Domain\Policy\PlanEntitlements;
 use App\Domain\Support\ApiException;
 use App\Domain\Support\RequestContext;
 use CodeIgniter\Database\BaseConnection;
@@ -73,6 +74,11 @@ class MembershipVerifier
 
             if ($answer['state'] === ManageClient::GRANTED) {
                 $this->markVerified($userId, $companyId, $answer['name']);
+                // The company's plan came with the same answer (CONTRACTS §3.5): kept for PlanEntitlements.
+                // Workspace-wide access (`app_access_source: workspace`) needs nothing more here: the row
+                // Remote holds stays a member's (role MEMBER, never company admin) — Remote derives no role
+                // from Manage's `app_role_key`.
+                $this->rememberPlan($companyId, (bool) ($answer['planKnown'] ?? false), $answer['plan'] ?? null);
                 $row['verified_at'] = gmdate('Y-m-d H:i:sO');
 
                 return $row;
@@ -232,6 +238,25 @@ class MembershipVerifier
             'user'    => $userId,
             'company' => $companyId,
         ]);
+    }
+
+    /** Keep the plan companyinfo carried (or that it carried none) on the company's directory row. */
+    private function rememberPlan(int $companyId, bool $planKnown, mixed $plan): void
+    {
+        try {
+            $this->db->query(
+                <<<'SQL'
+                    INSERT INTO remote_company_directory (company_id, name, synced_at, created_at, updated_at)
+                    VALUES (?, ?, NOW(), NOW(), NOW())
+                    ON CONFLICT (company_id) DO NOTHING
+                    SQL,
+                [$companyId, 'Company ' . $companyId],
+            );
+            PlanEntitlements::remember($this->db, $companyId, $planKnown ? $plan : null);
+        } catch (\Throwable $e) {
+            // A database without the plan columns yet: no limits, membership unaffected.
+            log_message('warning', 'Remote: plan of company {company} not kept: {reason}', ['company' => $companyId, 'reason' => $e->getMessage()]);
+        }
     }
 
     public function markVerified(int $userId, int $companyId, ?string $companyName): void

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Domain\Directory;
 
+use App\Domain\Policy\PlanEntitlements;
 use App\Libraries\CompanyLifecycle;
 use Config\Remote as RemoteConfig;
 
@@ -67,8 +68,11 @@ class ManageClient
         // truth: written through, so a lifecycle event Remote missed is corrected. Never throws.
         CompanyLifecycle::syncFromCompanyInfo($companyId, (int) $result['status'], (string) $result['body']);
 
+        // The company's plan for Remote (CONTRACTS §3.5): [said something about plans, the plan].
+        [$planKnown, $plan] = PlanEntitlements::fromCompanyInfoBody((string) $result['body']);
+
         if ($answer['state'] !== 'unevaluated') {
-            return ['state' => $answer['state'], 'name' => $answer['name']];
+            return ['state' => $answer['state'], 'name' => $answer['name'], 'planKnown' => $planKnown, 'plan' => $plan];
         }
 
         // A host whose companyinfo does not say how the session relates to the
@@ -79,8 +83,8 @@ class ManageClient
         }
 
         return isset($list[$companyId])
-            ? ['state' => self::GRANTED, 'name' => $list[$companyId] !== '' ? $list[$companyId] : $answer['name']]
-            : ['state' => self::DENIED, 'name' => null];
+            ? ['state' => self::GRANTED, 'name' => $list[$companyId] !== '' ? $list[$companyId] : $answer['name'], 'planKnown' => $planKnown, 'plan' => $plan]
+            : ['state' => self::DENIED, 'name' => null, 'planKnown' => false, 'plan' => null];
     }
 
     /**
