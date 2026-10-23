@@ -528,6 +528,24 @@ jobs:
           python3 scripts/ci/annotate-sections.py /tmp/turn-config.txt "TURN observe configuration"
           exit $rc
 
+      # The sandbox's own scheduled jobs: ONLY the 5-minute TURN health probe (backend/bin/ops/jobs.sandbox.txt), so
+      # node health is real here as in production. The production list's company-lifecycle jobs act on data and are
+      # not installed. install-jobs.sh writes one marked block naming this API folder; nothing else in the account's
+      # crontab (Connect's sandbox included) is touched. Then --check: the installed block must equal the file.
+      - name: Scheduled jobs (TURN health probe only)
+        env:
+          REMOTE_ROOT: ${{ secrets.SANDBOX_SSH_REMOTE_ROOT }}
+          PHP_BIN: ${{ vars.SANDBOX_PHP_CLI }}
+        run: |
+          root="${REMOTE_ROOT#\~/}"
+          php_opt=""; [ -n "$PHP_BIN" ] && php_opt="--php=$(printf '%q' "$PHP_BIN")"
+          rc=0
+          ssh deploy-target "cd '$root/api' && JOBS_FILE=bin/ops/jobs.sandbox.txt bash bin/ops/install-jobs.sh --apply $php_opt && JOBS_FILE=bin/ops/jobs.sandbox.txt bash bin/ops/install-jobs.sh --check $php_opt" > /tmp/jobs.txt 2>&1 || rc=$?
+          cat /tmp/jobs.txt
+          python3 scripts/ci/annotate-sections.py /tmp/jobs.txt "Scheduled jobs (sandbox)"
+          [ "$rc" -eq 0 ] || echo "::error::Installing the sandbox TURN probe job failed (exit $rc) - see the output above."
+          exit $rc
+
       # Is the live site really Remote, and the build just deployed? The host's
       # anti-bot page ("One moment, please...") answers some requests from
       # GitHub's runners with HTTP 200, so a status code proves nothing. These
