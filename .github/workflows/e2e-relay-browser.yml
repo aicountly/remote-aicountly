@@ -1,0 +1,108 @@
+name: E2E — browser through the TURN relays
+
+# End-to-end WebRTC through the real Mumbai and Greater Noida relays, from a real browser (headless Chromium on the runner), with
+# credentials minted by the chosen API host from its own node secrets (scripts/ci/emit-grant.sh; 300 s credentials, masked, never
+# printed, deleted at the end). Every connection is RELAY-ONLY, so a pass proves the relay carried it: video and audio decoded on
+# the far side, data-channel echo RTT, a 1 MiB transfer — cross-region (Mumbai user <-> Delhi user) over UDP, TCP and TLS 443, two
+# users on the same relay, and an ICE restart onto renewed credentials. scripts/ci/relay-e2e.sh lists the cases.
+#
+# Read-only for the applications: no build, no deploy, no .env or database change. It is NOT a test of the product UI (sign-in,
+# admission, screen sharing, the desktop agent); that is docs/E2E_TEST_PLAN.md stage 2.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Which API host mints the credentials (both use the same relays)
+        type: choice
+        options: [sandbox, production]
+        default: sandbox
+
+concurrency:
+  group: relay-e2e-${{ inputs.target }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  relay:
+    name: Browser relay E2E (${{ inputs.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Production runs come from main only
+        if: ${{ inputs.target == 'production' }}
+        run: |
+          [ "$GITHUB_REF" = "refs/heads/main" ] || { echo "::error::Run the production target from main (this run is on $GITHUB_REF)."; exit 1; }
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright's Chromium
+        run: |
+          mkdir -p "$RUNNER_TEMP/pw" && cd "$RUNNER_TEMP/pw"
+          npm init -y > /dev/null
+          npm install --no-save --no-audit --no-fund playwright@1.56.1
+          npx playwright install --with-deps chromium
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ inputs.target == 'production' && secrets.PROD_SSH_PRIVATE_KEY || secrets.SANDBOX_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ inputs.target == 'production' && secrets.PROD_SSH_HOST || secrets.SANDBOX_SSH_HOST }}
+          SSH_PORT: ${{ inputs.target == 'production' && secrets.PROD_SSH_PORT || secrets.SANDBOX_SSH_PORT }}
+          SSH_USER: ${{ inputs.target == 'production' && secrets.PROD_SSH_USER || secrets.SANDBOX_SSH_USER }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" | sed 's/\r$//' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keygen -y -f ~/.ssh/deploy_key > /dev/null 2>&1 || { echo "::error::The SSH private key secret is not a usable OpenSSH private key."; exit 1; }
+          ssh-keyscan -p "${SSH_PORT:-22}" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || { echo "::error::ssh-keyscan could not reach the host."; exit 1; }
+          [ -s ~/.ssh/known_hosts ] || { echo "::error::The host returned no SSH host key."; exit 1; }
+          chmod 600 ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<CFG
+          Host deploy-target
+            HostName $SSH_HOST
+            User $SSH_USER
+            Port ${SSH_PORT:-22}
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            PubkeyAcceptedAlgorithms +ssh-rsa
+            HostKeyAlgorithms +ssh-rsa
+            BatchMode yes
+          CFG
+          chmod 600 ~/.ssh/config
+
+      - name: Relay E2E
+        env:
+          SSH: ssh deploy-target
+          REMOTE_ROOT: ${{ inputs.target == 'production' && secrets.PROD_SSH_REMOTE_ROOT || secrets.SANDBOX_SSH_REMOTE_ROOT }}
+          PHP_CLI: ${{ inputs.target == 'production' && vars.PROD_PHP_CLI || vars.SANDBOX_PHP_CLI }}
+        run: |
+          rc=0
+          PW_DIR="$RUNNER_TEMP/pw" OUT="$RUNNER_TEMP/relay-e2e.txt" REPORT_DIR="$RUNNER_TEMP/relay-e2e-reports" \
+            bash scripts/ci/relay-e2e.sh || rc=$?
+          cat "$RUNNER_TEMP/relay-e2e.txt"
+          python3 scripts/ci/annotate-sections.py "$RUNNER_TEMP/relay-e2e.txt" "Relay E2E (${{ inputs.target }}, remote)"
+          [ "$rc" -eq 0 ] || echo "::error title=Relay E2E::at least one case failed - see the annotations."
+          exit $rc
+
+      # Per-case JSON (paths, candidates, stats, timings; relay-check writes no credential).
+      - name: Upload the reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-e2e-remote-${{ inputs.target }}
+          path: ${{ runner.temp }}/relay-e2e-reports
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Clean up SSH credentials
+        if: always()
+        run: rm -f ~/.ssh/deploy_key ~/.ssh/config
