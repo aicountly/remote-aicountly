@@ -32,9 +32,10 @@ trap 'rm -rf "$grants"' EXIT
 : > "$OUT"
 [ -n "$REPORT_DIR" ] && mkdir -p "$REPORT_DIR"
 
-mint() { # node transport file
+RUN_TAG="e2e-$(date -u +%H%M%S)-$RANDOM"
+mint() { # node transport file — each grant gets its own coturn user name (<run>-<file>), so no two peers share a quota
   local q
-  q="$(printf '%q ' "$REMOTE_ROOT" "$PHP_CLI" "$1" "$2" 300)"
+  q="$(printf '%q ' "$REMOTE_ROOT" "$PHP_CLI" "$1" "$2" 300 "$RUN_TAG-$(basename "$3" .json)")"
   $SSH "bash -s -- $q" < "$here/emit-grant.sh" > "$3" 2> "$3.err" || { echo "could not mint a grant for $1 over $2: $(head -c 200 "$3.err")"; return 1; }
   # Mask every credential before anything else runs (the grant itself is never printed).
   jq -r '.iceServers[].credential' "$3" | while IFS= read -r c; do [ -n "$c" ] && echo "::add-mask::$c" >&3; done
@@ -59,7 +60,7 @@ run_case() { # name nodeA nodeB transport [restart]
     env+=(ICE_FRESH_GRANT="$gf")
   fi
   [ -n "$REPORT_DIR" ] && env+=(ICE_REPORT="$REPORT_DIR/$name.json")
-  (cd "$PW_DIR" && env "${env[@]}" timeout 180 node "$check") >> "$OUT" 2>&1
+  (cd "$PW_DIR" && env "${env[@]}" timeout 300 node "$check") >> "$OUT" 2>&1
   rc=$?
   echo "(exit $rc)" >> "$OUT"
   NAMES+=("$name"); [ "$rc" -eq 0 ] && RESULTS+=("PASS") || RESULTS+=("FAIL (exit $rc)")

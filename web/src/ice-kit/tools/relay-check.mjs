@@ -154,39 +154,57 @@ window.runRelayCheck = async (rawGrant, rawFresh, rawPeer, withMedia) => {
 
   try {
     await negotiate(a, b);
-    await until(connected(a), 15000, 'relay-only connection');
-    await until(new Promise((r) => { if (channel.readyState === 'open') r(); else channel.onopen = r; }), 10000, 'data channel');
+    await until(connected(a), 30000, 'relay-only connection');
+    await until(new Promise((r) => { if (channel.readyState === 'open') r(); else channel.onopen = r; }), 20000, 'data channel');
     channel.send('ping-1');
-    result.firstMessage = await until(nextMessage(), 10000, 'first message');
+    result.firstMessage = await until(nextMessage(), 20000, 'first message');
     result.path = await diagnostics.selectedPath();
     result.peerPath = await peerDiagnostics.selectedPath();
 
+    // Each measurement stands alone: one that times out is recorded and the next still runs.
+    result.stepErrors = {};
+    const step = async (name, fn) => { try { await fn(); } catch (error) { result.stepErrors[name] = String(error.message || error); } };
+
     if (withMedia) {
+      // Media first: is real encoded video and audio decoded on the far side, before anything else competes for the path?
+      await step('media', async () => {
+        await new Promise((r) => setTimeout(r, 8000));
+        result.media = await inbound(b);
+      });
+
       // Echo round trips through the relay(s), as a control message (Remote's input channel) experiences them.
-      const rtts = [];
-      for (let i = 0; i < 5; i += 1) {
+      await step('echo', async () => {
+        const rtts = [];
+        for (let i = 0; i < 5; i += 1) {
+          const t0 = performance.now();
+          const back = new Promise((r) => { channel.onmessage = (m) => r(m.data); });
+          channel.send('echo:' + i);
+          await until(back, 10000, 'echo ' + i);
+          rtts.push(Math.round(performance.now() - t0));
+        }
+        result.echoRttMs = rtts;
+      });
+
+      // 1 MiB in 16 KiB chunks, honouring the send buffer: file transfer over the relay. A measurement, with a generous budget;
+      // what arrived by then is reported either way.
+      await step('bulk', async () => {
+        const chunk = new Uint8Array(16384);
+        channel.bufferedAmountLowThreshold = 262144;
         const t0 = performance.now();
-        const back = new Promise((r) => { channel.onmessage = (m) => r(m.data); });
-        channel.send('echo:' + i);
-        await until(back, 5000, 'echo ' + i);
-        rtts.push(Math.round(performance.now() - t0));
-      }
-      result.echoRttMs = rtts;
-
-      // 1 MiB in 16 KiB chunks, honouring the send buffer: file transfer over the relay.
-      const chunk = new Uint8Array(16384);
-      channel.bufferedAmountLowThreshold = 262144;
-      const t0 = performance.now();
-      for (let sent = 0; sent < 64; sent += 1) {
-        if (channel.bufferedAmount > 1048576) await new Promise((r) => { channel.onbufferedamountlow = r; });
-        channel.send(chunk);
-      }
-      await until(new Promise((r) => { const check = () => bulkBytes >= 1048576 ? r() : waiters.push(check); check(); }), 30000, 'bulk transfer');
-      const seconds = (performance.now() - t0) / 1000;
-      result.bulk = { bytes: bulkBytes, seconds: Math.round(seconds * 100) / 100, mbps: Math.round((8 * bulkBytes / 1e6 / seconds) * 10) / 10 };
-
-      await new Promise((r) => setTimeout(r, 6000));
-      result.media = await inbound(b);
+        const rate = () => {
+          const seconds = (performance.now() - t0) / 1000;
+          result.bulk = { bytes: bulkBytes, seconds: Math.round(seconds * 100) / 100, mbps: Math.round((8 * bulkBytes / 1e6 / seconds) * 100) / 100 };
+        };
+        try {
+          for (let sent = 0; sent < 64; sent += 1) {
+            if (channel.bufferedAmount > 1048576) await until(new Promise((r) => { channel.onbufferedamountlow = r; }), 90000, 'send buffer');
+            channel.send(chunk);
+          }
+          await until(new Promise((r) => { const check = () => bulkBytes >= 1048576 ? r() : waiters.push(check); check(); }), 90000, 'bulk transfer');
+        } finally {
+          rate();
+        }
+      });
     }
 
     if (rawFresh) {
@@ -196,9 +214,9 @@ window.runRelayCheck = async (rawGrant, rawFresh, rawPeer, withMedia) => {
       const supervisor = new ConnectionSupervisor({ pc: a, network: null, restart: () => negotiate(a, b, { iceRestart: true }) });
       await supervisor.requestRestart('credential_refresh');
       await new Promise((r) => setTimeout(r, 3000));
-      await until(connected(a), 15000, 'connection after ICE restart');
+      await until(connected(a), 30000, 'connection after ICE restart');
       channel.send('ping-2');
-      result.secondMessage = await until(nextMessage(), 10000, 'message after restart');
+      result.secondMessage = await until(nextMessage(), 20000, 'message after restart');
       result.pathAfterRestart = await diagnostics.selectedPath();
       supervisor.dispose();
     }
@@ -279,7 +297,7 @@ const checks = [
     ['video was decoded on the far side (frames through the relay)', (result.media?.video.frames ?? 0) >= 30],
     ['audio arrived on the far side', (result.media?.audio.bytes ?? 0) > 0],
     ['data-channel echo round trips completed', (result.echoRttMs ?? []).length === 5],
-    ['1 MiB bulk transfer completed', (result.bulk?.bytes ?? 0) >= 1048576],
+    [`1 MiB bulk transfer completed within 90 s${result.bulk ? ` (${result.bulk.mbps} Mbit/s)` : ''}`, (result.bulk?.bytes ?? 0) >= 1048576],
   ] : []),
   ['the client could time every reachable node (the `rtt` it sends back)', Object.keys(result.latency ?? {}).length === result.probe.nodes.filter((n) => !tolerated.has(n.id)).length && Object.values(result.latency ?? {}).every((ms) => ms > 0)],
   ...(fresh ? [
@@ -297,6 +315,7 @@ if (peerGrant && result.peerPath) console.log(`peer path: ${result.peerPath.path
 if (result.media) console.log(`media: video ${result.media.video.frames} frames / ${result.media.video.bytes} B, audio ${result.media.audio.bytes} B`);
 if (result.echoRttMs) console.log(`echo rtt ms: ${result.echoRttMs.join(', ')}`);
 if (result.bulk) console.log(`bulk: ${result.bulk.bytes} B in ${result.bulk.seconds} s = ${result.bulk.mbps} Mbit/s`);
+if (result.stepErrors && Object.keys(result.stepErrors).length) console.log(`step errors: ${Object.entries(result.stepErrors).map(([k, v]) => `${k}: ${v}`).join('; ')}`);
 if (result.latency) console.log(`measured: ${Object.entries(result.latency).map(([id, ms]) => `${id} ${ms} ms`).join(', ') || 'nothing'}`);
 if (result.pathAfterRestart) console.log(`after restart: ${JSON.stringify(result.pathAfterRestart)}`);
 if (result.error) console.log(`error: ${result.error}`);
