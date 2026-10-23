@@ -348,10 +348,18 @@ jobs:
           # uploaded and must never be deleted, hence the excludes below
           # combined with --delete.
           #
-          # writable/ is excluded for the same reason: it holds the rate
-          # limiter's buckets and the application log, and --delete would wipe
-          # them on every deploy.
+          # writable/ is server state, not code: besides the cache, logs and
+          # sessions it holds writable/ice/ (TURN node health, the admission
+          # books, learned client latency, the licence cache), which exists only
+          # on the server. Excluding three of its subdirectories left the rest
+          # exposed, so --delete wiped writable/ice/ on every deploy (node health
+          # showed "unknown" until the 5-minute probe ran again). 'P /writable/***'
+          # protects the directory and everything under it from deletion; the
+          # tracked skeleton (index.html, .htaccess) is still uploaded. It comes
+          # first because rsync filters are first-match. Same rule as Connect's
+          # deploy (server-php/tests/unit/DeployRsyncProtectsWritableTest.php).
           rsync -avz --delete \
+            --filter='P /writable/***' \
             --exclude='.env' \
             --exclude='.env.*' \
             --exclude='.git*' \
