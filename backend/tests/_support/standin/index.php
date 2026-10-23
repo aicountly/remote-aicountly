@@ -52,6 +52,17 @@ if ($bearer === 'html') {
     reply(200, '<html><body>Down for maintenance</body></html>', 'text/html');
 }
 
+// What the caller actually sent. A request with no Accept and no User-Agent is
+// what a WAF in front of the real portal answers with its own HTML page instead
+// of the portal's JSON, so PortalClient has to send both.
+if ($path === '/api/echo-request') {
+    $seen = [];
+    foreach ($header as $name => $value) {
+        $seen[strtolower((string) $name)] = (string) $value;
+    }
+    reply(200, ['headers' => $seen]);
+}
+
 // ------------------------------------------------------------------- portal
 
 if ($path === '/api/validatesession') {

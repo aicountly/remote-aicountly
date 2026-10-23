@@ -92,6 +92,30 @@ class PortalRelayController extends Controller
                 ->setJSON(['message' => 'Auth service unavailable — please retry.']);
         }
 
+        // The portal answers JSON and only JSON. HTML here is something in
+        // front of it — a WAF's “checking your browser” page, a maintenance
+        // page — and it arrives with the portal's own 200, which passed straight
+        // through to the browser as a successful sign-in carrying no token. The
+        // app then reported a 200 it could not parse as the sign-in service
+        // being unavailable, which is true but unactionable. Say so properly
+        // instead: the portal never saw the request, so a one-time code is
+        // unspent and the same call may be made again.
+        if (self::isNotJson($result['contentType'])) {
+            log_message('error', 'portal relay: ' . $path . ' was answered by an interceptor, not the portal ('
+                . $result['contentType'] . ', HTTP ' . $result['status'] . ')');
+
+            return $this->response
+                ->setStatusCode(503)
+                ->setHeader('Cache-Control', 'no-store')
+                ->setHeader('Retry-After', '5')
+                ->setJSON([
+                    'status'    => 0,
+                    'error'     => 'auth_unavailable',
+                    'retryable' => true,
+                    'message'   => 'Sign-in service temporarily unavailable. Please retry.',
+                ]);
+        }
+
         $response = $this->response
             ->setStatusCode($result['status'])
             ->setContentType($result['contentType'])
@@ -103,6 +127,20 @@ class PortalRelayController extends Controller
         }
 
         return $response->setBody($result['body']);
+    }
+
+    /**
+     * True when a content type is not the portal's JSON.
+     *
+     * Deliberately positive about JSON rather than looking for `text/html`: an
+     * interceptor may answer `text/plain`, or nothing at all, and anything that
+     * is not JSON is equally not an answer this relay may hand on as one.
+     */
+    private static function isNotJson(string $contentType): bool
+    {
+        $type = strtolower(trim($contentType));
+
+        return $type === '' || (! str_contains($type, 'application/json') && ! str_contains($type, '+json'));
     }
 
     /**
