@@ -60,6 +60,9 @@
   Header set X-Content-Type-Options "nosniff"
   Header set Referrer-Policy "strict-origin-when-cross-origin"
   Header set X-Frame-Options "DENY"
+  # HTTPS only from now on (HSTS, one year). Browsers ignore it on plain http, which the rule at the top
+  # redirects anyway; `always` also covers error pages.
+  Header always set Strict-Transport-Security "max-age=31536000"
 
   # Screen capture and microphone are the product; they are permitted for this
   # origin and denied to anything embedded. `display-capture=(self)` is what

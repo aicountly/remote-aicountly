@@ -219,9 +219,11 @@ jobs:
       - name: Verify signatures
         shell: pwsh
         working-directory: desktop
+        env:
+          INPUT_CHANNEL: ${{ inputs.channel }}
         run: |
           $target = 'target/x86_64-pc-windows-msvc/release'
-          $allowUnsigned = '${{ inputs.channel }}' -eq 'sandbox'
+          $allowUnsigned = $env:INPUT_CHANNEL -eq 'sandbox'
 
           # See the comment on the Sign step: '&' keeps this in the current
           # session so the comma-separated -Path list stays one array
@@ -233,6 +235,8 @@ jobs:
       - name: Collect artifacts
         shell: pwsh
         working-directory: desktop
+        env:
+          INPUT_CHANNEL: ${{ inputs.channel }}
         run: |
           $target = 'target/x86_64-pc-windows-msvc/release'
           New-Item -ItemType Directory -Force -Path release | Out-Null
@@ -248,7 +252,7 @@ jobs:
 
           Get-Content release/SHA256SUMS.txt
 
-          if ('${{ inputs.channel }}' -eq 'sandbox') {
+          if ($env:INPUT_CHANNEL -eq 'sandbox') {
             # Travels with the artifact, so an unsigned build cannot be handed
             # to somebody as though it were a release.
             $unsignedNotice = @(
