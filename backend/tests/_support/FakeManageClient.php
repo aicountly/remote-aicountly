@@ -83,6 +83,12 @@ final class FakeManageClient extends ManageClient
         return $this->down ? null : ($this->access[$sesKey] ?? []);
     }
 
+    /** The directory and the list answer alike here; the difference is pinned in ManageClientContractTest. */
+    public function openableCompanies(string $sesKey): ?array
+    {
+        return $this->accessibleCompanies($sesKey);
+    }
+
     public function companyMembers(string $sesKey, int $companyId): array
     {
         $this->asked[] = 'share:' . $companyId;

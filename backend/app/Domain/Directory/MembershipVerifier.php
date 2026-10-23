@@ -108,9 +108,18 @@ class MembershipVerifier
     }
 
     /**
-     * Check every company this person holds against what Manage lets them open.
-     * Present means confirmed (and the name refreshed); absent means removed.
-     * An unanswered question changes nothing.
+     * The person's companies, from Manage's live directory (finding F-2).
+     *
+     * Manage's company directory (`GET /api/v1/company-directory?app=remote&access=granted`, asked with the
+     * person's own session; an older Manage's company list otherwise — ManageClient::openableCompanies)
+     * is the source: every company it says the person may open in Remote — a share, an approved
+     * request, a creator's access, a workspace owner's "every company" access — is added here as a
+     * confirmed member's row (role MEMBER, never company administrator; a row Remote already holds keeps
+     * its administrator flag and role, which are Remote's own), and every row Remote holds that is due a
+     * confirmation is checked against it: present means confirmed (and the name refreshed); absent means
+     * removed. The list is read when a row is due, or when the last read is older than
+     * `membershipVerifySeconds` (remote_identities.directory_synced_at), so a new grant shows up in the
+     * picker within that window. An unanswered question changes nothing.
      */
     public function reconcileUser(RemoteIdentity $identity): void
     {
@@ -133,23 +142,67 @@ class MembershipVerifier
             ->get()
             ->getResultArray();
 
-        if ($stale === []) {
+        if ($stale === [] && ! $this->directoryDue($identity->id)) {
             return;
         }
 
-        $accessible = $this->manage->accessibleCompanies($sesKey);
+        $accessible = $this->manage->openableCompanies($sesKey);
         if ($accessible === null) {
             return;
         }
 
         foreach ($stale as $row) {
             $companyId = (int) $row['company_id'];
-            if (array_key_exists($companyId, $accessible)) {
-                $this->markVerified($identity->id, $companyId, $accessible[$companyId] !== '' ? $accessible[$companyId] : null);
-            } else {
+            if (! array_key_exists($companyId, $accessible)) {
                 $this->forget($identity->id, $companyId);
             }
         }
+        foreach ($accessible as $companyId => $name) {
+            $this->adopt($identity->id, (int) $companyId, $name !== '' ? $name : null);
+        }
+        try {
+            $this->db->query('UPDATE remote_identities SET directory_synced_at = NOW() WHERE id = ?', [$identity->id]);
+        } catch (\Throwable $e) {
+            log_message('warning', 'Remote: directory read time not kept (migration 2026-10-24-000200 not applied?): {reason}', ['reason' => $e->getMessage()]);
+        }
+    }
+
+    /** Whether Manage's list was last read for this person longer ago than the verify window (or never). */
+    private function directoryDue(int $userId): bool
+    {
+        try {
+            $last = $this->db->table('remote_identities')->select('directory_synced_at')->where('id', $userId)->get()->getRowArray();
+        } catch (\Throwable $e) {
+            // A database without the column yet (migration 2026-10-24-000200): behave as before it.
+            return false;
+        }
+        $at = $last['directory_synced_at'] ?? null;
+
+        return $at === null || strtotime((string) $at) < time() - $this->config->membershipVerifySeconds;
+    }
+
+    /**
+     * Manage lists $companyId for this person in Remote: hold it as a confirmed member's row. An existing
+     * row is confirmed and keeps its role and administrator flag (Remote's own); a new one is MEMBER.
+     */
+    private function adopt(int $userId, int $companyId, ?string $name): void
+    {
+        $this->db->query(
+            'INSERT INTO remote_company_directory (company_id, name, synced_at, created_at, updated_at)
+             VALUES (?, ?, NOW(), NOW(), NOW())
+             ON CONFLICT (company_id) DO ' . ($name !== null ? 'UPDATE SET name = EXCLUDED.name, synced_at = NOW(), updated_at = NOW()' : 'NOTHING'),
+            [$companyId, $name ?? ('Company ' . $companyId)],
+        );
+        $this->db->query(
+            <<<'SQL'
+                INSERT INTO remote_user_company_access
+                    (user_id, company_id, role_key, is_company_admin, source, synced_at, verified_at, created_at, updated_at)
+                VALUES (?, ?, 'MEMBER', FALSE, 'PORTAL', NOW(), NOW(), NOW(), NOW())
+                ON CONFLICT (user_id, company_id) DO UPDATE
+                    SET verified_at = NOW(), synced_at = NOW(), updated_at = NOW()
+                SQL,
+            [$userId, $companyId],
+        );
     }
 
     /**

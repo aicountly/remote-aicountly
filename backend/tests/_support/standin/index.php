@@ -28,7 +28,10 @@
  *   mgr-ws-<cmp>             a workspace member of <cmp> (not the owner) with access to every
  *                            company of the workspace: asked for app=remote, companyinfo carries
  *                            app_access_source 'workspace', app_role_key 'company_admin' and the
- *                            company's plan (CONTRACTS §1, §3.5; entitlements as a list)
+ *                            company's plan (CONTRACTS §1, §3.5; entitlements as a list). Manage's
+ *                            company list (shares only) does not carry <cmp>; its company directory
+ *                            (v1/company-directory) does, with access_via 'workspace'
+ *   mgr-old-<cmp>            an older Manage without v1/company-directory (404); its list carries <cmp>
  */
 
 $path   = (string) parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
@@ -87,7 +90,7 @@ if ($path === '/api/userprofile') {
 
 // ------------------------------------------------------------------- manage
 
-$ownedCompany = preg_match('/^mgr-(?:ok|eval|noapp|evalnoapp|ws)-(\d+)$/', $bearer, $m) ? (int) $m[1] : 0;
+$ownedCompany = preg_match('/^mgr-(?:ok|eval|noapp|evalnoapp|ws|old)-(\d+)$/', $bearer, $m) ? (int) $m[1] : 0;
 $evaluated    = str_starts_with($bearer, 'mgr-ok-') || str_starts_with($bearer, 'mgr-noapp-');
 // Company registry: asked for Remote, a member whose access excludes it is refused.
 $askedRemote  = ($query['app'] ?? '') === 'remote';
@@ -121,8 +124,30 @@ if ($path === '/api/companyinfo') {
     reply(200, ['success' => '1', 'data' => $company]);
 }
 
+// Manage's company directory (company registry, finding F-2): shares AND a workspace owner's "every company"
+// access, each row saying whether it opens in the named app. mgr-old-<cmp> stands for a Manage that predates it.
+if ($path === '/api/v1/company-directory') {
+    if (str_starts_with($bearer, 'mgr-old-')) {
+        reply(404, ['success' => false, 'message' => 'No such route.']);
+    }
+    $rows = [];
+    if ($ownedCompany > 0) {
+        $viaWorkspace = str_starts_with($bearer, 'mgr-ws-');
+        $openable = ! $notForRemote;
+        $row = ['cmp_id' => $ownedCompany, 'legal_name' => 'ABC Private Limited', 'display_name' => 'ABC Private Limited',
+            'relationship' => $viaWorkspace ? 'workspace' : 'owner', 'app' => $query['app'] ?? null,
+            'access_status' => $openable ? ($viaWorkspace ? 'ACCESS_GRANTED' : 'OWNER') : 'ACCESS_RESTRICTED',
+            'can_open_in_current_app' => $openable, 'access_via' => $viaWorkspace ? 'workspace' : null];
+        if (($query['access'] ?? 'all') !== 'granted' || $openable) {
+            $rows[] = $row;
+        }
+    }
+    reply(200, ['success' => true, 'status' => 1, 'data' => $rows, 'meta' => ['page' => 1, 'per_page' => 100, 'total' => count($rows), 'total_pages' => 1]]);
+}
+
 if ($path === '/api/companies') {
-    $rows = $ownedCompany > 0 ? [['comp_id' => $ownedCompany, 'company_name' => 'ABC Private Limited', 'ownership' => 'owner']] : [];
+    // Manage's company list is built from share rows: workspace-wide access is not materialised there.
+    $rows = $ownedCompany > 0 && ! str_starts_with($bearer, 'mgr-ws-') ? [['comp_id' => $ownedCompany, 'company_name' => 'ABC Private Limited', 'ownership' => 'owner']] : [];
     if ($askedRemote && $rows !== []) {
         $rows[0]['app_access_status'] = $notForRemote ? 'ACCESS_RESTRICTED' : 'OWNER';
         $rows[0]['can_open_in_current_app'] = ! $notForRemote;
