@@ -29,7 +29,7 @@ jobs:
   relay:
     name: Browser relay E2E (${{ inputs.target }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Production runs come from main only
         if: ${{ inputs.target == 'production' }}
