@@ -191,6 +191,54 @@ class ManageClient
     }
 
     /**
+     * Every company Manage lets this session open in Remote — a share, an approved request, a creator's
+     * access and a workspace owner's "every company" access (finding F-2): Manage's company directory,
+     * `GET /api/v1/company-directory?app=remote&access=granted`, paged. A row Manage marks not openable in
+     * Remote is left out. An older Manage without the directory (404 on the first page) is asked the
+     * company list instead ({@see accessibleCompanies}), which knows shares only. Null when Manage could not
+     * answer, so the caller changes nothing.
+     *
+     * @return array<int, string>|null company id => name
+     */
+    public function openableCompanies(string $sesKey): ?array
+    {
+        $companies = [];
+        for ($page = 1; $page <= self::MAX_PAGES; $page++) {
+            $result = $this->get(
+                'v1/company-directory?app=' . self::APP_KEY . '&access=granted&page=' . $page . '&per_page=' . self::PAGE_SIZE,
+                $sesKey,
+            );
+            if ($result['status'] === 404 && $page === 1) {
+                return $this->accessibleCompanies($sesKey);
+            }
+            if ($result['status'] !== 200) {
+                return null;
+            }
+            $body = json_decode($result['body'], true);
+            $rows = is_array($body) ? ($body['data'] ?? null) : null;
+            if (! is_array($rows) || ! array_is_list($rows)) {
+                return null;
+            }
+            foreach ($rows as $row) {
+                if (! is_array($row)) {
+                    continue;
+                }
+                $id = (int) ($row['cmp_id'] ?? $row['canonical_company_id'] ?? 0);
+                if ($id <= 0 || ($row['can_open_in_current_app'] ?? true) === false) {
+                    continue;
+                }
+                $companies[$id] = trim((string) ($row['display_name'] ?? $row['legal_name'] ?? ''));
+            }
+            $pages = (int) ($body['meta']['total_pages'] ?? 1);
+            if (count($rows) < self::PAGE_SIZE || $page >= $pages) {
+                break;
+            }
+        }
+
+        return $companies;
+    }
+
+    /**
      * The company's member directory, per Manage, now.
      *
      * @return array{state: string, members: list<array{uuid: string, name: string, email: ?string}>}

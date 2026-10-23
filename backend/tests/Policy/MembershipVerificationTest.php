@@ -362,4 +362,73 @@ final class MembershipVerificationTest extends RemoteTestCase
         $this->assertSame('COMPANY_ACCESS_DENIED', $this->deniedAs(static fn () => Services::policyResolver()->resolve($user, 'COMPANY', 481)));
         $this->assertNull($this->accessRow($user, 481));
     }
+    // ---------------------------------------------- finding F-2: Manage's live directory feeds the picker
+
+    public function testThePickerOffersEveryCompanyManageListsAsAMembersConfirmedRow(): void
+    {
+        $user = $this->makeIdentity('Asha');
+        // Nothing launched, nothing seeded: Manage gave Asha two companies (a share; a workspace owner's
+        // "every company" access) and Remote has never heard of either.
+        $this->manage->allow('key-a', 481, 'Shared Ltd');
+        $this->manage->allow('key-a', 902, 'Workspace Traders');
+        $this->signedInAs($user);
+
+        $companies = Services::platformDirectory()->companiesFor($user);
+
+        $this->assertSame([481, 902], array_column($companies, 'companyId'));
+        $this->assertSame(['Shared Ltd', 'Workspace Traders'], array_column($companies, 'name'));
+        $this->assertSame([false, false], array_column($companies, 'isCompanyAdmin'), 'a member\'s access, never a company administrator');
+        $this->assertSame(['MEMBER', 'MEMBER'], array_column($companies, 'roleKey'));
+        $row = $this->accessRow($user, 902);
+        $this->assertSame('PORTAL', $row['source']);
+        $this->assertNotNull($row['verified_at'], 'Manage\'s list is a confirmation');
+        $this->assertSame(['companies'], $this->manage->asked);
+        $this->assertSame(481, Services::policyResolver()->resolve($user, 'COMPANY', 481)->companyId, 'and the company opens without asking again');
+        $this->assertSame(['companies'], $this->manage->asked);
+    }
+
+    public function testManagesListIsReadAtMostOncePerVerifyWindowAndANewGrantAppearsAfterIt(): void
+    {
+        $user = $this->makeIdentity('Asha');
+        $this->manage->allow('key-a', 481, 'First Ltd');
+        $this->signedInAs($user);
+        $directory = Services::platformDirectory();
+
+        $directory->companiesFor($user);
+        $this->manage->allow('key-a', 903, 'Granted Later Ltd');
+        $this->assertSame([481], array_column($directory->companiesFor($user), 'companyId'), 'inside the window: no second question');
+        $this->assertSame(['companies'], $this->manage->asked);
+
+        $this->db->query("UPDATE remote_identities SET directory_synced_at = NOW() - INTERVAL '10 minutes' WHERE id = ?", [$user->id]);
+        $this->assertSame([481, 903], array_column($directory->companiesFor($user), 'companyId'), 'past it, the new grant appears');
+        $this->assertSame(['companies', 'companies'], $this->manage->asked);
+    }
+
+    public function testRemotesOwnAdministratorFlagSurvivesTheDirectory(): void
+    {
+        $user    = $this->makeIdentity('Admin');
+        $company = $this->makeCompany(481, 'Own Ltd');
+        $this->grantCompanyAccess($user, $company, 'COMPANY_ADMIN', true);
+        $this->manage->allow('key-a', 481, 'Own Ltd');
+        $this->signedInAs($user);
+
+        $companies = Services::platformDirectory()->companiesFor($user);
+
+        $this->assertSame([[481, true, 'COMPANY_ADMIN']], array_map(static fn (array $c) => [$c['companyId'], $c['isCompanyAdmin'], $c['roleKey']], $companies));
+    }
+
+    public function testAnOutageAddsNothingAndTheListIsAskedForAgainNextTime(): void
+    {
+        $user = $this->makeIdentity('Asha');
+        $this->manage->allow('key-a', 481, 'Shared Ltd');
+        $this->manage->down();
+        $this->signedInAs($user);
+
+        $this->assertSame([], Services::platformDirectory()->companiesFor($user));
+        $this->assertNull($this->accessRow($user, 481), 'no answer grants nothing');
+        $this->assertNull($this->db->table('remote_identities')->where('id', $user->id)->get()->getRowArray()['directory_synced_at']);
+
+        $this->manage->down(false);
+        $this->assertSame([481], array_column(Services::platformDirectory()->companiesFor($user), 'companyId'), 'read again once Manage answers');
+    }
 }

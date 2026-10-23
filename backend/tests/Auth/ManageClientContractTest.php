@@ -116,6 +116,36 @@ final class ManageClientContractTest extends RemoteTestCase
         $this->assertSame(ManageClient::GRANTED, $manage->companyAccess('mgr-eval-481', 481)['state']);
     }
 
+    // ------------------------------------------- finding F-2: the live directory
+
+    public function testTheLiveDirectoryIncludesWorkspaceWideAccessWhichTheCompanyListDoesNot(): void
+    {
+        $manage = Services::manageClient();
+
+        $this->assertSame([], $manage->accessibleCompanies('mgr-ws-481'), 'Manage\'s company list knows shares only');
+        $this->assertSame([481 => 'ABC Private Limited'], $manage->openableCompanies('mgr-ws-481'), 'the directory carries the workspace owner\'s "every company" access');
+        $this->assertSame([481 => 'ABC Private Limited'], $manage->openableCompanies('mgr-ok-481'), 'and a company the session owns');
+        $this->assertSame([], $manage->openableCompanies('mgr-noapp-481'), 'a company that does not open in Remote is left out');
+        $this->assertSame([], $manage->openableCompanies('mgr-none'));
+        $this->assertNull($manage->openableCompanies('boom'), 'an outage is no answer, never "no companies"');
+
+        $directory = array_values(array_filter(StandInServer::requests(), static fn (string $l): bool => str_contains($l, '/api/v1/company-directory')));
+        $this->assertNotEmpty($directory);
+        foreach ($directory as $line) {
+            $this->assertStringEndsWith(' app=remote', $line, 'the directory is asked for Remote');
+        }
+    }
+
+    public function testAnOlderManageWithoutTheDirectoryIsAskedTheCompanyList(): void
+    {
+        $manage = Services::manageClient();
+
+        $this->assertSame([481 => 'ABC Private Limited'], $manage->openableCompanies('mgr-old-481'));
+        $lines = StandInServer::requests();
+        $this->assertTrue((bool) array_filter($lines, static fn (string $l): bool => str_contains($l, '/api/v1/company-directory')), 'the directory was tried first');
+        $this->assertTrue((bool) array_filter($lines, static fn (string $l): bool => str_contains($l, '/api/companies ')), 'then the list');
+    }
+
     public function testTheMemberDirectoryListsNamesAndEmailsForAMember(): void
     {
         $members = Services::manageClient()->companyMembers('mgr-ok-481', 481);

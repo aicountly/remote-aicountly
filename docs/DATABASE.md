@@ -68,9 +68,13 @@ session list without a network call. Not a company master.
 ### `remote_user_company_access`
 
 Which companies a user may act in, and with what platform role. Populated from
-a verified launch context, from the platform directory API when one is
-configured, or by an administrator. It is a cache with a `synced_at`, and
-`source` records which of the three it came from.
+AICOUNTLY Manage's live directory (the company picker reads Manage's list for
+the person at most once per `membershipVerifySeconds`; `source` `PORTAL`,
+role `MEMBER`), from a verified launch context (a hint until Manage confirms
+it), from the platform directory API when one is configured, or by an
+administrator. It is a cache with a `synced_at` and a Manage confirmation
+(`verified_at`), and `source` records where it came from. When Manage's list
+was last read for a person is `remote_identities.directory_synced_at`.
 
 This is the table tenant isolation is decided against: no row, no access.
 

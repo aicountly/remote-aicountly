@@ -149,7 +149,15 @@ Manage's company registry decides who may see and who may open a company, per pr
   denied (absent field = legacy behaviour). `MembershipVerifier` acts on that denial as on any other:
   the `remote_user_company_access` row and the person's seat in that company's live sessions are removed.
 - **Local projection:** `remote_user_company_access` is a cache of Manage's answer, re-confirmed per
-  `membershipVerifySeconds`; it is not an independent source of access.
+  `membershipVerifySeconds`; it is not an independent source of access. **Finding F-2 (closed, Phase 5):**
+  the projection is fed by Manage's live directory — the company picker reads Manage's list
+  (`GET /api/companies?filter=all&app=remote`, the person's own session) at most once per
+  `membershipVerifySeconds` (`remote_identities.directory_synced_at`) and adds every company Manage lets
+  the person open in Remote as a confirmed `MEMBER` row (a share, an approved request, workspace-wide
+  access), so a grant made in Manage appears without first launching Remote from another product; rows due
+  a confirmation that Manage no longer lists are removed with the person's live seats; an outage adds and
+  removes nothing. The table stays as the cache Remote's foreign keys, company-admin flags and permission
+  rules hang on; who may open a company is Manage's answer.
 - **Picker:** the organisation menu has *Browse all workspace companies* (shared `CompanyDirectoryPicker`),
   which switches scope through the existing `switchScope`.
 - **Users & Access:** `/settings/users-access` (nav entry in company scope) renders the shared
@@ -168,7 +176,7 @@ Manage's company registry decides who may see and who may open a company, per pr
 - **Workspace-wide access** (`app_access_source: workspace` on companyinfo) is a member's access here: the
   projection row stays `MEMBER`, never a company administrator — Remote derives no role from Manage's
   `app_role_key`. Remote has no Manage seat route: its per-company rows are the local projection of Manage's
-  access (finding F-2, to be replaced by the live directory), not product roles; what a person may do comes from
+  access (fed by Manage's live directory, finding F-2 above), not product roles; what a person may do comes from
   Remote's company-admin flag and its role/user permission rules (Administration).
 
 ## Plan limits
