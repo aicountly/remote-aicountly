@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh api -X PUT repos/aicountly/remote-aicountly/pulls/*/merge)",
+      "Bash(gh api -X PUT repos/aicountly/remote-aicountly/pulls/*/merge *)"
+    ]
+  }
+}
