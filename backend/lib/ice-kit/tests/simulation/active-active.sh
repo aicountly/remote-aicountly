@@ -26,6 +26,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KIT="$(cd "$HERE/../.." && pwd)"
 command -v turnserver >/dev/null || { echo "turnserver (coturn) is not installed" >&2; exit 2; }
+# coturn 4.18 removed --no-dtls (DTLS support is gone); older releases need it to keep DTLS off. Pass it only where it exists.
+NO_DTLS=""; turnserver --help 2>&1 | grep -q -- '--no-dtls' && NO_DTLS="--no-dtls"
 command -v php >/dev/null || { echo "php is not installed" >&2; exit 2; }
 
 MUM_PORT=${SIM_MUM_PORT:-15478}; NCR_PORT=${SIM_NCR_PORT:-16478}; QT_PORT=${SIM_QT_PORT:-17478}
@@ -43,7 +45,7 @@ check() { [ "$2" = "$3" ] && ok "$1" || bad "$1" "expected '$2', got '$3'"; }
 start_relay() { # name port secret relay-port-base [extra turnserver args...] -> pid in $RELAY_PID
   local name="$1" port="$2" secret="$3" base="$4"; shift 4
   turnserver -n --use-auth-secret --static-auth-secret="$secret" --realm="$name.sim" \
-    --listening-ip=127.0.0.1 --relay-ip=127.0.0.1 --listening-port="$port" --no-tls --no-dtls \
+    --listening-ip=127.0.0.1 --relay-ip=127.0.0.1 --listening-port="$port" --no-tls $NO_DTLS \
     --min-port="$base" --max-port=$((base + 99)) --no-cli --allow-loopback-peers --verbose --simple-log \
     --userdb="$WORK/$name.sqlite" --log-file="$WORK/$name.log" --pidfile="$WORK/$name.pid" "$@" >/dev/null 2>&1 &
   RELAY_PID=$!

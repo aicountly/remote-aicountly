@@ -68,19 +68,19 @@ jobs:
         working-directory: backend
         run: composer audit
 
-      # A throwaway coturn (REST auth, UDP/TCP 3478, TLS 5349 with a one-day self-signed certificate)
+      # A throwaway coturn 4.18.0 (REST auth, UDP/TCP 3478, TLS 5349 with a one-day self-signed certificate)
       # so the ICE kit's live tests allocate real relays with credentials the kit minted, instead of
       # being skipped. Nothing here reaches the production relays.
       - name: Local coturn for the ICE kit's live tests
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq coturn >/dev/null
-          # Ubuntu's package now starts its own coturn service on install, with the default configuration: no
-          # authentication, listening on 3478. Left running it takes the port, and the live tests meet an open relay
-          # ("open_relay", no TLS) instead of this one. Stop it, then make sure nothing else holds 3478.
-          sudo systemctl stop coturn 2>/dev/null || true
-          sudo systemctl disable coturn 2>/dev/null || true
-          sudo pkill -x turnserver 2>/dev/null || true
-          sleep 1
+          # coturn 4.18.0 — the version the production relays run — built from its release tag, not Ubuntu's package.
+          # The package drifted with the runner image: on Ubuntu 26 it starts an unauthenticated service of its own on
+          # 3478, and its unauthenticated UDP challenges timed out, so the live tests measured the wrong relay.
+          sudo apt-get update -qq && sudo apt-get install -y -qq libevent-dev libssl-dev libsqlite3-dev pkg-config >/dev/null
+          git clone -q --depth 1 --branch 4.18.0 https://github.com/coturn/coturn /tmp/coturn
+          (cd /tmp/coturn && ./configure >/dev/null && make -j"$(nproc)" >/dev/null)
+          sudo install -m 0755 /tmp/coturn/bin/turnserver /usr/local/bin/turnserver
+          turnserver --version
           openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/turn-key.pem -out /tmp/turn-cert.pem -days 1 \
             -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost" -addext "basicConstraints=critical,CA:TRUE" 2>/dev/null
           sudo turnserver -o --listening-ip=127.0.0.1 --relay-ip=127.0.0.1 --listening-port=3478 --tls-listening-port=5349 \
