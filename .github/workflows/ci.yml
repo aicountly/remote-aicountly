@@ -94,7 +94,12 @@ jobs:
           database.tests.password: remote_ci
           database.tests.DBDriver: Postgre
           database.tests.port: '5432'
-        run: vendor/bin/phpunit --no-coverage
+        run: vendor/bin/phpunit --no-coverage --log-junit "$RUNNER_TEMP/phpunit.xml"
+
+      # The failing tests as annotations (the raw log is not always readable where the result is needed).
+      - name: Report failing tests
+        if: ${{ failure() }}
+        run: python3 scripts/ci/junit-annotate.py "$RUNNER_TEMP/phpunit.xml" "PHPUnit (backend)"
 
       # The failover chain on two throwaway local relays (health probe -> health file -> grant), as an
       # unprivileged user. A test of the selection logic only; it says nothing about the real nodes.
