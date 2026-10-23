@@ -138,7 +138,8 @@ final class LeaseStoreTest extends IceKitTestCase
         $this->assertSame($got['paid'], $usage['paid']['leases'], 'A lease was lost or invented.');
         $this->assertLessThanOrEqual(100, $usage['free']['leases'] + $usage['paid']['leases'], 'Over-admitted.');
         $this->assertLessThanOrEqual(100 - max($usage['paid']['leases'], 50), $usage['free']['leases'], 'Free users ate into the paid reserve.');
-        $this->assertSame(50, $usage['paid']['leases'], 'The whole reserve was available to paid whatever free did.');
+        // Paid may also take free-pool units free has not claimed yet, so how far above 50 it gets depends on who arrives first.
+        $this->assertGreaterThanOrEqual(50, $usage['paid']['leases'], 'The whole reserve was available to paid whatever free did.');
 
         foreach ([$books, $mixed] as $path) {
             @unlink($path);
