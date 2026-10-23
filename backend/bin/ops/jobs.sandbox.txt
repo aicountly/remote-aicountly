@@ -1,0 +1,12 @@
+# Scheduled jobs of the remote SANDBOX (remote.gh.aicountly.com). Installed by the sandbox deploy with
+#   JOBS_FILE=bin/ops/jobs.sandbox.txt bash bin/ops/install-jobs.sh --apply
+# into its own crontab block (the markers name the sandbox API folder, so Connect's sandbox and anything else in
+# that account's crontab is untouched). ONLY the TURN health probe: the company-lifecycle jobs in jobs.txt act on
+# data (purges, archive drops) and stay production-only. No --monitor, so nothing reports to Console's Cron Job
+# Monitor and no CONSOLE_CRON_MONITOR_KEY is needed. Remove with: JOBS_FILE=… bash bin/ops/install-jobs.sh --remove --apply
+#! app: remote
+#! php-ext: openssl
+# name                   | schedule    | command (run from the api folder)
+# Probes every TURN node not disabled (a real allocation with a minted credential, over udp/tcp/tls) and
+# records the result in writable/ice/turn-health.json, which the API reads to skip a node that is down.
+turn-probe               | */5 * * * * | {php} bin/ops/run-job.php --name=turn-probe --every=300 -- {php} lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --allocate --write-health
