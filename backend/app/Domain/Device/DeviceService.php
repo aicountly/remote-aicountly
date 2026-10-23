@@ -10,6 +10,7 @@ use App\Domain\Auth\RemoteIdentity;
 use App\Domain\Policy\EffectivePolicy;
 use App\Domain\Policy\EffectivePolicyResolver;
 use App\Domain\Policy\PermissionCatalog;
+use App\Domain\Policy\PlanEntitlements;
 use App\Domain\Support\ApiException;
 use App\Domain\Support\Clock;
 use App\Domain\Support\Ids;
@@ -135,6 +136,20 @@ class DeviceService
 
             return $this->refreshEnrolment($this->castRow($existing), $identity, $input);
         }
+
+        // The company's Manage plan (remote.max_devices, CONTRACTS §3.6): 402 PLAN_LIMIT_REACHED. Absent =
+        // unlimited; the hard ceiling below still applies. Re-enrolling a known machine (above) never counts.
+        PlanEntitlements::assertRoom(
+            $this->db,
+            $companyId,
+            PlanEntitlements::MAX_DEVICES,
+            fn (): int => $this->db->table('remote_devices')
+                ->where('company_id', $companyId)
+                ->whereIn('status', [self::STATUS_PENDING, self::STATUS_ACTIVE, self::STATUS_SUSPENDED])
+                ->countAllResults(),
+            'registered computer',
+            'registered computers',
+        );
 
         $deviceCount = $this->db->table('remote_devices')
             ->where('company_id', $companyId)

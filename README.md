@@ -160,6 +160,32 @@ Manage's company registry decides who may see and who may open a company, per pr
   exactly the shared client's calls, 404 otherwise; production hosting can answer a direct cross-site call to
   Manage with a challenge page that has no CORS headers). `web/src/company-access/` is copied verbatim from Manage (`Saas Common Handler/company-access`).
 - **Discovery is not access:** a company listed in the directory may still be closed to Remote.
+- **company-access 1.2.0** (workspace sharing settings, CONTRACTS §1/§2): the workspace owner renames the
+  workspace, invites with sharing settings and edits each member's settings in My workspaces / the panel's
+  Workspace tab. The relay passes the 1.2.0 calls (`GET v1/app-roles`, `v1/company-creation-targets`,
+  `v1/me/pending`, `PATCH v1/workspaces/{id}`, `PATCH v1/workspaces/{id}/members/{ref}`,
+  `POST v1/companies/{cmp}/creator-access/retry`) and the plan reads (`GET v1/companies/{cmp}/plan`, `v1/me/plan`).
+- **Workspace-wide access** (`app_access_source: workspace` on companyinfo) is a member's access here: the
+  projection row stays `MEMBER`, never a company administrator — Remote derives no role from Manage's
+  `app_role_key`. Remote has no Manage seat route: its per-company rows are the local projection of Manage's
+  access (finding F-2, to be replaced by the live directory), not product roles; what a person may do comes from
+  Remote's company-admin flag and its role/user permission rules (Administration).
+
+## Plan limits
+
+Manage's companyinfo (asked with `app=remote` whenever a membership is confirmed — at most every
+`membershipVerifySeconds`) carries the company's plan for Remote (CONTRACTS §3.5); Remote keeps it on
+`remote_company_directory.plan` (migration `2026-10-24-000100_AddRemoteCompanyPlan`). An absent code, no plan
+or an older Manage = unlimited. Over the limit the API answers **402** `{"error":{"code":"PLAN_LIMIT_REACHED",
+"details":{"code","limit","used"}}}` and the web shows "Your plan allows N … — ask the account owner to upgrade
+in Manage". Joining, ending, history, audit and revoking a device are never refused; nothing is deleted. Remote's
+own `remote_entitlements` row (403 `SESSION_QUOTA_REACHED`) and the hard device ceiling still apply on top.
+Personal sessions are not held to a Manage plan.
+
+| Code | What is counted | Where enforced |
+| --- | --- | --- |
+| `remote.max_sessions_per_month` | sessions the company started this calendar month (UTC) | `backend/app/Domain/Policy/PlanEntitlements.php` — `SessionService` before a company session is created |
+| `remote.max_devices` | registered computers (pending, active, suspended — not revoked) | `DeviceService::enrol` before a new device (re-enrolling a known machine never counts) |
 
 ## Environment variables
 

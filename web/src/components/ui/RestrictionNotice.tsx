@@ -65,6 +65,11 @@ const PRESENTATION: Record<string, Presentation> = {
     alternatives: ['Ask your administrator to enable it for your account'],
     tone: 'restricted',
   },
+  PLAN_LIMIT_REACHED: {
+    title: 'Your plan’s limit is reached',
+    alternatives: ['Ask the account owner to upgrade in Manage (Plans & billing)'],
+    tone: 'restricted',
+  },
   SESSION_QUOTA_REACHED: {
     title: 'This month’s Remote sessions have been used',
     alternatives: ['Contact your AICOUNTLY administrator about your plan'],

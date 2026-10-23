@@ -12,6 +12,7 @@
 import { getApiBaseUrl } from '../../config'
 import { ensureSesKey, AuthError } from '../../auth/portal'
 import { activeCompanyForRestrictions, noteRestrictedResponse } from '../companyRestriction'
+import { PLAN_LIMIT_CODE, planLimitFromError, planLimitMessage } from '../planLimit'
 
 const REQUEST_TIMEOUT_MS = 20_000
 
@@ -31,11 +32,13 @@ export class RemoteApiError extends Error {
   readonly details: Record<string, unknown>
 
   constructor(code: string, message: string, status: number, details: Record<string, unknown> = {}) {
-    super(message)
+    // 402 PLAN_LIMIT_REACHED (CONTRACTS §3.6): one sentence naming the limit and who can change it.
+    const planLimit = planLimitFromError(status, code, details)
+    super(planLimit ? planLimitMessage(planLimit) : message)
     this.name = 'RemoteApiError'
-    this.code = code
+    this.code = planLimit ? PLAN_LIMIT_CODE : code
     this.status = status
-    this.details = details
+    this.details = planLimit ? { ...details, ...planLimit } : details
   }
 
   /** True when retrying might genuinely work — used to decide whether to offer it. */
@@ -289,7 +292,7 @@ export async function apiFetchWithMeta<T>(
   }
 
   const text = await response.text()
-  const payload = text ? (JSON.parse(text) as ApiEnvelope<T> & { error?: { code: string; message: string } }) : null
+  const payload = text ? (JSON.parse(text) as ApiEnvelope<T> & { error?: { code: string; message: string; details?: Record<string, unknown> } }) : null
 
   if (!response.ok) {
     noteRestrictedResponse(activeCompanyForRestrictions(), response.status, payload)
@@ -297,6 +300,7 @@ export async function apiFetchWithMeta<T>(
       payload?.error?.code ?? 'REQUEST_FAILED',
       payload?.error?.message ?? 'Something went wrong. Please try again.',
       response.status,
+      payload?.error?.details ?? {},
     )
   }
 

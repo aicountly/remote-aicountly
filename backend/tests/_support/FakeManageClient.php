@@ -26,6 +26,9 @@ final class FakeManageClient extends ManageClient
 
     private bool $down = false;
 
+    /** @var array<int, mixed> company id => the `plan` companyinfo carries (absent = an older Manage) */
+    private array $plans = [];
+
     /** @var list<string> */
     public array $asked = [];
 
@@ -41,6 +44,12 @@ final class FakeManageClient extends ManageClient
     public function revoke(string $sesKey, int $companyId): void
     {
         unset($this->access[$sesKey][$companyId]);
+    }
+
+    /** The plan Manage's companyinfo carries for $companyId (CONTRACTS §3.5). */
+    public function setPlan(int $companyId, mixed $plan): void
+    {
+        $this->plans[$companyId] = $plan;
     }
 
     public function down(bool $down = true): void
@@ -62,7 +71,8 @@ final class FakeManageClient extends ManageClient
         }
 
         return isset($this->access[$sesKey][$companyId])
-            ? ['state' => self::GRANTED, 'name' => $this->access[$sesKey][$companyId] ?: null]
+            ? ['state' => self::GRANTED, 'name' => $this->access[$sesKey][$companyId] ?: null,
+                'planKnown' => array_key_exists($companyId, $this->plans), 'plan' => $this->plans[$companyId] ?? null]
             : ['state' => self::DENIED, 'name' => null];
     }
 
