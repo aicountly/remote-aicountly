@@ -60,6 +60,15 @@ check_with_hint "degraded: the API cannot reach its database. Check api/.env (a 
   '.app == "AICOUNTLY Remote"' \
   '.status == "ok"'
 
+# The signalling service: a separate long-running Node app (cPanel "Setup Node.js App", docs/DEPLOYMENT.md "The
+# signalling service") that no deploy step touches. Without it no session connects, and /api/health cannot tell
+# (its "signalling":"configured" only means the API holds the secret). It must answer as the signalling service
+# (fatal); "status" other than ok only warns.
+check_with_hint "the signalling app answered but is not healthy: check its Environment variables in cPanel (REMOTE_SIGNALLING_TOKEN_SECRET must equal the API's remote.signallingSecret) and restart it." \
+  json "Remote signalling (${target})" "${base}/signal/health" \
+  '.service == "aicountly-remote-signalling"' \
+  '.status == "ok"'
+
 # The web root serves the build just deployed, or at least the Remote page (fatal).
 if [ -n "$entry" ]; then
   check page "Remote web (${target})" "${base}/" "$entry"
