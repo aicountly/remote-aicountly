@@ -40,10 +40,16 @@ class ManageRegistryRelay
             '#^v1/access-requests$#',
             '#^v1/workspaces$#',
             '#^v1/workspaces/\d+/(members|member-suggestions)$#',
+            // company-access 1.2.0 (CONTRACTS §1, §2): role catalogue, creation targets, pending counts.
+            '#^v1/(app-roles|company-creation-targets|me/pending)$#',
+            // Plans (CONTRACTS §3.5): the company's plan and the person's own.
+            '#^v1/companies/\d+/plan$#',
+            '#^v1/me/plan$#',
         ],
         'POST' => [
             '#^v1/companies/duplicate-check$#',
             '#^v1/companies/\d+/(permissions|access-requests)$#',
+            '#^v1/companies/\d+/creator-access/retry$#',
             '#^v1/access-requests/\d+/(approve|reject|cancel)$#',
             '#^v1/workspaces/\d+/(members|accept|decline|exit)$#',
         ],
@@ -52,12 +58,21 @@ class ManageRegistryRelay
         ],
         'PATCH' => [
             '#^v1/companies/\d+/permissions/' . self::REF . '$#',
+            // Workspace rename (owner) and a member's sharing settings (company-access 1.1.1 / 1.2.0).
+            '#^v1/workspaces/\d+$#',
+            '#^v1/workspaces/\d+/members/' . self::REF . '$#',
         ],
         'DELETE' => [
             '#^v1/companies/\d+/permissions/' . self::REF . '$#',
             '#^v1/workspaces/\d+/members/' . self::REF . '$#',
         ],
     ];
+
+    /**
+     * Relayed by contract (CONTRACTS §3.5 plan reads) although the vendored client does not call them
+     * itself; tests/Directory/ManageRegistryRelayTest.php allows exactly these beyond the client's calls.
+     */
+    public const CONTRACT_ONLY = ['GET v1/companies/74/plan', 'GET v1/me/plan'];
 
     /** Request headers Manage reads on a registry call, forwarded as the browser sent them. */
     public const FORWARDED_HEADERS = ['Authorization', 'Content-Type', 'Accept', 'Idempotency-Key', 'X-Correlation-Id'];
