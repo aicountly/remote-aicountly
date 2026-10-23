@@ -82,4 +82,48 @@ final class AuthOutageApiTest extends RemoteTestCase
         $this->assertSame('Priya Nair', $row['display_name'], 'stored, so a host deciding who may watch their screen sees a name');
         $this->assertSame('priya.nair@example.test', $row['email']);
     }
+
+    // ------------------------------------- answered by something, not the portal
+
+    public function testTheRelayDoesNotPassAnInterceptorsPageOffAsThePortalsAnswer(): void
+    {
+        // The hosting in front of the portal answers a caller it cannot vouch
+        // for with an HTML "checking your browser" page — carrying HTTP 200. It
+        // used to go straight back to the browser as a successful sign-in with
+        // no token in it, and the app could only report that something was
+        // unavailable. It is an outage, and says so, with the detail that makes
+        // it safe to act on: the portal never saw the request, so nothing was
+        // spent and the same call may be made again.
+        $result = $this->withHeaders(['Authorization' => 'Bearer html'])->post('global/seskey');
+
+        $result->assertStatus(503);
+        $result->assertHeader('Retry-After', '5');
+        $body = json_decode((string) $result->response()->getBody(), true);
+        $this->assertSame('auth_unavailable', $body['error']);
+        $this->assertTrue($body['retryable']);
+        $this->assertStringNotContainsString('<html', (string) $result->response()->getBody(), 'the page itself never reaches the browser');
+    }
+
+    public function testThePortalIsAskedForJsonByACallerThatSaysWhoItIs(): void
+    {
+        // A request with no Accept and no User-Agent is exactly what a WAF
+        // serves its challenge page to, and this one is a server, not a browser
+        // — it can never pass a JavaScript check. Both headers go on every
+        // relayed and server-to-server call so the portal's hosting has no
+        // reason to challenge it in the first place.
+        $seen = Services::portalClient()->forward('GET', 'echo-request', [], '');
+
+        $this->assertSame(200, $seen['status']);
+        $headers = json_decode($seen['body'], true)['headers'];
+        $this->assertSame('application/json', $headers['accept']);
+        $this->assertStringContainsString('AICOUNTLY-Remote-API', $headers['user-agent']);
+    }
+
+    public function testACallerThatSetItsOwnAcceptKeepsIt(): void
+    {
+        $seen = Services::portalClient()->forward('GET', 'echo-request', ['Accept: text/csv'], '');
+
+        $headers = json_decode($seen['body'], true)['headers'];
+        $this->assertSame('text/csv', $headers['accept']);
+    }
 }

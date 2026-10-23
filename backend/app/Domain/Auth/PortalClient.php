@@ -32,10 +32,23 @@ class PortalClient
     }
 
     /**
+     * The User-Agent this server sends to the portal.
+     *
+     * curl sends none at all unless it is told to, and a request with no
+     * User-Agent and no Accept is exactly what a WAF in front of the portal
+     * serves its “checking your browser” page to — an HTML page, with HTTP 200,
+     * where the caller expected the portal's JSON. Saying plainly who this is
+     * keeps these calls recognisable as one server talking to another.
+     */
+    private const USER_AGENT = 'AICOUNTLY-Remote-API/1.0 (+https://remote.aicountly.com)';
+
+    /**
      * Forward one request to the portal and return its raw answer.
      *
      * Only the headers given are sent — never an Origin of this host's own, which
-     * the portal's sso/exchange would refuse (and burn the code over).
+     * the portal's sso/exchange would refuse (and burn the code over) — plus an
+     * Accept and a User-Agent of this server's own (see {@see USER_AGENT}); a
+     * caller that set its own Accept keeps it.
      *
      * @param  array<int, string> $headers
      * @return array{status: int, body: string, contentType: string, retryAfter: string}
@@ -43,6 +56,17 @@ class PortalClient
     public function forward(string $method, string $path, array $headers, string $body): array
     {
         $url = $this->base() . '/api/' . ltrim($path, '/');
+
+        $sendsAccept = false;
+        foreach ($headers as $line) {
+            if (stripos($line, 'accept:') === 0) {
+                $sendsAccept = true;
+                break;
+            }
+        }
+        if (! $sendsAccept) {
+            $headers[] = 'Accept: application/json';
+        }
 
         $ch = curl_init($url);
         if ($ch === false) {
@@ -57,6 +81,7 @@ class PortalClient
             CURLOPT_HTTPHEADER     => $headers,
             CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT_SECONDS,
             CURLOPT_TIMEOUT        => self::REQUEST_TIMEOUT_SECONDS,
+            CURLOPT_USERAGENT      => self::USER_AGENT,
             CURLOPT_HEADER         => false,
             CURLOPT_HEADERFUNCTION => static function ($ch, string $line) use (&$retryAfter): int {
                 if (preg_match('/^Retry-After:\s*(\d{1,5})\s*$/i', $line, $m) === 1) {

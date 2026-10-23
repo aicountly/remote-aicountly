@@ -356,30 +356,95 @@ async function fetchWithTimeout(url: string, options: RequestInit): Promise<Resp
 }
 
 /**
+ * True when a firewall, not the API, answered — the “checking your browser”
+ * interstitial.
+ *
+ * Production sits behind a WAF (Imunify360 WebShield) that answers a request it
+ * cannot vouch for with an HTML challenge page carrying **HTTP 200**, so
+ * `res.ok` is true, `res.json()` throws, and the only thing that gives it away
+ * is the content type. Every auth endpoint on both sides answers
+ * `application/json` and nothing else, so HTML here can only be that page or a
+ * hosting error page — and either way the request never reached PHP: nothing
+ * was read, no one-time code was spent, and asking again is safe.
+ *
+ * This is what broke sign-in. `/sso/exchange` was the one same-origin request
+ * in the app that sent neither cookies nor an `Accept`, so the WAF saw a
+ * browser it had no clearance cookie for asking for something it renders as a
+ * page, and served the challenge instead. {@link AUTH_REQUEST_HEADERS} and the
+ * per-hop credentials below stop it being served; this check stops it ever
+ * being mistaken for an answer again.
+ */
+function isChallengePage(res: Response): boolean {
+  return (res.headers.get('Content-Type') ?? '').toLowerCase().includes('html')
+}
+
+/**
+ * What these calls send so a WAF reads them as API requests, not page views.
+ *
+ * `Accept: application/json` is the one that matters: the challenge page is
+ * served only to a client that says it renders HTML, and a `fetch` with no
+ * `Accept` of its own sends the catch-all, which does. It is why every
+ * `apiFetch` call — which has always sent this header — sailed through while
+ * the auth calls, which sent none, did not. `X-Requested-With` is the second
+ * signal the same filters read.
+ */
+const AUTH_REQUEST_HEADERS: Record<string, string> = {
+  Accept: 'application/json',
+  'X-Requested-With': 'XMLHttpRequest',
+}
+
+/** One hop's request: the caller's options, the headers above, and this hop's credentials. */
+function authRequest(options: RequestInit, credentials: RequestCredentials): RequestInit {
+  return {
+    ...options,
+    credentials,
+    headers: { ...AUTH_REQUEST_HEADERS, ...((options.headers ?? {}) as Record<string, string>) },
+  }
+}
+
+/**
  * Call a portal auth endpoint, preferring this product's same-origin relay.
  *
- * The relay (server-php `/api/global/*`) exists so the browser never makes a
- * cross-origin call to the portal: a new product domain is not in the portal's
- * CORS allowlist on day one, and without the relay sign-in would fail for
- * everyone with only a CORS message to show for it. The direct call is kept as
- * the fallback for when the PHP API is not deployed yet.
+ * The relay (`/api/global/*`) exists so the browser never makes a cross-origin
+ * call to the portal: a new product domain is not in the portal's CORS
+ * allowlist on day one, and without the relay sign-in would fail for everyone
+ * with only a CORS message to show for it. The direct call is kept as the
+ * fallback for when the PHP API is not deployed yet — and now for when a
+ * firewall swallows the relayed one.
+ *
+ * Credentials are set here, per hop, and the two hops differ on purpose. The
+ * relay is same-origin and gets the browser default, so the WAF's own clearance
+ * cookie — earned when this page was loaded — rides along with the request it
+ * gates; sending `omit` is what made every exchange look like a brand-new
+ * unvouched-for client and got it challenged. The portal is another origin and
+ * gets nothing: it authenticates by Bearer token and must never be handed this
+ * site's cookies.
  */
 async function fetchPortalAuth(path: string, options: RequestInit): Promise<Response> {
   const relayUrl = `${getApiBaseUrl()}/global${path}`
   const directUrl = `${PORTAL_AUTH_API}/api${path}`
 
   try {
-    const relayed = await fetchWithTimeout(relayUrl, options)
-    // 404/5xx mean the relay itself is missing or broken, not that the portal
-    // rejected the token — fall through and ask the portal directly.
-    if (relayed.ok || (relayed.status < 500 && relayed.status !== 404)) {
+    const relayed = await fetchWithTimeout(relayUrl, authRequest(options, 'same-origin'))
+    // 404/5xx mean the relay itself is missing or broken, and an interstitial
+    // means it never ran at all — neither is the portal rejecting the token, so
+    // fall through and ask the portal directly.
+    if (!isChallengePage(relayed) && (relayed.ok || (relayed.status < 500 && relayed.status !== 404))) {
       return relayed
     }
   } catch {
     /* relay unreachable — try the portal directly */
   }
 
-  return fetchWithTimeout(directUrl, options)
+  const direct = await fetchWithTimeout(directUrl, authRequest(options, 'omit'))
+  if (isChallengePage(direct)) {
+    // A firewall answered both hops. Reported as a retryable outage, never as
+    // the portal's answer: the session the caller holds is kept and a one-time
+    // code stays unspent, so Try again is a real offer rather than a loop.
+    throw new AuthError('The sign-in request was stopped by this site’s firewall. Please try again.', 503)
+  }
+
+  return direct
 }
 
 interface SesKeyResponse {
@@ -429,7 +494,6 @@ export async function exchangeAuthCode(code: string): Promise<string> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ code, redirect_uri: buildCallbackUrl() }),
     cache: 'no-store',
-    credentials: 'omit',
   })
   const body = (await res.json().catch(() => null)) as { aic_auth_token?: string; data?: { aic_auth_token?: string } } | null
   const token = body?.aic_auth_token ?? body?.data?.aic_auth_token
@@ -466,7 +530,6 @@ export async function exchangeSsoCode(ssoCode: string, cbState: string | null): 
       product: resolveProductKeyFromHost(),
     }),
     cache: 'no-store',
-    credentials: 'omit',
   })
   type Answer = { status?: number; auth_token?: string; error?: string; retryable?: boolean } | null
   let res = await request()
@@ -482,7 +545,12 @@ export async function exchangeSsoCode(ssoCode: string, cbState: string | null): 
   if (res.ok && typeof token === 'string' && token !== '') return token
   if (res.status === 401) throw new AuthError('This sign-in link has expired or was already used. Sign in again.', 401)
   if (res.status === 400) throw new AuthError('Sign-in could not be completed (the request was refused). Sign in again.', 400)
-  throw new AuthError(`Sign-in could not be completed (HTTP ${res.status}).`, res.ok ? 502 : res.status)
+  // A 200 carrying no JSON is not an answer at all — something on the way
+  // replied instead of the API. Reported as an outage rather than a refusal, so
+  // the code is treated as unspent and “HTTP 200” never reaches a log as a
+  // reason for a failed sign-in.
+  if (res.ok) throw new AuthError('The sign-in service did not answer. Please try again.', 503)
+  throw new AuthError(`Sign-in could not be completed (HTTP ${res.status}).`, res.status)
 }
 
 let mintInFlight: Promise<string> | null = null
@@ -569,9 +637,15 @@ export function performLogout(): void {
     fetch(`${getApiBaseUrl()}/global/logout`, {
       method: 'POST',
       headers: {
+        ...AUTH_REQUEST_HEADERS,
         'Content-Type': 'application/json',
         Authorization: `Bearer ${authToken}`,
       },
+      // Same-origin, so the WAF clearance cookie goes with it: without
+      // AUTH_REQUEST_HEADERS and this, the firewall answers with its challenge
+      // page and the portal token is never revoked — the very failure this call
+      // was relayed to avoid.
+      credentials: 'same-origin',
       keepalive: true,
     }).catch(() => {
       /* the local session is already gone; the redirect proceeds regardless */

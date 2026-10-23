@@ -102,6 +102,47 @@ this host into an open proxy for the portal's whole auth surface, with the
 portal seeing this server's IP instead of the caller's. It is rate limited at
 30 requests a minute per IP.
 
+## When a firewall answers instead of the API
+
+Both hosts sit behind a WAF (Imunify360 WebShield). It answers a request it
+cannot vouch for with an HTML “checking your browser” page — carrying
+**HTTP 200**, because as far as it is concerned the page was served. To a
+browser that is a redirect it will follow; to `fetch` it is a successful
+response whose body will not parse.
+
+This broke sign-in in production: `POST /api/global/sso/exchange` was answered
+with that page, `res.ok` was true, there was no `auth_token` in it, and the app
+reported “the sign-in service is temporarily unavailable” — every time, with a
+Try again that started a fresh portal round trip and was intercepted
+identically. See [SIGN_IN_WAF_INTERCEPTION.md](SIGN_IN_WAF_INTERCEPTION.md).
+
+Three rules keep it from coming back. They are cheap, and each one is load
+bearing:
+
+1. **Every auth call says `Accept: application/json`.** A WAF serves its HTML
+   challenge only to a client that says it renders HTML, and a `fetch` with no
+   `Accept` of its own sends the catch-all, which does. This is why every
+   `apiFetch` call — which has always sent this header — sailed through while
+   the auth calls did not. `X-Requested-With: XMLHttpRequest` goes with it.
+2. **The same-origin relay hop gets the browser's cookies**
+   (`credentials: 'same-origin'`, the default). The WAF's own clearance cookie,
+   earned when this page was loaded, has to ride along with the request it is
+   gating. `credentials: 'omit'` — right for the cross-origin call to the
+   portal, which authenticates by Bearer token and must never see this site's
+   cookies — made every exchange look like a brand-new unvouched-for client.
+   `fetchPortalAuth` therefore sets credentials per hop; call sites do not.
+3. **An HTML answer is never read as an answer.** `isChallengePage()` in the
+   browser and `isNotJson()` in `PortalRelayController` both treat a non-JSON
+   body as *the request never arrived*: the browser falls through to the portal
+   directly, the relay answers `503 auth_unavailable` with `Retry-After`, and
+   neither pretends a one-time code was spent. `PortalClient` sends an `Accept`
+   and a `User-Agent` of its own for the same reason — curl sends neither
+   unless told to, and a request with neither is what a WAF challenges first.
+
+A server handed a JavaScript challenge can never pass it, so the standing ask of
+the host is that these domains are not challenged at all — Imunify360 whitelists
+by domain, not by path. The runbook has the commands.
+
 ## This product's backend
 
 - Does **not** issue `auth_token` or `ses_key`.
