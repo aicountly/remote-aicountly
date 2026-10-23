@@ -94,7 +94,10 @@ be challenged at all, because no API client can pass a JavaScript check.
 
 ### Verify the diagnosis first
 
-In cPanel → **Terminal** (or over SSH), as the site's user:
+In cPanel → **Terminal** (or over SSH), as the site's user. **Run the two
+`sso/exchange` calls from a machine outside the server as well**: WebShield
+trusts the host's own address, so from cPanel Terminal they can sail through
+while a browser on a flagged network is still being challenged.
 
 ```bash
 # 1. Does the API answer JSON? Expect a JSON body, not HTML.
