@@ -1,123 +1,63 @@
-//! macOS. **Not implemented, and it says so.**
+//! macOS: the **control companion**.
 //!
-//! Every provider here returns [`PlatformError::Unsupported`]. There is no
-//! simulated capture, no pretend input injection, and no capability declared
-//! that the machine cannot deliver.
+//! A Mac does not host a session of its own here — there is no screen capture
+//! and no encoder. What it does is the thing a browser cannot: its owner
+//! shares a screen from Chrome or Edge as usual, links this Mac to that share,
+//! and somebody they grant control to in the browser moves this Mac's mouse
+//! and types on its keyboard. The picture comes from the browser; the input
+//! comes through here, through the same `ControlGate` as on Windows. See
+//! `docs/desktop/CONTROL_COMPANION.md` for the whole flow.
 //!
-//! That is a deliberate choice rather than an omission. A macOS agent that
-//! enrolled with `remote_control: true` would appear in an administrator's
-//! device list as a machine they can connect to and control — and the first
-//! time somebody tried, in the middle of helping a colleague, it would fail.
-//! An honest "not available on macOS yet" costs nothing and misleads nobody.
-//!
-//! # What a macOS implementation will need
-//!
-//! The work is enumerated rather than hidden, so that adding it is filling in
-//! this file and touching nothing above it:
-//!
-//! | Trait | macOS API | The part that needs care |
+//! | Trait | macOS | Notes |
 //! |---|---|---|
-//! | `ScreenCaptureProvider` | `ScreenCaptureKit` | Screen Recording is a TCC permission the user grants in System Settings; it cannot be requested silently, and the app must be relaunched after it is granted. |
-//! | `InputProvider` | `CGEvent` | Accessibility is a separate TCC permission. Posting an event without it fails silently, which is the worst possible failure mode — so `summary()` has to report it before control is offered. |
-//! | `ClipboardProvider` | `NSPasteboard` | Straightforward; the change count is what tells you it moved. |
-//! | `SecureStorageProvider` | Keychain | A `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` item, so the helper can read it after a reboot without anybody signing in. |
-//! | `SystemServiceProvider` | `launchd` | A `LaunchDaemon` plist, not a `LaunchAgent` — the machine has to be reachable with nobody signed in. |
-//! | `DeviceInfoProvider` | `sysctl`, `SCDynamicStore` | The computer name is the one a person recognises, not the hostname. |
-//! | `PowerProvider` | `AEDeterminePermissionToAutomateTarget` | Restarting needs Apple Events consent, which is a third TCC permission. |
+//! | `ScreenCaptureProvider` | [`display::MacDisplays`] | The display list only (`CGGetActiveDisplayList`, `CGDisplayBounds`) — no Screen Recording. Capture is refused. |
+//! | `InputProvider` | [`input::MacInput`] | `CGEvent` from a private event source, posted at the HID tap. Needs Accessibility. |
+//! | `PermissionsProvider` | [`permissions::MacPermissions`] | `AXIsProcessTrustedWithOptions`, checked on every read. |
+//! | `DeviceInfoProvider` | [`device::MacDeviceInfo`] | Computer name, `kern.osproductversion`; macOS 13 and later. |
+//! | `SecureStorageProvider` | [`storage::KeychainStorage`] | A generic-password item, after first unlock, this device only. |
+//! | `ClipboardProvider` | `Unsupported` | Off for companions in this version. |
+//! | `SystemServiceProvider` | `Unsupported` | No launch daemon: never unattended. |
+//! | `PowerProvider` | `Unsupported` | A companion cannot restart the Mac. |
 //!
-//! Everything else — the protocol, the gate, the state machine, the API
-//! client, the WebRTC session, the whole interface — is already shared.
+//! # Compiled and tested on every host
+//!
+//! Like `platform::windows`, this module is **not** gated on the target. Each
+//! file keeps its native calls in an inner `#[cfg(target_os = "macos")] mod
+//! imp`, and everything around them — the key table, the coordinate
+//! arithmetic, the display description, the permission summary, the keychain
+//! fallback rule — is plain Rust tested on Linux CI. Off macOS the providers
+//! refuse with [`remote_device::PlatformError::Unsupported`], which is also
+//! what a Linux developer build of the agent uses.
 
 use remote_device::{
-    ClipboardProvider, DeviceInfoProvider, InputProvider, PermissionSummary, PermissionsProvider,
-    PlatformProviders, PlatformResult, PowerProvider, ScreenCaptureProvider, SystemServiceProvider,
+    ClipboardProvider, PlatformProviders, PlatformResult, PowerProvider, SystemServiceProvider,
 };
-use remote_protocol::{
-    ClipboardPayload, KeyEvent, MonitorLayout, MouseEvent, PointerPosition, ScrollEvent,
-};
+use remote_protocol::ClipboardPayload;
 
-use super::{unsupported, unsupported_permissions};
+use super::unsupported;
 
-/// Assemble the providers for a platform that has none.
+pub mod device;
+pub mod display;
+pub mod input;
+pub mod permissions;
+pub mod storage;
+
+pub use device::MacDeviceInfo;
+
+/// Assemble the macOS providers. Off macOS every native one refuses.
 pub fn providers() -> PlatformResult<PlatformProviders> {
     Ok(PlatformProviders {
-        capture: Box::new(NoCapture),
-        input: Box::new(NoInput),
+        capture: Box::new(display::MacDisplays),
+        input: Box::new(input::MacInput::new()),
         clipboard: Box::new(NoClipboard),
         service: Box::new(NoService),
         device_info: Box::new(MacDeviceInfo),
         power: Box::new(NoPower),
-        permissions: Box::new(NoPermissions),
+        permissions: Box::new(permissions::MacPermissions),
     })
 }
 
-/// Screen capture, once `ScreenCaptureKit` is wired up.
-pub struct NoCapture;
-
-impl ScreenCaptureProvider for NoCapture {
-    fn monitors(&self) -> PlatformResult<MonitorLayout> {
-        unsupported("Reading the display layout")
-    }
-
-    fn start(
-        &mut self,
-        _monitor_id: u32,
-        _profile: remote_device::CaptureProfile,
-    ) -> PlatformResult<()> {
-        unsupported("Screen capture")
-    }
-
-    fn stop(&mut self) -> PlatformResult<()> {
-        // Stopping something that was never started succeeds — a teardown path
-        // must not fail on a platform where nothing was running.
-        Ok(())
-    }
-
-    fn next_frame(&mut self) -> PlatformResult<Option<remote_device::Frame>> {
-        unsupported("Screen capture")
-    }
-
-    fn reconfigure(&mut self, _profile: remote_device::CaptureProfile) -> PlatformResult<()> {
-        unsupported("Screen capture")
-    }
-
-    fn is_running(&self) -> bool {
-        false
-    }
-}
-
-/// Input injection, once `CGEvent` is wired up.
-pub struct NoInput;
-
-impl InputProvider for NoInput {
-    fn move_pointer(&self, _monitor_id: u32, _position: PointerPosition) -> PlatformResult<()> {
-        unsupported("Remote control")
-    }
-
-    fn move_pointer_relative(&self, _dx: f64, _dy: f64) -> PlatformResult<()> {
-        unsupported("Remote control")
-    }
-
-    fn mouse_button(&self, _monitor_id: u32, _event: MouseEvent) -> PlatformResult<()> {
-        unsupported("Remote control")
-    }
-
-    fn scroll(&self, _monitor_id: u32, _event: ScrollEvent) -> PlatformResult<()> {
-        unsupported("Remote control")
-    }
-
-    fn key(&self, _event: KeyEvent) -> PlatformResult<()> {
-        unsupported("Remote control")
-    }
-
-    fn release_all(&self) -> PlatformResult<()> {
-        // Nothing was ever pressed, so there is nothing to release. Succeeding
-        // matters: this is called on every teardown, including a failed one.
-        Ok(())
-    }
-}
-
-/// The clipboard, once `NSPasteboard` is wired up.
+/// The clipboard: off for companions in this version.
 pub struct NoClipboard;
 
 impl ClipboardProvider for NoClipboard {
@@ -134,7 +74,7 @@ impl ClipboardProvider for NoClipboard {
     }
 }
 
-/// The background daemon, once the `launchd` plist exists.
+/// No background daemon: a companion runs while its owner is signed in.
 pub struct NoService;
 
 impl SystemServiceProvider for NoService {
@@ -167,7 +107,7 @@ impl SystemServiceProvider for NoService {
     }
 }
 
-/// Restarting, once Apple Events consent is handled.
+/// Restarting: not something a companion can do.
 pub struct NoPower;
 
 impl PowerProvider for NoPower {
@@ -182,77 +122,45 @@ impl PowerProvider for NoPower {
     }
 }
 
-/// Native permissions, once TCC is handled.
-pub struct NoPermissions;
-
-impl PermissionsProvider for NoPermissions {
-    fn summary(&self) -> PlatformResult<PermissionSummary> {
-        Ok(unsupported_permissions())
-    }
-
-    fn request(&self, _permission: &str) -> PlatformResult<()> {
-        unsupported("Requesting a permission")
-    }
-}
-
-/// What the machine is.
-///
-/// The one provider that answers rather than refusing, because the About panel
-/// and the "not supported" screen both need to say which operating system this
-/// is — and refusing to name it would make that screen say nothing useful.
-pub struct MacDeviceInfo;
-
-impl DeviceInfoProvider for MacDeviceInfo {
-    fn host_name(&self) -> PlatformResult<String> {
-        unsupported("Reading the machine name")
-    }
-
-    fn operating_system(&self) -> &'static str {
-        #[cfg(target_os = "macos")]
-        {
-            "macOS"
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            "unsupported"
-        }
-    }
-
-    fn os_version(&self) -> PlatformResult<String> {
-        unsupported("Reading the operating system version")
-    }
-
-    fn architecture(&self) -> &'static str {
-        std::env::consts::ARCH
-    }
-
-    fn is_supported_platform(&self) -> PlatformResult<bool> {
-        Ok(false)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use remote_device::PlatformError;
+    use remote_protocol::PointerPosition;
 
     #[test]
-    fn every_capability_refuses_with_a_reason_a_person_can_read() {
-        let providers = providers().expect("assembles");
+    fn what_a_companion_does_not_do_refuses_with_a_reason_a_person_can_read() {
+        let mut providers = providers().expect("assembles");
 
-        let error = providers.capture.monitors().unwrap_err();
+        let error = providers
+            .capture
+            .start(1, remote_device::CaptureProfile::adaptive())
+            .unwrap_err();
         assert!(matches!(error, PlatformError::Unsupported(_)));
         assert!(error
             .to_string()
             .contains("not available on this platform yet"));
 
+        assert!(providers.clipboard.read_text().is_err());
+        assert!(providers.power.reboot("test").is_err());
+    }
+
+    /// Off macOS the native providers refuse too, rather than pretending.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn off_macos_every_native_provider_refuses() {
+        let providers = providers().expect("assembles");
+
+        assert!(providers.capture.monitors().is_err());
         assert!(providers
             .input
             .move_pointer(1, PointerPosition { x: 0.5, y: 0.5 })
             .is_err());
-        assert!(providers.clipboard.read_text().is_err());
-        assert!(providers.power.reboot("test").is_err());
+        assert_eq!(
+            providers.permissions.summary().unwrap(),
+            remote_device::PermissionSummary::all_unsupported()
+        );
+        assert_eq!(providers.device_info.is_supported_platform(), Ok(false));
     }
 
     /// A teardown path must not fail on a platform where nothing was running.
@@ -263,6 +171,7 @@ mod tests {
         assert!(providers.capture.stop().is_ok());
         assert!(providers.input.release_all().is_ok());
         assert!(!providers.capture.is_running());
+        let _ = PointerPosition { x: 0.0, y: 0.0 };
     }
 
     /// The UI asks these to decide whether to *offer* something, so they
@@ -274,14 +183,5 @@ mod tests {
         assert_eq!(providers.power.can_reboot(), Ok(false));
         assert_eq!(providers.service.is_installed(), Ok(false));
         assert_eq!(providers.service.is_running(), Ok(false));
-        assert_eq!(providers.device_info.is_supported_platform(), Ok(false));
-    }
-
-    #[test]
-    fn the_permission_summary_reports_unsupported_rather_than_denied() {
-        let summary = providers().unwrap().permissions.summary().unwrap();
-
-        assert_eq!(summary, PermissionSummary::all_unsupported());
-        assert!(!summary.can_host_session());
     }
 }

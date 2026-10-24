@@ -13,15 +13,20 @@
 //! is given. What decides whether to give it anything is [`Agent::handle_control`],
 //! and that runs every message through the gate first.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Instant;
 
 use remote_core::{AgentConfig, AgentEvent, AgentState, ControlStateView, UnattendedState};
-use remote_core::{ApiClient, ControlDecision, DeviceCredential};
+use remote_core::{
+    ApiClient, CompanionSummary, ControlDecision, DeviceCredential, MonitorOption, PendingCompanion,
+};
 use remote_device::{
     AgentCapabilities, DeviceDescription, PermissionSummary, PlatformProviders, PlatformResult,
 };
 use remote_protocol::{
-    ControlEnvelope, ControlGate, ControlMessage, ControlState, GateError, ProtocolError,
+    ControlEnvelope, ControlGate, ControlMessage, ControlState, GateError, Monitor, MonitorLayout,
+    ProtocolError,
 };
 use remote_security::{DeviceKeypair, EnrolmentRecord, KeyError, StorageScope, DEVICE_KEY_ENTRY};
 
@@ -44,6 +49,32 @@ pub struct Agent {
     /// Stop control — can be reported to the API without waiting for the loop
     /// to come round again.
     credential: Mutex<Option<DeviceCredential>>,
+    /// The control-companion link this machine has joined, if any.
+    companion: Mutex<Option<CompanionContext>>,
+    /// The person at the machine's answer to a waiting companion link —
+    /// `(link, allowed)` — until the connection loop picks it up.
+    companion_decision: Mutex<Option<(String, bool)>>,
+    /// The monitor the person at the machine picked — `(link, monitor id)` —
+    /// until the companion loop reports it.
+    monitor_choice: Mutex<Option<(String, u32)>>,
+    /// The person at the machine ended the companion link here.
+    companion_leave: AtomicBool,
+    /// Stop control was pressed and the controller has not been told on the
+    /// control channel yet.
+    stop_notice: AtomicBool,
+    /// When input was last injected, so the local-input override does not
+    /// mistake this agent's own events for the person at the machine.
+    last_injection: Mutex<Option<Instant>>,
+}
+
+/// The companion link this machine has joined.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompanionContext {
+    companion_uuid: String,
+    session_uuid: String,
+    /// The monitor input lands on. `None` while it is being worked out, and
+    /// then nothing is injected at all.
+    monitor_id: Option<u32>,
 }
 
 impl Default for Agent {
@@ -63,6 +94,12 @@ impl Agent {
             providers: Mutex::new(platform::providers().ok()),
             description: Mutex::new(None),
             credential: Mutex::new(None),
+            companion: Mutex::new(None),
+            companion_decision: Mutex::new(None),
+            monitor_choice: Mutex::new(None),
+            companion_leave: AtomicBool::new(false),
+            stop_notice: AtomicBool::new(false),
+            last_injection: Mutex::new(None),
         }
     }
 
@@ -166,15 +203,45 @@ impl Agent {
             .unwrap_or_else(PermissionSummary::all_unsupported)
     }
 
+    /// Ask the platform to prompt for a permission — on macOS, Accessibility.
+    /// It grants nothing itself; the person does, in System Settings.
+    pub fn request_permission(&self, permission: &str) -> PlatformResult<()> {
+        let providers = self
+            .providers
+            .lock()
+            .map_err(|_| remote_device::PlatformError::NotFound("The platform layer"))?;
+
+        providers
+            .as_ref()
+            .ok_or(remote_device::PlatformError::Unsupported(
+                "Requesting a permission",
+            ))?
+            .permissions
+            .request(permission)
+    }
+
     /// What this build declares it can do, given what the machine permits.
     ///
     /// This is the value sent at enrolment. It is an upper bound the server
     /// intersects with policy — and it is already constrained by the machine,
     /// so an agent on a box with no background service does not enrol claiming
     /// it can be reached unattended.
+    ///
+    /// A companion-only platform (macOS) is the exception: its one capability,
+    /// `remote_control`, depends on Accessibility, which a person grants in
+    /// System Settings — typically *after* registering, when first asked. The
+    /// declaration is fixed at enrolment, so constraining it by a permission
+    /// not granted yet would enrol a Mac that can never be a companion. The
+    /// permission is instead checked live, every time, before the companion
+    /// reports itself ready (`companion::CompanionApi::can_inject`).
     pub fn capabilities(&self) -> AgentCapabilities {
-        self.permissions()
-            .constrain(platform::declared_capabilities())
+        let declared = platform::declared_capabilities();
+
+        if platform::supports_companion() && !platform::supports_hosting() {
+            return declared;
+        }
+
+        self.permissions().constrain(declared)
     }
 
     /// Describe this machine, for enrolment and for the About panel.
@@ -458,11 +525,24 @@ impl Agent {
 
         self.release_all_input();
 
+        // The controller is told on the control channel too, by whichever
+        // loop owns it — the gate has already stopped admitting either way.
+        if controller.is_some() {
+            self.stop_notice.store(true, Ordering::SeqCst);
+        }
+
         // Reported after the fact and never waited on: if the network is the
         // reason somebody pressed Stop, waiting for it would be the worst
         // possible behaviour.
         if let (Some(session), Some(participant)) = (self.session_uuid(), controller) {
             self.report_control_decision(&session, &participant, ControlDecision::Revoke, false);
+        }
+
+        if self.state().active_companion().is_some() {
+            return self.apply(AgentEvent::CompanionControl {
+                controlled: false,
+                controller_name: None,
+            });
         }
 
         self.apply(AgentEvent::ControlChanged {
@@ -473,11 +553,26 @@ impl Agent {
         })
     }
 
-    /// The session currently running, if one is.
+    /// Whether Stop was pressed since the last call — the control-channel
+    /// owner's cue to send `control_ended`. Cleared by reading it.
+    pub fn take_stop_notice(&self) -> bool {
+        self.stop_notice.swap(false, Ordering::SeqCst)
+    }
+
+    /// The session currently running, if one is — hosted, or joined as a
+    /// companion.
     fn session_uuid(&self) -> Option<String> {
-        self.state()
+        let state = self.state();
+
+        state
             .active_session()
             .map(|session| session.session_uuid.clone())
+            .or_else(|| {
+                state
+                    .active_companion()
+                    .filter(|companion| companion.is_joined())
+                    .map(|companion| companion.session_uuid.clone())
+            })
     }
 
     /// Whoever the gate currently names as the controller.
@@ -489,15 +584,19 @@ impl Agent {
     }
 
     /// Adopt the control state the API reports.
+    ///
+    /// `grant_id` is the API's identifier for the grant; see
+    /// [`ControlGate::sync_from_api`] for why a local Stop needs it.
     pub fn sync_control(
         &self,
         state: ControlState,
         controller: Option<String>,
         clipboard: bool,
+        grant_id: Option<String>,
     ) -> AgentState {
         if let Ok(mut gate) = self.gate.lock() {
             if let Some(gate) = gate.as_mut() {
-                gate.sync_from_api(state, controller, clipboard);
+                gate.sync_from_api(state, controller, clipboard, grant_id);
             }
         }
 
@@ -526,6 +625,261 @@ impl Agent {
     /// reported it.
     pub fn set_allowed_capabilities(&self, capabilities: AgentCapabilities) -> AgentState {
         self.apply(AgentEvent::CapabilitiesChanged(capabilities))
+    }
+
+    // ----------------------------------------------------------- companion
+
+    /// The owner linked this machine to their browser share: ask the person
+    /// at the machine. Raised only from `GET /devices/me`, never from anything
+    /// a peer sends.
+    pub fn companion_requested(&self, pending: &PendingCompanion) -> AgentState {
+        self.apply(AgentEvent::CompanionRequested(CompanionSummary {
+            companion_uuid: pending.companion_uuid.clone(),
+            session_uuid: pending.session_uuid.clone(),
+            display_id: pending.display_id.clone(),
+            company_name: pending.company_name.clone(),
+            requested_by_name: pending.requested_by_name.clone(),
+            expires_at: pending.expires_at.clone(),
+            started_at: None,
+            phase: remote_core::CompanionPhase::AwaitingConfirmation,
+            monitors: Vec::new(),
+            monitor: None,
+            controller_name: None,
+        }))
+    }
+
+    /// A waiting link went away unanswered here — or was declined.
+    pub fn companion_dismissed(&self, companion_uuid: &str) -> AgentState {
+        self.apply(AgentEvent::CompanionDismissed {
+            companion_uuid: companion_uuid.to_owned(),
+        })
+    }
+
+    /// The person at the machine answered a waiting link. Picked up by the
+    /// connection loop, which joins or declines.
+    pub fn decide_companion(&self, companion_uuid: &str, allow: bool) {
+        if let Ok(mut decision) = self.companion_decision.lock() {
+            *decision = Some((companion_uuid.to_owned(), allow));
+        }
+    }
+
+    /// The answer for this link, if one was given. Taken: it is acted on once.
+    pub fn take_companion_decision(&self, companion_uuid: &str) -> Option<bool> {
+        let mut decision = self.companion_decision.lock().ok()?;
+
+        match decision.as_ref() {
+            Some((uuid, allow)) if uuid == companion_uuid => {
+                let allow = *allow;
+                *decision = None;
+
+                Some(allow)
+            }
+            _ => None,
+        }
+    }
+
+    /// Joined as a companion: a fresh gate for the session, and the indicator
+    /// on.
+    pub fn begin_companion(&self, summary: CompanionSummary) -> AgentState {
+        if let Ok(mut gate) = self.gate.lock() {
+            *gate = Some(ControlGate::new(summary.session_uuid.clone()));
+        }
+
+        if let Ok(mut companion) = self.companion.lock() {
+            *companion = Some(CompanionContext {
+                companion_uuid: summary.companion_uuid.clone(),
+                session_uuid: summary.session_uuid.clone(),
+                monitor_id: None,
+            });
+        }
+
+        self.companion_leave.store(false, Ordering::SeqCst);
+        self.stop_notice.store(false, Ordering::SeqCst);
+
+        self.apply(AgentEvent::CompanionJoined(summary))
+    }
+
+    /// Which monitor is shared cannot be told automatically: offer these, and
+    /// inject nothing until one is chosen.
+    pub fn companion_choose_monitor(&self, options: &[Monitor]) -> AgentState {
+        self.set_companion_monitor(None);
+
+        self.apply(AgentEvent::CompanionChooseMonitor {
+            options: options.iter().map(MonitorOption::from).collect(),
+        })
+    }
+
+    /// The monitor being shared is known and was reported: input lands on it.
+    pub fn companion_monitor_chosen(&self, monitor: &Monitor) -> AgentState {
+        self.set_companion_monitor(Some(monitor.id));
+
+        self.apply(AgentEvent::CompanionMonitorChosen(MonitorOption::from(
+            monitor,
+        )))
+    }
+
+    fn set_companion_monitor(&self, monitor_id: Option<u32>) {
+        if let Ok(mut companion) = self.companion.lock() {
+            if let Some(companion) = companion.as_mut() {
+                companion.monitor_id = monitor_id;
+            }
+        }
+    }
+
+    /// The person at the machine picked a monitor in the window.
+    pub fn choose_companion_monitor(&self, companion_uuid: &str, monitor_id: u32) {
+        if let Ok(mut choice) = self.monitor_choice.lock() {
+            *choice = Some((companion_uuid.to_owned(), monitor_id));
+        }
+    }
+
+    /// The pick for this link, if one was made. Taken: it is reported once.
+    pub fn take_monitor_choice(&self, companion_uuid: &str) -> Option<u32> {
+        let mut choice = self.monitor_choice.lock().ok()?;
+
+        match choice.as_ref() {
+            Some((uuid, id)) if uuid == companion_uuid => {
+                let id = *id;
+                *choice = None;
+
+                Some(id)
+            }
+            _ => None,
+        }
+    }
+
+    /// The person at the machine ended the link here.
+    pub fn leave_companion(&self) {
+        self.companion_leave.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether the person at the machine asked to leave. Cleared by reading.
+    pub fn take_companion_leave(&self) -> bool {
+        self.companion_leave.swap(false, Ordering::SeqCst)
+    }
+
+    /// Adopt control as the API reports it for a companion session.
+    ///
+    /// No consent dialog here: the owner grants each request in their browser.
+    /// `grant_id` is what lets a grant made after a local Stop re-arm the gate
+    /// — and nothing else does.
+    pub fn sync_companion_control(
+        &self,
+        controller: Option<String>,
+        controller_name: Option<String>,
+        grant_id: Option<String>,
+    ) -> AgentState {
+        let state = if controller.is_some() {
+            ControlState::Granted
+        } else {
+            ControlState::None
+        };
+
+        let controlled = {
+            let Ok(mut gate) = self.gate.lock() else {
+                return self.state();
+            };
+
+            match gate.as_mut() {
+                Some(gate) => {
+                    // Companions never share the clipboard in this version.
+                    gate.sync_from_api(state, controller, false, grant_id);
+                    gate.state().permits_input()
+                }
+                None => false,
+            }
+        };
+
+        self.apply(AgentEvent::CompanionControl {
+            controlled,
+            controller_name: controller_name.filter(|name| !name.is_empty()),
+        })
+    }
+
+    /// The person at the machine is (`true`) or is no longer (`false`) using
+    /// it while somebody holds control. Pausing drops their input at the gate
+    /// and lets go of anything held, so a remote Shift does not ride along
+    /// with the local person's typing.
+    pub fn set_companion_paused(&self, paused: bool) -> AgentState {
+        if let Ok(mut gate) = self.gate.lock() {
+            if let Some(gate) = gate.as_mut() {
+                if paused {
+                    gate.pause();
+                } else {
+                    gate.resume();
+                }
+            }
+        }
+
+        if paused {
+            self.release_all_input();
+        }
+
+        self.apply(AgentEvent::CompanionPaused(paused))
+    }
+
+    /// The companion left the session.
+    pub fn end_companion(&self) -> AgentState {
+        if let Ok(mut gate) = self.gate.lock() {
+            *gate = None;
+        }
+
+        if let Ok(mut companion) = self.companion.lock() {
+            *companion = None;
+        }
+
+        self.release_all_input();
+        self.stop_notice.store(false, Ordering::SeqCst);
+
+        self.apply(AgentEvent::CompanionEnded)
+    }
+
+    /// Every display the platform can see, in its injection space.
+    pub fn monitor_layout(&self) -> PlatformResult<MonitorLayout> {
+        let providers = self
+            .providers
+            .lock()
+            .map_err(|_| remote_device::PlatformError::NotFound("The display list"))?;
+
+        providers
+            .as_ref()
+            .ok_or(remote_device::PlatformError::Unsupported(
+                "Reading the display layout",
+            ))?
+            .capture
+            .monitors()
+    }
+
+    /// Seconds since the machine last saw any mouse or keyboard input, and
+    /// seconds since this agent last injected some. `None` for the first when
+    /// the platform cannot say, which leaves the local-input override off.
+    pub fn input_activity(&self) -> (Option<f64>, Option<f64>) {
+        let local = self.providers.lock().ok().and_then(|providers| {
+            providers
+                .as_ref()
+                .and_then(|providers| providers.input.seconds_since_input().ok())
+        });
+
+        let injected = self
+            .last_injection
+            .lock()
+            .ok()
+            .and_then(|last| last.map(|at| at.elapsed().as_secs_f64()));
+
+        (local, injected)
+    }
+
+    /// Whether the gate is open and not paused, nor stopped locally.
+    #[must_use]
+    pub fn control_admits_input(&self) -> bool {
+        self.gate
+            .lock()
+            .ok()
+            .and_then(|gate| {
+                gate.as_ref()
+                    .map(|gate| gate.state().permits_input() && !gate.is_paused())
+            })
+            .unwrap_or(false)
     }
 
     /// An administrator revoked this device.
@@ -558,10 +912,37 @@ impl Agent {
         gate.admit(&envelope)?;
 
         // Past the gate. From here the message is acted on.
-        self.dispatch(&envelope)
+        let handled = self.dispatch(&envelope)?;
+
+        if handled == Handled::Applied && envelope.is_input() {
+            if let Ok(mut last) = self.last_injection.lock() {
+                *last = Some(Instant::now());
+            }
+        }
+
+        Ok(handled)
     }
 
     fn dispatch(&self, envelope: &ControlEnvelope) -> Result<Handled, GateError> {
+        // A ping is answered by whoever owns the channel, with the nonce.
+        if let ControlMessage::Ping { nonce } = envelope.message {
+            return Ok(Handled::Pinged(nonce));
+        }
+
+        // A companion's monitor is the one its owner is sharing, chosen at the
+        // machine or matched to the browser's surface — never one a message
+        // names, which is why `select_monitor` does nothing here. Until it is
+        // known, nothing is injected anywhere.
+        let companion_monitor = self
+            .companion
+            .lock()
+            .ok()
+            .and_then(|companion| companion.as_ref().map(|companion| companion.monitor_id));
+
+        if matches!(companion_monitor, Some(None)) {
+            return Ok(Handled::Ignored);
+        }
+
         let Ok(providers) = self.providers.lock() else {
             return Ok(Handled::Ignored);
         };
@@ -570,14 +951,17 @@ impl Agent {
             return Ok(Handled::Unsupported);
         };
 
-        // The monitor a message applies to is the one being captured. A
+        // The monitor a message applies to is the one being shared. A
         // controller cannot address a monitor that is not being shared, which
         // is why the id is taken from the layout rather than from the message.
-        let monitor_id = providers
-            .capture
-            .monitors()
-            .map(|layout| layout.active_monitor_id)
-            .unwrap_or(1);
+        let monitor_id = match companion_monitor {
+            Some(Some(id)) => id,
+            _ => providers
+                .capture
+                .monitors()
+                .map(|layout| layout.active_monitor_id)
+                .unwrap_or(1),
+        };
 
         let outcome = match &envelope.message {
             ControlMessage::MouseMove { position } => {
@@ -647,6 +1031,8 @@ pub enum Handled {
     Unsupported,
     /// The platform refused.
     Failed,
+    /// A keep-alive: the channel's owner answers it with this nonce.
+    Pinged(u64),
 }
 
 /// Why an agent operation failed.
@@ -881,7 +1267,7 @@ mod tests {
         agent.grant_control(CONTROLLER, true);
         agent.stop_control();
 
-        agent.sync_control(ControlState::Granted, Some(CONTROLLER.into()), true);
+        agent.sync_control(ControlState::Granted, Some(CONTROLLER.into()), true, None);
 
         assert_eq!(agent.control_state(), ControlState::Revoked);
         assert_eq!(
@@ -963,6 +1349,9 @@ mod tests {
         ));
         std::env::set_var("XDG_CONFIG_HOME", &root);
         std::env::set_var("ProgramData", &root);
+        // macOS keeps it under ~/Library/Application Support.
+        #[cfg(target_os = "macos")]
+        std::env::set_var("HOME", &root);
 
         let agent = Agent::new();
 
@@ -999,6 +1388,13 @@ mod tests {
         if !platform::is_supported() {
             assert!(!declared.remote_control);
             assert!(!declared.unattended_access);
+        }
+
+        // A companion-only platform never declares unattended access, whatever
+        // the machine permits.
+        if !platform::supports_hosting() {
+            assert!(!declared.unattended_access);
+            assert!(!declared.clipboard_sync);
         }
     }
 
@@ -1052,6 +1448,178 @@ mod tests {
         assert_eq!(
             state.active_session().unwrap().connected_name,
             "Sam in support"
+        );
+    }
+
+    fn companion(agent: &Agent) {
+        agent.begin_companion(CompanionSummary {
+            companion_uuid: "companion-1".into(),
+            session_uuid: SESSION.into(),
+            display_id: "123-456".into(),
+            company_name: None,
+            requested_by_name: Some("Rahul".into()),
+            expires_at: None,
+            started_at: Some("2026-10-25T09:00:00Z".into()),
+            phase: remote_core::CompanionPhase::ChoosingMonitor,
+            monitors: Vec::new(),
+            monitor: None,
+            controller_name: None,
+        });
+    }
+
+    fn display(id: u32) -> Monitor {
+        Monitor {
+            id,
+            name: format!("Display {id}"),
+            primary: id == 1,
+            x: 0,
+            y: 0,
+            width: 1512,
+            height: 982,
+            scale: 2.0,
+            refresh_hz: None,
+            orientation: remote_protocol::Orientation::Landscape,
+        }
+    }
+
+    /// A companion's control comes from the API — granted in the owner's
+    /// browser — and lands only once the monitor is known.
+    #[test]
+    fn a_companion_admits_input_only_when_granted_and_with_a_monitor() {
+        let agent = enrolled_agent();
+        companion(&agent);
+
+        // Granted, but no monitor yet: past the gate, and still ignored.
+        let state = agent.sync_companion_control(
+            Some(CONTROLLER.into()),
+            Some("Sam".into()),
+            Some("grant-1".into()),
+        );
+        assert!(!state.is_being_controlled(), "no monitor, no control shown");
+        assert_eq!(agent.handle_control(&pointer(1)), Ok(Handled::Ignored));
+
+        let state = agent.companion_monitor_chosen(&display(1));
+        assert_eq!(
+            state.active_companion().unwrap().phase,
+            remote_core::CompanionPhase::Ready
+        );
+
+        let state = agent.sync_companion_control(
+            Some(CONTROLLER.into()),
+            Some("Sam".into()),
+            Some("grant-1".into()),
+        );
+        assert!(state.is_being_controlled());
+        assert!(agent.control_admits_input());
+        // Past the gate; this host has no input provider to apply it with.
+        assert!(agent.handle_control(&pointer(2)).is_ok());
+    }
+
+    /// Stop at the machine: the gate closes, the loop is owed a
+    /// `control_ended`, and the same grant reported again does not reopen it.
+    #[test]
+    fn stopping_a_companion_locally_holds_until_a_new_grant() {
+        let agent = enrolled_agent();
+        companion(&agent);
+        agent.companion_monitor_chosen(&display(1));
+        agent.sync_companion_control(Some(CONTROLLER.into()), None, Some("grant-1".into()));
+
+        let state = agent.stop_control();
+        assert!(!state.is_being_controlled());
+        assert!(agent.take_stop_notice());
+        assert!(!agent.take_stop_notice(), "taken once");
+
+        agent.sync_companion_control(Some(CONTROLLER.into()), None, Some("grant-1".into()));
+        assert_eq!(
+            agent.handle_control(&pointer(3)),
+            Err(GateError::NotGranted)
+        );
+        assert!(!agent.state().is_being_controlled());
+
+        agent.sync_companion_control(Some(CONTROLLER.into()), None, Some("grant-2".into()));
+        assert!(agent.state().is_being_controlled());
+        assert!(agent.handle_control(&pointer(1)).is_ok());
+    }
+
+    /// The local person wins: paused input is dropped at the gate, and the
+    /// banner says so.
+    #[test]
+    fn a_paused_companion_drops_input_until_resumed() {
+        let agent = enrolled_agent();
+        companion(&agent);
+        agent.companion_monitor_chosen(&display(1));
+        agent.sync_companion_control(Some(CONTROLLER.into()), None, Some("grant-1".into()));
+
+        let state = agent.set_companion_paused(true);
+        assert_eq!(
+            state.active_companion().unwrap().phase,
+            remote_core::CompanionPhase::Paused
+        );
+        assert!(!agent.control_admits_input());
+        assert_eq!(agent.handle_control(&pointer(1)), Err(GateError::Paused));
+
+        agent.set_companion_paused(false);
+        assert!(agent.handle_control(&pointer(2)).is_ok());
+    }
+
+    /// `select_monitor` is ignored in companion mode — the monitor is the one
+    /// the owner shares, not one a controller names — and a ping is answered.
+    #[test]
+    fn a_companion_ignores_select_monitor_and_answers_a_ping() {
+        let agent = enrolled_agent();
+        companion(&agent);
+        agent.companion_monitor_chosen(&display(1));
+        agent.sync_companion_control(Some(CONTROLLER.into()), None, Some("grant-1".into()));
+
+        let select = ControlEnvelope::new(
+            SESSION,
+            CONTROLLER,
+            1,
+            ControlMessage::SelectMonitor { monitor_id: 2 },
+        )
+        .encode()
+        .unwrap();
+        assert_eq!(agent.handle_control(&select), Ok(Handled::Ignored));
+
+        let ping = ControlEnvelope::new(SESSION, CONTROLLER, 2, ControlMessage::Ping { nonce: 9 })
+            .encode()
+            .unwrap();
+        assert_eq!(agent.handle_control(&ping), Ok(Handled::Pinged(9)));
+    }
+
+    #[test]
+    fn decisions_and_monitor_choices_are_taken_once_and_only_for_their_link() {
+        let agent = enrolled_agent();
+
+        agent.decide_companion("companion-1", true);
+        assert_eq!(agent.take_companion_decision("companion-2"), None);
+        assert_eq!(agent.take_companion_decision("companion-1"), Some(true));
+        assert_eq!(agent.take_companion_decision("companion-1"), None);
+
+        agent.choose_companion_monitor("companion-1", 4);
+        assert_eq!(agent.take_monitor_choice("other"), None);
+        assert_eq!(agent.take_monitor_choice("companion-1"), Some(4));
+        assert_eq!(agent.take_monitor_choice("companion-1"), None);
+
+        agent.leave_companion();
+        assert!(agent.take_companion_leave());
+        assert!(!agent.take_companion_leave());
+    }
+
+    #[test]
+    fn ending_a_companion_takes_the_gate_and_the_monitor_with_it() {
+        let agent = enrolled_agent();
+        companion(&agent);
+        agent.companion_monitor_chosen(&display(1));
+        agent.sync_companion_control(Some(CONTROLLER.into()), None, Some("grant-1".into()));
+
+        let state = agent.end_companion();
+
+        assert!(state.active_companion().is_none());
+        assert!(!state.is_session_active());
+        assert_eq!(
+            agent.handle_control(&pointer(1)),
+            Err(GateError::NotGranted)
         );
     }
 

@@ -16,7 +16,7 @@
 //! the other.
 
 use remote_device::AgentCapabilities;
-use remote_protocol::ControlState;
+use remote_protocol::{ControlState, Monitor};
 use serde::{Deserialize, Serialize};
 
 /// What the agent is doing right now.
@@ -48,6 +48,14 @@ pub enum AgentStatus {
     /// A session is running. **The indicator is on whenever this is the state.**
     InSession(SessionSummary),
 
+    /// This machine is its owner's control companion in a session they are
+    /// sharing from the browser — or is asking them to confirm becoming one.
+    ///
+    /// From [`CompanionPhase::ChoosingMonitor`] on, the machine is in the
+    /// session, and the indicator is on exactly as it is for
+    /// [`AgentStatus::InSession`].
+    Companion(CompanionSummary),
+
     /// The device was revoked by an administrator. A terminal state: the agent
     /// stops trying, says so, and waits to be enrolled again.
     Revoked,
@@ -74,6 +82,106 @@ pub struct SessionSummary {
     pub unattended: bool,
     /// Where control stands.
     pub control: ControlSummary,
+}
+
+/// Where a control companion is, from being asked to being controlled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompanionPhase {
+    /// The owner linked this machine to their share from the browser; the
+    /// person at the machine has not said yes yet. Nothing is joined.
+    AwaitingConfirmation,
+    /// Joined, and working out which monitor is being shared — or waiting
+    /// for the person at the machine to pick one.
+    ChoosingMonitor,
+    /// The monitor is known and reported. Somebody the owner grants control
+    /// to, in the browser, can use this machine's mouse and keyboard.
+    Ready,
+    /// Somebody is controlling this machine.
+    Controlled,
+    /// Somebody holds control, but the person at the machine is using it, so
+    /// their input waits.
+    Paused,
+}
+
+/// A monitor, as the companion's picker offers it.
+///
+/// Integers only, so it crosses the Tauri boundary in a state that compares
+/// exactly: the scale is a whole percentage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonitorOption {
+    /// The id the choice is reported with.
+    pub id: u32,
+    /// What the person at the machine calls it.
+    pub name: String,
+    /// The main display.
+    pub primary: bool,
+    /// Width, in the platform's injection space.
+    pub width: u32,
+    /// Height, in the platform's injection space.
+    pub height: u32,
+    /// The display scale as a percentage — 200 on a Retina display.
+    pub scale_percent: u32,
+}
+
+impl From<&Monitor> for MonitorOption {
+    fn from(monitor: &Monitor) -> Self {
+        Self {
+            id: monitor.id,
+            name: monitor.name.clone(),
+            primary: monitor.primary,
+            width: monitor.width,
+            height: monitor.height,
+            scale_percent: (monitor.scale * 100.0).round().clamp(0.0, 10_000.0) as u32,
+        }
+    }
+}
+
+/// The control companion, as the interface shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanionSummary {
+    /// The link's identifier.
+    pub companion_uuid: String,
+    /// The session the owner is sharing in.
+    pub session_uuid: String,
+    /// `123-456`.
+    pub display_id: String,
+    /// Which organisation.
+    pub company_name: Option<String>,
+    /// Who linked this machine — its owner, from their browser.
+    pub requested_by_name: Option<String>,
+    /// When an unanswered request lapses.
+    pub expires_at: Option<String>,
+    /// When the machine joined, ISO-8601 UTC. `None` until it has.
+    pub started_at: Option<String>,
+    /// Where it is.
+    pub phase: CompanionPhase,
+    /// What the picker offers, while the person at the machine has to choose.
+    /// Empty otherwise.
+    pub monitors: Vec<MonitorOption>,
+    /// The monitor being controlled through, once known.
+    pub monitor: Option<MonitorOption>,
+    /// Who holds control, while somebody does.
+    pub controller_name: Option<String>,
+}
+
+impl CompanionSummary {
+    /// Whether the machine is in the session, rather than still being asked.
+    #[must_use]
+    pub fn is_joined(&self) -> bool {
+        self.phase != CompanionPhase::AwaitingConfirmation
+    }
+
+    /// Whether somebody holds control, paused or not.
+    #[must_use]
+    pub fn is_controlled(&self) -> bool {
+        matches!(
+            self.phase,
+            CompanionPhase::Controlled | CompanionPhase::Paused
+        )
+    }
 }
 
 /// Control, for the interface.
@@ -193,7 +301,20 @@ impl AgentState {
     /// function the "no hidden remote control" property rests on.
     #[must_use]
     pub fn is_session_active(&self) -> bool {
-        matches!(self.status, AgentStatus::InSession(_))
+        match &self.status {
+            AgentStatus::InSession(_) => true,
+            AgentStatus::Companion(companion) => companion.is_joined(),
+            _ => false,
+        }
+    }
+
+    /// The control companion, if this machine is one or is being asked to be.
+    #[must_use]
+    pub fn active_companion(&self) -> Option<&CompanionSummary> {
+        match &self.status {
+            AgentStatus::Companion(companion) => Some(companion),
+            _ => None,
+        }
     }
 
     /// The running session, if there is one.
@@ -210,6 +331,9 @@ impl AgentState {
     pub fn is_being_controlled(&self) -> bool {
         self.active_session()
             .is_some_and(|session| session.control.state == ControlStateView::Granted)
+            || self
+                .active_companion()
+                .is_some_and(CompanionSummary::is_controlled)
     }
 
     /// Whether the agent is enrolled at all.
@@ -221,7 +345,10 @@ impl AgentState {
     /// Whether the machine is reachable.
     #[must_use]
     pub fn is_online(&self) -> bool {
-        matches!(self.status, AgentStatus::Online | AgentStatus::InSession(_))
+        matches!(
+            self.status,
+            AgentStatus::Online | AgentStatus::InSession(_) | AgentStatus::Companion(_)
+        )
     }
 
     /// The one line the tray tooltip shows.
@@ -233,6 +360,22 @@ impl AgentState {
             AgentStatus::Offline { reason, .. } => format!("AICOUNTLY Remote — offline: {reason}"),
             AgentStatus::Online => "AICOUNTLY Remote — online".into(),
             AgentStatus::Revoked => "AICOUNTLY Remote — this device was removed".into(),
+            AgentStatus::Companion(companion) => match companion.phase {
+                CompanionPhase::AwaitingConfirmation => {
+                    "AICOUNTLY Remote — waiting for you to allow control".into()
+                }
+                CompanionPhase::ChoosingMonitor | CompanionPhase::Ready => format!(
+                    "AICOUNTLY Remote — ready to be controlled in session {}",
+                    companion.display_id
+                ),
+                CompanionPhase::Controlled => format!(
+                    "AICOUNTLY Remote — {} is controlling this computer",
+                    companion.controller_name.as_deref().unwrap_or("someone")
+                ),
+                CompanionPhase::Paused => {
+                    "AICOUNTLY Remote — control paused while you use this computer".into()
+                }
+            },
             AgentStatus::InSession(session) => format!(
                 "AICOUNTLY Remote — session active with {}{}",
                 session.connected_name,
@@ -302,6 +445,13 @@ impl AgentState {
             (_, AgentEvent::AuthenticationFailed { attempt }) => {
                 AgentStatus::Authenticating { attempt }
             }
+
+            // The connection loop renews its credential and reports presence
+            // while a confirmation is on screen; neither dismisses it.
+            (
+                AgentStatus::Companion(companion),
+                AgentEvent::Authenticated | AgentEvent::Connected,
+            ) => AgentStatus::Companion(companion),
             (_, AgentEvent::Authenticated) => AgentStatus::Online,
 
             (_, AgentEvent::Disconnected { reason, retryable }) => {
@@ -310,6 +460,146 @@ impl AgentState {
             (_, AgentEvent::Connected) => AgentStatus::Online,
 
             (_, AgentEvent::SessionStarted(session)) => AgentStatus::InSession(session),
+
+            // ----------------------------------------------------- companion
+            //
+            // A request is only raised on an idle machine, and only replaces a
+            // request — never a session or a companion that already joined.
+            (AgentStatus::Online, AgentEvent::CompanionRequested(request)) => {
+                AgentStatus::Companion(CompanionSummary {
+                    phase: CompanionPhase::AwaitingConfirmation,
+                    ..request
+                })
+            }
+            (AgentStatus::Companion(current), AgentEvent::CompanionRequested(request))
+                if !current.is_joined() =>
+            {
+                AgentStatus::Companion(CompanionSummary {
+                    phase: CompanionPhase::AwaitingConfirmation,
+                    ..request
+                })
+            }
+            (status, AgentEvent::CompanionRequested(_)) => status,
+
+            (
+                AgentStatus::Companion(current),
+                AgentEvent::CompanionDismissed { companion_uuid },
+            ) if !current.is_joined() && current.companion_uuid == companion_uuid => {
+                AgentStatus::Online
+            }
+            (status, AgentEvent::CompanionDismissed { .. }) => status,
+
+            // Joining: from the confirmation, or from an idle machine when the
+            // confirmation was given in a window the state had not caught up
+            // with yet.
+            (
+                AgentStatus::Companion(_) | AgentStatus::Online,
+                AgentEvent::CompanionJoined(joined),
+            ) => AgentStatus::Companion(CompanionSummary {
+                phase: CompanionPhase::ChoosingMonitor,
+                monitors: Vec::new(),
+                monitor: None,
+                controller_name: None,
+                ..joined
+            }),
+            (status, AgentEvent::CompanionJoined(_)) => status,
+
+            (AgentStatus::Companion(current), AgentEvent::CompanionChooseMonitor { options })
+                if current.is_joined() =>
+            {
+                AgentStatus::Companion(CompanionSummary {
+                    phase: CompanionPhase::ChoosingMonitor,
+                    monitors: options,
+                    monitor: None,
+                    controller_name: None,
+                    ..current
+                })
+            }
+            (status, AgentEvent::CompanionChooseMonitor { .. }) => status,
+
+            (AgentStatus::Companion(current), AgentEvent::CompanionMonitorChosen(monitor))
+                if current.is_joined() =>
+            {
+                AgentStatus::Companion(CompanionSummary {
+                    phase: if current.is_controlled() {
+                        current.phase
+                    } else {
+                        CompanionPhase::Ready
+                    },
+                    monitors: Vec::new(),
+                    monitor: Some(monitor),
+                    ..current
+                })
+            }
+            (status, AgentEvent::CompanionMonitorChosen(_)) => status,
+
+            // Control only means something once the monitor is known: before
+            // that the gate has nowhere to put a click, and the API does not
+            // let anybody be granted it.
+            (
+                AgentStatus::Companion(current),
+                AgentEvent::CompanionControl {
+                    controlled,
+                    controller_name,
+                },
+            ) if current.monitor.is_some() => {
+                let phase = match (controlled, current.phase) {
+                    (true, CompanionPhase::Paused) => CompanionPhase::Paused,
+                    (true, _) => CompanionPhase::Controlled,
+                    (false, _) => CompanionPhase::Ready,
+                };
+
+                AgentStatus::Companion(CompanionSummary {
+                    phase,
+                    controller_name: if controlled { controller_name } else { None },
+                    ..current
+                })
+            }
+            (status, AgentEvent::CompanionControl { .. }) => status,
+
+            (AgentStatus::Companion(current), AgentEvent::CompanionPaused(paused))
+                if current.is_controlled() =>
+            {
+                AgentStatus::Companion(CompanionSummary {
+                    phase: if paused {
+                        CompanionPhase::Paused
+                    } else {
+                        CompanionPhase::Controlled
+                    },
+                    ..current
+                })
+            }
+            (status, AgentEvent::CompanionPaused(_)) => status,
+
+            (AgentStatus::Companion(current), AgentEvent::CompanionEnded) => {
+                if let Some(started_at) = current.started_at.clone() {
+                    self.recent_sessions.insert(
+                        0,
+                        SessionSummary {
+                            session_uuid: current.session_uuid.clone(),
+                            display_id: current.display_id.clone(),
+                            connected_name: current
+                                .controller_name
+                                .clone()
+                                .or_else(|| current.requested_by_name.clone())
+                                .unwrap_or_default(),
+                            company_name: current.company_name.clone(),
+                            started_at,
+                            unattended: false,
+                            control: ControlSummary {
+                                state: ControlStateView::None,
+                                clipboard: false,
+                                requester_uuid: None,
+                                requester_name: None,
+                            },
+                        },
+                    );
+                    self.recent_sessions.truncate(10);
+                }
+
+                AgentStatus::Online
+            }
+            (status, AgentEvent::CompanionEnded) => status,
 
             (
                 AgentStatus::InSession(session),
@@ -427,6 +717,36 @@ pub enum AgentEvent {
     CapabilitiesChanged(AgentCapabilities),
     /// An administrator revoked this device.
     Revoked,
+    /// The owner linked this machine to their browser share; ask the person
+    /// at the machine. The summary's phase is ignored — it is a request.
+    CompanionRequested(CompanionSummary),
+    /// The request went away unanswered here: declined, lapsed, or withdrawn
+    /// from the browser.
+    CompanionDismissed {
+        /// Which link.
+        companion_uuid: String,
+    },
+    /// The person at the machine said yes and the machine joined.
+    CompanionJoined(CompanionSummary),
+    /// Which monitor is being shared cannot be told automatically; offer these.
+    CompanionChooseMonitor {
+        /// The candidates, in layout order.
+        options: Vec<MonitorOption>,
+    },
+    /// The monitor being shared is known and was reported.
+    CompanionMonitorChosen(MonitorOption),
+    /// Control was granted to somebody, or is no longer held.
+    CompanionControl {
+        /// Whether somebody holds control.
+        controlled: bool,
+        /// Who, for the banner.
+        controller_name: Option<String>,
+    },
+    /// The person at the machine started (`true`) or stopped (`false`) using it
+    /// while somebody holds control.
+    CompanionPaused(bool),
+    /// The companion left the session.
+    CompanionEnded,
 }
 
 #[cfg(test)]
@@ -726,6 +1046,206 @@ mod tests {
 
         assert_eq!(back, state);
         assert!(back.is_session_active());
+    }
+
+    fn companion_request() -> CompanionSummary {
+        CompanionSummary {
+            companion_uuid: "companion-1".into(),
+            session_uuid: "session-1".into(),
+            display_id: "123-456".into(),
+            company_name: Some("Northwind".into()),
+            requested_by_name: Some("Rahul".into()),
+            expires_at: Some("2026-10-25T09:05:00Z".into()),
+            started_at: None,
+            phase: CompanionPhase::Ready,
+            monitors: Vec::new(),
+            monitor: None,
+            controller_name: None,
+        }
+    }
+
+    fn option(id: u32) -> MonitorOption {
+        MonitorOption {
+            id,
+            name: format!("Display {id}"),
+            primary: id == 1,
+            width: 1512,
+            height: 982,
+            scale_percent: 200,
+        }
+    }
+
+    fn joined() -> CompanionSummary {
+        CompanionSummary {
+            started_at: Some("2026-10-25T09:01:00Z".into()),
+            ..companion_request()
+        }
+    }
+
+    /// The whole companion life: asked, joined, monitor chosen, controlled,
+    /// paused by the person at the machine, resumed, released, ended.
+    #[test]
+    fn a_companion_moves_through_its_phases_in_order() {
+        let phase = |state: &AgentState| state.active_companion().map(|c| c.phase);
+
+        let state = enrolled()
+            .apply(AgentEvent::Authenticated)
+            .apply(AgentEvent::CompanionRequested(companion_request()));
+        assert_eq!(phase(&state), Some(CompanionPhase::AwaitingConfirmation));
+        // Being asked is not being in a session.
+        assert!(!state.is_session_active());
+        assert!(state.tray_summary().contains("allow control"));
+
+        let state = state.apply(AgentEvent::CompanionJoined(joined()));
+        assert_eq!(phase(&state), Some(CompanionPhase::ChoosingMonitor));
+        assert!(state.is_session_active(), "joined is visible");
+
+        let state = state.apply(AgentEvent::CompanionChooseMonitor {
+            options: vec![option(1), option(2)],
+        });
+        assert_eq!(state.active_companion().unwrap().monitors.len(), 2);
+
+        let state = state.apply(AgentEvent::CompanionMonitorChosen(option(2)));
+        assert_eq!(phase(&state), Some(CompanionPhase::Ready));
+        assert!(state.active_companion().unwrap().monitors.is_empty());
+        assert!(!state.is_being_controlled());
+
+        let state = state.apply(AgentEvent::CompanionControl {
+            controlled: true,
+            controller_name: Some("Sam".into()),
+        });
+        assert_eq!(phase(&state), Some(CompanionPhase::Controlled));
+        assert!(state.is_being_controlled());
+        assert!(state.tray_summary().contains("Sam is controlling"));
+
+        let state = state.apply(AgentEvent::CompanionPaused(true));
+        assert_eq!(phase(&state), Some(CompanionPhase::Paused));
+        assert!(
+            state.is_being_controlled(),
+            "Stop stays on offer while paused"
+        );
+
+        // A control poll while paused does not lift the pause.
+        let state = state.apply(AgentEvent::CompanionControl {
+            controlled: true,
+            controller_name: Some("Sam".into()),
+        });
+        assert_eq!(phase(&state), Some(CompanionPhase::Paused));
+
+        let state = state.apply(AgentEvent::CompanionPaused(false));
+        assert_eq!(phase(&state), Some(CompanionPhase::Controlled));
+
+        let state = state.apply(AgentEvent::CompanionControl {
+            controlled: false,
+            controller_name: None,
+        });
+        assert_eq!(phase(&state), Some(CompanionPhase::Ready));
+        assert!(state.active_companion().unwrap().controller_name.is_none());
+
+        let state = state.apply(AgentEvent::CompanionEnded);
+        assert_eq!(state.status, AgentStatus::Online);
+        assert_eq!(state.recent_sessions[0].display_id, "123-456");
+    }
+
+    /// Presence and renewal keep running under a confirmation on screen, and
+    /// must not wipe it away.
+    #[test]
+    fn a_confirmation_survives_the_connection_loop_reporting_in() {
+        let state = enrolled()
+            .apply(AgentEvent::Authenticated)
+            .apply(AgentEvent::CompanionRequested(companion_request()))
+            .apply(AgentEvent::Connected)
+            .apply(AgentEvent::Authenticated);
+
+        assert_eq!(
+            state.active_companion().map(|c| c.phase),
+            Some(CompanionPhase::AwaitingConfirmation)
+        );
+    }
+
+    /// A request never interrupts a hosted session or a companion that has
+    /// already joined; dismissing applies only to the request it names.
+    #[test]
+    fn a_request_never_displaces_a_session_and_dismissal_is_by_name() {
+        let hosting = enrolled()
+            .apply(AgentEvent::Authenticated)
+            .apply(AgentEvent::SessionStarted(session(false)))
+            .apply(AgentEvent::CompanionRequested(companion_request()));
+        assert!(hosting.active_session().is_some());
+
+        let companion = enrolled()
+            .apply(AgentEvent::Authenticated)
+            .apply(AgentEvent::CompanionRequested(companion_request()))
+            .apply(AgentEvent::CompanionJoined(joined()))
+            .apply(AgentEvent::CompanionRequested(CompanionSummary {
+                companion_uuid: "companion-2".into(),
+                ..companion_request()
+            }));
+        assert_eq!(
+            companion.active_companion().unwrap().companion_uuid,
+            "companion-1"
+        );
+        assert!(companion.active_companion().unwrap().is_joined());
+
+        let asked = enrolled()
+            .apply(AgentEvent::Authenticated)
+            .apply(AgentEvent::CompanionRequested(companion_request()));
+        let still = asked.clone().apply(AgentEvent::CompanionDismissed {
+            companion_uuid: "someone-else".into(),
+        });
+        assert!(still.active_companion().is_some());
+
+        let gone = asked.apply(AgentEvent::CompanionDismissed {
+            companion_uuid: "companion-1".into(),
+        });
+        assert_eq!(gone.status, AgentStatus::Online);
+        assert!(
+            gone.recent_sessions.is_empty(),
+            "never joined, nothing to list"
+        );
+    }
+
+    /// Control cannot be shown before there is a monitor for it to land on,
+    /// and a pause cannot exist without control.
+    #[test]
+    fn control_needs_a_monitor_and_a_pause_needs_control() {
+        let state = enrolled()
+            .apply(AgentEvent::Authenticated)
+            .apply(AgentEvent::CompanionJoined(joined()))
+            .apply(AgentEvent::CompanionControl {
+                controlled: true,
+                controller_name: Some("Sam".into()),
+            })
+            .apply(AgentEvent::CompanionPaused(true));
+
+        assert_eq!(
+            state.active_companion().unwrap().phase,
+            CompanionPhase::ChoosingMonitor
+        );
+        assert!(!state.is_being_controlled());
+    }
+
+    #[test]
+    fn a_monitor_option_carries_its_scale_as_a_whole_percentage() {
+        let monitor = Monitor {
+            id: 3,
+            name: "Studio Display".into(),
+            primary: false,
+            x: 1512,
+            y: 0,
+            width: 2560,
+            height: 1440,
+            scale: 2.0,
+            refresh_hz: Some(60),
+            orientation: remote_protocol::Orientation::Landscape,
+        };
+
+        let option = MonitorOption::from(&monitor);
+        assert_eq!(option.scale_percent, 200);
+        assert_eq!((option.width, option.height), (2560, 1440));
+
+        let json = serde_json::to_value(&option).unwrap();
+        assert_eq!(json["scalePercent"], 200);
     }
 
     #[test]

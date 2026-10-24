@@ -18,11 +18,37 @@ import { PermissionPill } from '../../components/StatusPill'
 export function PermissionsCard({
   permissions,
   allowed,
+  companionOnly = false,
 }: {
   permissions: PermissionSummary
   /** What the organisation permits, from `GET /devices/me`. */
   allowed: AgentCapabilities | null
+  /**
+   * A control companion (macOS): it shares no screen of its own, so the only
+   * row that means anything is the mouse and keyboard — Accessibility.
+   */
+  companionOnly?: boolean
 }) {
+  if (companionOnly) {
+    return (
+      <section className="card">
+        <h2 className="card__title">Permissions</h2>
+        <p className="card__subtitle">
+          The picture comes from your browser&apos;s share, so the only permission this computer
+          needs is for the mouse and keyboard.
+        </p>
+
+        <div className="card__rows">
+          <PermissionRow
+            label="Mouse and keyboard (Accessibility)"
+            machine={permissions.input_injection}
+            organisation={allowed?.remote_control}
+          />
+        </div>
+      </section>
+    )
+  }
+
   return (
     <section className="card">
       <h2 className="card__title">Permissions</h2>

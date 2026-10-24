@@ -58,12 +58,12 @@ use crate::Agent;
 /// Fast, because both are latency: a candidate held back is a connection that
 /// takes longer to establish, and a control message held back is a mouse that
 /// lags.
-const PUMP_INTERVAL: Duration = Duration::from_millis(50);
+pub(crate) const PUMP_INTERVAL: Duration = Duration::from_millis(50);
 
 /// How often the API is asked who is waiting for control.
 ///
 /// Slower, because somebody is reading a dialog rather than moving a mouse.
-const CONTROL_POLL: Duration = Duration::from_secs(3);
+pub(crate) const CONTROL_POLL: Duration = Duration::from_secs(3);
 
 /// How long to wait for a peer before giving up on the session.
 ///
@@ -80,10 +80,10 @@ const RENEW_BEFORE_EXPIRY: Duration = Duration::from_secs(30);
 const ASSUMED_TOKEN_LIFETIME: Duration = Duration::from_secs(120);
 
 /// How long to wait before trying a failed renewal again.
-const RENEW_RETRY: Duration = Duration::from_secs(5);
+pub(crate) const RENEW_RETRY: Duration = Duration::from_secs(5);
 
 /// How long the session keeps trying to get its signalling connection back after the relay dropped it.
-const RECONNECT_WINDOW: Duration = Duration::from_secs(30);
+pub(crate) const RECONNECT_WINDOW: Duration = Duration::from_secs(30);
 
 /// Why a session ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,16 +114,16 @@ impl Ended {
 }
 
 /// What the API returned when the machine joined.
-struct Joined {
-    participant_uuid: String,
-    display_id: String,
-    company_name: Option<String>,
-    signalling_url: String,
-    signalling_token: String,
+pub(crate) struct Joined {
+    pub(crate) participant_uuid: String,
+    pub(crate) display_id: String,
+    pub(crate) company_name: Option<String>,
+    pub(crate) signalling_url: String,
+    pub(crate) signalling_token: String,
     /// When the room token stops being accepted. `None` when the response did not say, in which case the
     /// connection is renewed on the server's documented two-minute lifetime.
-    signalling_expires_at: Option<time::OffsetDateTime>,
-    ice: IceConfiguration,
+    pub(crate) signalling_expires_at: Option<time::OffsetDateTime>,
+    pub(crate) ice: IceConfiguration,
 }
 
 /// Read the join response without trusting its shape.
@@ -131,7 +131,7 @@ struct Joined {
 /// Every field is optional in the parse and checked afterwards: this arrived
 /// over the network, and a missing `signalling.token` should be a clear
 /// refusal rather than a panic in a background task.
-fn read_join(body: &serde_json::Value) -> Result<Joined, String> {
+pub(crate) fn read_join(body: &serde_json::Value) -> Result<Joined, String> {
     let session = &body["session"];
     let signalling = &body["signalling"];
 
@@ -307,6 +307,9 @@ where
                 .await
                 {
                     Continue::Carry => {}
+                    // Somebody changed control in the API: read it now
+                    // rather than at the next poll.
+                    Continue::PollNow => last_control_poll = Instant::now() - CONTROL_POLL,
                     Continue::Stop(reason) => {
                         announce_end(&mut peer, joined, session_uuid, reason.clone()).await;
                         socket.close().await;
@@ -439,6 +442,7 @@ where
 /// Whether the loop carries on.
 enum Continue {
     Carry,
+    PollNow,
     Stop(Ended),
 }
 
@@ -530,6 +534,12 @@ async fn handle_signal<P: PeerSession>(
             tracing::warn!(%code, %message, "the relay refused something");
         }
 
+        // A nudge to read the API now. It grants nothing by itself.
+        Signal::ControlHint { .. } => return Continue::PollNow,
+
+        // Only ever sent into a device's presence room, not a session's.
+        Signal::DeviceInvite { .. } => {}
+
         Signal::Renegotiate { .. } | Signal::PeerUnavailable { .. } | Signal::Pong => {}
 
         // A relay that grows a message type must not drop the connection.
@@ -565,6 +575,7 @@ fn adopt_control(agent: &Arc<Agent>, sink: &StateSink, view: &remote_core::Sessi
         state,
         view.controller_uuid.clone(),
         view.clipboard_enabled && view.allow_clipboard_sync,
+        view.grant_id.clone(),
     ));
 }
 
@@ -614,6 +625,11 @@ fn control_ended_bytes(
 
 /// When to replace the signalling connection: shortly before its token expires.
 fn renew_at(expires_at: Option<time::OffsetDateTime>) -> Instant {
+    Instant::now() + renew_in(expires_at)
+}
+
+/// How long from now to replace the signalling connection.
+pub(crate) fn renew_in(expires_at: Option<time::OffsetDateTime>) -> Duration {
     let lifetime = match expires_at {
         Some(at) => {
             let left = at - time::OffsetDateTime::now_utc();
@@ -623,10 +639,9 @@ fn renew_at(expires_at: Option<time::OffsetDateTime>) -> Instant {
     };
 
     // Never sooner than a few seconds from now, so a short or already-past expiry cannot spin the loop.
-    Instant::now()
-        + lifetime
-            .saturating_sub(RENEW_BEFORE_EXPIRY)
-            .max(RENEW_RETRY)
+    lifetime
+        .saturating_sub(RENEW_BEFORE_EXPIRY)
+        .max(RENEW_RETRY)
 }
 
 /// Keep trying [`renew_signalling`] for up to [`RECONNECT_WINDOW`], with a short pause between attempts.
@@ -714,7 +729,7 @@ fn quality_from(name: &str) -> CaptureQuality {
     }
 }
 
-fn now_iso() -> String {
+pub(crate) fn now_iso() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_default()

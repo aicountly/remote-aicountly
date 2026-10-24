@@ -18,15 +18,16 @@ pub mod signalling;
 pub mod state;
 
 pub use api::{
-    ApiClient, ApiError, ControlDecision, DeviceCredential, PendingControlRequest,
-    SessionControlView,
+    companion_monitor_body, ApiClient, ApiError, CompanionView, ControlDecision, DeviceCredential,
+    MonitorMatch, PendingCompanion, PendingControlRequest, SessionControlView, SharedSurface,
+    SurfaceKind,
 };
 pub use backoff::Backoff;
-pub use config::{config_path, AgentConfig, ConfigError};
+pub use config::{config_path, macos_support_directory, AgentConfig, ConfigError};
 pub use signalling::{Outbound, Peer, Signal, SignallingError, SignallingSocket};
 pub use state::{
-    AgentEvent, AgentState, AgentStatus, ControlStateView, ControlSummary, SessionSummary,
-    UnattendedState,
+    AgentEvent, AgentState, AgentStatus, CompanionPhase, CompanionSummary, ControlStateView,
+    ControlSummary, MonitorOption, SessionSummary, UnattendedState,
 };
 
 /// The single authoritative agent version.

@@ -23,7 +23,7 @@
 //! Collapsing those three into one "Quit" is how a person ends up believing
 //! they have switched something off that is still on.
 
-use remote_core::{AgentState, AgentStatus};
+use remote_core::{AgentState, AgentStatus, CompanionPhase};
 
 /// The menu item ids, in one place so the handler and the builder agree.
 pub mod ids {
@@ -91,10 +91,12 @@ pub fn menu_for(state: &AgentState) -> Vec<MenuLine> {
             AgentStatus::NotEnrolled => "This device is not registered".to_owned(),
             AgentStatus::Authenticating { .. } => "Connecting…".to_owned(),
             AgentStatus::Offline { reason, .. } => format!("Offline — {reason}"),
-            AgentStatus::Online | AgentStatus::InSession(_) => match &state.device_name {
-                Some(name) => format!("{name} — online"),
-                None => "Online".to_owned(),
-            },
+            AgentStatus::Online | AgentStatus::InSession(_) | AgentStatus::Companion(_) => {
+                match &state.device_name {
+                    Some(name) => format!("{name} — online"),
+                    None => "Online".to_owned(),
+                }
+            }
             AgentStatus::Revoked => "Removed by an administrator".to_owned(),
         },
     ));
@@ -121,6 +123,39 @@ pub fn menu_for(state: &AgentState) -> Vec<MenuLine> {
         }
 
         lines.push(MenuLine::action(ids::END_SESSION, "End session"));
+    } else if let Some(companion) = state.active_companion() {
+        lines.push(MenuLine::info(
+            ids::SESSION,
+            match companion.phase {
+                CompanionPhase::AwaitingConfirmation => {
+                    "Asked to allow control — open the window to answer".to_owned()
+                }
+                CompanionPhase::ChoosingMonitor => format!(
+                    "Session {} — choose the screen you are sharing",
+                    companion.display_id
+                ),
+                CompanionPhase::Ready => format!(
+                    "Session {} — can be controlled while you share",
+                    companion.display_id
+                ),
+                CompanionPhase::Controlled => format!(
+                    "{} is controlling this computer",
+                    companion.controller_name.as_deref().unwrap_or("Someone")
+                ),
+                CompanionPhase::Paused => "Control paused while you use this computer".to_owned(),
+            },
+        ));
+
+        if state.is_being_controlled() {
+            lines.push(MenuLine::action(ids::STOP_CONTROL, "Stop control"));
+        }
+
+        if companion.is_joined() {
+            lines.push(MenuLine::action(
+                ids::END_SESSION,
+                "Stop letting this session control this computer",
+            ));
+        }
     } else {
         lines.push(MenuLine::info(ids::SESSION, "No session is running"));
     }
@@ -160,10 +195,10 @@ pub fn tooltip(state: &AgentState) -> String {
 }
 
 #[cfg(not(test))]
-pub use imp::{install, show_window};
+pub use imp::{install, refresh, show_window};
 
 #[cfg(test)]
-pub use stub::{install, show_window};
+pub use stub::{install, refresh, show_window};
 
 #[cfg(test)]
 mod stub {
@@ -177,6 +212,9 @@ mod stub {
 
     /// Does nothing under test.
     pub fn show_window(_app: &tauri::AppHandle) {}
+
+    /// Does nothing under test.
+    pub fn refresh(_app: &tauri::AppHandle, _state: &remote_core::AgentState) {}
 }
 
 #[cfg(not(test))]
@@ -194,19 +232,9 @@ mod imp {
         let agent = app.state::<Arc<Agent>>();
         let state = agent.state();
 
-        let mut builder = MenuBuilder::new(app);
+        let menu = build_menu(app, &state)?;
 
-        for line in menu_for(&state) {
-            builder = builder.item(
-                &MenuItemBuilder::with_id(line.id, &line.label)
-                    .enabled(line.enabled)
-                    .build(app)?,
-            );
-        }
-
-        let menu = builder.build()?;
-
-        TrayIconBuilder::with_id("aicountly-remote")
+        TrayIconBuilder::with_id(TRAY_ID)
             .icon(app.default_window_icon().cloned().ok_or("no window icon")?)
             .tooltip(tooltip(&state))
             .menu(&menu)
@@ -214,6 +242,40 @@ mod imp {
             .build(app)?;
 
         Ok(())
+    }
+
+    const TRAY_ID: &str = "aicountly-remote";
+
+    fn build_menu(
+        app: &tauri::AppHandle,
+        state: &remote_core::AgentState,
+    ) -> Result<tauri::menu::Menu<tauri::Wry>, Box<dyn std::error::Error>> {
+        let mut builder = MenuBuilder::new(app);
+
+        for line in menu_for(state) {
+            builder = builder.item(
+                &MenuItemBuilder::with_id(line.id, &line.label)
+                    .enabled(line.enabled)
+                    .build(app)?,
+            );
+        }
+
+        Ok(builder.build()?)
+    }
+
+    /// Bring the menu and the tooltip into line with the state, so Stop
+    /// control appears in the tray the moment somebody is controlling — not
+    /// only in a menu built when the application started.
+    pub fn refresh(app: &tauri::AppHandle, state: &remote_core::AgentState) {
+        let Some(tray) = app.tray_by_id(TRAY_ID) else {
+            return;
+        };
+
+        if let Ok(menu) = build_menu(app, state) {
+            let _ = tray.set_menu(Some(menu));
+        }
+
+        let _ = tray.set_tooltip(Some(tooltip(state)));
     }
 
     /// Bring the window back.
@@ -243,7 +305,14 @@ mod imp {
             // performs — it does not wait for the API.
             ids::STOP_CONTROL => {
                 let state = agent.stop_control();
+                refresh(app, &state);
                 let _ = app.emit("aicountly-remote://state", state);
+            }
+
+            // A companion is ended by leaving the link; the loop that owns it
+            // does the rest.
+            ids::END_SESSION if agent.state().active_companion().is_some() => {
+                agent.leave_companion();
             }
 
             ids::END_SESSION => {
@@ -418,6 +487,59 @@ mod tests {
             .iter()
             .any(|label| label.contains("Removed by an administrator")));
         assert!(tooltip(&state).contains("removed"));
+    }
+
+    fn companion() -> remote_core::CompanionSummary {
+        remote_core::CompanionSummary {
+            companion_uuid: "companion-1".into(),
+            session_uuid: "s".into(),
+            display_id: "123-456".into(),
+            company_name: None,
+            requested_by_name: Some("Rahul".into()),
+            expires_at: None,
+            started_at: Some("2026-10-25T09:00:00Z".into()),
+            phase: CompanionPhase::Ready,
+            monitors: Vec::new(),
+            monitor: None,
+            controller_name: None,
+        }
+    }
+
+    /// A companion is a session too: it shows in the tray, and Stop control
+    /// is there whenever somebody holds control — paused or not.
+    #[test]
+    fn a_companion_shows_in_the_tray_with_stop_control_while_controlled() {
+        let asked = enrolled().apply(AgentEvent::CompanionRequested(companion()));
+        assert!(labels(&asked)
+            .iter()
+            .any(|label| label.contains("allow control")));
+        assert!(!has_action(&asked, ids::END_SESSION), "nothing joined yet");
+
+        let joined = asked.apply(AgentEvent::CompanionJoined(companion())).apply(
+            AgentEvent::CompanionMonitorChosen(remote_core::MonitorOption {
+                id: 1,
+                name: "Built-in display".into(),
+                primary: true,
+                width: 1512,
+                height: 982,
+                scale_percent: 200,
+            }),
+        );
+        assert!(has_action(&joined, ids::END_SESSION));
+        assert!(!has_action(&joined, ids::STOP_CONTROL));
+
+        let controlled = joined.apply(AgentEvent::CompanionControl {
+            controlled: true,
+            controller_name: Some("Sam".into()),
+        });
+        assert!(has_action(&controlled, ids::STOP_CONTROL));
+        assert!(labels(&controlled)
+            .iter()
+            .any(|label| label.contains("Sam is controlling")));
+
+        let paused = controlled.apply(AgentEvent::CompanionPaused(true));
+        assert!(has_action(&paused, ids::STOP_CONTROL));
+        assert!(labels(&paused).iter().any(|label| label.contains("paused")));
     }
 
     #[test]

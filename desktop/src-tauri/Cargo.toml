@@ -46,6 +46,9 @@ tauri-plugin-dialog = "2"
 # that is never in this repository. See docs/desktop/WINDOWS_RELEASE.md.
 tauri-plugin-updater = "2"
 tauri-plugin-single-instance = "2"
+# Stop control from anywhere, without finding the window: one system-wide
+# shortcut, registered by the Rust side only (the window cannot reach it).
+tauri-plugin-global-shortcut = "~2.3"
 # Opening a URL in the person's own browser. Used behind an allowlist — see
 # `commands::is_permitted_url` — never as a passthrough.
 open = "5"
@@ -91,6 +94,20 @@ windows = { version = "0.62", features = [
     "Foundation",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# The macOS control companion (docs/desktop/CONTROL_COMPANION.md). The same versions Tauri's own macOS stack already
+# resolves, so these add no second copy of anything:
+#   * core-graphics — CGEvent injection from a private event source, and the display list (CGGetActiveDisplayList,
+#     CGDisplayBounds), which needs no Screen Recording permission;
+#   * core-foundation — the CFDictionary AXIsProcessTrustedWithOptions takes, and the CFString the computer name is;
+#   * security-framework — the Keychain item the device key lives in;
+#   * libc — sysctl, for the OS version and the hardware model.
+core-graphics = { version = "0.25", features = ["highsierra"] }
+core-foundation = "0.10"
+security-framework = { version = "3.7", features = ["OSX_10_15"] }
+libc = "0.2"
+
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "macros"] }
+# `test-util` for the companion's tests, which run its loop on a paused clock.
+tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
 remote-security = { workspace = true, features = ["test-support"] }

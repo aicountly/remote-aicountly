@@ -196,6 +196,27 @@ pub fn wheel_delta(notches: f64) -> i32 {
     (notches * f64::from(WHEEL_DELTA)).round() as i32
 }
 
+/// Seconds between two `GetTickCount` readings, across the 49.7-day wrap.
+///
+/// The local-input override (`companion::LocalOverride`) reads this:
+/// `GetLastInputInfo` stamps the last input with the tick count, and the
+/// difference from now is how long the machine has been idle.
+///
+/// `GetLastInputInfo` counts input injected with `SendInput` as well as the
+/// person's, so the override compares this with when the agent last injected.
+/// That cannot tell the two apart while remote input is streaming
+/// continuously.
+///
+/// TODO(windows-local-override): a low-level mouse and keyboard hook
+/// (`WH_MOUSE_LL` / `WH_KEYBOARD_LL`, on a thread with a message loop) sees
+/// `LLMHF_INJECTED` / `LLKHF_INJECTED` on every event and would distinguish
+/// them exactly. Not done here: it needs its own thread and message pump, and
+/// a hook that stalls delays every keystroke on the machine.
+#[must_use]
+pub fn idle_seconds(now_tick: u32, last_input_tick: u32) -> f64 {
+    f64::from(now_tick.wrapping_sub(last_input_tick)) / 1000.0
+}
+
 impl InputProvider for WindowsInput {
     fn move_pointer(&self, monitor_id: u32, position: PointerPosition) -> PlatformResult<()> {
         #[cfg(target_os = "windows")]
@@ -297,13 +318,27 @@ impl InputProvider for WindowsInput {
 
         Ok(())
     }
+
+    fn seconds_since_input(&self) -> PlatformResult<f64> {
+        #[cfg(target_os = "windows")]
+        {
+            imp::seconds_since_input()
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            Err(PlatformError::Unsupported("Reading local input activity"))
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
 mod imp {
     //! The `SendInput` half. Compiled only on Windows.
 
-    use super::{is_extended, to_virtual_desktop, virtual_key, wheel_delta, VirtualDesktop};
+    use super::{
+        idle_seconds, is_extended, to_virtual_desktop, virtual_key, wheel_delta, VirtualDesktop,
+    };
     use remote_device::{PlatformError, PlatformResult};
     use remote_protocol::{Key, KeyEvent, MouseButton, MouseEvent, PointerPosition, ScrollEvent};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -317,6 +352,32 @@ mod imp {
         GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
         SM_YVIRTUALSCREEN,
     };
+
+    /// Seconds since the last keyboard or mouse input this session received.
+    pub fn seconds_since_input() -> PlatformResult<f64> {
+        use windows::Win32::System::SystemInformation::GetTickCount;
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+
+        let mut info = LASTINPUTINFO {
+            cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+            dwTime: 0,
+        };
+
+        // SAFETY: `info` is a correctly sized, writable LASTINPUTINFO.
+        let read = unsafe { GetLastInputInfo(&mut info) }.as_bool();
+
+        if !read {
+            return Err(PlatformError::Os {
+                operation: "reading local input activity",
+                detail: "GetLastInputInfo failed".into(),
+            });
+        }
+
+        // SAFETY: takes nothing and cannot fail.
+        let now = unsafe { GetTickCount() };
+
+        Ok(idle_seconds(now, info.dwTime))
+    }
 
     /// The virtual desktop as Windows currently reports it.
     ///
@@ -700,6 +761,15 @@ mod tests {
         assert!(!is_extended(Key::Enter));
         assert!(!is_extended(Key::Character('a')));
         assert!(!is_extended(Key::Function(1)));
+    }
+
+    /// The tick count wraps every 49.7 days; idle time must not jump to
+    /// seven weeks at the wrap.
+    #[test]
+    fn idle_time_survives_the_tick_count_wrapping() {
+        assert_eq!(idle_seconds(10_000, 8_500), 1.5);
+        assert_eq!(idle_seconds(500, u32::MAX - 499), 1.0);
+        assert_eq!(idle_seconds(42, 42), 0.0);
     }
 
     #[test]

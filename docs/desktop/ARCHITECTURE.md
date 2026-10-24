@@ -69,7 +69,7 @@ desktop/
     src/session.rs      one session: join, negotiate, pump the control channel
     src/platform/       the ONLY place a native API is called
       windows/          capture, input, clipboard, DPAPI, service, power
-      macos/            every provider returns Unsupported
+      macos/            the control companion: CGEvent input, display list, Keychain
   agents/
     windows-service/    the Session 0 half: SCM, named pipe, restart
   src/                  the agent's own React interface
@@ -85,27 +85,32 @@ the lookup tables around them — where a click lands, the virtual-key codes, th
 clipboard bounds — are tested on Linux as well. What only a Windows runner can
 check is `mod imp` itself, and that is what it compiles and clippy-checks.
 
-`cargo test --workspace` runs **299 Rust tests** on any host.
+`cargo test --workspace` runs **417 Rust tests** on any host.
 
 ### The platform traits
 
 `crates/remote-device/src/lib.rs` defines seven, and each platform implements
 them or says it cannot:
 
-| Trait | Windows | macOS |
+| Trait | Windows | macOS (control companion) |
 |---|---|---|
-| `ScreenCaptureProvider` | `Windows.Graphics.Capture` + D3D11 readback | `Unsupported` |
-| `InputProvider` | `SendInput`, absolute virtual-desktop coordinates | `Unsupported` |
-| `ClipboardProvider` | `OpenClipboard` / `CF_UNICODETEXT`, text only | `Unsupported` |
-| `SecureStorageProvider` | DPAPI, machine scope, extra entropy | `Unsupported` |
-| `SystemServiceProvider` | the SCM, and the named-pipe client | `Unsupported` |
-| `DeviceInfoProvider` | `RtlGetVersion`, `COMPUTERNAME` | `Unsupported` |
+| `ScreenCaptureProvider` | `Windows.Graphics.Capture` + D3D11 readback | the display list only (`CGGetActiveDisplayList`, `CGDisplayBounds`); capture refused |
+| `InputProvider` | `SendInput`, absolute virtual-desktop coordinates | `CGEvent` from a private source at the HID tap, global points |
+| `ClipboardProvider` | `OpenClipboard` / `CF_UNICODETEXT`, text only | `Unsupported` (off for companions) |
+| `SecureStorageProvider` | DPAPI, machine scope, extra entropy | Keychain, after first unlock, this device only |
+| `SystemServiceProvider` | the SCM, and the named-pipe client | `Unsupported` (never unattended) |
+| `DeviceInfoProvider` | `RtlGetVersion`, `COMPUTERNAME` | computer name, `kern.osproductversion`, macOS 13+ |
 | `PowerProvider` | delegates the restart to the service | `Unsupported` |
+| `PermissionsProvider` | the service and the Windows version | Accessibility (`AXIsProcessTrustedWithOptions`), read live |
 
-macOS returns `PlatformError::Unsupported` from every one. **There is no
-pretend implementation**: a provider that silently did nothing would look like
-control that works and does not, which is worse than a clear refusal. What a
-real macOS port needs is listed in `desktop/scripts/macos/README.md`.
+A platform can **host** (`platform::supports_hosting`: share its own screen and
+be controlled through it — Windows) or be a **control companion**
+(`platform::supports_companion`: join a session its owner shares from Chrome or
+Edge, input-only — Windows and macOS). macOS is a companion and nothing else,
+and declares only `remote_control`; what it cannot do it refuses with
+`PlatformError::Unsupported` rather than pretending. The companion flow is
+`src-tauri/src/companion.rs`; the whole design, server side included, is
+[CONTROL_COMPANION.md](CONTROL_COMPANION.md).
 
 ## What a session looks like
 
@@ -234,7 +239,8 @@ gap at the wrong moment.
   but the machine's clipboard is not sent back to the controller.
 * **Automatic updates.** Deliberately inactive — see
   [WINDOWS_RELEASE.md](WINDOWS_RELEASE.md).
-* **macOS.** Every provider returns `Unsupported`.
+* **macOS as a host.** A Mac is a control companion only: no capture, no
+  encoder, no clipboard, no restart, never unattended.
 
 ## Where the boundaries are enforced
 

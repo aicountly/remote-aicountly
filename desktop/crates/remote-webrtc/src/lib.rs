@@ -223,6 +223,11 @@ pub trait PeerSession: Send {
     /// Take whatever has arrived on the control channel since the last call.
     async fn receive_control(&mut self) -> Result<Vec<Vec<u8>>, WebRtcError>;
 
+    /// Whether the control channel is open, so a message sent now is
+    /// delivered rather than refused. A companion sends its monitor layout the
+    /// moment this turns true.
+    async fn control_channel_open(&mut self) -> bool;
+
     /// The connection's current state.
     fn state(&self) -> PeerState;
 
@@ -248,6 +253,17 @@ pub trait PeerSessionFactory: Send + Sync {
         &self,
         ice: IceConfiguration,
         profile: CaptureProfile,
+    ) -> Result<Self::Session, WebRtcError>;
+
+    /// Create a **control-only** session: data channels, and no video track.
+    ///
+    /// What a control companion uses. The picture comes from its owner's
+    /// browser, so the companion offers no media at all — not an empty track
+    /// it never fills, which a browser would still try to render. It never
+    /// makes the first offer either: it answers the controller's.
+    async fn create_control_only(
+        &self,
+        ice: IceConfiguration,
     ) -> Result<Self::Session, WebRtcError>;
 
     /// A name for the diagnostics panel: "webrtc-rs 0.20".

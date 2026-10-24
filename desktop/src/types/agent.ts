@@ -40,12 +40,57 @@ export interface SessionSummary {
   control: ControlSummary
 }
 
+/**
+ * Where a control companion is. Mirrors `remote_core::CompanionPhase`.
+ *
+ * The owner shares a screen from the browser and links this computer to that
+ * share; somebody they grant control to in the browser then uses this
+ * computer's mouse and keyboard.
+ */
+export type CompanionPhase =
+  | 'awaiting_confirmation'
+  | 'choosing_monitor'
+  | 'ready'
+  | 'controlled'
+  | 'paused'
+
+/** A monitor, as the companion's picker offers it. */
+export interface MonitorOption {
+  id: number
+  name: string
+  primary: boolean
+  width: number
+  height: number
+  /** 200 on a Retina display. */
+  scalePercent: number
+}
+
+export interface CompanionSummary {
+  companionUuid: string
+  sessionUuid: string
+  /** `123-456`, as the browser shows it. */
+  displayId: string
+  companyName: string | null
+  /** Who linked this computer — its owner, from their browser. */
+  requestedByName: string | null
+  expiresAt: string | null
+  /** When it joined; `null` while it is still being asked. */
+  startedAt: string | null
+  phase: CompanionPhase
+  /** What the picker offers, while the person here has to choose. */
+  monitors: MonitorOption[]
+  /** The monitor control lands on, once known. */
+  monitor: MonitorOption | null
+  controllerName: string | null
+}
+
 export type AgentStatus =
   | { status: 'not_enrolled' }
   | { status: 'authenticating'; attempt: number }
   | { status: 'offline'; reason: string; retryable: boolean }
   | { status: 'online' }
   | ({ status: 'in_session' } & SessionSummary)
+  | ({ status: 'companion' } & CompanionSummary)
   | { status: 'revoked' }
 
 export interface UnattendedState {
@@ -125,6 +170,12 @@ export interface About {
   version: string
   platform: string
   supported: boolean
+  /** Whether this build can share its own screen and be controlled (Windows). */
+  supportsHosting: boolean
+  /** Whether it can be its owner's control companion for a browser share. */
+  supportsCompanion: boolean
+  /** The system-wide Stop control shortcut, as this platform writes it. */
+  stopShortcut: string
   /** Where the device key is kept. The store's name, never anything in it. */
   keyStorage: string
   service: ServiceStatus
@@ -200,11 +251,22 @@ export function isEnrolled(state: AgentState): boolean {
 }
 
 export function isOnline(state: AgentState): boolean {
-  return state.status.status === 'online' || state.status.status === 'in_session'
+  return (
+    state.status.status === 'online' ||
+    state.status.status === 'in_session' ||
+    state.status.status === 'companion'
+  )
+}
+
+/** The control companion, joined or still being asked. */
+export function activeCompanion(state: AgentState): CompanionSummary | null {
+  return state.status.status === 'companion' ? state.status : null
 }
 
 export function isBeingControlled(state: AgentState): boolean {
-  return activeSession(state)?.control.state === 'granted'
+  const phase = activeCompanion(state)?.phase
+
+  return activeSession(state)?.control.state === 'granted' || phase === 'controlled' || phase === 'paused'
 }
 
 export function isUsable(permission: PermissionState): boolean {
