@@ -546,6 +546,13 @@ jobs:
           [ "$rc" -eq 0 ] || echo "::error::Installing the sandbox TURN probe job failed (exit $rc) - see the output above."
           exit $rc
 
+      # The signalling service (signalling/) runs on the server as its own systemd service behind an Apache proxy for
+      # /signal, installed once by remote-signalling-setup.sh. This ships the code to ~/remote-signalling-sandbox, installs its one
+      # dependency with Node 22 and asks the service to restart (scripts/ci/deploy-signalling.sh). It runs before the
+      # live checks so they see the new code.
+      - name: Signalling service (code and restart)
+        run: bash scripts/ci/deploy-signalling.sh remote-signalling-sandbox
+
       # Is the live site really Remote, and the build just deployed? The host's
       # anti-bot page ("One moment, please...") answers some requests from
       # GitHub's runners with HTTP 200, so a status code proves nothing. These

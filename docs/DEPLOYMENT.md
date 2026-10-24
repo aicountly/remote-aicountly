@@ -291,6 +291,23 @@ ssh <cpanel user>@<host> "bash -s -- public_html '' apply" < scripts/ci/remote-m
 
 ## The signalling service
 
+**On server1 (AlmaLinux + cPanel, no CloudLinux, no Passenger)** the service runs as a systemd unit per environment,
+behind an Apache proxy for `/signal`, installed once as root:
+
+```bash
+dnf install -y ea-nodejs22          # Node 22 beside the system Node, which other apps use
+bash scripts/ops/remote-signalling-setup.sh sandbox
+bash scripts/ops/remote-signalling-setup.sh production
+```
+
+It runs as the cPanel user on `127.0.0.1` (8788 sandbox, 8787 production), takes its token secret from the API's own
+`remote.signallingSecret`, and writes nothing into the document root, so a web deploy cannot remove it. After that,
+**every Remote deploy ships the code and restarts the service** (`scripts/ci/deploy-signalling.sh`, step "Signalling
+service (code and restart)"), and the post-deploy checks ask `/signal/health`. Logs:
+`journalctl -u remote-signalling-<sandbox|production>`.
+
+The Passenger instructions below are for a host that has "Setup Node.js App".
+
 A long-running Node process — the one part of Remote that cannot be a PHP
 request. On cPanel, **Setup Node.js App** runs it under Passenger; elsewhere,
 systemd or a container.
