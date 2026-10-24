@@ -281,22 +281,6 @@ export const AICOUNTLY_APPS: AicountlyAppDef[] = [
     accent: 'bg-cyan-700',
   },
   {
-    id: 'edge',
-    name: 'Edge',
-    jumpKey: 'edge',
-    prodHost: 'edge.aicountly.com',
-    sandboxHost: 'edge.gh.aicountly.com',
-    accent: 'bg-zinc-700',
-  },
-  {
-    id: 'aspire',
-    name: 'Aspire',
-    jumpKey: 'aspire',
-    prodHost: 'aspire.aicountly.com',
-    sandboxHost: 'aspire.gh.aicountly.com',
-    accent: 'bg-fuchsia-700',
-  },
-  {
     id: 'integrate',
     name: 'Integrate',
     jumpKey: 'integrate',
