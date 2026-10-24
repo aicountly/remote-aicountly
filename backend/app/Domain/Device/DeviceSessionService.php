@@ -236,6 +236,18 @@ class DeviceSessionService
             );
         }
 
+        // Same company is not enough. A device may host only the session it was asked to host (unattended: the
+        // session names it), or an attended session its own owner started. Without this, any enrolled machine in a
+        // company could join any live session of that company as its controllable sharer. Refused as "not found",
+        // like a session in another company, so the answer does not confirm that a session exists.
+        $namedForThisDevice = $session['device_id'] !== null && (int) $session['device_id'] === (int) $device['id'];
+        $startedByOwner     = ($session['access_mode'] ?? 'ATTENDED') === 'ATTENDED'
+            && (int) $session['initiator_user_id'] === $owner->id;
+
+        if (! $namedForThisDevice && ! $startedByOwner) {
+            throw ApiException::notFound('That Remote session could not be found.');
+        }
+
         $policy = $this->policies->resolve($owner, 'COMPANY', (int) $device['company_id']);
 
         $existing = $this->findDeviceParticipant((int) $session['id'], (int) $device['id']);

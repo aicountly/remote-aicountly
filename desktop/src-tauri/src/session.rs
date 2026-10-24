@@ -72,6 +72,19 @@ const CONTROL_POLL: Duration = Duration::from_secs(3);
 /// a connection that is not coming.
 const PEER_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// How long before its token expires the signalling connection is replaced with a fresh one. The relay closes a
+/// socket when its token expires; replacing it first means the room never sees this computer leave.
+const RENEW_BEFORE_EXPIRY: Duration = Duration::from_secs(30);
+
+/// The room token's lifetime when the join response did not state an expiry (`remote.signallingTokenTtl`).
+const ASSUMED_TOKEN_LIFETIME: Duration = Duration::from_secs(120);
+
+/// How long to wait before trying a failed renewal again.
+const RENEW_RETRY: Duration = Duration::from_secs(5);
+
+/// How long the session keeps trying to get its signalling connection back after the relay dropped it.
+const RECONNECT_WINDOW: Duration = Duration::from_secs(30);
+
 /// Why a session ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ended {
@@ -107,6 +120,9 @@ struct Joined {
     company_name: Option<String>,
     signalling_url: String,
     signalling_token: String,
+    /// When the room token stops being accepted. `None` when the response did not say, in which case the
+    /// connection is renewed on the server's documented two-minute lifetime.
+    signalling_expires_at: Option<time::OffsetDateTime>,
     ice: IceConfiguration,
 }
 
@@ -140,6 +156,9 @@ fn read_join(body: &serde_json::Value) -> Result<Joined, String> {
         company_name: session["companyName"].as_str().map(str::to_owned),
         signalling_url: url,
         signalling_token: token,
+        signalling_expires_at: signalling["expiresAt"].as_str().and_then(|at| {
+            time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).ok()
+        }),
         ice: IceConfiguration {
             ice_servers: body["iceServers"].as_array().cloned().unwrap_or_default(),
             relay_available: body["relayAvailable"].as_bool().unwrap_or(false),
@@ -257,6 +276,7 @@ where
     let mut peer_uuid: Option<String> = None;
     let mut last_control_poll = Instant::now() - CONTROL_POLL;
     let joined_at = Instant::now();
+    let mut renew_after = renew_at(joined.signalling_expires_at);
 
     tracing::info!(
         session = %session_uuid,
@@ -266,7 +286,7 @@ where
 
     loop {
         if stopping.load(Ordering::SeqCst) {
-            announce_end(&mut peer, Ended::Stopped).await;
+            announce_end(&mut peer, joined, session_uuid, Ended::Stopped).await;
             socket.close().await;
 
             return Ended::Stopped;
@@ -288,29 +308,64 @@ where
                 {
                     Continue::Carry => {}
                     Continue::Stop(reason) => {
-                        announce_end(&mut peer, reason.clone()).await;
+                        announce_end(&mut peer, joined, session_uuid, reason.clone()).await;
                         socket.close().await;
 
                         return reason;
                     }
                 }
             }
-            // The relay closed it: an expired token, the session ending, or a
-            // newer connection replacing this one. None is an error.
-            Ok(Ok(None)) => {
-                announce_end(&mut peer, Ended::Normally).await;
+            // The relay closed it (an expired token, a restart of the signalling service) or the network dropped
+            // it. Neither ends the session: the peer connection carries the picture and the control channel on its
+            // own, so get a fresh token and a new socket, and end only if the API says the session is over or the
+            // connection cannot be had back within the window.
+            Ok(Ok(None)) | Ok(Err(_)) => {
+                tracing::info!("the signalling connection closed; reconnecting");
 
-                return Ended::Normally;
-            }
-            Ok(Err(error)) => {
-                tracing::warn!(%error, "the signalling connection dropped");
-                announce_end(&mut peer, Ended::Disconnected).await;
+                match reconnect_signalling(client, session_uuid, stopping).await {
+                    Renewal::Fresh(fresh, expires_at) => {
+                        socket = *fresh;
+                        renew_after = renew_at(expires_at);
 
-                return Ended::Disconnected;
+                        continue;
+                    }
+                    Renewal::Over(reason) => {
+                        announce_end(&mut peer, joined, session_uuid, reason.clone()).await;
+
+                        return reason;
+                    }
+                    Renewal::Retry => {
+                        announce_end(&mut peer, joined, session_uuid, Ended::Disconnected).await;
+
+                        return Ended::Disconnected;
+                    }
+                }
             }
             // Nothing arrived within the pump interval, which is the ordinary
             // case: fall through and do the local work.
             Err(_) => {}
+        }
+
+        // --- replace the signalling connection before its token expires ---
+        //
+        // Make before break: the new socket joins the room as the same participant, the relay closes the old one as
+        // replaced, and nobody in the room sees this computer leave.
+        if Instant::now() >= renew_after {
+            match renew_signalling(client, session_uuid).await {
+                Renewal::Fresh(fresh, expires_at) => {
+                    let old = std::mem::replace(&mut socket, *fresh);
+                    old.close().await;
+                    renew_after = renew_at(expires_at);
+                    tracing::debug!("the signalling connection was renewed");
+                }
+                Renewal::Over(reason) => {
+                    announce_end(&mut peer, joined, session_uuid, reason.clone()).await;
+                    socket.close().await;
+
+                    return reason;
+                }
+                Renewal::Retry => renew_after = Instant::now() + RENEW_RETRY,
+            }
         }
 
         // --- trickle our own candidates -----------------------------------
@@ -351,7 +406,13 @@ where
             match client.session_control(session_uuid).await {
                 Ok(view) => adopt_control(agent, sink, &view),
                 Err(error) if error.is_device_rejected() => {
-                    announce_end(&mut peer, Ended::Refused("removed".into())).await;
+                    announce_end(
+                        &mut peer,
+                        joined,
+                        session_uuid,
+                        Ended::Refused("removed".into()),
+                    )
+                    .await;
 
                     return Ended::Refused("This computer was removed from AICOUNTLY.".into());
                 }
@@ -367,7 +428,7 @@ where
         }
 
         if peer.state() == PeerState::Failed {
-            announce_end(&mut peer, Ended::Disconnected).await;
+            announce_end(&mut peer, joined, session_uuid, Ended::Disconnected).await;
             socket.close().await;
 
             return Ended::Disconnected;
@@ -511,16 +572,132 @@ fn adopt_control(agent: &Arc<Agent>, sink: &StateSink, view: &remote_core::Sessi
 ///
 /// Best effort and never waited on for long: the gate has already stopped
 /// admitting input, so this is courtesy rather than enforcement.
-async fn announce_end<P: PeerSession>(peer: &mut P, ended: Ended) {
-    let message = remote_protocol::ControlMessage::ControlEnded {
-        reason: ended.wire_reason(),
-    };
-
-    if let Ok(bytes) = serde_json::to_vec(&message) {
+async fn announce_end<P: PeerSession>(
+    peer: &mut P,
+    joined: &Joined,
+    session_uuid: &str,
+    ended: Ended,
+) {
+    if let Some(bytes) = control_ended_bytes(session_uuid, &joined.participant_uuid, &ended) {
         let _ = peer.send_control(&bytes).await;
     }
 
     let _ = peer.close().await;
+}
+
+/// `control_ended`, in the same envelope as every other control message.
+///
+/// It used to go out as a bare message, which the browser's `decodeControlEnvelope` drops (no `v`, no `s`), so the
+/// person controlling never learned why control stopped. The sequence is wall-clock milliseconds: it only has to be
+/// newer than anything this sender sent before, across reconnects too.
+fn control_ended_bytes(
+    session_uuid: &str,
+    participant_uuid: &str,
+    ended: &Ended,
+) -> Option<Vec<u8>> {
+    let sequence = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(1);
+
+    let envelope = remote_protocol::ControlEnvelope::new(
+        session_uuid,
+        participant_uuid,
+        sequence,
+        remote_protocol::ControlMessage::ControlEnded {
+            reason: ended.wire_reason(),
+        },
+    );
+
+    serde_json::to_vec(&envelope).ok()
+}
+
+/// When to replace the signalling connection: shortly before its token expires.
+fn renew_at(expires_at: Option<time::OffsetDateTime>) -> Instant {
+    let lifetime = match expires_at {
+        Some(at) => {
+            let left = at - time::OffsetDateTime::now_utc();
+            Duration::try_from(left).unwrap_or(Duration::ZERO)
+        }
+        None => ASSUMED_TOKEN_LIFETIME,
+    };
+
+    // Never sooner than a few seconds from now, so a short or already-past expiry cannot spin the loop.
+    Instant::now()
+        + lifetime
+            .saturating_sub(RENEW_BEFORE_EXPIRY)
+            .max(RENEW_RETRY)
+}
+
+/// Keep trying [`renew_signalling`] for up to [`RECONNECT_WINDOW`], with a short pause between attempts.
+async fn reconnect_signalling(
+    client: &ApiClient,
+    session_uuid: &str,
+    stopping: &Arc<AtomicBool>,
+) -> Renewal {
+    let started = Instant::now();
+
+    loop {
+        if stopping.load(Ordering::SeqCst) {
+            return Renewal::Over(Ended::Stopped);
+        }
+
+        match renew_signalling(client, session_uuid).await {
+            Renewal::Retry if started.elapsed() < RECONNECT_WINDOW => {
+                tokio::time::sleep(Duration::from_secs(2)).await
+            }
+            outcome => return outcome,
+        }
+    }
+}
+
+/// What became of an attempt to get a fresh signalling connection.
+enum Renewal {
+    /// A new socket, already in the room, and when its own token expires.
+    Fresh(Box<SignallingSocket>, Option<time::OffsetDateTime>),
+    /// The session is over: there is nothing to reconnect to.
+    Over(Ended),
+    /// Try again shortly.
+    Retry,
+}
+
+/// Join again (the API returns the same participant and a fresh room token) and open a new socket with it.
+async fn renew_signalling(client: &ApiClient, session_uuid: &str) -> Renewal {
+    let body = match client.join_session(session_uuid).await {
+        Ok(body) => body,
+        Err(error) if error.is_device_rejected() => {
+            return Renewal::Over(Ended::Refused(
+                "This computer was removed from AICOUNTLY.".into(),
+            ));
+        }
+        Err(ApiError::Refused {
+            status: 404 | 409 | 410,
+            ..
+        }) => return Renewal::Over(Ended::Normally),
+        Err(error) => {
+            tracing::debug!(%error, "the signalling token could not be renewed yet");
+
+            return Renewal::Retry;
+        }
+    };
+
+    let fresh = match read_join(&body) {
+        Ok(fresh) => fresh,
+        Err(reason) => {
+            tracing::warn!(%reason, "the renewal response could not be read");
+
+            return Renewal::Retry;
+        }
+    };
+
+    match SignallingSocket::connect(&fresh.signalling_url, &fresh.signalling_token).await {
+        Ok(socket) => Renewal::Fresh(Box::new(socket), fresh.signalling_expires_at),
+        Err(error) => {
+            tracing::debug!(%error, "the renewed signalling connection failed");
+
+            Renewal::Retry
+        }
+    }
 }
 
 /// The configured quality name, as a profile.
@@ -602,6 +779,59 @@ mod tests {
 
         assert!(joined.ice.is_empty());
         assert!(!joined.ice.relay_available);
+    }
+
+    #[test]
+    fn control_ended_travels_in_the_envelope_the_browser_decodes() {
+        let bytes = control_ended_bytes("sess-1", "agent-1", &Ended::Stopped).expect("encodes");
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        // What web/src/services/webrtc/remoteControl.ts decodeControlEnvelope requires.
+        assert_eq!(
+            value["v"],
+            serde_json::json!(remote_protocol::PROTOCOL_VERSION)
+        );
+        assert_eq!(value["s"], "sess-1");
+        assert_eq!(value["p"], "agent-1");
+        assert!(value["n"].as_u64().unwrap() > 0);
+        assert!(
+            value["m"].is_object(),
+            "the message sits inside the envelope"
+        );
+
+        let envelope: remote_protocol::ControlEnvelope = serde_json::from_slice(&bytes).unwrap();
+        assert!(matches!(
+            envelope.message,
+            remote_protocol::ControlMessage::ControlEnded { .. }
+        ));
+    }
+
+    #[test]
+    fn the_signalling_connection_is_renewed_before_its_token_expires() {
+        let now = Instant::now();
+
+        let in_two_minutes = time::OffsetDateTime::now_utc() + time::Duration::seconds(120);
+        let renew = renew_at(Some(in_two_minutes));
+        let wait = renew.duration_since(now);
+        assert!(
+            wait >= Duration::from_secs(85) && wait <= Duration::from_secs(91),
+            "about 30 s early: {wait:?}"
+        );
+
+        // An expiry already passed, or one too close to act on, is retried shortly rather than spun on.
+        let past = time::OffsetDateTime::now_utc() - time::Duration::seconds(10);
+        let wait = renew_at(Some(past)).duration_since(now);
+        assert!(wait >= RENEW_RETRY && wait <= RENEW_RETRY + Duration::from_secs(1));
+
+        // No stated expiry: the documented two-minute lifetime.
+        let wait = renew_at(None).duration_since(now);
+        assert!(wait >= Duration::from_secs(89) && wait <= Duration::from_secs(91));
+    }
+
+    #[test]
+    fn a_join_response_states_when_its_token_expires() {
+        let joined = read_join(&join_body()).expect("reads");
+        assert!(joined.signalling_expires_at.is_some());
     }
 
     #[test]

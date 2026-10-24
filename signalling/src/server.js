@@ -255,7 +255,11 @@ wss.on('connection', (ws, _request, participant) => {
 
   ws.on('close', () => {
     clearTimeout(expiryTimer);
-    rooms.leave(participant.room, participant.participantUuid, ws);
+
+    // Only a socket that was still this participant's connection means they left. The close of a socket a newer
+    // connection already replaced (a reconnect with a re-minted token) is not a departure, and announcing one made
+    // every peer tear down a connection that was about to continue.
+    if (!rooms.leave(participant.room, participant.participantUuid, ws)) return;
 
     broadcast(participant.room, participant.participantUuid, {
       type: 'peer-left',
