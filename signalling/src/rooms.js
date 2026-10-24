@@ -36,21 +36,28 @@ export class Rooms {
     return previous && previous.socket !== socket ? previous.socket : null;
   }
 
+  /**
+   * @returns {boolean} whether this socket was still the participant's connection — that is, whether they left
+   */
   leave(room, participantUuid, socket) {
     const members = this.rooms.get(room);
-    if (!members) return;
+    if (!members) return false;
 
     // Only remove the entry if it is still *this* socket: a reconnect that
     // already replaced it must not be torn down by the old socket's close
     // event arriving afterwards.
     const current = members.get(participantUuid);
+    let removed = false;
     if (current && current.socket === socket) {
       members.delete(participantUuid);
+      removed = true;
     }
 
     if (members.size === 0) {
       this.rooms.delete(room);
     }
+
+    return removed;
   }
 
   /** @returns {Array<{socket: import('ws').WebSocket, participant: object}>} */

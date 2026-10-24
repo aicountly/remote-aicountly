@@ -200,9 +200,10 @@ describe('Rooms', () => {
     rooms.join('room-1', { participantUuid: 'p1' }, first);
     rooms.join('room-1', { participantUuid: 'p1' }, second);
 
-    rooms.leave('room-1', 'p1', first);
+    assert.equal(rooms.leave('room-1', 'p1', first), false, 'the replaced socket did not leave');
 
     assert.equal(rooms.member('room-1', 'p1').socket, second);
+    assert.equal(rooms.leave('room-1', 'p1', second), true, 'the live socket did');
   });
 
   it('drops a room once its last member leaves', () => {
@@ -512,6 +513,34 @@ describe('signalling server', () => {
     second.close();
 
     assert.equal((await left).from, 'second-uuid-0001');
+
+    first.close();
+  });
+
+  it('does not announce a departure when a participant reconnects', async () => {
+    const room = 'room-eeee-1111-2222-3333';
+
+    const first = await connect(mintToken({ room, sub: 'stays-uuid-00001' }));
+    await nextMessage(first, (m) => m.type === 'joined');
+
+    const old = await connect(mintToken({ room, sub: 'moves-uuid-00001' }));
+    await nextMessage(old, (m) => m.type === 'joined');
+
+    // The same participant connects again (a re-minted token); the server replaces and closes the old socket.
+    const oldClosed = new Promise((resolve) => old.once('close', (code) => resolve(code)));
+    const fresh = await connect(mintToken({ room, sub: 'moves-uuid-00001' }));
+    await nextMessage(fresh, (m) => m.type === 'joined');
+    assert.equal(await oldClosed, 4004);
+
+    await assert.rejects(
+      nextMessage(first, (m) => m.type === 'peer-left' && m.from === 'moves-uuid-00001'),
+      /timed out/,
+      'a replaced socket closing is not the participant leaving',
+    );
+
+    const left = nextMessage(first, (m) => m.type === 'peer-left');
+    fresh.close();
+    assert.equal((await left).from, 'moves-uuid-00001', 'the live connection closing still is');
 
     first.close();
   });

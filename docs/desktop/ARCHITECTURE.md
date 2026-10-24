@@ -206,6 +206,12 @@ gap at the wrong moment.
 * the session runtime: joining through the API, the **same** signalling socket
   the browser uses, offer/answer/ICE, and the control channel pumped through
   the gate;
+* keeping the session's signalling connection: about 30 seconds before its
+  two-minute room token expires the agent joins again (the API returns the
+  same participant and a fresh token) and opens a new socket, which replaces
+  the old one without the room seeing a departure; if the relay drops the
+  socket, it reconnects the same way for up to 30 seconds, and ends only when
+  the API says the session is over;
 * the tray, the window and the consent screens;
 * the whole server side — devices, policy, control, unattended sessions,
   presence rooms, audit — with 211 backend tests;
@@ -226,9 +232,6 @@ gap at the wrong moment.
 * **The clipboard in the other direction.** A controller's clipboard reaches
   the machine — the message goes through the gate to the clipboard provider —
   but the machine's clipboard is not sent back to the controller.
-* **Reconnecting a session.** A signalling token lasts two minutes; the socket
-  is not re-established after it closes, so a session that loses its relay
-  connection mid-negotiation ends rather than recovering.
 * **Automatic updates.** Deliberately inactive — see
   [WINDOWS_RELEASE.md](WINDOWS_RELEASE.md).
 * **macOS.** Every provider returns `Unsupported`.
