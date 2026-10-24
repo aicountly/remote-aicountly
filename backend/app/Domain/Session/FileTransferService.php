@@ -453,7 +453,9 @@ class FileTransferService
         $admitted = array_values(array_filter(
             $this->participants->forSession((int) $session['id']),
             static fn (array $participant) => (int) $participant['id'] !== (int) $sender['id']
-                && in_array((string) $participant['status'], ['APPROVED', 'JOINED'], true),
+                && in_array((string) $participant['status'], ['APPROVED', 'JOINED'], true)
+                // A control companion is a machine's input helper, not somebody to send a file to.
+                && (string) $participant['participant_role'] !== ParticipantService::ROLE_COMPANION,
         ));
 
         if ($recipientUuid !== null) {

@@ -241,6 +241,11 @@ gap at the wrong moment.
 | Property | Enforced by |
 |---|---|
 | A browser cannot be controlled | `ClientCapabilities::browser()` and the capability intersection |
+| A browser share is controllable only through the sharer's own app, while an entire screen is shared | `ControlService::controllableHost()` and `CompanionLinks` — see [CONTROL_COMPANION.md](CONTROL_COMPANION.md) |
+| One control companion per session and per device | partial unique indexes on `remote_control_companions` |
+| Only the linked sharer grants control through a companion; the companion never grants | `ControlService::grant()`, `decideAsCompanion()` (`COMPANION_CANNOT_GRANT`) |
+| A changed or stopped share, or the sharer leaving, ends companion control | `CompanionService::onShareStarted/onShareStopped/onParticipantLeft` |
+| No media to a companion | `RemoteSessionEngine` (control-only connection, only while REQUESTED/GRANTED) |
 | A device cannot grant itself a capability | `DeviceService::effectiveCapabilities`, server-side |
 | A company prohibition beats a user grant | `EffectivePolicyResolver`, capability mask applied last |
 | No input without a grant | `ControlGate::admit`, locally, in the agent |

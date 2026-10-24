@@ -437,6 +437,39 @@ describe('signalling server', () => {
     ws.close();
   });
 
+  it('broadcasts a control-hint to the room with its payload dropped', async () => {
+    const room = '99999999-8888-4777-8666-333333333333';
+
+    const viewer = await connect(mintToken({ room, sub: 'viewer-uuid-hint1', role: 'VIEWER' }));
+    await nextMessage(viewer, (m) => m.type === 'joined');
+    const companion = await connect(mintToken({ room, sub: 'companion-uuid-h1', role: 'CONTROL_COMPANION' }));
+    await nextMessage(companion, (m) => m.type === 'joined');
+
+    const hint = nextMessage(companion, (m) => m.type === 'control-hint');
+    // A payload cannot ride along on a nudge: the API is the only source of a control decision.
+    viewer.send(JSON.stringify({ type: 'control-hint', payload: { grant: true, controllerUuid: 'someone' } }));
+
+    const delivered = await hint;
+    assert.equal(delivered.from, 'viewer-uuid-hint1');
+    assert.equal(delivered.payload, null);
+
+    viewer.close();
+    companion.close();
+  });
+
+  it('refuses a control-hint inside a device presence room', async () => {
+    const room = `${DEVICE_ROOM_PREFIX}eeeeeeee-1111-4222-8333-444444444444`;
+    const ws = await connect(mintToken({ knd: 'device', room, sub: 'agent-uuid-hint01', role: 'DEVICE' }));
+    await nextMessage(ws, (m) => m.type === 'joined');
+
+    const error = nextMessage(ws, (m) => m.type === 'error');
+    ws.send(JSON.stringify({ type: 'control-hint' }));
+
+    assert.equal((await error).code, 'UNSUPPORTED_IN_DEVICE_ROOM');
+
+    ws.close();
+  });
+
   it('relays an invitation inside a device presence room', async () => {
     const room = `${DEVICE_ROOM_PREFIX}aaaaaaaa-1111-4222-8333-444444444444`;
 

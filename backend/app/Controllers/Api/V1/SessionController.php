@@ -144,9 +144,27 @@ class SessionController extends BaseApiController
             $this->identity(),
             $surface,
             $this->policyForSession($session),
+            // The captured surface's size (track.getSettings()), which a control companion matches its
+            // monitors against. Optional: an older client sends none.
+            self::dimension($body['surfaceWidth'] ?? null),
+            self::dimension($body['surfaceHeight'] ?? null),
         );
 
         return $this->ok($this->detail($updated));
+    }
+
+    /** A whole number of pixels from a JSON number, or null. */
+    private static function dimension(mixed $value): ?int
+    {
+        if (is_int($value)) {
+            return $value;
+        }
+
+        if (is_float($value) && is_finite($value)) {
+            return (int) round($value);
+        }
+
+        return null;
     }
 
     /** `POST /sessions/{uuid}/share-stopped` */

@@ -34,6 +34,7 @@ abstract class RemoteTestCase extends CIUnitTestCase
     /** Tables emptied before each test, children first so the FKs are happy. */
     private const TABLES = [
         'remote_session_feedback',
+        'remote_control_companions',
         'remote_recordings',
         'remote_file_transfers',
         'remote_messages',
@@ -111,7 +112,7 @@ abstract class RemoteTestCase extends CIUnitTestCase
         // resolved earlier in the test keeps the previous secret.
         foreach ([
             'policyResolver', 'sessionService', 'joinService', 'invitationService',
-            'fileTransferService', 'controlService',
+            'fileTransferService', 'controlService', 'companionLinks', 'companionService',
             'deviceService', 'deviceAuthenticationService', 'deviceSessionService',
             'devicePresenceService',
             'supportRequestService', 'signallingTokenService', 'iceConfigService',

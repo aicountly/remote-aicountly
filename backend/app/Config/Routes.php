@@ -161,6 +161,15 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
     $routes->post('sessions/(:segment)/control/revoke', 'ControlController::revoke/$1', ['filter' => 'api-auth']);
     $routes->post('sessions/(:segment)/control/clipboard', 'ControlController::clipboard/$1', ['filter' => 'api-auth']);
 
+    // Control companions (docs/desktop/CONTROL_COMPANION.md): the person sharing from a browser links their
+    // own desktop app, input-only. Signed-in people only — never a guest — and the policy is always the
+    // session's own company's.
+    $routes->get('sessions/(:segment)/companion/devices', 'CompanionController::devices/$1', ['filter' => 'api-auth']);
+    $routes->post('sessions/(:segment)/companion', 'CompanionController::link/$1', [
+        'filter' => ['api-auth', 'rate-limit:companion-link,10,60'],
+    ]);
+    $routes->delete('sessions/(:segment)/companion', 'CompanionController::unlink/$1', ['filter' => 'api-auth']);
+
     // --- Devices ------------------------------------------------------------
     //
     // Two audiences, two filters, and the split is deliberate: `api-auth` is a
@@ -192,6 +201,20 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
     ]);
     $routes->post('devices/me/sessions/(:segment)/control', 'DeviceAgentController::control/$1', [
         'filter' => ['device-auth:device.session', 'rate-limit:device-control,60,60'],
+    ]);
+    // A control companion: the machine confirming, declining, describing its monitor and leaving.
+    // Like everything under devices/me these come before `devices/(:segment)`.
+    $routes->post('devices/me/companions/(:segment)/join', 'DeviceAgentController::companionJoin/$1', [
+        'filter' => ['device-auth:device.session', 'rate-limit:device-companion-join,30,60'],
+    ]);
+    $routes->post('devices/me/companions/(:segment)/decline', 'DeviceAgentController::companionDecline/$1', [
+        'filter' => ['device-auth:device.session', 'rate-limit:device-companion,30,60'],
+    ]);
+    $routes->post('devices/me/companions/(:segment)/monitor', 'DeviceAgentController::companionMonitor/$1', [
+        'filter' => ['device-auth:device.session', 'rate-limit:device-companion,30,60'],
+    ]);
+    $routes->post('devices/me/companions/(:segment)/leave', 'DeviceAgentController::companionLeave/$1', [
+        'filter' => ['device-auth:device.session', 'rate-limit:device-companion,30,60'],
     ]);
     $routes->post('devices/me/unattended/disable', 'DeviceAgentController::disableUnattended', [
         'filter' => 'device-auth:device.self',

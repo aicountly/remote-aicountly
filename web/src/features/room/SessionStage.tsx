@@ -303,6 +303,14 @@ export default function SessionStage({
 
           <AnnotationLayer shapes={shapes} />
 
+          {/* Somebody at the controlled machine is using it (owner decision 7):
+              their input wins, and nothing is sent until they stop. */}
+          {controlling && live?.controlPaused ? (
+            <p className="stage__paused" role="status">
+              Paused — someone is using that computer
+            </p>
+          ) : null}
+
           {Object.entries(live?.pointers ?? {}).map(([peerId, pointer]) => (
             <span
               key={peerId}

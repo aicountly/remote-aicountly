@@ -111,6 +111,13 @@ export class RemotePeerConnection {
     }
   }
 
+  /**
+   * A control companion's connection (docs/desktop/CONTROL_COMPANION.md): input only. No media is offered or
+   * received and only the control channel is opened — the picture comes from the person's browser, never from
+   * the companion, and chat or files have no business going to a machine's input helper.
+   */
+  controlOnly = false
+
   get connectionState(): RTCPeerConnectionState {
     return this.pc.connectionState
   }
@@ -144,7 +151,7 @@ export class RemotePeerConnection {
    * of channels each time somebody started sharing.
    */
   async createOffer(options: { iceRestart?: boolean } = {}): Promise<RTCSessionDescriptionInit> {
-    if (!this.channel) {
+    if (!this.channel && !this.controlOnly) {
       this.attachChannel(
         this.pc.createDataChannel(DATA_CHANNEL_LABEL, {
           // Ordered and reliable: chat and annotation events are meaningless out
@@ -171,8 +178,8 @@ export class RemotePeerConnection {
     // again — with whatever ICE servers they now hold — while media keeps
     // flowing on the old path until a new one is selected.
     const offer = await this.pc.createOffer({
-      offerToReceiveAudio: true,
-      offerToReceiveVideo: true,
+      offerToReceiveAudio: !this.controlOnly,
+      offerToReceiveVideo: !this.controlOnly,
       iceRestart: options.iceRestart === true,
     })
     await this.pc.setLocalDescription(offer)
@@ -488,6 +495,11 @@ export class RemotePeerConnection {
   private attachControlChannel(channel: RTCDataChannel): void {
     this.controlChannel = channel
     channel.binaryType = 'arraybuffer'
+
+    // A control-only connection has no other channel to say the wire is up.
+    channel.onopen = () => {
+      if (!this.disposed) this.events.onDataChannelOpen()
+    }
 
     channel.onmessage = (event) => {
       if (this.disposed) return

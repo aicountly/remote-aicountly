@@ -19,6 +19,14 @@
  * lower participant id. The driver restarts ICE itself; the other side asks it
  * to. Fresh TURN credentials are fetched before they expire, and a relayed
  * connection is restarted onto them (docs/ICE_CONTRACT.md).
+ *
+ * Control companions (docs/desktop/CONTROL_COMPANION.md) are the exception to
+ * "the peer already here offers": a CONTROL_COMPANION peer is a person's own
+ * desktop app, input-only. Nobody offers it anything when it arrives, nobody
+ * ever sends it media, chat or files, and it never becomes the picture, the
+ * share state or the connection indicator. Only a viewer whose own control
+ * state is REQUESTED or GRANTED connects to it — control-only, one data
+ * channel — and drops that connection again when the state moves on.
  */
 
 import {
@@ -54,6 +62,8 @@ import {
 } from '../api/remote'
 import { latencyMeter } from '../api/iceLatency'
 import { RemoteSignallingClient } from '../signalling/RemoteSignallingClient'
+import { readSurfaceSize } from './screenCapture'
+import type { SurfaceSize } from './screenCapture'
 import type { SignallingMessage, SignallingPeer, SignallingStatus } from '../signalling/RemoteSignallingClient'
 import { RemotePeerConnection } from './RemotePeerConnection'
 import type { PeerConnectionQuality } from './RemotePeerConnection'
@@ -167,6 +177,12 @@ export interface EngineSnapshot {
    * counts.
    */
   controllingPeerId: string | null
+  /**
+   * Set while the machine being controlled has paused remote input because
+   * somebody there is using its own mouse or keyboard (owner decision 7); the
+   * reason the agent gave. Input sent meanwhile would be dropped, so none is.
+   */
+  controlPaused: string | null
   network: NetworkStatus
   lastError: string | null
 }
@@ -184,7 +200,12 @@ interface EngineOptions {
   onControlEnded?: (reason: string) => void
   /** The agent described its displays; the viewer maps clicks against them. */
   onMonitorLayout?: (monitors: unknown[], activeMonitorId: number) => void
+  /** Somebody in the room changed control state: re-read it now instead of on the next poll. */
+  onControlHint?: () => void
 }
+
+/** The participant role of a control companion (docs/desktop/CONTROL_COMPANION.md). */
+export const COMPANION_ROLE = 'CONTROL_COMPANION'
 
 /** Pointer moves are throttled rather than sent per mousemove (§65). */
 const POINTER_THROTTLE_MS = 50
@@ -290,6 +311,15 @@ export class RemoteSessionEngine {
   /** Keys this browser has pressed and not released on the remote machine. */
   private heldKeys: ControlKey[] = []
 
+  /**
+   * Control companions present in the room, known from signalling. They get a
+   * peer connection only while they are `companionTarget`.
+   */
+  private companionPeers = new Map<string, SignallingPeer>()
+
+  /** The companion this browser should be connected to: set only while its own control is REQUESTED or GRANTED. */
+  private companionTarget: string | null = null
+
   private snapshot: EngineSnapshot = {
     connection: 'idle',
     signalling: 'idle',
@@ -305,6 +335,7 @@ export class RemoteSessionEngine {
     relayAvailable: false,
     relayDenied: false,
     controllingPeerId: null,
+    controlPaused: null,
     network: {
       path: 'unknown',
       relayNode: null,
@@ -393,19 +424,26 @@ export class RemoteSessionEngine {
    * surface against policy and refuses if it is not permitted, and a refusal
    * must stop the stream rather than leave it attached (§16).
    */
-  async startSharing(stream: MediaStream, displaySurface: string): Promise<void> {
-    await reportShareStarted(this.options.sessionUuid, displaySurface)
+  async startSharing(stream: MediaStream, displaySurface: string, size?: SurfaceSize | null): Promise<void> {
+    const [videoTrack] = stream.getVideoTracks()
+
+    // The captured size goes with it: a control companion matches its monitors
+    // against it, and a change of size means matching again.
+    await reportShareStarted(
+      this.options.sessionUuid,
+      displaySurface,
+      size === undefined ? (videoTrack ? readSurfaceSize(videoTrack) : null) : size,
+    )
 
     this.localStream = stream
 
-    for (const { connection } of this.peers.values()) {
+    for (const { connection } of this.mediaEntries()) {
       await connection.setLocalStream(stream)
     }
 
     // The browser's own "Stop sharing" bar ends the track without telling the
     // page anything else. Without this listener the session would keep
     // claiming to share a screen that is already black (§86).
-    const [videoTrack] = stream.getVideoTracks()
     videoTrack?.addEventListener('ended', () => void this.stopSharing('BROWSER_ENDED'), { once: true })
 
     this.broadcast({ type: 'share-state', payload: { sharing: true } })
@@ -425,7 +463,7 @@ export class RemoteSessionEngine {
 
     this.localStream = null
 
-    for (const { connection } of this.peers.values()) {
+    for (const { connection } of this.mediaEntries()) {
       await connection.setLocalStream(null)
     }
 
@@ -448,7 +486,7 @@ export class RemoteSessionEngine {
 
     this.microphoneStream = stream
 
-    for (const { connection } of this.peers.values()) {
+    for (const { connection } of this.mediaEntries()) {
       await connection.setLocalStream(stream ?? this.localStream)
     }
 
@@ -721,7 +759,34 @@ export class RemoteSessionEngine {
     this.heldKeys = []
     this.control = null
 
-    this.patch({ controllingPeerId: null })
+    this.patch({ controllingPeerId: null, controlPaused: null })
+  }
+
+  /**
+   * Which control companion this browser should be connected to, from the
+   * API's control state: the session's controllable host, but only while this
+   * participant's own control is REQUESTED or GRANTED. Anything else drops the
+   * connection — a companion serves one controller at a time.
+   *
+   * Has no effect on a host that is not a companion (an agent sharing its own
+   * screen), which is connected the ordinary way.
+   */
+  setControlTarget(controllableHostUuid: string | null, myControlState: string | null): void {
+    const wanted =
+      controllableHostUuid !== null && (myControlState === 'REQUESTED' || myControlState === 'GRANTED')
+        ? controllableHostUuid
+        : null
+
+    this.companionTarget = wanted
+    void this.syncCompanions()
+  }
+
+  /**
+   * Tell the room that control state changed, so a companion (and the other
+   * browsers) re-read it from the API now. Carries nothing and grants nothing.
+   */
+  sendControlHint(): void {
+    this.signalling?.send({ type: 'control-hint' })
   }
 
   /** Whether input is currently being sent. */
@@ -731,6 +796,8 @@ export class RemoteSessionEngine {
 
   /** Move the remote pointer. Throttled; `force` is for a move-and-click. */
   sendControlPointer(position: ControlPoint, force = false): void {
+    if (this.snapshot.controlPaused !== null) return
+
     this.control?.sender.movePointer(position, force)
   }
 
@@ -742,13 +809,15 @@ export class RemoteSessionEngine {
     double = false,
   ): void {
     const name = mouseButtonName(button)
-    if (!name) return
+    if (!name || this.snapshot.controlPaused !== null) return
 
     this.control?.sender.button(name, pressed, position, double)
   }
 
   /** Scroll the remote screen. */
   sendControlScroll(deltaX: number, deltaY: number, position?: ControlPoint): void {
+    if (this.snapshot.controlPaused !== null) return
+
     this.control?.sender.scroll(deltaX, deltaY, position)
   }
 
@@ -761,7 +830,7 @@ export class RemoteSessionEngine {
    * keyboard.
    */
   sendControlKey(event: KeyboardEvent, pressed: boolean): boolean {
-    if (!this.control) return false
+    if (!this.control || this.snapshot.controlPaused !== null) return false
 
     const key = controlKeyFrom(event)
     if (!key) return false
@@ -793,11 +862,27 @@ export class RemoteSessionEngine {
 
     if (!envelope || envelope.s !== this.options.sessionUuid) return
 
+    // A companion names itself on every message it sends; one that names
+    // somebody else is not believed.
+    if (this.isCompanion(peerId) && envelope.p !== peerId) return
+
     if (envelope.m.type === 'control_ended' && this.control?.peerId === peerId) {
       this.stopControlling()
       this.patch({ lastError: null })
 
       this.options.onControlEnded?.(envelope.m.reason)
+    }
+
+    // Somebody at the machine is using it (owner decision 7). The agent has
+    // already stopped applying input and released any held keys; this side
+    // stops sending until it says it has resumed.
+    if (envelope.m.type === 'control_paused' && this.control?.peerId === peerId) {
+      this.heldKeys = []
+      this.patch({ controlPaused: envelope.m.reason || 'local_input' })
+    }
+
+    if (envelope.m.type === 'control_resumed' && this.control?.peerId === peerId) {
+      this.patch({ controlPaused: null })
     }
 
     if (envelope.m.type === 'monitor_layout') {
@@ -860,6 +945,8 @@ export class RemoteSessionEngine {
 
     this.remoteStream = null
     this.peerStreams.clear()
+    this.companionPeers.clear()
+    this.companionTarget = null
   }
 
   // ---------------------------------------------------------- internals
@@ -867,7 +954,7 @@ export class RemoteSessionEngine {
   private handleSignallingStatus(status: SignallingStatus): void {
     const connection: LiveConnectionState =
       status === 'open'
-        ? this.peers.size > 0
+        ? this.mediaEntries().length > 0
           ? this.snapshot.connection === 'connected'
             ? 'connected'
             : 'connecting'
@@ -888,13 +975,16 @@ export class RemoteSessionEngine {
       case 'joined': {
         // We are the newcomer. Everyone already here will offer to us; there is
         // nothing to do but be ready and tell the API we are in.
+        let mediaPeers = 0
         for (const peer of message.peers ?? []) {
-          this.registerPeer(peer)
+          if (this.notePeer(peer)) mediaPeers += 1
         }
 
         this.patch({
-          connection: (message.peers?.length ?? 0) > 0 ? 'connecting' : 'waiting-for-peer',
+          connection: mediaPeers > 0 ? 'connecting' : 'waiting-for-peer',
         })
+
+        void this.syncCompanions()
 
         try {
           await markParticipantJoined(this.options.sessionUuid, this.options.participantUuid)
@@ -908,15 +998,26 @@ export class RemoteSessionEngine {
       case 'peer-joined': {
         if (!message.peer) break
 
-        const peer = this.registerPeer(message.peer)
+        // A control companion is never offered anything on arrival: only a
+        // viewer whose control is requested or granted connects to it.
+        if (!this.notePeer(message.peer)) {
+          await this.syncCompanions()
+
+          break
+        }
+
         // We were here first, so we offer.
-        await this.offerTo(peer.participantUuid)
+        await this.offerTo(message.peer.participantUuid)
 
         break
       }
 
       case 'offer': {
         if (!message.from) break
+
+        // A companion never makes the first offer. One that arrives anyway
+        // from a companion this browser did not connect to is dropped.
+        if (this.isCompanion(message.from) && !this.peers.has(message.from)) break
 
         const entry = this.ensurePeer(message.from)
         const answer = await entry.connection.acceptOffer(message.payload as RTCSessionDescriptionInit)
@@ -926,8 +1027,10 @@ export class RemoteSessionEngine {
         if (answer === null) break
 
         // Attach whatever we are already sharing before answering, so the
-        // answer describes the media we intend to send.
-        await entry.connection.setLocalStream(this.localStream ?? this.microphoneStream)
+        // answer describes the media we intend to send — never to a companion.
+        if (!this.isCompanion(message.from)) {
+          await entry.connection.setLocalStream(this.localStream ?? this.microphoneStream)
+        }
 
         this.signalling?.send({ type: 'answer', to: message.from, payload: answer })
 
@@ -956,6 +1059,7 @@ export class RemoteSessionEngine {
 
       case 'renegotiate': {
         if (!message.from) break
+        if (this.isCompanion(message.from) && !this.peers.has(message.from)) break
 
         // `iceRestart`: the peer's connection is failing and we drive restarts
         // for this pair. An older client sends no payload and gets a plain
@@ -976,6 +1080,7 @@ export class RemoteSessionEngine {
 
       case 'peer-left': {
         if (!message.from) break
+        this.companionPeers.delete(message.from)
         this.removePeer(message.from)
 
         break
@@ -1015,6 +1120,12 @@ export class RemoteSessionEngine {
         break
       }
 
+      case 'control-hint': {
+        this.options.onControlHint?.()
+
+        break
+      }
+
       case 'session-ended': {
         this.options.onSessionEnded()
 
@@ -1049,6 +1160,51 @@ export class RemoteSessionEngine {
     return entry.info
   }
 
+  /**
+   * Note a peer from signalling. A control companion is only remembered; anybody
+   * else gets a peer entry as before.
+   *
+   * @returns whether the peer is an ordinary (media) peer
+   */
+  private notePeer(peer: SignallingPeer): boolean {
+    if (peer.role === COMPANION_ROLE) {
+      this.companionPeers.set(peer.participantUuid, peer)
+
+      return false
+    }
+
+    this.registerPeer(peer)
+
+    return true
+  }
+
+  /** Connect to the target companion, and drop every other companion connection. */
+  private async syncCompanions(): Promise<void> {
+    if (this.disposed) return
+
+    for (const [uuid, peer] of this.companionPeers) {
+      const connected = this.peers.has(uuid)
+
+      if (uuid === this.companionTarget) {
+        if (!connected) {
+          this.registerPeer(peer)
+          await this.offerTo(uuid)
+        }
+      } else if (connected) {
+        this.removePeer(uuid)
+      }
+    }
+  }
+
+  private isCompanion(peerId: string): boolean {
+    return this.companionPeers.has(peerId)
+  }
+
+  /** Every peer connection that carries the session itself — everything but companions. */
+  private mediaEntries(): PeerEntry[] {
+    return [...this.peers.entries()].filter(([peerId]) => !this.isCompanion(peerId)).map(([, entry]) => entry)
+  }
+
   private ensurePeer(peerId: string): PeerEntry {
     const existing = this.peers.get(peerId)
     if (existing) return existing
@@ -1058,6 +1214,9 @@ export class RemoteSessionEngine {
         this.signalling?.send({ type: 'ice-candidate', to: peerId, payload: candidate })
       },
       onTrack: (stream) => {
+        // A companion sends no media; anything it sent would not be the shared screen.
+        if (this.isCompanion(peerId)) return
+
         this.peerStreams.set(peerId, stream)
         this.remoteStream = stream
         this.patch({ remoteStream: stream, connection: 'connected' })
@@ -1071,7 +1230,7 @@ export class RemoteSessionEngine {
         if (entry) {
           entry.info = {
             ...entry.info,
-            dataChannelReady: true,
+            dataChannelReady: entry.connection.dataChannelReady,
             controlChannelReady: entry.connection.controlChannelReady,
           }
           this.publishPeers()
@@ -1089,6 +1248,7 @@ export class RemoteSessionEngine {
       controlChannelReady: false,
     }
     connection.polite = !this.drivesRestartsFor(info)
+    connection.controlOnly = this.isCompanion(peerId)
 
     const pc = connection.peerConnection
     const entry: PeerEntry = {
@@ -1118,7 +1278,9 @@ export class RemoteSessionEngine {
   private async offerTo(peerId: string, options: { iceRestart?: boolean } = {}): Promise<void> {
     const entry = this.ensurePeer(peerId)
 
-    await entry.connection.setLocalStream(this.localStream ?? this.microphoneStream)
+    if (!this.isCompanion(peerId)) {
+      await entry.connection.setLocalStream(this.localStream ?? this.microphoneStream)
+    }
 
     const offer = await entry.connection.createOffer(options)
     this.signalling?.send({ type: 'offer', to: peerId, payload: offer })
@@ -1272,6 +1434,9 @@ export class RemoteSessionEngine {
    * back — the new share flows on the same track, so there is no `ontrack` to do it.
    */
   private applyPeerShareState(peerId: string, sharing: boolean): void {
+    // A companion shares nothing, whatever it says.
+    if (this.isCompanion(peerId)) return
+
     this.options.onPeerShareState(peerId, sharing)
 
     if (sharing) {
@@ -1284,7 +1449,7 @@ export class RemoteSessionEngine {
       return
     }
 
-    if (this.remoteStream !== null && (this.remoteStream === this.peerStreams.get(peerId) || this.peers.size <= 1)) {
+    if (this.remoteStream !== null && (this.remoteStream === this.peerStreams.get(peerId) || this.mediaEntries().length <= 1)) {
       this.remoteStream = null
       this.patch({ remoteStream: null })
     }
@@ -1292,6 +1457,8 @@ export class RemoteSessionEngine {
 
   private async renegotiateAll(): Promise<void> {
     for (const peerId of this.peers.keys()) {
+      if (this.isCompanion(peerId)) continue
+
       this.signalling?.send({ type: 'renegotiate', to: peerId })
     }
   }
@@ -1322,12 +1489,13 @@ export class RemoteSessionEngine {
 
     if (this.remoteStream !== null && this.remoteStream === this.peerStreams.get(peerId)) this.remoteStream = null
     this.peerStreams.delete(peerId)
-    this.remoteStream = this.peers.size > 0 ? this.remoteStream : null
+    const mediaPeers = this.mediaEntries().length
+    this.remoteStream = mediaPeers > 0 ? this.remoteStream : null
 
     this.patch({
       pointers,
       remoteStream: this.remoteStream,
-      connection: this.peers.size === 0 ? 'waiting-for-peer' : this.snapshot.connection,
+      connection: mediaPeers === 0 ? 'waiting-for-peer' : this.snapshot.connection,
     })
 
     this.publishPeers()
@@ -1360,7 +1528,8 @@ export class RemoteSessionEngine {
    * the supervisor restarts ICE after it.
    */
   private recomputeConnection(): void {
-    const entries = [...this.peers.values()]
+    // A companion's input-only connection is not the session's connection.
+    const entries = this.mediaEntries()
     const states = entries.map((peer) => peer.info.connectionState)
 
     let connection: LiveConnectionState = this.snapshot.connection
@@ -1383,7 +1552,7 @@ export class RemoteSessionEngine {
 
   /** Fold every connection's path and recovery into the one status the UI shows. */
   private publishNetwork(): void {
-    const entries = [...this.peers.values()]
+    const entries = this.mediaEntries()
     const carrying = entries.find((peer) => peer.info.connectionState === 'connected' && peer.path !== null)
     const failed = entries.find((peer) => peer.recovery === 'failed')
     const verdict = failed ? failed.diagnostics.verdict() : null
@@ -1709,14 +1878,14 @@ export class RemoteSessionEngine {
   /** Which peer a file is going to, when the caller did not say. */
   private resolveTransferPeer(toParticipantUuid?: string | null): string {
     if (toParticipantUuid) {
-      if (!this.peers.get(toParticipantUuid)?.connection.dataChannelReady) {
+      if (this.isCompanion(toParticipantUuid) || !this.peers.get(toParticipantUuid)?.connection.dataChannelReady) {
         throw new Error('PEER_NOT_CONNECTED')
       }
 
       return toParticipantUuid
     }
 
-    const ready = [...this.peers.values()].filter((peer) => peer.connection.dataChannelReady)
+    const ready = this.mediaEntries().filter((peer) => peer.connection.dataChannelReady)
 
     if (ready.length === 0) throw new Error('PEER_NOT_CONNECTED')
     // Guessing between two people is how a file reaches the wrong one.
@@ -1817,7 +1986,7 @@ export class RemoteSessionEngine {
   private broadcast(message: { type: string; payload: unknown }): boolean {
     let deliveredOverDataChannel = false
 
-    for (const { connection } of this.peers.values()) {
+    for (const { connection } of this.mediaEntries()) {
       if (connection.send(message)) deliveredOverDataChannel = true
     }
 
@@ -1855,15 +2024,14 @@ export class RemoteSessionEngine {
   }
 
   private async pollQuality(): Promise<void> {
-    if (this.disposed || this.peers.size === 0) return
+    const media = this.mediaEntries()
+    if (this.disposed || media.length === 0) return
 
-    const readings = await Promise.all(
-      [...this.peers.values()].map(({ connection }) => connection.readQuality()),
-    )
+    const readings = await Promise.all(media.map(({ connection }) => connection.readQuality()))
 
     // A path changes under a live connection — an ICE restart, a relay
     // replacing a direct path that broke — so it is re-read with the quality.
-    for (const entry of this.peers.values()) {
+    for (const entry of media) {
       if (entry.info.connectionState === 'connected') entry.path = await entry.diagnostics.selectedPath()
     }
     this.publishNetwork()

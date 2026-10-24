@@ -38,6 +38,7 @@ php spark db:seed RemoteDevelopmentSeeder            # refuses to run in product
 | `…000400_CreateRemoteActivityTables` | `remote_session_events`, `remote_audit_logs`, `remote_messages`, `remote_file_transfers`, `remote_recordings` |
 | `…000500_CreateRemoteSupportTables` | `remote_support_requests`, `remote_session_feedback` |
 | `…000600_CreateRemotePlatformTables` | `remote_context_tokens`, `remote_devices` |
+| `2026-10-25-000100_AddRemoteControlCompanions` | `remote_control_companions`; the `CONTROL_COMPANION` participant role and `companion_of_participant_id`; `remote_sessions.actual_surface_width/height` — [desktop/CONTROL_COMPANION.md](desktop/CONTROL_COMPANION.md) |
 
 Rollback is exercised in CI, not assumed: a migration nobody can undo is a
 migration nobody can deploy with confidence.
@@ -165,6 +166,12 @@ without a schema change ([DESKTOP_AGENT.md](DESKTOP_AGENT.md)).
 
 `UNIQUE (session_id, user_id) WHERE user_id IS NOT NULL` is what makes a repeated
 join request idempotent instead of producing a queue of duplicates.
+
+A `CONTROL_COMPANION` participant is a person's own desktop app serving the screen they share from the browser:
+`CHECK ((participant_role = 'CONTROL_COMPANION') = (companion_of_participant_id IS NOT NULL))`, and it always
+carries its device, is a `DESKTOP_AGENT` and is never a host. Its link lives in `remote_control_companions`, where
+partial unique indexes allow one live link per session and one per device, and an ACTIVE link must name its
+monitor ([desktop/CONTROL_COMPANION.md](desktop/CONTROL_COMPANION.md)).
 
 ### `remote_invitations`
 
