@@ -5,9 +5,10 @@ declare(strict_types=1);
 /**
  * AICOUNTLY ICE kit — summarise the connectivity reports in the API's logs.
  *
- *   php lib/ice-kit/bin/summarize-reports.php writable/logs/log-2026-10-21.log [more.log ...] [--json]
+ *   php lib/ice-kit/bin/summarize-reports.php writable/logs/ice-reports-2026-10-21.log [more.log ...] [--json]
  *
- * Reads the `remote.ice.report` / `connect.ice.report` lines the products write and prints how many
+ * Reads the `remote.ice.report` / `connect.ice.report` lines the products keep (ReportLog: one file per UTC day,
+ * writable/logs/ice-reports-YYYY-MM-DD.log; older framework logs with `info` lines are read too) and prints how many
  * connections there were, how many were relayed (through which node, over which transport), how long
  * they took, and why the failed ones failed. The staging test's evidence. Exit 0 unless it could not
  * read a file or found no reports at all (exit 1).

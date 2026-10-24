@@ -175,7 +175,7 @@ connection is then relay-only, so a pass proves the relay carried it. Remove it 
 After the tests, from the staging API host:
 
 ```bash
-$PHP lib/ice-kit/bin/summarize-reports.php writable/logs/log-$(date +%F).log
+$PHP lib/ice-kit/bin/summarize-reports.php writable/logs/ice-reports-$(date -u +%F).log
 curl -s https://remote.gh.aicountly.com/api/health | jq '.relayNodes'
 ```
 

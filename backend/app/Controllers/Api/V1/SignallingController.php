@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controllers\Api\V1;
 
 use Aicountly\Ice\ConnectivityReport;
+use Aicountly\Ice\ReportLog;
 use App\Controllers\BaseApiController;
 use App\Domain\Audit\EventType;
 use App\Domain\Session\SessionStatus;
@@ -96,7 +97,7 @@ class SignallingController extends BaseApiController
     /**
      * `POST /sessions/{uuid}/connectivity-report` — how this participant's connection went.
      *
-     * Diagnostics, not audit: written to the application log as one structured line so an operator can
+     * Diagnostics, not audit: written as one structured line to its own daily file so an operator can
      * answer "is the Mumbai relay carrying calls, and where does ICE fail" across sessions. The body is
      * reduced to an allow-list of enumerations and counts before anything is written — no SDP, no
      * candidate, no IP address and no credential can pass through, whatever a client sends.
@@ -113,12 +114,12 @@ class SignallingController extends BaseApiController
             Services::iceConfigService()->noteConnection((string) $participant['uuid'], (string) $session['uuid'], $report['path'], $report['relayNode']);
         }
 
-        log_message('info', 'remote.ice.report {report}', [
-            'report' => json_encode([
-                'session'     => (string) $session['uuid'],
-                'participant' => (string) $participant['uuid'],
-            ] + $report, JSON_UNESCAPED_SLASHES),
-        ]);
+        // Its own daily file (writable/logs/ice-reports-YYYY-MM-DD.log), not the framework log: production logs at
+        // `error`, which dropped every report, and these are the evidence summarize-reports.php reads.
+        ReportLog::append(WRITEPATH . 'logs', 'remote', [
+            'session'     => (string) $session['uuid'],
+            'participant' => (string) $participant['uuid'],
+        ] + $report);
 
         return $this->ok(['recorded' => true]);
     }

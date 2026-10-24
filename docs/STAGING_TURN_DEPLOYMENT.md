@@ -322,7 +322,7 @@ curl -sS -X POST "https://remote.gh.aicountly.com/api/v1/remote/sessions/$SESSIO
 
 # Books after a session: the lease appears in the SHARED ledger, tagged product=remote and its tier
 $PHP lib/ice-kit/bin/probe.php --bootstrap=config/ice-kit.php --status | sed -n '/reserved/,$p'
-$PHP lib/ice-kit/bin/summarize-reports.php writable/logs/log-$(date +%F).log
+$PHP lib/ice-kit/bin/summarize-reports.php writable/logs/ice-reports-$(date -u +%F).log
 ```
 
 ### 7.3 Connect calls and rooms (authenticated)

@@ -141,7 +141,7 @@ That is a test of this logic, **not** of Mumbai or Noida.
   offer only.
 * **Diagnostics** — the Security panel says whether media is direct or relayed, through which node and over
   what, and can run a relay check. Connected, recovered and failed connections are reported to
-  `…/connectivity-report`, logged as `remote.ice.report`: outcome, path, candidate types, relay node and
+  `…/connectivity-report`, kept as `remote.ice.report` lines in `writable/logs/ice-reports-YYYY-MM-DD.log` (UTC day, 30 days, independent of the log level): outcome, path, candidate types, relay node and
   protocol, ICE error categories, restarts, timings — never an address, SDP or credential.
 
 ## The desktop agent and long sessions
@@ -243,7 +243,7 @@ A node run as two coturn instances sets `WEBRTC_TURN_NODE_<ID>_GROUP` and `_STRU
 | Grant files for the browser check | `… --node=mum --transports=tls --emit-grant=/tmp/g.json --ttl=900` (0600; live credentials) |
 | Health, every 5 minutes | `turn-probe` in `bin/ops/jobs.txt` → `writable/ice/turn-health.json` (**production deploy installs it; sandbox deploys do not**) |
 | At a glance | `GET /api/health` → `relayNodes: [{id, status, servable, health, condition, state, serving, load, servingBy}]` |
-| Per-connection outcomes | `php lib/ice-kit/bin/summarize-reports.php writable/logs/log-YYYY-MM-DD.log` |
+| Per-connection outcomes | `php lib/ice-kit/bin/summarize-reports.php writable/logs/ice-reports-YYYY-MM-DD.log` |
 | Browser relay check | `web/src/ice-kit/tools/relay-check.mjs` (`ICE_EXPECT_NODE`, `ICE_EXPECT_PROTOCOL`, `ICE_REPORT`) |
 | Local failover simulation | `lib/ice-kit/tests/simulation/failover.sh` |
 

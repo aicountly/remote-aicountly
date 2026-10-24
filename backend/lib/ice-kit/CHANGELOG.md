@@ -1,5 +1,12 @@
 # Changelog — AICOUNTLY ICE kit
 
+## 1.5.1 — 2026-10-24
+
+- `ReportLog`: connectivity reports are kept in their own daily file, `writable/logs/ice-reports-YYYY-MM-DD.log` (UTC day, one line per
+  report in the format `ReportSummary` reads, files older than 30 days pruned). The products wrote them only through the framework logger at
+  `info`, which production runs at `error`, so every report was dropped and `summarize-reports.php` had nothing to read. Reports are already
+  reduced by `ConnectivityReport::sanitize()`, so nothing new is kept. Writing never throws.
+
 ## 1.5.0 — 2026-10-22
 
 Contextual, company-scoped licensing (docs/LICENCE_ENTITLEMENT_CONTRACT.md §1, §4, §9). **No global upgrades.**
