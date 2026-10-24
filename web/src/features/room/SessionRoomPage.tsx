@@ -31,6 +31,7 @@ import ConsentDialog from './ConsentDialog'
 import { controlPhase } from './ControlPanel'
 import SessionEnded from './SessionEnded'
 import ConnectionIndicator from './ConnectionIndicator'
+import SessionCodeBadge from './SessionCodeBadge'
 import RestrictionNotice from '../../components/ui/RestrictionNotice'
 import { RemoteApiError } from '../../services/api/client'
 import { RemoteCaptureError } from '../../services/webrtc/screenCapture'
@@ -236,6 +237,7 @@ export default function SessionRoomPage() {
                 <Shield size={12} aria-hidden="true" />
                 Secure
               </span>
+              {session.sessionCode ? <SessionCodeBadge code={session.sessionCode} /> : null}
             </div>
             <p className="room__context truncate">
               {describeScope(session.scopeType, session.companyName)}
