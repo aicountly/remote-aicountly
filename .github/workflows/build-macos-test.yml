@@ -1,0 +1,154 @@
+# Build AICOUNTLY Remote for macOS, for the owner's own testing of the control companion
+# (docs/desktop/CONTROL_COMPANION.md). Manual only — it uses a macOS runner, which costs Actions minutes.
+#
+# This is NOT a release: no notarisation, no update feed, no publishing. The artifact is an Apple Silicon .dmg plus a
+# config.json that points the app at the chosen environment, and INSTALL.txt with the steps.
+#
+# Signing:
+#   * With the repository secrets MACOS_DEV_CERTIFICATE (base64 of a .p12 holding one "Apple Development" certificate
+#     and its key), MACOS_DEV_CERTIFICATE_PASSWORD and MACOS_DEV_SIGNING_IDENTITY (e.g.
+#     "Apple Development: Rahul Gupta (TEAMID)"), the app is signed with that certificate. macOS keeps the Accessibility
+#     permission across builds only while the signing identity stays the same, so this is the recommended setup.
+#   * Without them it is ad-hoc signed ("-"): it runs after removing the quarantine flag, but macOS treats every build
+#     as a new app, so Accessibility must be granted again after each install.
+# A Developer ID certificate and notarisation are needed before anyone else installs it (WINDOWS_RELEASE.md's macOS
+# counterpart); they are not part of this workflow.
+name: Build AICOUNTLY Remote for macOS (test)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to build
+        type: string
+        default: main
+      environment:
+        description: Which AICOUNTLY Remote the bundled config.json points the app at
+        type: choice
+        options: [sandbox, production]
+        default: sandbox
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-macos-test
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (Apple Silicon, ${{ inputs.environment }})
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Check the macOS companion is in this build
+        run: |
+          # Without the macOS providers every platform call returns Unsupported: the app would install and do nothing.
+          if ! grep -rqs 'supports_companion' desktop/src-tauri/src/platform/; then
+            echo "::error::This ref has no macOS control-companion support yet (desktop/src-tauri/src/platform/*: supports_companion). Build the branch that has it."
+            exit 1
+          fi
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: desktop
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm ci --no-audit --no-fund
+
+      - name: Import the development certificate (optional)
+        id: cert
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_DEV_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_DEV_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.MACOS_DEV_SIGNING_IDENTITY }}
+        run: |
+          if [ -z "$CERTIFICATE" ] || [ -z "$IDENTITY" ]; then
+            echo "No development certificate configured: the app will be ad-hoc signed."
+            echo "identity=-" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/build.keychain-db"
+          password="$(openssl rand -hex 16)"
+          echo "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
+          echo "Signing with the configured development certificate."
+
+      - name: Build the app and the disk image
+        working-directory: desktop
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ steps.cert.outputs.identity }}
+          CARGO_PROFILE_RELEASE_DEBUG: '0'
+        run: npx tauri build --target aarch64-apple-darwin --bundles app,dmg
+
+      - name: Package for testing
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          IDENTITY: ${{ steps.cert.outputs.identity }}
+        run: |
+          out="$RUNNER_TEMP/aicountly-remote-macos"
+          mkdir -p "$out"
+          cp desktop/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg "$out/"
+          case "$ENVIRONMENT" in
+            sandbox)    api=https://remote.gh.aicountly.com/api ;;
+            production) api=https://remote.aicountly.com/api ;;
+          esac
+          cat > "$out/config.json" <<JSON
+          {
+            "apiBaseUrl": "$api",
+            "portalUrl": "https://my.aicountly.com",
+            "presenceIntervalSeconds": 60,
+            "runInBackground": true,
+            "startAtLogin": false,
+            "captureQuality": "adaptive"
+          }
+          JSON
+          signed="ad-hoc signed: macOS asks for Accessibility again after every new build"
+          [ "$IDENTITY" != "-" ] && signed="signed with: $IDENTITY"
+          cat > "$out/INSTALL.txt" <<TXT
+          AICOUNTLY Remote for macOS — test build ($ENVIRONMENT)
+          Built from $(git rev-parse --short HEAD); $signed. Not notarised: for your own testing only.
+
+          1. Open the .dmg and drag "AICOUNTLY Remote" to Applications.
+          2. In Terminal:
+               xattr -dr com.apple.quarantine "/Applications/AICOUNTLY Remote.app"
+               mkdir -p "\$HOME/Library/Application Support/AICOUNTLY/Remote"
+               cp config.json "\$HOME/Library/Application Support/AICOUNTLY/Remote/config.json"
+          3. Open AICOUNTLY Remote and sign in to $ENVIRONMENT with your AICOUNTLY account.
+          4. When asked, allow it in System Settings → Privacy & Security → Accessibility, then reopen it.
+             (No Screen Recording permission is needed: the picture comes from your browser's share.)
+          TXT
+          ls -la "$out"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: aicountly-remote-macos-${{ inputs.environment }}
+          path: ${{ runner.temp }}/aicountly-remote-macos
+          retention-days: 14
+
+      - name: Remove the build keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" 2>/dev/null || true
