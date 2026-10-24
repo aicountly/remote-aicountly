@@ -554,6 +554,8 @@ class SessionService
         ]);
 
         $this->participants->closeAll((int) $session['id']);
+        // Its control-companion link ends with it (and is recorded as ending).
+        \Config\Services::companionLinks()->sweep($updated);
         $this->db->table('remote_invitations')
             ->where('session_id', $session['id'])
             ->where('revoked_at', null)
@@ -583,8 +585,18 @@ class SessionService
         RemoteIdentity $identity,
         string $displaySurface,
         EffectivePolicy $policy,
+        ?int $surfaceWidth = null,
+        ?int $surfaceHeight = null,
     ): array {
         $surface = in_array($displaySurface, ['browser', 'window', 'monitor'], true) ? $displaySurface : 'unknown';
+
+        // track.getSettings() of the shared video track. A size the database would refuse is no size at all,
+        // and a half-reported one is not one either.
+        $surfaceWidth  = $surfaceWidth !== null && $surfaceWidth >= 1 && $surfaceWidth <= 16384 ? $surfaceWidth : null;
+        $surfaceHeight = $surfaceHeight !== null && $surfaceHeight >= 1 && $surfaceHeight <= 16384 ? $surfaceHeight : null;
+        if ($surfaceWidth === null || $surfaceHeight === null) {
+            $surfaceWidth = $surfaceHeight = null;
+        }
 
         // 'unknown' means the browser did not report `displaySurface` at all.
         // Firefox and Safari are in that position today, so refusing outright
@@ -604,12 +616,28 @@ class SessionService
             );
         }
 
+        $previous = $this->db->table('remote_sessions')
+            ->select('actual_display_surface, actual_surface_width, actual_surface_height')
+            ->where('id', $session['id'])
+            ->get()
+            ->getRowArray() ?? [];
+
         $updated = $this->transition($session, SessionStatus::ACTIVE, [
             'actual_display_surface' => $surface,
+            'actual_surface_width'   => $surfaceWidth,
+            'actual_surface_height'  => $surfaceHeight,
             'started_at'             => $session['started_at'] ?? Clock::now(),
         ]);
 
         $this->participants->setSharing((int) $session['id'], $identity->id, true);
+
+        // A control companion maps input onto the monitor it matched to *this* picture. A different picture
+        // (another surface, another size) needs matching again, and control it carried stops now.
+        \Config\Services::companionService()->onShareStarted($updated, $identity, [
+            'displaySurface' => $previous['actual_display_surface'] ?? null,
+            'width'          => isset($previous['actual_surface_width']) ? (int) $previous['actual_surface_width'] : null,
+            'height'         => isset($previous['actual_surface_height']) ? (int) $previous['actual_surface_height'] : null,
+        ], ['displaySurface' => $surface, 'width' => $surfaceWidth, 'height' => $surfaceHeight]);
 
         // The surface-specific event only exists when the browser actually told
         // us which surface it was. Emitting it for 'unknown' would add a second
@@ -622,6 +650,8 @@ class SessionService
 
         $this->audit->record($updated, EventType::SCREEN_SHARE_STARTED, $identity->id, 'USER', null, null, [
             'displaySurface' => $surface,
+            'surfaceWidth'   => $surfaceWidth,
+            'surfaceHeight'  => $surfaceHeight,
             'shareMode'      => $session['requested_share_mode'],
             // False when the browser does not implement `displaySurface`
             // (Firefox, Safari). The audit trail says so rather than implying
@@ -643,10 +673,12 @@ class SessionService
     {
         $this->participants->setSharing((int) $session['id'], $identity->id, false);
 
-        $update = ['actual_display_surface' => null];
+        $update = ['actual_display_surface' => null, 'actual_surface_width' => null, 'actual_surface_height' => null];
         $updated = SessionStatus::isTerminal((string) $session['status'])
             ? $session
             : $this->transition($session, (string) $session['status'], $update);
+
+        \Config\Services::companionService()->onShareStopped($updated, $identity);
 
         $this->audit->record($updated, EventType::SCREEN_SHARE_STOPPED, $identity->id, 'USER', null, null, [
             'reason' => $reason,
@@ -673,7 +705,13 @@ class SessionService
 
         $updated = SessionStatus::isTerminal((string) $session['status'])
             ? $session
-            : $this->transition($session, SessionStatus::PAUSED, ['actual_display_surface' => null]);
+            : $this->transition($session, SessionStatus::PAUSED, [
+                'actual_display_surface' => null,
+                'actual_surface_width'   => null,
+                'actual_surface_height'  => null,
+            ]);
+
+        \Config\Services::companionService()->onShareStopped($updated, $identity);
 
         $this->audit->record($updated, EventType::COMPANY_CONTEXT_MISMATCH, $identity->id, 'USER', null, null, [
             'sessionCompanyId'  => $session['company_id'],

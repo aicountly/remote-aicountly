@@ -12,7 +12,7 @@ declare(strict_types=1);
  *
  *   company_tables  EVERYTHING company-scoped (key company_id): the company's sessions with their
  *                   participants, invitations, messages, file-transfer records, recording records,
- *                   events and feedback; support requests; devices with their challenges; desktop
+ *                   events, feedback and control-companion links; support requests; devices with their challenges; desktop
  *                   sign-in codes; launch-context tokens; policy, entitlements, role and user
  *                   permissions, memberships, the directory projection; and Remote's own audit log (no
  *                   statute keeps it). Archived first, children before parents.
@@ -36,6 +36,9 @@ return [
 
     'company_tables' => [
         // A session's children reach the company only through it (session_id, ON DELETE CASCADE).
+        // Control-companion links (migration 2026-10-25-000100) point at the session, its participants and the
+        // device, so they are archived before all three.
+        ['table' => 'remote_control_companions', 'via' => ['column' => 'session_id', 'parent' => 'remote_sessions', 'parent_column' => 'id']],
         ['table' => 'remote_file_transfers', 'via' => ['column' => 'session_id', 'parent' => 'remote_sessions', 'parent_column' => 'id']],
         ['table' => 'remote_messages', 'via' => ['column' => 'session_id', 'parent' => 'remote_sessions', 'parent_column' => 'id']],
         // Recording records: Remote stores no recording object (nothing writes storage_key), so only rows go.

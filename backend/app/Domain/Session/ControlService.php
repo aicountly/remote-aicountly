@@ -51,10 +51,17 @@ class ControlService
     public const STATE_DENIED    = 'DENIED';
     public const STATE_REVOKED   = 'REVOKED';
 
+    /** Why nobody can be controlled right now — see {@see blockedReason()}. */
+    public const BLOCKED_NO_COMPANION        = 'NO_COMPANION';
+    public const BLOCKED_COMPANION_NOT_READY = 'COMPANION_NOT_READY';
+    public const BLOCKED_NOT_SHARING         = 'NOT_SHARING';
+    public const BLOCKED_SURFACE_NOT_MONITOR = 'SURFACE_NOT_MONITOR';
+
     public function __construct(
         private readonly BaseConnection $db,
         private readonly ParticipantService $participants,
         private readonly AuditService $audit,
+        private readonly CompanionLinks $companions,
     ) {
     }
 
@@ -102,13 +109,12 @@ class ControlService
         $host = $this->controllableHost($session);
 
         if ($host === null) {
-            throw ApiException::conflict(
-                'HOST_NOT_CONTROLLABLE',
-                'The computer in this session cannot be controlled. AICOUNTLY Remote for Windows is needed at that end.',
-            );
+            throw $this->notControllable($session);
         }
 
-        if ((int) $host['id'] === (int) $requester['id']) {
+        // The person a companion serves is, for control, the machine itself.
+        if ((int) $host['id'] === (int) $requester['id']
+            || (int) ($host['companion_of_participant_id'] ?? 0) === (int) $requester['id']) {
             throw ApiException::badRequest(
                 'CONTROL_SELF',
                 'You are the computer being shared, so there is nothing to request.',
@@ -189,6 +195,27 @@ class ControlService
             );
         }
 
+        // Nothing to hand over is nothing to grant: a request outlives the machine
+        // that could have answered it (the companion's link ended, the share
+        // stopped, the agent left), and a grant written then would wait for the
+        // next machine to join and arm it without anyone deciding again.
+        $controllable = $this->controllableHost($session);
+        if ($controllable === null) {
+            throw $this->notControllable($session);
+        }
+
+        $viaCompanion = (string) ($controllable['participant_role'] ?? '') === ParticipantService::ROLE_COMPANION;
+
+        // A control companion serves one person's screen. Only that person — the
+        // participant the companion is linked to — may hand control of it over:
+        // not the session's owner, not another host, not an administrator.
+        if ($viaCompanion && (int) $controllable['companion_of_participant_id'] !== (int) $hostParticipant['id']) {
+            throw ApiException::forbidden(
+                'NOT_SESSION_HOST',
+                'Only the person sharing this screen can hand over control of it.',
+            );
+        }
+
         // One controller at a time. Two people typing into the same desktop is
         // not a feature, and deciding which keystroke wins is not a decision
         // anybody should have to make afterwards.
@@ -204,10 +231,12 @@ class ControlService
         return $this->applyGrant(
             $session,
             $requester,
-            $allowClipboard && $policy->allowClipboardSync,
+            // Owner decision 3: no clipboard through a companion in v1, whatever the policy says.
+            ! $viaCompanion && $allowClipboard && $policy->allowClipboardSync,
             $host->id,
             'USER',
             (string) $hostParticipant['uuid'],
+            $viaCompanion ? ['companionParticipantUuid' => (string) $controllable['uuid']] : [],
         );
     }
 
@@ -229,6 +258,7 @@ class ControlService
         ?int $actorUserId,
         string $actorType,
         string $hostParticipantUuid,
+        array $metadata = [],
     ): array {
         // Guarded on the state it was read in, so two Allow taps produce one
         // grant and one no-op rather than two audit entries.
@@ -257,10 +287,10 @@ class ControlService
             $actorType,
             (int) $updated['id'],
             (string) $updated['uuid'],
-            [
+            array_merge([
                 'hostParticipantUuid' => $hostParticipantUuid,
                 'clipboard'           => $clipboard,
-            ],
+            ], $metadata),
         );
 
         return $updated;
@@ -412,6 +442,14 @@ class ControlService
             throw ApiException::conflict('SESSION_ALREADY_ENDED', 'This Remote session has already finished.');
         }
 
+        // A control companion never hands control over: that is the person at
+        // the browser's decision, made in the browser (owner decision 2). It may
+        // still say no and stop — ending control needs no permission, and a
+        // machine that could not stop its own control is not one to trust.
+        if ((string) ($deviceParticipant['participant_role'] ?? '') === ParticipantService::ROLE_COMPANION) {
+            return $this->decideAsCompanion($session, $deviceParticipant, $requesterUuid, $decision);
+        }
+
         // A device answering for a session whose controllable host is some
         // other participant is a device answering a question it was not asked.
         $host = $this->controllableHost($session);
@@ -495,6 +533,110 @@ class ControlService
     }
 
     /**
+     * A control companion answering: Not now, or Stop control. Never Allow.
+     *
+     * @param  array<string, mixed> $session
+     * @param  array<string, mixed> $companion
+     * @return array<string, mixed>
+     */
+    private function decideAsCompanion(array $session, array $companion, string $requesterUuid, string $decision): array
+    {
+        if ($decision === 'GRANT') {
+            throw ApiException::forbidden(
+                'COMPANION_CANNOT_GRANT',
+                'Control is handed over in the browser, by the person sharing this screen.',
+            );
+        }
+
+        if ($decision !== 'DENY' && $decision !== 'REVOKE') {
+            throw ApiException::badRequest(
+                'VALIDATION_FAILED',
+                'Some of the details sent were not valid.',
+                ['fields' => ['decision' => 'This must be DENY or REVOKE.']],
+            );
+        }
+
+        if (! in_array((string) $companion['status'], ['APPROVED', 'JOINED'], true)) {
+            throw ApiException::forbidden(
+                'NOT_SESSION_HOST',
+                'Only the computer being shared can decide about remote control.',
+            );
+        }
+
+        $requester = $this->requireParticipantByUuid($session, $requesterUuid);
+
+        return $this->applyEnd(
+            $session,
+            $requester,
+            $decision === 'DENY' ? self::STATE_DENIED : self::STATE_REVOKED,
+            $decision === 'DENY' ? EventType::CONTROL_DENIED : EventType::CONTROL_REVOKED,
+            $companion['user_id'] !== null ? (int) $companion['user_id'] : null,
+            'DEVICE',
+            ['by' => 'DEVICE', 'deviceParticipantUuid' => (string) $companion['uuid'], 'companion' => true],
+        );
+    }
+
+    /**
+     * Take control away because what it depended on changed — the shared surface, the share itself, the
+     * person sharing, the companion's link. Nobody pressed Stop, so it is recorded as the system (or as
+     * whoever ended the link) with the reason, and it applies to whoever holds control right now.
+     *
+     * @param  array<string, mixed> $session
+     * @return array<string, mixed>|null the former controller, or null when nobody had control
+     */
+    public function revokeBecause(array $session, string $reason, ?int $actorUserId = null, string $actorType = 'SYSTEM'): ?array
+    {
+        $controller = $this->currentController((int) $session['id']);
+        if ($controller === null) {
+            return null;
+        }
+
+        return $this->applyEnd(
+            $session,
+            $controller,
+            self::STATE_REVOKED,
+            EventType::CONTROL_REVOKED,
+            $actorUserId,
+            $actorType,
+            ['by' => $actorType, 'reason' => $reason],
+        );
+    }
+
+    /**
+     * Why there is nobody to control in this session right now, or null when there is.
+     *
+     * @param  array<string, mixed> $session
+     * @return self::BLOCKED_*|null
+     */
+    public function blockedReason(array $session): ?string
+    {
+        if ($this->controllableHost($session) !== null) {
+            return null;
+        }
+
+        $link = $this->companions->liveFor($session);
+
+        return $link === null ? self::BLOCKED_NO_COMPANION : $this->companions->blockedReason($session, $link);
+    }
+
+    /** @param array<string, mixed> $session */
+    private function notControllable(array $session): ApiException
+    {
+        $reason = $this->blockedReason($session);
+
+        return ApiException::conflict(
+            'HOST_NOT_CONTROLLABLE',
+            match ($reason) {
+                self::BLOCKED_NOT_SHARING         => 'This computer can be controlled only while its screen is being shared.',
+                self::BLOCKED_SURFACE_NOT_MONITOR => 'This computer can be controlled only while an entire screen is being shared.',
+                self::BLOCKED_COMPANION_NOT_READY => 'The AICOUNTLY Remote app on that computer is not ready yet.',
+                default                           => 'The computer in this session cannot be controlled. The AICOUNTLY Remote app is needed at that end.',
+            },
+            ['controlBlockedReason' => $reason],
+        );
+    }
+
+    /**
      * Turn clipboard synchronisation on or off within a granted control
      * session.
      *
@@ -522,6 +664,15 @@ class ControlService
                 'CLIPBOARD_SYNC_NOT_ALLOWED',
                 'Clipboard sharing is not enabled for this organisation.',
                 ['restrictions' => $policy->restrictions],
+            );
+        }
+
+        // Owner decision 3: a control companion carries input only, never the clipboard, in v1.
+        $controllable = $enabled ? $this->controllableHost($session) : null;
+        if ($controllable !== null && (string) $controllable['participant_role'] === ParticipantService::ROLE_COMPANION) {
+            throw ApiException::forbidden(
+                'CLIPBOARD_SYNC_NOT_ALLOWED',
+                'Clipboard sharing is not available when control comes from the browser share.',
             );
         }
 
@@ -596,9 +747,26 @@ class ControlService
                 $capabilities = json_decode($capabilities, true) ?: [];
             }
 
-            if (($capabilities['remote_control'] ?? false) === true) {
-                return $participant;
+            if (($capabilities['remote_control'] ?? false) !== true) {
+                continue;
             }
+
+            // A control companion is controllable only while everything it
+            // depends on holds at once: its link is ACTIVE (it knows which
+            // monitor the picture is), the person it serves is in the session and
+            // sharing, and what they share is an entire screen. Input onto a
+            // window or a tab would land on whatever is beside it on the monitor,
+            // which the viewer cannot see.
+            if ((string) $participant['participant_role'] === ParticipantService::ROLE_COMPANION) {
+                $link = $this->companions->activeForCompanion((int) $participant['id']);
+
+                if ($link === null || (int) $link['session_id'] !== (int) $session['id']
+                    || ! $this->companions->isReady($session, $link)) {
+                    continue;
+                }
+            }
+
+            return $participant;
         }
 
         return null;
@@ -620,6 +788,8 @@ class ControlService
             static fn (array $row) => (string) $row['control_state'] === self::STATE_REQUESTED,
         ));
 
+        $link = $this->companions->latestFor($session);
+
         return [
             'controllableHostUuid' => $host !== null ? (string) $host['uuid'] : null,
             'controllerUuid'       => $controller !== null ? (string) $controller['uuid'] : null,
@@ -630,7 +800,33 @@ class ControlService
                 'displayName'     => (string) $row['display_name'],
                 'requestedAt'     => \App\Domain\Support\Clock::iso($row['control_requested_at'] ?? null),
             ], $pending),
+            // Control companions (docs/desktop/CONTROL_COMPANION.md): the session's most recent link, what the
+            // browser reports it is sharing, and why nobody can be controlled when nobody can.
+            'companion'            => $this->companions->present($link, $session),
+            'sharedSurface'        => $this->companions->surfaceOf((int) $session['id']),
+            'controlBlockedReason' => $host !== null ? null : $this->blockedReason($session),
+            'grantId'              => self::grantId($controller),
         ];
+    }
+
+    /**
+     * An opaque name for one particular grant: the controller and the moment control was granted to them.
+     *
+     * The desktop agent arms its gate for a grant, and after the person at the machine presses Stop it
+     * stays disarmed until it sees a *different* grant — so a stale poll that still reads GRANTED cannot
+     * re-arm what was just stopped.
+     *
+     * @param array<string, mixed>|null $controller
+     */
+    public static function grantId(?array $controller): ?string
+    {
+        if ($controller === null || ($controller['control_granted_at'] ?? null) === null) {
+            return null;
+        }
+
+        $at = strtotime((string) $controller['control_granted_at']);
+
+        return substr(hash('sha256', (string) $controller['uuid'] . '|' . (string) $at), 0, 32);
     }
 
     // ------------------------------------------------------------- internals

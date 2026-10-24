@@ -30,6 +30,8 @@ class ParticipantService
     public const ROLE_SUPPORT = 'SUPPORT_TECHNICIAN';
     public const ROLE_OBSERVER = 'OBSERVER';
     public const ROLE_GUEST   = 'GUEST';
+    /** A person's own desktop app, input-only, serving the screen they share from a browser. */
+    public const ROLE_COMPANION = 'CONTROL_COMPANION';
 
     public function __construct(
         private readonly BaseConnection $db,
@@ -295,6 +297,9 @@ class ParticipantService
 
         // Someone who has left holds no relay capacity.
         \Config\Services::iceConfigService()->releaseSession((string) $session['uuid'], (string) $participant['uuid']);
+
+        // A person who leaves takes their control companion's link with them, and any control it carried.
+        \Config\Services::companionService()->onParticipantLeft($session, $participant);
     }
 
     public function closeAll(int $sessionId): void
@@ -311,11 +316,16 @@ class ParticipantService
             ]);
     }
 
+    /**
+     * The person's own row only: a device participant carries its owner in `user_id` too, and the browser
+     * starting to share is not the machine starting to share (a control companion never shares at all).
+     */
     public function setSharing(int $sessionId, int $userId, bool $sharing): void
     {
         $this->db->table('remote_participants')
             ->where('session_id', $sessionId)
             ->where('user_id', $userId)
+            ->where('device_id', null)
             ->update(['is_sharing' => $sharing, 'updated_at' => Clock::now()]);
     }
 

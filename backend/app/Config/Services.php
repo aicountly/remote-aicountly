@@ -8,6 +8,7 @@ use App\Domain\Audit\AuditService;
 use App\Domain\Auth\IdentityResolver;
 use App\Domain\Auth\PortalClient;
 use App\Domain\Auth\SourceContextVerifier;
+use App\Domain\Device\CompanionService;
 use App\Domain\Device\DeviceAuthenticationService;
 use App\Domain\Device\DevicePresenceService;
 use App\Domain\Device\DeviceService;
@@ -19,6 +20,7 @@ use App\Domain\Directory\MembershipVerifier;
 use App\Domain\Directory\PlatformDirectory;
 use App\Domain\Policy\EffectivePolicyResolver;
 use App\Domain\Session\ChatService;
+use App\Domain\Session\CompanionLinks;
 use App\Domain\Session\ControlService;
 use App\Domain\Session\FileTransferService;
 use App\Domain\Session\InvitationService;
@@ -195,7 +197,41 @@ class Services extends BaseService
             return static::getSharedInstance('controlService');
         }
 
-        return new ControlService(db_connect(), static::participantService(), static::auditService());
+        return new ControlService(
+            db_connect(),
+            static::participantService(),
+            static::auditService(),
+            static::companionLinks(),
+        );
+    }
+
+    /** Control-companion links, read and presented one way (docs/desktop/CONTROL_COMPANION.md). */
+    public static function companionLinks(bool $getShared = true): CompanionLinks
+    {
+        if ($getShared) {
+            return static::getSharedInstance('companionLinks');
+        }
+
+        return new CompanionLinks(db_connect(), static::auditService());
+    }
+
+    /** Linking a person's own desktop app to the screen they share from a browser. */
+    public static function companionService(bool $getShared = true): CompanionService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('companionService');
+        }
+
+        return new CompanionService(
+            db_connect(),
+            static::deviceService(),
+            static::sessionService(),
+            static::participantService(),
+            static::controlService(),
+            static::companionLinks(),
+            static::policyResolver(),
+            static::auditService(),
+        );
     }
 
     // ----------------------------------------------------------------- devices

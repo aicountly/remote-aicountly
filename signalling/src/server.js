@@ -86,7 +86,15 @@ const RATE_LIMIT_WINDOW_MS = 10_000;
 
 /** The only message types a client may send. Anything else is dropped. */
 const RELAYABLE = new Set(['offer', 'answer', 'ice-candidate', 'peer-ready', 'renegotiate']);
-const BROADCASTABLE = new Set(['presence', 'chat', 'pointer', 'annotation', 'share-state', 'session-ended']);
+const BROADCASTABLE = new Set(['presence', 'chat', 'pointer', 'annotation', 'share-state', 'session-ended', 'control-hint']);
+
+/**
+ * `control-hint` is a "poll the API now" nudge (docs/desktop/CONTROL_COMPANION.md): a browser that has
+ * just requested, granted or revoked control tells the room, so a control companion re-reads the control
+ * state at once instead of on its next poll. It carries nothing and grants nothing — the API is the only
+ * source of a control decision — so its payload is dropped here rather than relayed.
+ */
+const PAYLOADLESS = new Set(['control-hint']);
 
 /**
  * A device's presence room is not a session room, and carries almost nothing.
@@ -337,7 +345,7 @@ function handle(ws, message) {
     broadcast(participant.room, participant.participantUuid, {
       type,
       from: participant.participantUuid,
-      payload: message.payload ?? null,
+      payload: PAYLOADLESS.has(type) ? null : (message.payload ?? null),
     });
 
     return;

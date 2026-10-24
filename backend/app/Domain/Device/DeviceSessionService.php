@@ -251,6 +251,16 @@ class DeviceSessionService
         $policy = $this->policies->resolve($owner, 'COMPANY', (int) $device['company_id']);
 
         $existing = $this->findDeviceParticipant((int) $session['id'], (int) $device['id']);
+
+        // A machine serving this session as a control companion is not its shared screen, and this route
+        // must not hand it a token as one: the companion has its own join (devices/me/companions/{uuid}).
+        if ($existing !== null && (string) $existing['participant_role'] === ParticipantService::ROLE_COMPANION) {
+            throw ApiException::conflict(
+                'DEVICE_IS_COMPANION',
+                'This computer is linked to that session as a control companion.',
+            );
+        }
+
         if ($existing !== null) {
             return $existing;
         }
@@ -404,12 +414,27 @@ class DeviceSessionService
             ? $this->policies->resolve($owner, 'COMPANY', (int) $device['company_id'])
             : null;
 
-        return array_merge($this->control->stateFor($session), [
+        $state = $this->control->stateFor($session);
+
+        // A companion reads its own link, not whichever link is the session's latest: if the person linked
+        // a different machine since, this one must see that its own has ended.
+        $links = \Config\Services::companionLinks();
+        $own   = $links->latestFor($session, (int) $device['id']);
+        if ($own !== null) {
+            $state['companion'] = $links->present($own, $session);
+        } elseif (($state['companion']['deviceUuid'] ?? null) !== (string) $device['uuid']) {
+            $state['companion'] = null;
+        }
+
+        $isCompanion = $this->findDeviceParticipant((int) $session['id'], (int) $device['id'])['participant_role'] === ParticipantService::ROLE_COMPANION;
+
+        return array_merge($state, [
             // The organisation's answer, so the agent's consent dialog cannot
             // offer something the server would refuse.
             'allowRemoteControl' => $policy?->allowRemoteControl ?? false,
-            'allowClipboardSync' => $policy?->allowClipboardSync ?? false,
-            'allowDeviceReboot'  => $policy?->allowDeviceReboot ?? false,
+            // Owner decision 3: no clipboard through a companion in v1.
+            'allowClipboardSync' => ! $isCompanion && ($policy?->allowClipboardSync ?? false),
+            'allowDeviceReboot'  => ! $isCompanion && ($policy?->allowDeviceReboot ?? false),
         ]);
     }
 

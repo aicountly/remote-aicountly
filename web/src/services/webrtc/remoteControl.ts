@@ -105,6 +105,10 @@ export type ControlMessage =
   | { type: 'monitor_layout'; monitors: MonitorDescription[]; active_monitor_id: number }
   | { type: 'select_monitor'; monitor_id: number }
   | { type: 'control_ended'; reason: string }
+  // Agent → browser, additive within protocol version 1: input paused because somebody at the machine is using
+  // its own mouse or keyboard, and resumed after they stop (docs/desktop/CONTROL_COMPANION.md).
+  | { type: 'control_paused'; reason: string }
+  | { type: 'control_resumed' }
   | { type: 'reboot'; session_uuid: string }
   | { type: 'ping'; nonce: number }
   | { type: 'pong'; nonce: number }

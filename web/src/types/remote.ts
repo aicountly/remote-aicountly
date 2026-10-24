@@ -30,7 +30,14 @@ export type ShareMode = 'SAFE_SHARE' | 'BROWSER_TAB' | 'APPLICATION_WINDOW' | 'E
 /** What `MediaTrackSettings.displaySurface` reports, plus our own "not told". */
 export type DisplaySurface = 'browser' | 'window' | 'monitor' | 'unknown';
 
-export type ParticipantRole = 'SHARER' | 'VIEWER' | 'SUPPORT_TECHNICIAN' | 'OBSERVER' | 'GUEST';
+export type ParticipantRole =
+  | 'SHARER'
+  | 'VIEWER'
+  | 'SUPPORT_TECHNICIAN'
+  | 'OBSERVER'
+  | 'GUEST'
+  /** A person's own desktop app, input-only, serving the screen they share from the browser. */
+  | 'CONTROL_COMPANION';
 
 export type ParticipantStatus = 'REQUESTED' | 'APPROVED' | 'DENIED' | 'JOINED' | 'LEFT' | 'REMOVED';
 
@@ -114,6 +121,47 @@ export interface SessionControlState {
   allowClipboardSync: boolean;
   allowDeviceReboot: boolean;
   restrictions: string[];
+  /** The session's most recent control-companion link (docs/desktop/CONTROL_COMPANION.md), if any. */
+  companion?: CompanionLink | null;
+  /** What the sharing browser reported it is sharing. */
+  sharedSurface?: SharedSurface;
+  /** Why nobody can be controlled right now; null when somebody can. */
+  controlBlockedReason?: ControlBlockedReason | null;
+  /** Opaque name of the current grant, or null. */
+  grantId?: string | null;
+}
+
+export type ControlBlockedReason = 'NO_COMPANION' | 'COMPANION_NOT_READY' | 'NOT_SHARING' | 'SURFACE_NOT_MONITOR';
+
+export type CompanionStatus = 'PENDING' | 'JOINED' | 'ACTIVE' | 'DECLINED' | 'ENDED' | 'EXPIRED';
+
+/** A person's own desktop app linked to the screen they share from the browser. */
+export interface CompanionLink {
+  uuid: string;
+  status: CompanionStatus;
+  deviceUuid: string | null;
+  deviceName: string | null;
+  /** The browser participant it serves. */
+  linkedParticipantUuid: string | null;
+  /** Its own (input-only) participant, once it has joined. */
+  participantUuid: string | null;
+  monitor: { id: number; name: string; x: number; y: number; width: number; height: number; scale: number } | null;
+  monitorMatch: 'AUTO_SINGLE' | 'AUTO_ASPECT' | 'USER' | null;
+  /** ACTIVE, and the person it serves is sharing an entire screen right now. */
+  ready: boolean;
+  endReason: string | null;
+  requestedAt: string | null;
+  expiresAt: string | null;
+  joinedAt: string | null;
+  endedAt: string | null;
+}
+
+export interface SharedSurface {
+  displaySurface: 'browser' | 'window' | 'monitor' | 'unknown' | null;
+  width: number | null;
+  height: number | null;
+  /** False when the browser does not report what it shares (Firefox, Safari). */
+  verified: boolean;
 }
 
 export interface SessionCapabilities {
