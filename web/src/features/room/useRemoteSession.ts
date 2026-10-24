@@ -56,6 +56,18 @@ const SESSION_POLL_MS = 10_000
 const SESSION_POLL_IDLE_MS = 25_000
 
 /**
+ * While I am the one waiting to be admitted: the host's click is the only thing I am waiting for, and the room starts
+ * the moment this poll sees it.
+ */
+const SESSION_POLL_ADMISSION_MS = 1_500
+
+/** While somebody is waiting for me (the host) to admit them. */
+const SESSION_POLL_HOST_PENDING_MS = 2_000
+
+/** The host's idle poll: it is how a new knock at the door is noticed, so it cannot be the 25-second one. */
+const SESSION_POLL_HOST_IDLE_MS = 4_000
+
+/**
  * How often control state is re-read while somebody is waiting on an answer.
  *
  * Faster than the session poll because both ends of a control request are
@@ -139,13 +151,24 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
   // Poll faster while somebody is waiting to be admitted — that is the one
   // state where a delay is felt by two people at once.
   const hasPending = (session?.waiting?.length ?? 0) > 0
+  const awaitingAdmission = session?.me?.status === 'REQUESTED'
+  const isHost = session?.isHost ?? false
+  const pollMs = awaitingAdmission
+    ? SESSION_POLL_ADMISSION_MS
+    : isHost
+      ? hasPending
+        ? SESSION_POLL_HOST_PENDING_MS
+        : SESSION_POLL_HOST_IDLE_MS
+      : hasPending
+        ? SESSION_POLL_MS
+        : SESSION_POLL_IDLE_MS
   useEffect(() => {
     if (ended) return
 
-    const interval = setInterval(() => void reload(), hasPending ? SESSION_POLL_MS : SESSION_POLL_IDLE_MS)
+    const interval = setInterval(() => void reload(), pollMs)
 
     return () => clearInterval(interval)
-  }, [reload, hasPending, ended])
+  }, [reload, pollMs, ended])
 
   // --- Remote control state (§18, §51) -------------------------------------
   //
@@ -195,18 +218,22 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
 
   const myParticipantUuid = guestParticipantUuid ?? session?.me?.uuid ?? null
   const myStatus = session?.me?.status ?? null
+  // A boolean, not the status: APPROVED -> JOINED is the same admitted participant and must keep the same engine.
+  const admitted = myStatus === 'APPROVED' || myStatus === 'JOINED'
 
+  // The engine depends on who I am and whether I am admitted, never on the session record itself. That record is a new
+  // object on every poll, and an effect keyed on it tore the engine down each time — socket, peer connections and the
+  // screen capture with it — so a share never reached the viewer and every poll was a reconnect.
   useEffect(() => {
     // Start only once the host has admitted us. Before that there is no token
     // to be had, so connecting would be a guaranteed 403 (§19).
-    if (!myParticipantUuid || !session) return
-    if (myStatus !== 'APPROVED' && myStatus !== 'JOINED') return
+    if (!myParticipantUuid || !admitted) return
     if (engineRef.current) return
 
     const engine = new RemoteSessionEngine({
       sessionUuid,
       participantUuid: myParticipantUuid,
-      displayName: session.me?.displayName ?? 'Participant',
+      displayName: sessionRef.current?.me?.displayName ?? 'Participant',
       onSnapshot: (snapshot) => {
         if (mountedRef.current) setLive(snapshot)
       },
@@ -243,7 +270,7 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
       engine.dispose()
       engineRef.current = null
     }
-  }, [myParticipantUuid, myStatus, session, sessionUuid, reload, refreshControl])
+  }, [myParticipantUuid, admitted, sessionUuid, reload, refreshControl])
 
   // Stop capture if this component ever unmounts while sharing. Belt and
   // braces over the effect cleanup above, because a leaked screen capture is
