@@ -55,7 +55,12 @@ export class RemotePeerConnection {
   private disposed = false
   /** Candidates that arrived before the remote description was set. */
   private pendingCandidates: RTCIceCandidateInit[] = []
-  private senders: RTCRtpSender[] = []
+  /**
+   * One sender per media kind, kept for the life of the connection. A stopped share empties its sender
+   * (`replaceTrack(null)`) rather than removing it: a removed sender's transceiver cannot be reused, so the next share
+   * would need a new m-line, which only an offer from this side can create — and Remote asks the *other* side to offer.
+   */
+  private senders = new Map<string, RTCRtpSender>()
 
   constructor(
     readonly peerId: string,
@@ -239,14 +244,14 @@ export class RemotePeerConnection {
     if (this.disposed) return
 
     if (stream === null) {
-      for (const sender of this.senders) {
+      // Stop sending, keep the sender: the next share fills the same transceiver with no renegotiation.
+      for (const sender of this.senders.values()) {
         try {
-          this.pc.removeTrack(sender)
+          await sender.replaceTrack(null)
         } catch {
-          /* already removed */
+          /* the connection is closing */
         }
       }
-      this.senders = []
 
       return
     }
@@ -254,12 +259,12 @@ export class RemotePeerConnection {
     // replaceTrack where possible: swapping a track on an existing sender does
     // not require renegotiation, so switching what is shared is seamless.
     for (const track of stream.getTracks()) {
-      const existing = this.senders.find((sender) => sender.track?.kind === track.kind)
+      const existing = this.senders.get(track.kind)
 
       if (existing) {
         await existing.replaceTrack(track)
       } else {
-        this.senders.push(this.pc.addTrack(track, stream))
+        this.senders.set(track.kind, this.pc.addTrack(track, stream))
       }
     }
   }
@@ -415,14 +420,14 @@ export class RemotePeerConnection {
     this.pc.onconnectionstatechange = null
     this.pc.ondatachannel = null
 
-    for (const sender of this.senders) {
+    for (const sender of this.senders.values()) {
       try {
         this.pc.removeTrack(sender)
       } catch {
         /* connection may already be closed */
       }
     }
-    this.senders = []
+    this.senders.clear()
     this.pendingCandidates = []
 
     try {

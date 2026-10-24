@@ -267,6 +267,12 @@ export class RemoteSessionEngine {
   private localStream: MediaStream | null = null
   private microphoneStream: MediaStream | null = null
   private remoteStream: MediaStream | null = null
+  /**
+   * The media each peer last sent us. A share that stops leaves the track in place (muted, see
+   * RemotePeerConnection.senders), so the next share arrives on the same stream without a new `ontrack`: it is put
+   * back on screen when that peer says it is sharing again.
+   */
+  private peerStreams = new Map<string, MediaStream>()
   private disposed = false
 
   private presenceTimer: ReturnType<typeof setInterval> | null = null
@@ -853,6 +859,7 @@ export class RemoteSessionEngine {
     this.signalling = null
 
     this.remoteStream = null
+    this.peerStreams.clear()
   }
 
   // ---------------------------------------------------------- internals
@@ -1001,14 +1008,8 @@ export class RemoteSessionEngine {
       }
 
       case 'share-state': {
-        const sharing = Boolean((message.payload as { sharing?: boolean })?.sharing)
-        if (message.from) this.options.onPeerShareState(message.from, sharing)
-
-        if (!sharing) {
-          // The peer stopped sharing; drop the stale frozen frame rather than
-          // leaving the last one on screen looking live.
-          this.remoteStream = null
-          this.patch({ remoteStream: null })
+        if (message.from) {
+          this.applyPeerShareState(message.from, Boolean((message.payload as { sharing?: boolean })?.sharing))
         }
 
         break
@@ -1057,6 +1058,7 @@ export class RemoteSessionEngine {
         this.signalling?.send({ type: 'ice-candidate', to: peerId, payload: candidate })
       },
       onTrack: (stream) => {
+        this.peerStreams.set(peerId, stream)
         this.remoteStream = stream
         this.patch({ remoteStream: stream, connection: 'connected' })
       },
@@ -1264,6 +1266,30 @@ export class RemoteSessionEngine {
    * received `peer-joined` is the offerer for that pair, and keeping that rule
    * consistent is what avoids glare on a mid-session media change.
    */
+  /**
+   * A peer started or stopped sharing. It arrives over the data channel (the usual path) or the signalling socket, and
+   * both must do the same: stopping takes the frozen last frame off screen, and starting again puts that peer's stream
+   * back — the new share flows on the same track, so there is no `ontrack` to do it.
+   */
+  private applyPeerShareState(peerId: string, sharing: boolean): void {
+    this.options.onPeerShareState(peerId, sharing)
+
+    if (sharing) {
+      const stream = this.peerStreams.get(peerId)
+      if (stream && this.remoteStream !== stream) {
+        this.remoteStream = stream
+        this.patch({ remoteStream: stream })
+      }
+
+      return
+    }
+
+    if (this.remoteStream !== null && (this.remoteStream === this.peerStreams.get(peerId) || this.peers.size <= 1)) {
+      this.remoteStream = null
+      this.patch({ remoteStream: null })
+    }
+  }
+
   private async renegotiateAll(): Promise<void> {
     for (const peerId of this.peers.keys()) {
       this.signalling?.send({ type: 'renegotiate', to: peerId })
@@ -1294,6 +1320,8 @@ export class RemoteSessionEngine {
 
     const { [peerId]: _removed, ...pointers } = this.snapshot.pointers
 
+    if (this.remoteStream !== null && this.remoteStream === this.peerStreams.get(peerId)) this.remoteStream = null
+    this.peerStreams.delete(peerId)
     this.remoteStream = this.peers.size > 0 ? this.remoteStream : null
 
     this.patch({
@@ -1390,7 +1418,7 @@ export class RemoteSessionEngine {
         this.applyAnnotation(message.payload as { action: string; shape?: AnnotationShape })
         break
       case 'share-state':
-        this.options.onPeerShareState(peerId, Boolean((message.payload as { sharing?: boolean })?.sharing))
+        this.applyPeerShareState(peerId, Boolean((message.payload as { sharing?: boolean })?.sharing))
         break
 
       // File transfer control. None of these carry file content — the bytes are
