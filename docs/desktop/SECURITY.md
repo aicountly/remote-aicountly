@@ -89,6 +89,16 @@ possession again.
 Windows DPAPI, machine scope (`CRYPTPROTECT_LOCAL_MACHINE`), with additional
 entropy, in `%ProgramData%\AICOUNTLY\Remote\device-signing-key.key`.
 
+On macOS, a Keychain generic-password item (service `com.aicountly.remote`,
+account `device-signing-key`) in the data-protection keychain, accessible
+**after first unlock, this device only** — never synchronised, never restored
+onto another Mac. That keychain needs a build signed with a team identifier;
+an ad-hoc-signed test build gets `errSecMissingEntitlement` and falls back to
+the signed-in user's login keychain (still encrypted, without the "this device
+only" guarantee). The fallback is taken only for that one error, and is
+logged. The enrolment record and `config.json` live beside each other in
+`~/Library/Application Support/AICOUNTLY/Remote/`, with no secret in either.
+
 Machine scope rather than user scope because the service runs as `LocalSystem`
 and a user-scoped blob would be invisible to it — a device that could only
 authenticate while one particular person happened to be signed in would not be

@@ -58,6 +58,21 @@ impl AgentCapabilities {
         }
     }
 
+    /// What a **control companion** can do: be controlled, and nothing else.
+    ///
+    /// The macOS agent today. Its owner shares their screen from the browser,
+    /// and the agent joins the same session input-only — no picture of its
+    /// own, no clipboard (off for companions in this version), no files, no
+    /// restart, and never unattended. Declaring anything more would enrol a
+    /// device an administrator believes they can reach in ways it cannot be.
+    #[must_use]
+    pub fn companion_only() -> Self {
+        Self {
+            remote_control: true,
+            ..Self::none()
+        }
+    }
+
     /// What a platform with no implementation can do: nothing.
     ///
     /// This is what macOS declares until its platform layer is written. An
@@ -84,7 +99,12 @@ impl AgentCapabilities {
             Self::windows()
         }
 
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
+        {
+            Self::companion_only()
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
             // Including Linux, where this crate compiles for CI but the agent
             // is not a supported product.
@@ -194,6 +214,15 @@ impl PermissionSummary {
         self.screen_capture.is_usable() && self.input_injection.is_usable()
     }
 
+    /// Whether the agent can act as a control companion right now.
+    ///
+    /// Input injection only: the picture comes from its owner's browser, so a
+    /// companion needs no screen capture — on macOS, no Screen Recording.
+    #[must_use]
+    pub fn can_be_companion(&self) -> bool {
+        self.input_injection.is_usable()
+    }
+
     /// What the declared capabilities become, given what the machine permits.
     ///
     /// This is what stops the agent from declaring `remote_control` on a
@@ -204,7 +233,14 @@ impl PermissionSummary {
         AgentCapabilities {
             screen_share: capabilities.screen_share && self.screen_capture.is_usable(),
             screen_view: capabilities.screen_view,
-            remote_control: capabilities.remote_control && self.can_be_controlled(),
+            // A declaration that shares no screen of its own is a companion's,
+            // and a companion needs only input injection.
+            remote_control: capabilities.remote_control
+                && if capabilities.screen_share {
+                    self.can_be_controlled()
+                } else {
+                    self.can_be_companion()
+                },
             unattended_access: capabilities.unattended_access
                 && self.can_be_controlled()
                 && self.background_service.is_usable(),
@@ -309,6 +345,53 @@ mod tests {
         assert!(!PermissionState::NeedsAttention.is_usable());
         assert!(!PermissionState::Denied.is_usable());
         assert!(!PermissionState::Unsupported.is_usable());
+    }
+
+    /// A companion is controllable and nothing else: no picture, no
+    /// clipboard, no files, no restart, never unattended.
+    #[test]
+    fn a_companion_declares_remote_control_and_nothing_else() {
+        let companion = AgentCapabilities::companion_only();
+
+        assert_eq!(
+            companion,
+            AgentCapabilities {
+                remote_control: true,
+                ..AgentCapabilities::none()
+            }
+        );
+        assert!(!companion.clipboard_sync, "clipboard is off for companions");
+        assert!(!companion.unattended_access);
+        assert!(!companion.screen_share);
+    }
+
+    /// macOS with Accessibility granted and no Screen Recording: a companion
+    /// keeps `remote_control`, because it never captures the screen.
+    #[test]
+    fn a_companion_needs_input_injection_but_not_screen_capture() {
+        let mac = PermissionSummary {
+            screen_capture: PermissionState::Unsupported,
+            input_injection: PermissionState::Ready,
+            ..PermissionSummary::all_unsupported()
+        };
+
+        assert!(mac.can_be_companion());
+        assert!(!mac.can_be_controlled());
+        assert!(
+            mac.constrain(AgentCapabilities::companion_only())
+                .remote_control
+        );
+
+        // Without Accessibility it declares nothing it cannot do.
+        let untrusted = PermissionSummary {
+            input_injection: PermissionState::NeedsAttention,
+            ..mac
+        };
+        assert!(
+            !untrusted
+                .constrain(AgentCapabilities::companion_only())
+                .remote_control
+        );
     }
 
     #[test]

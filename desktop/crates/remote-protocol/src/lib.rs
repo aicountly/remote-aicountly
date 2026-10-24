@@ -46,11 +46,15 @@ pub mod clipboard;
 pub mod gate;
 pub mod input;
 pub mod monitor;
+pub mod outbound;
 
 pub use clipboard::{ClipboardDirection, ClipboardPayload};
 pub use gate::{ControlGate, ControlState, GateError};
 pub use input::{Key, KeyEvent, Modifiers, MouseButton, MouseEvent, PointerPosition, ScrollEvent};
-pub use monitor::{Monitor, MonitorLayout, Orientation, MAX_SCALE, MIN_SCALE};
+pub use monitor::{
+    Monitor, MonitorLayout, Orientation, SurfaceMatch, ASPECT_TOLERANCE, MAX_SCALE, MIN_SCALE,
+};
+pub use outbound::OutboundEnvelopes;
 
 /// The wire version.
 ///
@@ -134,6 +138,20 @@ pub enum ControlMessage {
         /// The session this was authorised inside.
         session_uuid: String,
     },
+    /// The agent telling the controller that its input is paused, and why.
+    ///
+    /// Sent by a control companion when the person at the machine starts using
+    /// their own mouse or keyboard: the local person always wins, the
+    /// controller's input is dropped until they stop, and the controller is
+    /// told so rather than left wondering why nothing happens. Control is
+    /// still granted — this is not [`ControlMessage::ControlEnded`].
+    ControlPaused {
+        /// Machine reason, for the interface to explain.
+        reason: PauseReason,
+    },
+    /// The pause is over: the person at the machine has been idle long
+    /// enough, and the controller's input is admitted again.
+    ControlResumed,
     /// Keep-alive, so a silent channel can be told from a dead one.
     Ping {
         /// Milliseconds since the controller's epoch; echoed back untouched.
@@ -173,6 +191,22 @@ impl fmt::Display for ControlEndReason {
         };
 
         f.write_str(text)
+    }
+}
+
+/// Why remote input is paused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PauseReason {
+    /// The person at the machine is using their own mouse or keyboard.
+    LocalInput,
+}
+
+impl fmt::Display for PauseReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::LocalInput => "the person at the computer is using it",
+        })
     }
 }
 
@@ -291,6 +325,8 @@ impl ControlEnvelope {
             ControlMessage::MonitorLayout(layout) => layout.validate(),
             ControlMessage::SelectMonitor { .. }
             | ControlMessage::ControlEnded { .. }
+            | ControlMessage::ControlPaused { .. }
+            | ControlMessage::ControlResumed
             | ControlMessage::Ping { .. }
             | ControlMessage::Pong { .. } => Ok(()),
             ControlMessage::Reboot { session_uuid } => {
@@ -396,6 +432,10 @@ mod tests {
             ControlMessage::Ping { nonce: 7 },
             ControlMessage::Pong { nonce: 7 },
             ControlMessage::SelectMonitor { monitor_id: 2 },
+            ControlMessage::ControlPaused {
+                reason: PauseReason::LocalInput,
+            },
+            ControlMessage::ControlResumed,
         ];
 
         for message in messages {
@@ -405,6 +445,38 @@ mod tests {
 
             assert_eq!(original, decoded);
         }
+    }
+
+    /// What `web/src/services/webrtc/remoteControl.ts` reads: the two companion
+    /// messages are spelled exactly this way inside the envelope.
+    #[test]
+    fn the_pause_messages_have_the_wire_shape_the_browser_reads() {
+        let paused = serde_json::to_value(envelope(ControlMessage::ControlPaused {
+            reason: PauseReason::LocalInput,
+        }))
+        .unwrap();
+        assert_eq!(
+            paused["m"],
+            serde_json::json!({"type": "control_paused", "reason": "local_input"})
+        );
+
+        let resumed = serde_json::to_value(envelope(ControlMessage::ControlResumed)).unwrap();
+        assert_eq!(resumed["m"], serde_json::json!({"type": "control_resumed"}));
+
+        // And the browser's spelling decodes back.
+        for text in [
+            r#"{"v":1,"s":"session-uuid","p":"participant-uuid","n":3,"m":{"type":"control_resumed"}}"#,
+            r#"{"v":1,"s":"session-uuid","p":"participant-uuid","n":4,"m":{"type":"control_paused","reason":"local_input"}}"#,
+        ] {
+            let decoded = ControlEnvelope::decode(text.as_bytes()).expect("decodes");
+            assert!(!decoded.is_input(), "a pause notice injects nothing");
+        }
+
+        // An unknown pause reason is refused rather than guessed at.
+        assert!(ControlEnvelope::decode(
+            br#"{"v":1,"s":"s","p":"p","n":1,"m":{"type":"control_paused","reason":"lunch"}}"#
+        )
+        .is_err());
     }
 
     #[test]

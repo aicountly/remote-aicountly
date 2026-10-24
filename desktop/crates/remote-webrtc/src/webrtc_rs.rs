@@ -39,7 +39,7 @@ use rtc::media_stream::MediaStreamTrack;
 use rtc::rtp_transceiver::rtp_sender::{
     RTCRtpCodec, RTCRtpCodingParameters, RTCRtpEncodingParameters, RtpCodecKind,
 };
-use webrtc::data_channel::{DataChannel, RTCDataChannelInit};
+use webrtc::data_channel::{DataChannel, RTCDataChannelInit, RTCDataChannelState};
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::media_stream::track_local::TrackLocal;
 use webrtc::peer_connection::{
@@ -92,7 +92,14 @@ impl PeerSessionFactory for WebRtcFactory {
         ice: IceConfiguration,
         profile: CaptureProfile,
     ) -> Result<Self::Session, WebRtcError> {
-        WebRtcSession::new(ice, profile).await
+        WebRtcSession::new(ice, profile, true).await
+    }
+
+    async fn create_control_only(
+        &self,
+        ice: IceConfiguration,
+    ) -> Result<Self::Session, WebRtcError> {
+        WebRtcSession::new(ice, CaptureProfile::adaptive(), false).await
     }
 
     fn implementation(&self) -> &'static str {
@@ -172,7 +179,8 @@ impl PeerConnectionEventHandler for SessionEvents {
 /// One peer connection.
 pub struct WebRtcSession {
     peer: Arc<dyn PeerConnection>,
-    video: Arc<TrackLocalStaticSample>,
+    /// The screen track. `None` for a control-only session, which has none.
+    video: Option<Arc<TrackLocalStaticSample>>,
     collaboration: Option<Arc<dyn DataChannel>>,
     control: Option<Arc<dyn DataChannel>>,
     shared: Arc<SharedState>,
@@ -181,7 +189,11 @@ pub struct WebRtcSession {
 }
 
 impl WebRtcSession {
-    async fn new(ice: IceConfiguration, profile: CaptureProfile) -> Result<Self, WebRtcError> {
+    async fn new(
+        ice: IceConfiguration,
+        profile: CaptureProfile,
+        with_video: bool,
+    ) -> Result<Self, WebRtcError> {
         let shared = Arc::new(SharedState::default());
 
         let configuration = RTCConfigurationBuilder::default()
@@ -213,6 +225,18 @@ impl WebRtcSession {
 
         let peer: Arc<dyn PeerConnection> = Arc::new(peer);
 
+        if !with_video {
+            return Ok(Self {
+                peer,
+                video: None,
+                collaboration: None,
+                control: None,
+                shared,
+                profile,
+                started_at: Instant::now(),
+            });
+        }
+
         let video = Arc::new(
             TrackLocalStaticSample::new(MediaStreamTrack::new(
                 "aicountly-remote".to_owned(),
@@ -243,7 +267,7 @@ impl WebRtcSession {
 
         Ok(Self {
             peer,
-            video,
+            video: Some(video),
             collaboration: None,
             control: None,
             shared,
@@ -468,6 +492,14 @@ impl PeerSession for WebRtcSession {
     }
 
     async fn send_frame(&mut self, frame: Frame) -> Result<(), WebRtcError> {
+        // A control-only session has no track to put a frame on, and says so
+        // rather than dropping it as though it had been sent.
+        let Some(video) = self.video.clone() else {
+            return Err(WebRtcError::Media(
+                "this is a control-only connection with no video track".into(),
+            ));
+        };
+
         // The frame is moved in and dropped at the end of this call. Nothing
         // here keeps one, and there is no method that returns one.
         let sample = Sample {
@@ -476,7 +508,7 @@ impl PeerSession for WebRtcSession {
             ..Sample::default()
         };
 
-        self.video
+        video
             .write_sample(VIDEO_SSRC, VIDEO_PAYLOAD_TYPE, &sample, &[])
             .await
             .map_err(|error| WebRtcError::Media(error.to_string()))
@@ -504,6 +536,16 @@ impl PeerSession for WebRtcSession {
             .lock()
             .map(|mut inbox| std::mem::take(&mut *inbox))
             .unwrap_or_default())
+    }
+
+    async fn control_channel_open(&mut self) -> bool {
+        self.adopt_inbound_channels();
+
+        let Some(channel) = self.control.clone() else {
+            return false;
+        };
+
+        matches!(channel.ready_state().await, Ok(RTCDataChannelState::Open))
     }
 
     fn state(&self) -> PeerState {
@@ -659,6 +701,53 @@ mod tests {
 
         session.close().await.expect("closes");
         assert_eq!(session.state(), PeerState::Closed);
+    }
+
+    /// A companion offers no media: its picture comes from its owner's
+    /// browser. Data channels only, in an offer and in an answer, and a frame
+    /// is refused rather than silently dropped.
+    #[tokio::test]
+    async fn a_control_only_session_has_data_channels_and_no_video() {
+        let factory = WebRtcFactory;
+
+        // The controller's side: a browser offering only the data channels.
+        let mut controller = factory
+            .create_control_only(IceConfiguration::default())
+            .await
+            .expect("controller");
+        let mut companion = factory
+            .create_control_only(IceConfiguration::default())
+            .await
+            .expect("companion");
+
+        let offer = controller.create_offer().await.expect("offer");
+        let offer_sdp = offer["sdp"].as_str().expect("sdp");
+        assert!(offer_sdp.contains("m=application"));
+        assert!(!offer_sdp.contains("m=video"), "no video track to offer");
+
+        let answer = companion.accept_offer(offer).await.expect("answer");
+        let answer_sdp = answer["sdp"].as_str().expect("sdp");
+        assert!(answer_sdp.contains("m=application"));
+        assert!(!answer_sdp.contains("m=video"));
+
+        controller.accept_answer(answer).await.expect("accepts");
+
+        let frame = Frame {
+            width: 2,
+            height: 2,
+            stride: 8,
+            format: remote_device::PixelFormat::Bgra8,
+            data: vec![0; 16],
+            timestamp_us: 0,
+        };
+        assert!(matches!(
+            companion.send_frame(frame).await,
+            Err(WebRtcError::Media(_))
+        ));
+        assert!(!companion.control_channel_open().await, "not connected yet");
+
+        controller.close().await.expect("closes");
+        companion.close().await.expect("closes");
     }
 
     #[tokio::test]

@@ -28,6 +28,24 @@
 //! for the peer to acknowledge, for the API to answer, or for a poll — the
 //! person at the machine pressed Stop, and the next event is dropped. That is
 //! the whole reason this is a local gate rather than a server check.
+//!
+//! # A local Stop outlives a stale server, and only a new grant re-arms it
+//!
+//! After Stop, the server can go on reporting the grant as `GRANTED` for a
+//! poll or two — it has not yet heard the agent's `REVOKE`. That report must
+//! not put control back. What *should* is a deliberate new grant, made after
+//! the Stop: the API identifies each grant with an opaque `grantId` (the
+//! controller and the instant it was granted), so the gate remembers which
+//! grant was live when Stop was pressed and re-arms only for a different one.
+//! With no `grantId` at all the gate cannot tell a new grant from a stale
+//! read, and stays revoked — the person in the room wins.
+//!
+//! # Paused is not revoked
+//!
+//! A control companion pauses the gate while the person at the machine is
+//! using their own mouse or keyboard ([`ControlGate::pause`]). The grant
+//! stands — nothing is reported to the API — but every act on the machine is
+//! dropped until [`ControlGate::resume`].
 
 use crate::{ControlEnvelope, ProtocolError};
 
@@ -94,12 +112,25 @@ pub enum GateError {
         /// The newest sequence acted on before this.
         seen: u64,
     },
+    /// The person at the machine is using it; remote input waits.
+    #[error("remote input is paused while the person at the computer is using it")]
+    Paused,
     /// Clipboard synchronisation is not switched on for this session.
     #[error("clipboard sharing is not enabled for this session")]
     ClipboardDisabled,
     /// The message failed structural validation.
     #[error(transparent)]
     Invalid(#[from] ProtocolError),
+}
+
+/// What the gate remembers about a local Stop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalStop {
+    /// The grant that was live when Stop was pressed, if the API had named it.
+    grant_id: Option<String>,
+    /// Whether the API has since reported control as not granted — it has
+    /// heard about the Stop, so any grant it reports from now on is new.
+    acknowledged: bool,
 }
 
 /// The gate.
@@ -115,6 +146,12 @@ pub struct ControlGate {
     clipboard_enabled: bool,
     last_sequence: u64,
     clipboard_max_bytes: usize,
+    /// The API's identifier for the grant currently admitted, when it gave one.
+    grant_id: Option<String>,
+    /// Set by a local Stop, and cleared only by a grant made after it.
+    local_stop: Option<LocalStop>,
+    /// The person at the machine is using it. Input waits; the grant stands.
+    paused: bool,
     /// How many messages have been dropped, for the diagnostics panel.
     ///
     /// A number, never the messages themselves: a rejected input event is
@@ -134,6 +171,9 @@ impl ControlGate {
             last_sequence: 0,
             clipboard_max_bytes: crate::clipboard::DEFAULT_MAX_CLIPBOARD_BYTES,
             rejected: 0,
+            grant_id: None,
+            local_stop: None,
+            paused: false,
         }
     }
 
@@ -158,11 +198,17 @@ impl ControlGate {
     /// controller's counter starts from zero when control begins, and carrying
     /// the previous grant's high-water mark would drop every event of the new
     /// one.
+    ///
+    /// A grant made here, by the person at the machine, is the deliberate act
+    /// that clears an earlier local Stop.
     pub fn grant(&mut self, participant_uuid: impl Into<String>, clipboard: bool) {
         self.controller = Some(participant_uuid.into());
         self.state = ControlState::Granted;
         self.clipboard_enabled = clipboard;
         self.last_sequence = 0;
+        self.grant_id = None;
+        self.local_stop = None;
+        self.paused = false;
     }
 
     /// The person at the machine said no.
@@ -173,10 +219,49 @@ impl ControlGate {
     }
 
     /// Stop. Takes effect on the very next message.
+    ///
+    /// Remembers which grant was stopped, so a server that has not caught up
+    /// cannot re-arm it — see the module documentation.
     pub fn revoke(&mut self) {
+        self.local_stop = Some(LocalStop {
+            grant_id: self.grant_id.take(),
+            acknowledged: false,
+        });
         self.state = ControlState::Revoked;
         self.controller = None;
         self.clipboard_enabled = false;
+        self.paused = false;
+    }
+
+    /// The person at the machine is using it: drop every act on the machine
+    /// until [`Self::resume`]. The grant stands and nobody is told but the
+    /// controller.
+    pub fn pause(&mut self) {
+        self.paused = true;
+    }
+
+    /// The person at the machine has stopped: admit input again.
+    pub fn resume(&mut self) {
+        self.paused = false;
+    }
+
+    /// Whether input is paused for the person at the machine.
+    #[must_use]
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    /// Whether the person at the machine pressed Stop and no new grant has
+    /// re-armed the gate since.
+    #[must_use]
+    pub fn is_locally_stopped(&self) -> bool {
+        self.local_stop.is_some()
+    }
+
+    /// The API's identifier for the grant currently admitted, if it gave one.
+    #[must_use]
+    pub fn grant_id(&self) -> Option<&str> {
+        self.grant_id.as_deref()
     }
 
     /// Adopt the state the API reports.
@@ -186,14 +271,53 @@ impl ControlGate {
     /// machine pressed Stop is a server working from a stale read, and the
     /// person in the room wins. The API is caught up by the revoke call the
     /// agent makes at the same moment.
+    ///
+    /// `grant_id` is the API's identifier for the grant it reports. After a
+    /// local Stop the gate re-arms only for a grant **different** from the one
+    /// that was stopped; with no identifier it stays revoked.
     pub fn sync_from_api(
         &mut self,
         state: ControlState,
         controller: Option<String>,
         clipboard: bool,
+        grant_id: Option<String>,
     ) {
-        if self.state == ControlState::Revoked && state == ControlState::Granted {
-            return;
+        if state.permits_input() {
+            if let Some(stop) = self.local_stop.as_mut() {
+                let new_grant = match (grant_id.as_deref(), stop.grant_id.as_deref()) {
+                    // Nothing to tell a new grant from a stale read by.
+                    (None, _) => false,
+                    (Some(reported), Some(stopped)) => reported != stopped,
+                    // The stopped grant was never named. Once the API has said
+                    // "not granted", whatever it grants next is new; until then
+                    // the first grant it names is taken to be the stopped one.
+                    (Some(reported), None) => {
+                        if stop.acknowledged {
+                            true
+                        } else {
+                            stop.grant_id = Some(reported.to_owned());
+                            false
+                        }
+                    }
+                };
+
+                if !new_grant {
+                    return;
+                }
+
+                // A deliberate new grant, made after the Stop.
+                self.local_stop = None;
+                self.last_sequence = 0;
+                self.paused = false;
+            }
+        } else if let Some(stop) = self.local_stop.as_mut() {
+            stop.acknowledged = true;
+        }
+
+        if state.permits_input() && grant_id.is_some() && grant_id != self.grant_id {
+            // A different grant is a different stream of events, even from
+            // the same controller.
+            self.last_sequence = 0;
         }
 
         self.state = state;
@@ -205,8 +329,11 @@ impl ControlGate {
                 self.last_sequence = 0;
             }
             self.controller = controller;
+            self.grant_id = grant_id;
         } else {
             self.controller = None;
+            self.grant_id = None;
+            self.paused = false;
         }
     }
 
@@ -289,6 +416,13 @@ impl ControlGate {
             return Err(GateError::NotGranted);
         }
 
+        // The person at the machine is using it. Checked after the grant so a
+        // revoked gate still says why it refuses, and before the sender so a
+        // paused gate refuses everybody alike.
+        if self.paused {
+            return Err(GateError::Paused);
+        }
+
         // (2) The participant.
         match self.controller.as_deref() {
             Some(controller) if controller == envelope.participant_uuid => {}
@@ -364,7 +498,7 @@ mod tests {
             ControlState::Revoked,
         ] {
             let mut gate = ControlGate::new(SESSION);
-            gate.sync_from_api(state, Some(CONTROLLER.into()), false);
+            gate.sync_from_api(state, Some(CONTROLLER.into()), false, None);
 
             assert_eq!(
                 gate.admit(&move_to(1, CONTROLLER, SESSION)),
@@ -396,7 +530,7 @@ mod tests {
         let mut gate = granted_gate();
         gate.revoke();
 
-        gate.sync_from_api(ControlState::Granted, Some(CONTROLLER.into()), true);
+        gate.sync_from_api(ControlState::Granted, Some(CONTROLLER.into()), true, None);
 
         assert_eq!(gate.state(), ControlState::Revoked);
         assert!(!gate.clipboard_enabled());
@@ -404,6 +538,175 @@ mod tests {
             gate.admit(&move_to(9, CONTROLLER, SESSION)),
             Err(GateError::NotGranted)
         );
+    }
+
+    fn api_grant(gate: &mut ControlGate, grant_id: &str) {
+        gate.sync_from_api(
+            ControlState::Granted,
+            Some(CONTROLLER.into()),
+            false,
+            Some(grant_id.into()),
+        );
+    }
+
+    /// The companion's case: a grant made in the browser, stopped at the
+    /// machine. The same grant reported again is a stale read and must not
+    /// put control back; a new grant — a different `grantId` — does.
+    #[test]
+    fn after_a_local_stop_only_a_different_grant_re_arms_the_gate() {
+        let mut gate = ControlGate::new(SESSION);
+        api_grant(&mut gate, "grant-1");
+        assert!(gate.admit(&move_to(1, CONTROLLER, SESSION)).is_ok());
+        assert_eq!(gate.grant_id(), Some("grant-1"));
+
+        gate.revoke();
+        assert!(gate.is_locally_stopped());
+
+        // Stale: the server has not heard the REVOKE yet.
+        api_grant(&mut gate, "grant-1");
+        assert_eq!(gate.state(), ControlState::Revoked);
+        assert_eq!(
+            gate.admit(&move_to(2, CONTROLLER, SESSION)),
+            Err(GateError::NotGranted)
+        );
+
+        // A new grant, deliberately made after the Stop.
+        api_grant(&mut gate, "grant-2");
+        assert_eq!(gate.state(), ControlState::Granted);
+        assert!(!gate.is_locally_stopped());
+        // A new stream: its sequence starts again.
+        assert!(gate.admit(&move_to(1, CONTROLLER, SESSION)).is_ok());
+    }
+
+    /// No identifier, no way to tell a new grant from a stale read.
+    #[test]
+    fn without_a_grant_id_a_local_stop_is_never_undone_by_the_server() {
+        let mut gate = ControlGate::new(SESSION);
+        api_grant(&mut gate, "grant-1");
+        gate.revoke();
+
+        gate.sync_from_api(ControlState::None, None, false, None);
+        gate.sync_from_api(ControlState::Granted, Some(CONTROLLER.into()), false, None);
+
+        assert!(!gate.state().permits_input());
+        assert!(gate.is_locally_stopped());
+    }
+
+    /// Granted locally (no id known), then stopped: the first id the server
+    /// reports is taken to be the stopped grant, not a new one.
+    #[test]
+    fn an_unnamed_stopped_grant_is_not_re_armed_by_the_first_id_the_server_reports() {
+        let mut gate = granted_gate();
+        gate.revoke();
+
+        api_grant(&mut gate, "grant-1");
+        assert_eq!(gate.state(), ControlState::Revoked);
+
+        api_grant(&mut gate, "grant-2");
+        assert_eq!(gate.state(), ControlState::Granted);
+    }
+
+    /// Once the server has said "not granted", it has heard the Stop, and the
+    /// next grant it reports is a new one even if the stopped grant was never
+    /// named.
+    #[test]
+    fn once_the_server_acknowledges_the_stop_its_next_grant_re_arms() {
+        let mut gate = granted_gate();
+        gate.revoke();
+
+        gate.sync_from_api(ControlState::Revoked, None, false, None);
+        gate.sync_from_api(ControlState::Requested, None, false, None);
+        api_grant(&mut gate, "grant-9");
+
+        assert_eq!(gate.state(), ControlState::Granted);
+        assert!(gate.admit(&move_to(1, CONTROLLER, SESSION)).is_ok());
+    }
+
+    /// A local grant is the person at the machine deciding again.
+    #[test]
+    fn granting_at_the_machine_clears_a_local_stop() {
+        let mut gate = ControlGate::new(SESSION);
+        api_grant(&mut gate, "grant-1");
+        gate.revoke();
+
+        gate.grant(CONTROLLER, false);
+
+        assert!(!gate.is_locally_stopped());
+        assert!(gate.admit(&move_to(1, CONTROLLER, SESSION)).is_ok());
+    }
+
+    /// A new grant from the same controller is a new stream of events.
+    #[test]
+    fn a_new_grant_id_resets_the_sequence_even_for_the_same_controller() {
+        let mut gate = ControlGate::new(SESSION);
+        api_grant(&mut gate, "grant-1");
+        assert!(gate.admit(&move_to(800, CONTROLLER, SESSION)).is_ok());
+
+        api_grant(&mut gate, "grant-1");
+        assert_eq!(
+            gate.admit(&move_to(5, CONTROLLER, SESSION)),
+            Err(GateError::Stale { seen: 800 })
+        );
+
+        api_grant(&mut gate, "grant-2");
+        assert!(gate.admit(&move_to(5, CONTROLLER, SESSION)).is_ok());
+    }
+
+    /// Paused: the person at the machine is using it. Nothing gets through —
+    /// input, clipboard or anything else that acts on the machine — but the
+    /// grant stands, and resuming admits input again without a new grant.
+    #[test]
+    fn a_paused_gate_drops_every_act_and_resuming_admits_again() {
+        let mut gate = ControlGate::new(SESSION);
+        api_grant(&mut gate, "grant-1");
+        assert!(gate.admit(&move_to(1, CONTROLLER, SESSION)).is_ok());
+
+        gate.pause();
+        assert!(gate.is_paused());
+        assert_eq!(gate.state(), ControlState::Granted);
+        assert_eq!(
+            gate.admit(&move_to(2, CONTROLLER, SESSION)),
+            Err(GateError::Paused)
+        );
+        let key = ControlEnvelope::new(
+            SESSION,
+            CONTROLLER,
+            3,
+            ControlMessage::Key(KeyEvent {
+                key: Key::Character('x'),
+                pressed: true,
+                modifiers: Modifiers::none(),
+            }),
+        );
+        assert_eq!(gate.admit(&key), Err(GateError::Paused));
+
+        // A ping still passes: it is not an act on the machine.
+        let ping = ControlEnvelope::new(SESSION, CONTROLLER, 4, ControlMessage::Ping { nonce: 1 });
+        assert!(gate.admit(&ping).is_ok());
+
+        gate.resume();
+        // The dropped input did not move the water mark; the ping did.
+        assert_eq!(
+            gate.admit(&move_to(3, CONTROLLER, SESSION)),
+            Err(GateError::Stale { seen: 4 })
+        );
+        assert!(gate.admit(&move_to(5, CONTROLLER, SESSION)).is_ok());
+    }
+
+    /// Stop ends a pause too; a pause never outlives the grant it paused.
+    #[test]
+    fn stopping_or_losing_the_grant_clears_a_pause() {
+        let mut gate = ControlGate::new(SESSION);
+        api_grant(&mut gate, "grant-1");
+        gate.pause();
+        gate.revoke();
+        assert!(!gate.is_paused());
+
+        let mut gate = ControlGate::new(SESSION);
+        api_grant(&mut gate, "grant-1");
+        gate.pause();
+        gate.sync_from_api(ControlState::None, None, false, None);
+        assert!(!gate.is_paused());
     }
 
     #[test]
@@ -477,6 +780,7 @@ mod tests {
             ControlState::Granted,
             Some("participant-cccc".into()),
             false,
+            None,
         );
 
         assert!(gate.admit(&move_to(1, "participant-cccc", SESSION)).is_ok());

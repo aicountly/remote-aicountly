@@ -27,8 +27,14 @@ pub struct About {
     pub version: String,
     /// `Windows`, `macOS`, or `unsupported`.
     pub platform: String,
-    /// Whether this build has a real platform implementation.
+    /// Whether this build has a real platform implementation — either role.
     pub supported: bool,
+    /// Whether it can host a session: share this screen and be controlled.
+    pub supports_hosting: bool,
+    /// Whether it can be its owner's control companion for a browser share.
+    pub supports_companion: bool,
+    /// The system-wide Stop control shortcut, as this platform writes it.
+    pub stop_shortcut: String,
     /// Where the device key is kept — "Windows DPAPI (machine scope)".
     ///
     /// The store's *name*, never anything in it. A support engineer needs to
@@ -238,6 +244,172 @@ pub fn stop_control(agent: tauri::State<'_, Arc<Agent>>) -> remote_core::AgentSt
     agent.stop_control()
 }
 
+/// Yes: let people in this session control this computer while its owner
+/// shares it. Picked up by the connection loop, which joins.
+#[tauri::command]
+pub fn allow_companion(
+    agent: tauri::State<'_, Arc<Agent>>,
+    companion_uuid: String,
+) -> remote_core::AgentState {
+    agent.decide_companion(&companion_uuid, true);
+
+    agent.state()
+}
+
+/// No. The connection loop tells the API; the question leaves the screen now.
+#[tauri::command]
+pub fn decline_companion(
+    agent: tauri::State<'_, Arc<Agent>>,
+    companion_uuid: String,
+) -> remote_core::AgentState {
+    agent.decide_companion(&companion_uuid, false);
+
+    agent.companion_dismissed(&companion_uuid)
+}
+
+/// The person picked which monitor they are sharing.
+#[tauri::command]
+pub fn choose_companion_monitor(
+    agent: tauri::State<'_, Arc<Agent>>,
+    companion_uuid: String,
+    monitor_id: u32,
+) -> remote_core::AgentState {
+    agent.choose_companion_monitor(&companion_uuid, monitor_id);
+
+    agent.state()
+}
+
+/// Stop being this session's control companion. Local, and needing nobody.
+#[tauri::command]
+pub fn leave_companion(agent: tauri::State<'_, Arc<Agent>>) -> remote_core::AgentState {
+    // Control stops at once; leaving the link follows in the loop.
+    if agent.state().is_being_controlled() {
+        agent.stop_control();
+    }
+
+    agent.leave_companion();
+
+    agent.state()
+}
+
+/// Ask macOS to prompt for a permission (Accessibility). Returns what the
+/// machine permits afterwards — usually unchanged until the person has acted
+/// in System Settings.
+#[tauri::command]
+pub fn request_permission(
+    agent: tauri::State<'_, Arc<Agent>>,
+    permission: String,
+) -> Result<PermissionSummary, String> {
+    agent
+        .request_permission(&permission)
+        .map_err(|error| error.to_string())?;
+
+    Ok(agent.permissions())
+}
+
+/// Put each monitor's name on the monitor itself for a few seconds, so the
+/// person choosing which one they share can see which is which.
+///
+/// Async because creating a window from a synchronous command deadlocks on
+/// Windows.
+#[tauri::command]
+pub async fn identify_monitors(
+    app: tauri::AppHandle,
+    agent: tauri::State<'_, Arc<Agent>>,
+) -> Result<(), String> {
+    let layout = agent.monitor_layout().map_err(|error| error.to_string())?;
+
+    for monitor in &layout.monitors {
+        show_identify(&app, monitor);
+    }
+
+    Ok(())
+}
+
+/// How long an Identify label stays up.
+const IDENTIFY_SECONDS: u64 = 4;
+
+/// The Identify label's size, in logical units.
+const IDENTIFY_SIZE: (f64, f64) = (420.0, 220.0);
+
+fn show_identify(app: &tauri::AppHandle, monitor: &remote_protocol::Monitor) {
+    use tauri::Manager;
+
+    let label = format!("identify-{}", monitor.id);
+
+    if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.close();
+    }
+
+    let url = tauri::WebviewUrl::App(
+        format!("index.html#identify={}", fragment_encode(&monitor.name)).into(),
+    );
+
+    let Ok(window) = tauri::WebviewWindowBuilder::new(app, &label, url)
+        .title("AICOUNTLY Remote")
+        .decorations(false)
+        .always_on_top(true)
+        .resizable(false)
+        .skip_taskbar(true)
+        .focused(false)
+        .visible(false)
+        .inner_size(IDENTIFY_SIZE.0, IDENTIFY_SIZE.1)
+        .build()
+    else {
+        return;
+    };
+
+    let (x, y) = identify_position(monitor, IDENTIFY_SIZE);
+
+    // The monitor is described in the platform's injection space: points on
+    // macOS, which Tauri calls logical; physical pixels on Windows.
+    #[cfg(target_os = "macos")]
+    let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+    #[cfg(not(target_os = "macos"))]
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+
+    let _ = window.show();
+
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(IDENTIFY_SECONDS)).await;
+        let _ = window.close();
+    });
+}
+
+/// Where to put an Identify label: centred on the monitor. On Windows the
+/// monitor is in physical pixels and the label's size is logical, so it is
+/// scaled by the monitor's scale to centre properly.
+#[must_use]
+pub fn identify_position(monitor: &remote_protocol::Monitor, size: (f64, f64)) -> (f64, f64) {
+    let scale = if cfg!(target_os = "macos") {
+        1.0
+    } else {
+        monitor.scale
+    };
+
+    (
+        f64::from(monitor.x) + (f64::from(monitor.width) - size.0 * scale).max(0.0) / 2.0,
+        f64::from(monitor.y) + (f64::from(monitor.height) - size.1 * scale).max(0.0) / 2.0,
+    )
+}
+
+/// Percent-encode a monitor name for the Identify window's URL fragment.
+#[must_use]
+pub fn fragment_encode(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+
+    encoded
+}
+
 /// End the session.
 #[tauri::command]
 pub fn end_session(agent: tauri::State<'_, Arc<Agent>>) -> remote_core::AgentState {
@@ -314,6 +486,9 @@ pub fn about(agent: tauri::State<'_, Arc<Agent>>) -> About {
         version: crate::VERSION.to_owned(),
         platform: platform::platform_name().to_owned(),
         supported: platform::is_supported(),
+        supports_hosting: platform::supports_hosting(),
+        supports_companion: platform::supports_companion(),
+        stop_shortcut: crate::stop_shortcut_label().to_owned(),
         key_storage: platform::secure_storage().describe().to_owned(),
         service: ipc::service_status(),
     }
@@ -413,6 +588,44 @@ mod tests {
         assert!(!json.contains("privatekey"));
         assert!(!json.contains("secret"));
         assert!(!json.contains("token"));
+    }
+
+    fn monitor(x: i32, y: i32, width: u32, height: u32, scale: f64) -> remote_protocol::Monitor {
+        remote_protocol::Monitor {
+            id: 1,
+            name: "Display 1".into(),
+            primary: true,
+            x,
+            y,
+            width,
+            height,
+            scale,
+            refresh_hz: None,
+            orientation: remote_protocol::Orientation::Landscape,
+        }
+    }
+
+    /// The label lands in the middle of the monitor it names, wherever that
+    /// monitor sits in the layout.
+    #[test]
+    fn an_identify_label_is_centred_on_its_monitor() {
+        let (x, y) = identify_position(&monitor(-1920, 0, 1920, 1080, 1.0), (420.0, 220.0));
+
+        assert_eq!((x, y), (-1920.0 + 750.0, 430.0));
+
+        // Smaller than the label: pinned to the corner rather than off-screen.
+        let (x, y) = identify_position(&monitor(100, 50, 200, 100, 1.0), (420.0, 220.0));
+        assert_eq!((x, y), (100.0, 50.0));
+    }
+
+    #[test]
+    fn a_monitor_name_is_escaped_for_the_identify_url() {
+        assert_eq!(fragment_encode("Display 2"), "Display%202");
+        assert_eq!(fragment_encode("a#b&c"), "a%23b%26c");
+        assert_eq!(
+            fragment_encode("Built-in_display.1~"),
+            "Built-in_display.1~"
+        );
     }
 
     /// The store's name, never anything in it.

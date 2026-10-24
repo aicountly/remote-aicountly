@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { Brand } from '../components/Brand'
+import { AccessibilityNotice } from '../features/companion/AccessibilityNotice'
+import { CompanionBanner } from '../features/companion/CompanionBanner'
+import { CompanionConfirm } from '../features/companion/CompanionConfirm'
+import { MonitorPicker } from '../features/companion/MonitorPicker'
 import { DeviceCard } from '../features/device/DeviceCard'
 import { DesktopSignInPending } from '../features/device/DesktopSignInPending'
 import { RecentSessions } from '../features/home/RecentSessions'
@@ -11,8 +15,15 @@ import { SettingsPage } from '../features/settings/SettingsPage'
 import { UnattendedCard } from '../features/unattended/UnattendedCard'
 import * as api from '../services/api'
 import * as bridge from '../services/tauri'
-import type { About, AgentConfig, AgentState, DesktopSignInStart, PermissionSummary } from '../types/agent'
-import { activeSession, isEnrolled } from '../types/agent'
+import type {
+  About,
+  AgentConfig,
+  AgentState,
+  DesktopSignInStart,
+  MonitorOption,
+  PermissionSummary,
+} from '../types/agent'
+import { activeCompanion, activeSession, isEnrolled, isUsable } from '../types/agent'
 
 type Screen = 'home' | 'unattended' | 'settings' | 'register'
 
@@ -78,6 +89,11 @@ export default function App() {
   // does not — a grant revoked from the browser, a device revoked by an
   // administrator — arrives this way.
   const session = state ? activeSession(state) : null
+  const companion = state ? activeCompanion(state) : null
+  const computerName = about?.platform === 'macOS' ? 'Mac' : 'computer'
+  // Accessibility is the one thing a Mac companion needs from the person.
+  const needsAccessibility =
+    about?.platform === 'macOS' && permissions !== null && !isUsable(permissions.input_injection)
 
   // What the organisation permits. Read from the device's own row, which the
   // agent fetches with its device credential and pushes here — the window
@@ -86,13 +102,17 @@ export default function App() {
   // person's.
   const allowed = state?.allowedCapabilities ?? null
 
-  useEffect(() => {
-    if (!session) return
+  // A companion polls too, and faster: Accessibility granted in System
+  // Settings should show here without anybody pressing anything.
+  const companionActive = companion !== null
 
-    const timer = setInterval(() => void refresh(), 5_000)
+  useEffect(() => {
+    if (!session && !companionActive) return
+
+    const timer = setInterval(() => void refresh(), companionActive ? 2_000 : 5_000)
 
     return () => clearInterval(timer)
-  }, [session, refresh])
+  }, [session, companionActive, refresh])
 
   const run = useCallback(
     async (action: () => Promise<unknown>) => {
@@ -125,6 +145,56 @@ export default function App() {
   )
 
   const endSession = useCallback(() => run(() => bridge.endSession()), [run])
+
+  const companionUuid = companion?.companionUuid ?? null
+
+  const allowCompanion = useCallback(
+    () =>
+      run(async () => {
+        if (!companionUuid) throw new Error('That request is no longer waiting.')
+
+        setState(await bridge.allowCompanion(companionUuid))
+      }),
+    [run, companionUuid],
+  )
+
+  const declineCompanion = useCallback(
+    () =>
+      run(async () => {
+        if (!companionUuid) return
+
+        setState(await bridge.declineCompanion(companionUuid))
+      }),
+    [run, companionUuid],
+  )
+
+  const chooseMonitor = useCallback(
+    (monitor: MonitorOption) =>
+      run(async () => {
+        if (!companionUuid) return
+
+        setState(await bridge.chooseCompanionMonitor(companionUuid, monitor.id))
+      }),
+    [run, companionUuid],
+  )
+
+  const identifyMonitors = useCallback(() => run(() => bridge.identifyMonitors()), [run])
+
+  const leaveCompanion = useCallback(
+    () =>
+      run(async () => {
+        setState(await bridge.leaveCompanion())
+      }),
+    [run],
+  )
+
+  const openAccessibility = useCallback(
+    () =>
+      run(async () => {
+        setPermissions(await bridge.requestPermission('input_injection'))
+      }),
+    [run],
+  )
 
   const grantControl = useCallback(
     () =>
@@ -302,7 +372,7 @@ export default function App() {
           <NavItem screen="home" current={screen} onSelect={setScreen}>
             Home
           </NavItem>
-          {isEnrolled(state) ? (
+          {isEnrolled(state) && about?.supportsHosting !== false ? (
             <NavItem screen="unattended" current={screen} onSelect={setScreen}>
               Unattended access
             </NavItem>
@@ -321,6 +391,42 @@ export default function App() {
           onEndSession={endSession}
           busy={busy}
         />
+
+        {/* The companion's banner: who is controlling, and Stop. */}
+        <CompanionBanner
+          state={state}
+          computerName={computerName}
+          stopShortcut={about?.stopShortcut ?? null}
+          onStopControl={stopControl}
+          onLeave={leaveCompanion}
+          busy={busy}
+        />
+
+        {companion && companion.phase === 'awaiting_confirmation' ? (
+          <CompanionConfirm
+            companion={companion}
+            computerName={computerName}
+            needsAccessibility={needsAccessibility}
+            onAllow={allowCompanion}
+            onDecline={declineCompanion}
+            onOpenAccessibility={openAccessibility}
+            busy={busy}
+          />
+        ) : null}
+
+        {companion && companion.phase === 'choosing_monitor' ? (
+          <MonitorPicker
+            companion={companion}
+            waitingForAccessibility={needsAccessibility}
+            onChoose={chooseMonitor}
+            onIdentify={identifyMonitors}
+            busy={busy}
+          />
+        ) : null}
+
+        {needsAccessibility && companion?.phase !== 'awaiting_confirmation' ? (
+          <AccessibilityNotice computerName={computerName} onOpen={openAccessibility} busy={busy} />
+        ) : null}
 
         {/*
          * Also above everything, on every screen: a pending request is a
@@ -347,6 +453,17 @@ export default function App() {
               AICOUNTLY Remote for desktop supports Windows 10 22H2 and Windows 11. This build is
               running on {about.platform}, where screen sharing and remote control are not
               available.
+            </p>
+          </div>
+        ) : null}
+
+        {about && about.supportsCompanion && !about.supportsHosting && !companion ? (
+          <div className="notice notice--info">
+            <p className="notice__title">Works alongside your browser</p>
+            <p>
+              On {about.platform}, AICOUNTLY Remote does not share this screen itself. Share your
+              entire screen from Chrome or Edge in a session, link this {computerName} from there, and
+              the people you approve can use its mouse and keyboard while you watch.
             </p>
           </div>
         ) : null}
@@ -386,7 +503,11 @@ export default function App() {
               busy={busy}
             />
 
-            <PermissionsCard permissions={permissions} allowed={allowed} />
+            <PermissionsCard
+              permissions={permissions}
+              allowed={allowed}
+              companionOnly={about ? about.supportsCompanion && !about.supportsHosting : false}
+            />
 
             <RecentSessions sessions={state.recentSessions} />
           </>

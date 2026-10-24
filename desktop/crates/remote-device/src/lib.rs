@@ -141,6 +141,19 @@ pub trait InputProvider: Send + Sync {
     /// whose tab closed mid-chord leaves Ctrl down on somebody else's machine
     /// — which reads, to the person sitting there, as a broken keyboard.
     fn release_all(&self) -> PlatformResult<()>;
+
+    /// How long since the last mouse or keyboard event the machine saw, in
+    /// seconds — the idle time the operating system keeps for its own
+    /// screensaver.
+    ///
+    /// The local-input override reads this: when the person at the machine
+    /// moves their own mouse, remote input pauses. Platforms count injected
+    /// events in this figure too, so the caller compares it with when it last
+    /// injected anything. Unsupported by default, which simply leaves the
+    /// override off.
+    fn seconds_since_input(&self) -> PlatformResult<f64> {
+        Err(PlatformError::Unsupported("Reading local input activity"))
+    }
 }
 
 /// Reading and writing the clipboard.

@@ -8,6 +8,7 @@
 //!   2. AICOUNTLY knows the machine is reachable         presence
 //!   3. the agent knows what it is currently permitted   GET /devices/me
 //!   4. an unattended connection request is noticed      pending sessions
+//!   5. a control-companion link is put to the person    pending companions
 //! ```
 //!
 //! # Why a loop and not an event stream
@@ -47,10 +48,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use remote_core::{
-    AgentConfig, AgentEvent, AgentState, ApiClient, ApiError, Backoff, UnattendedState,
+    AgentConfig, AgentEvent, AgentState, ApiClient, ApiError, Backoff, Signal, SignallingSocket,
+    UnattendedState,
 };
 use remote_webrtc::PeerSessionFactory;
 
+use crate::companion;
+use crate::platform;
 use crate::session;
 use crate::Agent;
 
@@ -73,6 +77,14 @@ const IDLE_POLL: Duration = Duration::from_secs(3);
 /// being asked, rather than at the end of whatever interval it happened to be
 /// in the middle of.
 const SLEEP_SLICE: Duration = Duration::from_millis(500);
+
+/// How often the loop looks at the API while a companion link is waiting for
+/// the person at the machine — so one withdrawn from the browser, or lapsed,
+/// leaves the screen promptly rather than at the next presence interval.
+const AWAITING_POLL: Duration = Duration::from_secs(5);
+
+/// How often a waiting answer is checked for.
+const DECISION_SLICE: Duration = Duration::from_millis(200);
 
 /// A running connection loop.
 ///
@@ -279,6 +291,10 @@ async fn connected<F>(
     let mut interval = Duration::from_secs(config.presence_interval_seconds);
     let _ = interval;
     let mut backoff = Backoff::presence();
+    // The device's own presence room, listened to for `device-invite` so a
+    // companion link (or an unattended request) is noticed at once rather
+    // than at the next poll. The poll stays what makes it reliable.
+    let mut presence: Option<PresenceRoom> = None;
 
     while !stopping.load(Ordering::SeqCst) {
         // Renewed a minute early. Re-authenticating is the outer loop's job,
@@ -286,6 +302,9 @@ async fn connected<F>(
         if credential_expiring(client) {
             return;
         }
+
+        // The companion link on screen, waiting for an answer, if there is one.
+        let awaiting: Option<remote_core::PendingCompanion>;
 
         match client.describe_self().await {
             Ok(description) => {
@@ -326,7 +345,9 @@ async fn connected<F>(
                 // Somebody is waiting. Host one at a time — two sessions on
                 // one desktop is not a feature, and deciding whose input wins
                 // is not a decision anybody should have to make afterwards.
-                if let Some(pending) = description.pending_sessions.first() {
+                let hosting = platform::supports_hosting();
+
+                if let Some(pending) = description.pending_sessions.first().filter(|_| hosting) {
                     tracing::info!(
                         session = %pending.uuid,
                         display_id = %pending.display_id,
@@ -349,6 +370,30 @@ async fn connected<F>(
                     // the outer loop re-authenticates rather than this one
                     // carrying on with a stale one.
                     return;
+                }
+
+                // A control-companion link waiting for the person here. The
+                // API is the only thing that raises this question — never a
+                // message from a peer — and nothing is joined until they say
+                // yes.
+                awaiting = description
+                    .pending_companions
+                    .first()
+                    .filter(|_| platform::supports_companion())
+                    .cloned();
+
+                match &awaiting {
+                    Some(pending) => emit(sink, agent.companion_requested(pending)),
+                    None => {
+                        // Withdrawn from the browser, lapsed, or answered
+                        // elsewhere: take it off the screen.
+                        let state = agent.state();
+                        if let Some(asked) =
+                            state.active_companion().filter(|asked| !asked.is_joined())
+                        {
+                            emit(sink, agent.companion_dismissed(&asked.companion_uuid));
+                        }
+                    }
                 }
             }
             Err(error) if error.is_device_rejected() => {
@@ -388,7 +433,168 @@ async fn connected<F>(
             }
         }
 
-        sleep_interruptibly(stopping, interval).await;
+        let Some(pending) = awaiting else {
+            if wait_for_nudge(client, &mut presence, interval, stopping).await {
+                tracing::debug!("nudged in the presence room; reading the API now");
+            }
+
+            continue;
+        };
+
+        match wait_for_decision(
+            agent,
+            &pending.companion_uuid,
+            interval.min(AWAITING_POLL),
+            stopping,
+        )
+        .await
+        {
+            Some(true) => {
+                let Some(device_client) = agent.device_client() else {
+                    continue;
+                };
+
+                let ended = companion::run(
+                    Arc::clone(agent),
+                    Arc::clone(sink),
+                    companion::LiveCompanionApi::new(device_client, Arc::clone(agent), &pending),
+                    factory.clone(),
+                    pending.clone(),
+                    Arc::clone(stopping),
+                )
+                .await;
+
+                tracing::info!(?ended, companion = %pending.companion_uuid, "the control companion ended");
+
+                // A join that was refused never left the question; clear it.
+                emit(sink, agent.companion_dismissed(&pending.companion_uuid));
+
+                // As after a hosted session: re-authenticate rather than carry
+                // on with a credential that may have expired meanwhile.
+                return;
+            }
+            Some(false) => {
+                if let Err(error) = client.decline_companion(&pending.companion_uuid).await {
+                    tracing::warn!(%error, "declining the companion link could not be reported");
+                }
+
+                emit(sink, agent.companion_dismissed(&pending.companion_uuid));
+            }
+            // No answer yet: look at the API again — the link may have been
+            // withdrawn — and keep asking.
+            None => {}
+        }
+    }
+}
+
+/// The device's presence-room socket, and when to replace its token.
+struct PresenceRoom {
+    socket: SignallingSocket,
+    renew_at: std::time::Instant,
+}
+
+/// Open (or renew) the presence-room socket. `None` when it cannot be had —
+/// which only costs the nudge, never the poll.
+async fn open_presence_room(client: &ApiClient) -> Option<PresenceRoom> {
+    let body = client.presence_token().await.ok()?;
+    let (url, token, expires_at) = read_presence_token(&body)?;
+    let socket = SignallingSocket::connect(&url, &token).await.ok()?;
+
+    Some(PresenceRoom {
+        socket,
+        renew_at: std::time::Instant::now() + session::renew_in(expires_at),
+    })
+}
+
+/// `POST /devices/me/presence-token`'s `{token, url, expiresAt}`, read without
+/// trusting its shape.
+fn read_presence_token(
+    body: &serde_json::Value,
+) -> Option<(String, String, Option<time::OffsetDateTime>)> {
+    let url = body["url"].as_str()?.to_owned();
+    let token = body["token"].as_str()?.to_owned();
+    let expires_at = body["expiresAt"].as_str().and_then(|at| {
+        time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).ok()
+    });
+
+    Some((url, token, expires_at))
+}
+
+/// Sleep for `total`, waking early — `true` — when the presence room carries
+/// a `device-invite`. The invite is only a reason to read the API sooner; it
+/// names nothing the agent acts on.
+async fn wait_for_nudge(
+    client: &ApiClient,
+    presence: &mut Option<PresenceRoom>,
+    total: Duration,
+    stopping: &Arc<AtomicBool>,
+) -> bool {
+    if presence
+        .as_ref()
+        .is_none_or(|room| std::time::Instant::now() >= room.renew_at)
+    {
+        if let Some(old) = presence.take() {
+            old.socket.close().await;
+        }
+
+        *presence = open_presence_room(client).await;
+    }
+
+    let until = std::time::Instant::now() + total;
+
+    while std::time::Instant::now() < until {
+        if stopping.load(Ordering::SeqCst) {
+            return false;
+        }
+
+        let slice = until
+            .saturating_duration_since(std::time::Instant::now())
+            .min(SLEEP_SLICE);
+
+        let Some(room) = presence.as_mut() else {
+            tokio::time::sleep(slice).await;
+
+            continue;
+        };
+
+        match tokio::time::timeout(slice, room.socket.next()).await {
+            Ok(Ok(Some(Signal::DeviceInvite { .. }))) => return true,
+            Ok(Ok(Some(_))) | Err(_) => {}
+            // Closed or dropped: the poll carries on without the nudge, and
+            // the next wait opens a fresh room.
+            Ok(Ok(None)) | Ok(Err(_)) => *presence = None,
+        }
+    }
+
+    false
+}
+
+/// Wait up to `total` for the person at the machine to answer a companion
+/// link. `None` when they have not, or the runtime is stopping.
+async fn wait_for_decision(
+    agent: &Arc<Agent>,
+    companion_uuid: &str,
+    total: Duration,
+    stopping: &Arc<AtomicBool>,
+) -> Option<bool> {
+    let mut remaining = total;
+
+    loop {
+        if stopping.load(Ordering::SeqCst) {
+            return None;
+        }
+
+        if let Some(decision) = agent.take_companion_decision(companion_uuid) {
+            return Some(decision);
+        }
+
+        if remaining.is_zero() {
+            return None;
+        }
+
+        let slice = remaining.min(DECISION_SLICE);
+        tokio::time::sleep(slice).await;
+        remaining -= slice;
     }
 }
 
@@ -584,6 +790,49 @@ mod tests {
         sleep_interruptibly(&stopping, Duration::from_secs(60)).await;
 
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_presence_token_is_read_without_trusting_its_shape() {
+        let (url, token, expires) = read_presence_token(&serde_json::json!({
+            "token": "t", "url": "wss://relay.test/signal", "room": "device-1",
+            "expiresAt": "2026-10-25T09:02:00Z", "staleAfterSeconds": 180
+        }))
+        .expect("reads");
+
+        assert_eq!(
+            (url.as_str(), token.as_str()),
+            ("wss://relay.test/signal", "t")
+        );
+        assert!(expires.is_some());
+
+        assert!(read_presence_token(&serde_json::json!({ "url": "wss://x" })).is_none());
+        assert!(read_presence_token(&serde_json::json!({})).is_none());
+    }
+
+    /// The person's answer is picked up within a slice, and only for the link
+    /// it was given for.
+    #[tokio::test(start_paused = true)]
+    async fn a_companion_answer_is_picked_up_promptly_and_only_for_its_link() {
+        let agent = Arc::new(Agent::new());
+        let stopping = Arc::new(AtomicBool::new(false));
+
+        assert_eq!(
+            wait_for_decision(&agent, "companion-1", Duration::from_secs(1), &stopping).await,
+            None
+        );
+
+        agent.decide_companion("companion-2", true);
+        assert_eq!(
+            wait_for_decision(&agent, "companion-1", Duration::from_secs(1), &stopping).await,
+            None
+        );
+
+        agent.decide_companion("companion-1", false);
+        assert_eq!(
+            wait_for_decision(&agent, "companion-1", Duration::from_secs(5), &stopping).await,
+            Some(false)
+        );
     }
 
     #[test]
