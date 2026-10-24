@@ -195,7 +195,8 @@ final class IceApiTest extends RemoteTestCase
 
     public function testAConnectivityReportIsLoggedWithOnlyAllowListedFields(): void
     {
-        $s = $this->sessionWithViewer();
+        $s      = $this->sessionWithViewer();
+        $before = $this->reportBytes();
 
         $this->withHeaders($s['viewer'])->withBodyFormat('json')
             ->post("v1/remote/sessions/{$s['session']['uuid']}/connectivity-report", [
@@ -214,11 +215,31 @@ final class IceApiTest extends RemoteTestCase
             ])
             ->assertStatus(200);
 
-        $this->assertLogContains('info', '"relayNode":"mum"');
-        $this->assertLogContains('info', '"category":"turn_unreachable"');
-        $this->assertFalse(\CodeIgniter\Test\TestLogger::didLog('info', '192.168.1.20', false), 'A candidate address must never reach the log.');
-        $this->assertFalse(\CodeIgniter\Test\TestLogger::didLog('info', '203.0.113.9', false));
-        $this->assertFalse(\CodeIgniter\Test\TestLogger::didLog('info', 'v=0', false));
+        $kept = $this->reportsKeptSince($before);
+        $this->assertStringContainsString('remote.ice.report ', $kept, 'The report is kept whatever the log level.');
+        $this->assertStringContainsString('"relayNode":"mum"', $kept);
+        $this->assertStringContainsString('"category":"turn_unreachable"', $kept);
+        $this->assertStringContainsString('"session":"' . $s['session']['uuid'] . '"', $kept);
+        $this->assertStringNotContainsString('192.168.1.20', $kept, 'A candidate address must never reach the report file.');
+        $this->assertStringNotContainsString('203.0.113.9', $kept);
+        $this->assertStringNotContainsString('v=0', $kept);
+        $this->assertSame(1, (new \Aicountly\Ice\ReportSummary())->addLog($kept), 'summarize-reports.php reads what is kept.');
+    }
+
+    /** What the report endpoint appended to today's ReportLog file after $before bytes. */
+    private function reportsKeptSince(int $before): string
+    {
+        $file = WRITEPATH . 'logs/' . \Aicountly\Ice\ReportLog::fileName(time());
+
+        return is_file($file) ? (string) substr((string) file_get_contents($file), $before) : '';
+    }
+
+    private function reportBytes(): int
+    {
+        $file = WRITEPATH . 'logs/' . \Aicountly\Ice\ReportLog::fileName(time());
+        clearstatcache();
+
+        return is_file($file) ? (int) filesize($file) : 0;
     }
 
     public function testHealthListsNodesWithoutHostsOrSecrets(): void
@@ -255,13 +276,14 @@ final class IceApiTest extends RemoteTestCase
 
     public function testADiagnosticReportFromAViewerTheHostHasNotAdmittedIsRefused(): void
     {
-        $s = $this->sessionWithViewer(false);
+        $s      = $this->sessionWithViewer(false);
+        $before = $this->reportBytes();
 
         $refused = $this->withHeaders($s['viewer'])->withBodyFormat('json')
             ->post("v1/remote/sessions/{$s['session']['uuid']}/connectivity-report", ['outcome' => 'connected']);
 
         $refused->assertStatus(403);
-        $this->assertFalse(\CodeIgniter\Test\TestLogger::didLog('info', $s['viewerUuid'], false), 'Nothing from an unadmitted caller reaches the log.');
+        $this->assertStringNotContainsString($s['viewerUuid'], $this->reportsKeptSince($before), 'Nothing from an unadmitted caller is kept.');
     }
 
     public function testADiagnosticReportWithoutCredentialsIsRefused(): void

@@ -66,7 +66,7 @@ Prerequisites (**owner decisions**, see the end of this document):
 | R8 | A ends the session | Both sides close; `…/ice-servers` → `409 SESSION_ALREADY_ENDED` |
 | R9 | C (other company) tries to join A's session or fetch its credentials | Refused; no credentials |
 
-Evidence: `php lib/ice-kit/bin/summarize-reports.php writable/logs/log-<date>.log` on the sandbox API host, which shows relayed sessions by
+Evidence: `php lib/ice-kit/bin/summarize-reports.php writable/logs/ice-reports-<date>.log` on the sandbox API host, which shows relayed sessions by
 node and transport, time to connect, restarts and renewals.
 
 ### Connect (`connect.gh.aicountly.com`)
@@ -81,7 +81,7 @@ node and transport, time to connect, restarts and renewals.
 | C6 | C (other company) calls A with A's company context claimed | Licensed in C's own context only; nothing leaks across tenants |
 | C7 | Mobile app (if a sandbox build exists) calls a browser | Connects and is relayed |
 
-Evidence: `chrome://webrtc-internals` (selected candidate pair = `relay`), and the `connect.ice.report` lines in the sandbox API log.
+Evidence: `chrome://webrtc-internals` (selected candidate pair = `relay`), and the `connect.ice.report` lines in `writable/logs/ice-reports-<date>.log` on the sandbox API host.
 
 ## Stage 3 — real networks and regions (production allowed, relay NOT forced)
 
