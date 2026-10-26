@@ -62,6 +62,26 @@ uninstall is supposed to guarantee.
 Without `-Sign` the script signs nothing, and can be run on any machine,
 including one that has no business holding a signing credential.
 
+### The application manifest, and how to edit it safely
+
+`src-tauri/windows-app-manifest.xml` is what declares per-monitor-v2 DPI
+awareness and `asInvoker`. It is embedded by `tauri-winres`, which does **not**
+pass the file to the resource compiler: it writes one quoted RC string per
+line, each trimmed, and the compiler concatenates them with no newlines. What
+Windows parses is every line of that file joined by single spaces.
+
+So the file must have **no XML declaration**. `<?xml ... ?>` has to be the very
+first thing in a document, and after the join it is preceded by a space;
+Windows then cannot build an activation context and every run of the binary
+fails with `ERROR_SXS_CANT_GEN_ACTCTX` (14001) — "the application has failed to
+start because its side-by-side configuration is incorrect" — before `main` is
+reached. Nothing fails at build time, the installer builds and installs, and
+the application simply will not start. Comments and non-ASCII characters are
+out for the same reason: they are prose compiled into every shipped binary
+through a quoting path with its own escaping rules. The reasoning lives in
+`src-tauri/build.rs`, and `src-tauri/tests/app_manifest.rs` applies the same
+transformation and checks the result.
+
 ## What "signed" has to mean
 
 **Signing the installer is not signing the product.** The installer is a

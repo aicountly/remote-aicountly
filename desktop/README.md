@@ -94,7 +94,7 @@ executables inside the installer are signed too — see
 ## Tests
 
 ```bash
-cargo test --workspace   # 427 — protocol, gate, keys, state, capture maths, IPC, the session, the installer
+cargo test --workspace   # 432 — protocol, gate, keys, state, capture maths, IPC, the session, the installer
 npm test                 #  36 — the session banner, the companion, the unattended screen
 cargo audit --deny warnings
 ```

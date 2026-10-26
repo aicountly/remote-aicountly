@@ -6,14 +6,14 @@ what is not covered at all.
 ## The numbers
 
 ```bash
-cd desktop    && cargo test --workspace   # 427 — protocol, gate, identity, state, session, service, the installer
+cd desktop    && cargo test --workspace   # 432 — protocol, gate, identity, state, session, service, the installer, the manifest
 cd desktop    && npm test                 #  36 — the agent's own interface
 cd backend    && vendor/bin/phpunit       # 228 — devices, policy, control, unattended, desktop sign-in
 cd web        && npm test                 # 294 — capability gating, control input, devices, desktop sign-in
 cd signalling && npm test                 #  31 — tokens, rooms, device rooms, live relay
 ```
 
-**463 automated tests in `desktop/`** — 427 Rust and 36 for the interface —
+**468 automated tests in `desktop/`** — 432 Rust and 36 for the interface —
 beside the backend, web and signalling suites above. The desktop, web and
 signalling figures are what those suites report on this commit; the backend's
 is what its own suite reports (it needs a PostgreSQL to run).
@@ -24,7 +24,7 @@ The desktop split by crate:
 |---|---|
 | `remote-protocol` | 79 — the wire format, the gate, clipboard bounds, monitors |
 | `remote-core` | 77 — configuration, the API client, signalling, backoff, the state machine, the log file |
-| `aicountly-remote-desktop` | 174 — the agent, its commands, the connection loop, the session, the platform layer's arithmetic, and what the installer claims |
+| `aicountly-remote-desktop` | 179 — the agent, its commands, the connection loop, the session, the platform layer's arithmetic, what the installer claims, and what the embedded Windows manifest becomes |
 | `aicountly-remote-service` | 35 — the IPC protocol, the pipe ACL, the service's decisions |
 | `remote-device` | 23 — capture profiles, capability declaration |
 | `remote-security` | 21 — keys, the canonical payload, storage, the enrolment record |

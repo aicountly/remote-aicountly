@@ -1,47 +1,3 @@
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<!--
-  AICOUNTLY Remote — the application manifest.
-
-  Tauri embeds a default manifest that declares one thing: the Common Controls
-  v6 dependency its dialog APIs need. This replaces it, keeps that dependency,
-  and adds the two declarations a remote-control agent cannot be left without.
-
-  dpiAwareness / dpiAware — PER MONITOR V2
-  ----------------------------------------
-  Without it the process is DPI *unaware*, and Windows virtualises every
-  coordinate it reports: `GetSystemMetrics(SM_CXVIRTUALSCREEN)` and the
-  rectangles from `EnumDisplayMonitors` come back in scaled, logical pixels
-  rather than physical ones. On a 150% display that is the difference between
-  a click landing where the viewer pointed and landing two thirds of the way
-  there — and on a mixed-DPI pair of monitors, the difference between the
-  right screen and the wrong one. It is the failure
-  `src-tauri/src/platform/windows/input.rs` calls "the single most common way
-  remote control lands clicks on the wrong monitor".
-
-  Tao, the windowing layer under Tauri, calls `SetProcessDpiAwarenessContext`
-  when it creates the event loop, so this was *nearly* true already. Nearly is
-  not a property to rest a coordinate system on: a manifest is in force from
-  the first instruction of the process, cannot be reordered by a change to
-  when something else initialises, and is the way Microsoft documents it.
-
-  requestedExecutionLevel — asInvoker
-  -----------------------------------
-  Stated rather than inferred. The application is not an installer and must
-  never ask for elevation: it runs as whoever signed in, and everything that
-  genuinely needs privilege is the service's. Declaring it also keeps UAC's
-  installer-detection heuristics away from a binary whose name a future
-  release might change.
-
-  What is deliberately NOT here
-  ----------------------------
-  No `<compatibility>` / `supportedOS` block. That exists to make the frozen
-  `GetVersionEx` report the real Windows version, and it has to be edited for
-  every future Windows release. `platform/windows/device.rs` reads the version
-  through `RtlGetVersion` instead, which is not subject to the shim, so there
-  is nothing here to keep up to date.
-
-  No `uiAccess`, no `highestAvailable`, no `requireAdministrator`.
--->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <dependency>
     <dependentAssembly>
@@ -66,11 +22,8 @@
 
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>
-      <!-- Windows 10 1703 and later. -->
       <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
-      <!-- The older spelling, for anything that reads it instead. -->
       <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/PM</dpiAware>
-      <!-- Paths under %ProgramData% are short, but a redirected profile is not. -->
       <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
     </windowsSettings>
   </application>
