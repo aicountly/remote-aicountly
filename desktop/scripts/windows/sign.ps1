@@ -223,9 +223,11 @@ Azure refused the request with 403. Two things cause that, and the Metadata
 block above shows which values were sent:
 
   * The signing identity is not allowed to sign. The app registration behind
-    AZURE_CLIENT_ID needs the "Trusted Signing Certificate Profile Signer"
-    role on the signing account. It is granted in that account's Access
-    control (IAM) and is separate from creating the client secret.
+    AZURE_CLIENT_ID needs the "Artifact Signing Certificate Profile Signer"
+    role on the signing account -- named "Trusted Signing Certificate
+    Profile Signer" in tenants that predate the rename. It is granted in
+    that account's Access control (IAM) and is separate from creating the
+    client secret.
 
   * CodeSigningAccountName or CertificateProfileName does not name a real
     account and profile in that endpoint's region. Both are Azure resource
