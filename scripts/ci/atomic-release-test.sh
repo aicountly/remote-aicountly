@@ -38,7 +38,9 @@ make_release() { # dir revision
   # The deploy's own filters (deploy-*.yml "Deploy backend to the api folder"), vendor/ as the runner built it.
   rsync -a --exclude='/vendor/' --exclude='/writable/' --exclude='.env' --exclude='.env.*' --exclude='.git*' \
     --exclude='tests/' --exclude='deploy/' --exclude='phpunit*' --exclude='composer.json' --exclude='composer.lock' "$API_SRC/" "$1/"
-  cp -al "$API_SRC/vendor" "$1/vendor" 2>/dev/null || cp -a "$API_SRC/vendor" "$1/vendor"
+  # Hard links where the temp folder shares the file system; a real copy otherwise (a failed cp -al leaves a
+  # partial vendor/ that a second cp would nest inside, so it is removed first).
+  cp -al "$API_SRC/vendor" "$1/vendor" 2>/dev/null || { rm -rf "$1/vendor"; cp -a "$API_SRC/vendor" "$1/vendor"; }
   mkdir -p "$1/writable/logs" "$1/writable/cache" "$1/writable/session" "$1/writable/uploads" "$1/writable/debugbar"
   echo "$2" > "$1/REVISION"
 }
