@@ -119,6 +119,64 @@ final class AuthOutageApiTest extends RemoteTestCase
         $this->assertStringContainsString('AICOUNTLY-Remote-API', $headers['user-agent']);
     }
 
+    public function testTheRelayNamesTheVisitorByTheConnectingAddressOnly(): void
+    {
+        // Every relayed call reaches the portal from this server, so without a
+        // name for the visitor the portal's per-IP throttles would be shared by
+        // every Remote user. The name is REMOTE_ADDR; whatever the browser says
+        // about itself is neither forwarded nor believed.
+        $saved = $_SERVER['REMOTE_ADDR'] ?? null;
+        $_SERVER['REMOTE_ADDR'] = '203.0.113.7';
+
+        try {
+            $result = $this->withHeaders([
+                'Authorization'         => 'Bearer echo',
+                'X-Aicountly-Client-Ip' => '198.51.100.1',
+                'X-Forwarded-For'       => '198.51.100.2',
+                'X-Real-IP'             => '198.51.100.3',
+                'Forwarded'             => 'for=198.51.100.4',
+                'Client-IP'             => '198.51.100.5',
+            ])->post('global/sso/exchange');
+        } finally {
+            if ($saved === null) {
+                unset($_SERVER['REMOTE_ADDR']);
+            } else {
+                $_SERVER['REMOTE_ADDR'] = $saved;
+            }
+        }
+
+        $result->assertStatus(200);
+        $headers = json_decode((string) $result->response()->getBody(), true)['headers'];
+        $this->assertSame('203.0.113.7', $headers['x-aicountly-client-ip'] ?? null);
+        $this->assertSame('Bearer echo', $headers['authorization'] ?? null);
+        foreach (['x-forwarded-for', 'x-real-ip', 'forwarded', 'client-ip'] as $name) {
+            $this->assertArrayNotHasKey($name, $headers, $name . ' is not forwarded');
+        }
+    }
+
+    public function testNoVisitorIsNamedWhenTheConnectingAddressIsNotAnIp(): void
+    {
+        $saved = $_SERVER['REMOTE_ADDR'] ?? null;
+        $_SERVER['REMOTE_ADDR'] = 'unix:/run/php.sock';
+
+        try {
+            $result = $this->withHeaders([
+                'Authorization'         => 'Bearer echo',
+                'X-Aicountly-Client-Ip' => '198.51.100.1',
+            ])->post('global/seskey');
+        } finally {
+            if ($saved === null) {
+                unset($_SERVER['REMOTE_ADDR']);
+            } else {
+                $_SERVER['REMOTE_ADDR'] = $saved;
+            }
+        }
+
+        $result->assertStatus(200);
+        $headers = json_decode((string) $result->response()->getBody(), true)['headers'];
+        $this->assertArrayNotHasKey('x-aicountly-client-ip', $headers, 'not REMOTE_ADDR, and not the browser\'s claim either');
+    }
+
     public function testACallerThatSetItsOwnAcceptKeepsIt(): void
     {
         $seen = Services::portalClient()->forward('GET', 'echo-request', ['Accept: text/csv'], '');

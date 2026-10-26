@@ -20,7 +20,9 @@ use Config\Services;
  * turn this host into an open proxy for the portal's whole auth surface —
  * login, signup, OTP, user lookup — with the portal seeing this server's IP
  * instead of the caller's, so anything it rate-limits per IP could be driven
- * through here instead.
+ * through here instead. Each relayed call names the visitor in
+ * `X-Aicountly-Client-Ip` (relayHeaders()), because the portal would otherwise
+ * count every Remote user against this server's one address.
  *
  * See docs/auth/AICOUNTLY_AUTH_WORKFLOW.md. This behaviour is carried over
  * unchanged from the `server-php` API it replaces.
@@ -63,25 +65,10 @@ class PortalRelayController extends Controller
                 ->setJSON(['message' => 'This path is not relayed. Call the portal API directly.']);
         }
 
-        $headers = [];
-
-        $authorization = $this->request->getHeaderLine('Authorization');
-        if ($authorization === '') {
-            $authorization = (string) ($_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '');
-        }
-        if ($authorization !== '') {
-            $headers[] = 'Authorization: ' . $authorization;
-        }
-
-        $contentType = $this->request->getHeaderLine('Content-Type');
-        if ($contentType !== '') {
-            $headers[] = 'Content-Type: ' . $contentType;
-        }
-
         $result = Services::portalClient()->forward(
             $this->request->getMethod(),
             $path,
-            $headers,
+            $this->relayHeaders(),
             (string) $this->request->getBody(),
         );
 
@@ -127,6 +114,42 @@ class PortalRelayController extends Controller
         }
 
         return $response->setBody($result['body']);
+    }
+
+    /**
+     * The headers sent to the portal: an allowlist, never a copy of the browser's.
+     *
+     * So a browser-sent `X-Aicountly-Client-Ip`, `X-Forwarded-For`, `X-Real-IP`,
+     * `Forwarded` or `Client-IP` never reaches the portal. `X-Aicountly-Client-Ip`
+     * is the connecting address (`REMOTE_ADDR`, not CodeIgniter's proxy-aware
+     * getIPAddress()), sent only when it is an IP, so the portal's per-IP
+     * throttles count the visitor rather than this server.
+     *
+     * @return list<string>
+     */
+    private function relayHeaders(): array
+    {
+        $headers = [];
+
+        $authorization = $this->request->getHeaderLine('Authorization');
+        if ($authorization === '') {
+            $authorization = (string) ($_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '');
+        }
+        if ($authorization !== '') {
+            $headers[] = 'Authorization: ' . $authorization;
+        }
+
+        $contentType = $this->request->getHeaderLine('Content-Type');
+        if ($contentType !== '') {
+            $headers[] = 'Content-Type: ' . $contentType;
+        }
+
+        $visitor = $_SERVER['REMOTE_ADDR'] ?? '';
+        if (is_string($visitor) && filter_var($visitor, FILTER_VALIDATE_IP) !== false) {
+            $headers[] = 'X-Aicountly-Client-Ip: ' . $visitor;
+        }
+
+        return $headers;
     }
 
     /**
