@@ -167,15 +167,19 @@ anything a browser can be made to talk to, and it has no idea who is
 connecting.
 
 ```
-D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)S:(ML;;NWNRNX;;;LW)
+D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)S:(ML;;NWNRNX;;;ME)
 ```
 
 LocalSystem and Administrators full control; the **interactive** user (not
 `Users` — narrower, and excludes a service account nobody is sitting in front
 of) read and write; no entry for Everyone, Anonymous or Guests; and a mandatory
-label that keeps low-integrity processes — a sandboxed browser — out even if
-they somehow satisfied the DACL. `PIPE_REJECT_REMOTE_CLIENTS` is set, so it is
-not reachable over SMB.
+label that keeps low-integrity processes — a sandboxed browser, an
+AppContainer — out even if they somehow satisfied the DACL. The label is
+`ME` (medium) rather than `LW` (low) because a mandatory policy only blocks a
+subject *below* the label: a low label admits the low-integrity processes it is
+meant to exclude, while medium is where an ordinary signed-in person's
+processes run, the tray application among them.
+`PIPE_REJECT_REMOTE_CLIENTS` is set, so it is not reachable over SMB.
 
 The protocol is length- and version-prefixed, bounded at 64 KiB, and
 exhaustively enumerated. Two tests assert the properties that matter:

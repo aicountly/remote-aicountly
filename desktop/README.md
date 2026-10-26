@@ -76,15 +76,26 @@ cp target/x86_64-pc-windows-gnu/debug/AicountlyRemoteService.exe \
    src-tauri/binaries/AicountlyRemoteService-x86_64-pc-windows-gnu.exe
 cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnu -- -D warnings
 
+# the whole installer, still without a Windows machine — a build check, not a
+# shippable artifact (GNU target, not MSVC). Needs `nsis` and, because the
+# Tauri CLI probes for it on any Linux host with `tray-icon` enabled,
+# `libayatana-appindicator3-dev`. See docs/desktop/TESTING.md.
+npm run tauri -- build --target x86_64-pc-windows-gnu
+
 # the installers, on Windows
-pwsh -File scripts/windows/build.ps1
+pwsh -File scripts/windows/build.ps1           # unsigned development build
+pwsh -File scripts/windows/build.ps1 -Sign     # signed: binaries and installer
 ```
+
+`-Sign` signs **through** the build rather than after it, so the two
+executables inside the installer are signed too — see
+[WINDOWS_RELEASE.md](../docs/desktop/WINDOWS_RELEASE.md#what-signed-has-to-mean).
 
 ## Tests
 
 ```bash
-cargo test --workspace   # 299 — protocol, gate, keys, state, capture maths, IPC, the session
-npm test                 #  12 — the session banner and the unattended screen
+cargo test --workspace   # 427 — protocol, gate, keys, state, capture maths, IPC, the session, the installer
+npm test                 #  36 — the session banner, the companion, the unattended screen
 cargo audit --deny warnings
 ```
 

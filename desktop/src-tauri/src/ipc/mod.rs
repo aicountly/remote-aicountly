@@ -102,6 +102,24 @@ pub fn service_status() -> ServiceStatus {
     }
 }
 
+/// Ask the service to authenticate this machine now.
+///
+/// Sent once, after a person registers the computer: the service reads the
+/// enrolment record and the device key itself, and this is what makes it do
+/// so at once rather than at its next presence interval. The credential never
+/// crosses the pipe — the answer is only whether the machine is
+/// authenticated, and until when.
+pub fn authenticate() -> Result<(), IpcError> {
+    match platform_service().request(&IpcRequest::Authenticate)? {
+        // Already authenticated, with an expiry.
+        IpcResponse::Authenticated { .. } => Ok(()),
+        // Accepted, and the service will do it now.
+        IpcResponse::Acknowledged => Ok(()),
+        IpcResponse::Error { message, .. } => Err(IpcError::Transport(message)),
+        _ => Err(IpcError::Malformed),
+    }
+}
+
 /// Tell the service a session started, so its presence stays in step.
 pub fn session_started(session_uuid: &str) -> Result<(), IpcError> {
     expect_acknowledged(platform_service().request(&IpcRequest::SessionStarted {
@@ -193,6 +211,7 @@ mod tests {
     #[test]
     fn off_windows_every_call_fails_softly() {
         assert!(!service_status().running);
+        assert_eq!(authenticate(), Err(IpcError::NotRunning));
         assert_eq!(session_started("s"), Err(IpcError::NotRunning));
         assert_eq!(session_ended("s"), Err(IpcError::NotRunning));
         assert_eq!(reboot("s", "why"), Err(IpcError::NotRunning));

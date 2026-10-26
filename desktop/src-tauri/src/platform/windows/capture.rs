@@ -42,7 +42,8 @@ use remote_protocol::MonitorLayout;
 // The arithmetic itself is plain numbers, so it lives beside the platform
 // modules rather than inside this one — see `platform::display`.
 pub use crate::platform::display::{
-    describe_monitor, orientation_from_windows, scale_from_dpi, SecureDesktopState,
+    describe_monitor, friendly_display_name, orientation_from_windows, scale_from_dpi,
+    SecureDesktopState,
 };
 
 /// Capture, through `Windows.Graphics.Capture`.
@@ -195,7 +196,9 @@ impl ScreenCaptureProvider for WindowsCapture {
 mod imp {
     //! The Win32 and WinRT half. Compiled only on Windows.
 
-    use super::{describe_monitor, orientation_from_windows, SecureDesktopState};
+    use super::{
+        describe_monitor, friendly_display_name, orientation_from_windows, SecureDesktopState,
+    };
     use remote_device::{CaptureProfile, Frame, PixelFormat, PlatformError, PlatformResult};
     use remote_protocol::MonitorLayout;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -208,7 +211,9 @@ mod imp {
     use windows::Graphics::DirectX::DirectXPixelFormat;
     use windows::Graphics::SizeInt32;
     use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, RECT};
-    use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
+    use windows::Win32::Graphics::Direct3D::{
+        D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP,
+    };
     use windows::Win32::Graphics::Direct3D11::{
         D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
         D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAPPED_SUBRESOURCE,
@@ -232,6 +237,45 @@ mod imp {
     /// building a queue: a third buffered frame is a frame the viewer will see
     /// late, and latency matters more here than smoothness.
     const FRAME_POOL_DEPTH: i32 = 2;
+
+    /// Make sure this process has an apartment WinRT activation can use.
+    ///
+    /// `RoGetActivationFactory` — which is what `windows::core::factory` and
+    /// every `Direct3D11CaptureFramePool` call below go through — fails with
+    /// `CO_E_NOTINITIALIZED` on a thread that has never initialised COM. The
+    /// capture runs on the agent's own connection thread, which is a plain
+    /// `std::thread` and had initialised nothing, so capture would have failed
+    /// at the first activation with an error that reads like a Windows
+    /// version problem rather than a missing apartment.
+    ///
+    /// `CoIncrementMTAUsage` and not `CoInitializeEx` on purpose: it creates
+    /// the process's implicit multithreaded apartment and leaves every
+    /// thread's own apartment alone, so it cannot fail with
+    /// `RPC_E_CHANGED_MODE` against the single-threaded apartment the webview
+    /// puts the main thread in, and it needs no matching uninitialise on a
+    /// thread that may outlive it. The cookie is deliberately never released:
+    /// the MTA is wanted for the life of the process.
+    fn ensure_apartment() -> PlatformResult<()> {
+        use windows::Win32::System::Com::CoIncrementMTAUsage;
+
+        static APARTMENT: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+
+        // SAFETY: takes nothing, and the cookie it returns is intentionally
+        // leaked — the apartment is wanted until the process exits.
+        APARTMENT
+            .get_or_init(|| unsafe {
+                CoIncrementMTAUsage()
+                    .map(|cookie| {
+                        let _ = cookie;
+                    })
+                    .map_err(|error| error.message())
+            })
+            .clone()
+            .map_err(|detail| PlatformError::Os {
+                operation: "preparing screen capture",
+                detail,
+            })
+    }
 
     /// Whether a UAC prompt or the sign-in screen is in front.
     ///
@@ -296,12 +340,16 @@ mod imp {
                 let _ = GetDpiForMonitor(handle, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
             }
 
-            let name = String::from_utf16_lossy(&info.szDevice)
-                .trim_end_matches('\0')
-                .to_owned();
+            let id = index as u32 + 1;
+
+            // `szDevice` is a GDI device path, `\\.\DISPLAY1`. The monitor
+            // picker asks a person which of their screens they are sharing,
+            // so what it shows them is "Display 1".
+            let device = String::from_utf16_lossy(&info.szDevice);
+            let name = friendly_display_name(&device, id);
 
             monitors.push(describe_monitor(
-                index as u32 + 1,
+                id,
                 &name,
                 info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
                 left,
@@ -352,6 +400,8 @@ mod imp {
         frame_pool: Direct3D11CaptureFramePool,
         session: GraphicsCaptureSession,
         item: GraphicsCaptureItem,
+        /// The size the pool's buffers currently are.
+        pool_size: SizeInt32,
         started: std::time::Instant,
         frames: AtomicU64,
         profile: CaptureProfile,
@@ -366,57 +416,15 @@ mod imp {
 
             let handle = monitor_handle(monitor_id)?;
 
+            // Nothing below can be activated without an apartment.
+            ensure_apartment()?;
+
             // SAFETY: every call below is a documented COM/WinRT entry point
             // with correctly typed arguments; each result is checked.
             unsafe {
-                let mut device: Option<ID3D11Device> = None;
-                let mut context: Option<ID3D11DeviceContext> = None;
+                let (device, context) = graphics_device()?;
 
-                D3D11CreateDevice(
-                    None,
-                    D3D_DRIVER_TYPE_HARDWARE,
-                    // No software rasteriser module: the hardware driver type
-                    // above is the one being asked for, and a null module is
-                    // what that combination expects.
-                    windows::Win32::Foundation::HMODULE::default(),
-                    D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                    None,
-                    D3D11_SDK_VERSION,
-                    Some(&mut device),
-                    None,
-                    Some(&mut context),
-                )
-                .map_err(|error| PlatformError::Os {
-                    operation: "creating the graphics device",
-                    detail: error.message(),
-                })?;
-
-                let device = device.ok_or(PlatformError::Os {
-                    operation: "creating the graphics device",
-                    detail: "no device was returned".into(),
-                })?;
-                let context = context.ok_or(PlatformError::Os {
-                    operation: "creating the graphics device",
-                    detail: "no context was returned".into(),
-                })?;
-
-                let dxgi: IDXGIDevice = device.cast().map_err(|error| PlatformError::Os {
-                    operation: "creating the graphics device",
-                    detail: error.message(),
-                })?;
-
-                let winrt_device =
-                    CreateDirect3D11DeviceFromDXGIDevice(&dxgi).map_err(|error| {
-                        PlatformError::Os {
-                            operation: "creating the capture device",
-                            detail: error.message(),
-                        }
-                    })?;
-                let winrt_device: windows::Graphics::DirectX::Direct3D11::IDirect3DDevice =
-                    winrt_device.cast().map_err(|error| PlatformError::Os {
-                        operation: "creating the capture device",
-                        detail: error.message(),
-                    })?;
+                let winrt_device = capture_device(&device)?;
 
                 let interop: IGraphicsCaptureItemInterop =
                     windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
@@ -433,16 +441,27 @@ mod imp {
                         ))
                     })?;
 
-                let (width, height) = profile.fit(monitor.width, monitor.height);
+                // The pool's buffers are the size of the content, taken from
+                // the capture item itself rather than from the monitor
+                // rectangle, because the item is what Windows will draw into
+                // them.
+                //
+                // NOT `profile.fit(...)`: a frame pool smaller than the
+                // content does not scale the picture into it, it **crops** —
+                // so sizing the pool to a downscaled profile would have sent
+                // the viewer the top-left corner of the screen and called it
+                // the screen. Scaling belongs to the encoder, which is handed
+                // the whole frame and the profile together.
+                let pool_size = item.Size().unwrap_or(SizeInt32 {
+                    Width: monitor.width as i32,
+                    Height: monitor.height as i32,
+                });
 
                 let frame_pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
                     &winrt_device,
                     DirectXPixelFormat::B8G8R8A8UIntNormalized,
                     FRAME_POOL_DEPTH,
-                    SizeInt32 {
-                        Width: width as i32,
-                        Height: height as i32,
-                    },
+                    pool_size,
                 )
                 .map_err(|error| PlatformError::Os {
                     operation: "creating the capture frame pool",
@@ -478,6 +497,7 @@ mod imp {
                     frame_pool,
                     session,
                     item,
+                    pool_size,
                     started: std::time::Instant::now(),
                     frames: AtomicU64::new(0),
                     profile,
@@ -497,6 +517,22 @@ mod imp {
                 Err(_) => return Ok(None),
             };
 
+            // A resolution change, a rotation, a DPI change or a remote
+            // desktop reconnect changes the content size under a running
+            // capture. The pool's buffers do not follow on their own, and a
+            // pool that no longer matches the content crops it — so the pool
+            // is rebuilt and this frame, which was drawn into the old one, is
+            // dropped. The next one arrives at the new size.
+            if let Ok(content) = frame.ContentSize() {
+                if content.Width != self.pool_size.Width || content.Height != self.pool_size.Height
+                {
+                    close_frame(&frame);
+                    self.resize(content)?;
+
+                    return Ok(None);
+                }
+            }
+
             let surface = frame.Surface().map_err(|error| PlatformError::Os {
                 operation: "reading a captured frame",
                 detail: error.message(),
@@ -506,9 +542,41 @@ mod imp {
 
             let bytes = read_staging(&self.context, &texture, profile)?;
 
+            // Explicitly, and before the next `TryGetNextFrame`: the buffer
+            // this frame holds goes back to the pool when the frame is
+            // closed, and a pool of two whose buffers are never returned
+            // stops delivering after two frames.
+            drop(surface);
+            close_frame(&frame);
+
             self.frames.fetch_add(1, Ordering::Relaxed);
 
             Ok(bytes)
+        }
+
+        /// Rebuild the pool at a new content size.
+        fn resize(&mut self, size: SizeInt32) -> PlatformResult<()> {
+            // The WinRT device is made again from the D3D11 one rather than
+            // held in this struct: `IDirect3DDevice` is not an agile
+            // interface, so it is not `Send`, and this session is owned by
+            // whichever thread is pumping the capture.
+            let device = capture_device(&self.device)?;
+
+            self.frame_pool
+                .Recreate(
+                    &device,
+                    DirectXPixelFormat::B8G8R8A8UIntNormalized,
+                    FRAME_POOL_DEPTH,
+                    size,
+                )
+                .map_err(|error| PlatformError::Os {
+                    operation: "following a display change",
+                    detail: error.message(),
+                })?;
+
+            self.pool_size = size;
+
+            Ok(())
         }
 
         pub fn reconfigure(&mut self, profile: CaptureProfile) -> PlatformResult<()> {
@@ -527,6 +595,113 @@ mod imp {
             let _ = self.frame_pool.Close();
             let _ = self.item;
             let _ = self.started;
+        }
+    }
+
+    /// The WinRT view of a D3D11 device, which is what the frame pool takes.
+    fn capture_device(
+        device: &ID3D11Device,
+    ) -> PlatformResult<windows::Graphics::DirectX::Direct3D11::IDirect3DDevice> {
+        // SAFETY: `device` is a live D3D11 device, and the interop entry point
+        // is the documented way to reach its WinRT counterpart.
+        unsafe {
+            let dxgi: IDXGIDevice = device.cast().map_err(|error| PlatformError::Os {
+                operation: "creating the graphics device",
+                detail: error.message(),
+            })?;
+
+            CreateDirect3D11DeviceFromDXGIDevice(&dxgi)
+                .map_err(|error| PlatformError::Os {
+                    operation: "creating the capture device",
+                    detail: error.message(),
+                })?
+                .cast()
+                .map_err(|error| PlatformError::Os {
+                    operation: "creating the capture device",
+                    detail: error.message(),
+                })
+        }
+    }
+
+    /// Give a frame's buffer back to the pool.
+    ///
+    /// `Direct3D11CaptureFrame` is an `IClosable`, and closing it is what
+    /// returns the buffer. Dropping the last reference does it too, but the
+    /// explicit call is what makes the ordering against the next
+    /// `TryGetNextFrame` deliberate rather than a consequence of where the
+    /// borrow happens to end.
+    fn close_frame(frame: &Direct3D11CaptureFrame) {
+        use windows::Foundation::IClosable;
+
+        if let Ok(closable) = frame.cast::<IClosable>() {
+            let _ = closable.Close();
+        }
+    }
+
+    /// A D3D11 device, preferring the GPU and falling back to the software
+    /// rasteriser.
+    ///
+    /// The fallback is not theoretical: a virtual machine without a
+    /// paravirtual GPU, a Windows Server install with no display driver, and
+    /// a machine whose driver has just been replaced mid-session all fail
+    /// `D3D_DRIVER_TYPE_HARDWARE`. WARP is slower and it is a picture; no
+    /// device at all is a support session that cannot start.
+    ///
+    /// # Safety
+    ///
+    /// Calls `D3D11CreateDevice`, whose out-parameters are locals here.
+    unsafe fn graphics_device() -> PlatformResult<(ID3D11Device, ID3D11DeviceContext)> {
+        let mut last: Option<windows::core::Error> = None;
+
+        for driver in [D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP] {
+            match unsafe { create_device(driver) } {
+                Ok(pair) => return Ok(pair),
+                Err(error) => last = Some(error),
+            }
+        }
+
+        Err(PlatformError::Os {
+            operation: "creating the graphics device",
+            detail: last
+                .map(|error| error.message())
+                .unwrap_or_else(|| "no Direct3D device could be created".into()),
+        })
+    }
+
+    /// One `D3D11CreateDevice` attempt.
+    ///
+    /// # Safety
+    ///
+    /// As [`graphics_device`].
+    unsafe fn create_device(
+        driver: D3D_DRIVER_TYPE,
+    ) -> windows::core::Result<(ID3D11Device, ID3D11DeviceContext)> {
+        let mut device: Option<ID3D11Device> = None;
+        let mut context: Option<ID3D11DeviceContext> = None;
+
+        unsafe {
+            D3D11CreateDevice(
+                None,
+                driver,
+                // No software rasteriser module: the driver type above is
+                // what is being asked for, and a null module is what that
+                // combination expects.
+                windows::Win32::Foundation::HMODULE::default(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                Some(&mut context),
+            )?;
+        }
+
+        match (device, context) {
+            (Some(device), Some(context)) => Ok((device, context)),
+            _ => Err(windows::core::Error::new(
+                windows::Win32::Foundation::E_FAIL,
+                "Direct3D returned no device",
+            )),
         }
     }
 

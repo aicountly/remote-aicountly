@@ -89,7 +89,7 @@ jobs:
       contents: write
 
     outputs:
-      signed: ${{ steps.sign.outputs.signed }}
+      signed: ${{ steps.build.outputs.signed }}
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -144,14 +144,20 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
-      # The same script a developer runs, so a release build and a local build
-      # are the same build.
-      - name: Build
-        shell: pwsh
-        working-directory: desktop
-        run: pwsh -File scripts/windows/build.ps1 -Configuration release -Target x86_64-pc-windows-msvc
-
       # ---------------------------------------------------------------- signing
+      #
+      # The signing client is installed BEFORE the build, because the build is
+      # where signing now happens: `build.ps1 -Sign` hands sign.ps1 to the
+      # Tauri bundler as its signing command, so the application binary, the
+      # service sidecar, the NSIS plugins, the uninstaller and the installer
+      # are each signed as they are produced.
+      #
+      # This replaces a separate Sign step that ran after the build. That step
+      # signed the installer and the two loose executables in the target
+      # directory — but the copies *inside* the installer had already been
+      # packaged, unsigned, and were the ones a customer actually ran. The
+      # verification afterwards passed, because the file it checked was the
+      # installer.
       #
       # Every credential comes from the protected environment. None of them has
       # a default, none is a workflow input, and none is ever written to the
@@ -169,9 +175,26 @@ jobs:
           if (-not (Test-Path $dlib)) { throw "The signing dlib was not found at $dlib." }
           "AICOUNTLY_SIGN_DLIB=$dlib" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Sign
-        id: sign
+      - name: Check that a signing method is configured
         if: inputs.channel != 'sandbox'
+        shell: pwsh
+        env:
+          AICOUNTLY_SIGN_METHOD: ${{ vars.AICOUNTLY_SIGN_METHOD }}
+        run: |
+          if (-not $env:AICOUNTLY_SIGN_METHOD) {
+            $missingSigningMessage = @(
+              'This channel publishes a signed build, and no signing method is configured.',
+              '',
+              'Set the variable AICOUNTLY_SIGN_METHOD (and its companions) on the',
+              'windows-release environment. See docs/desktop/WINDOWS_RELEASE.md.'
+            ) -join "`n"
+            throw $missingSigningMessage
+          }
+
+      # The same script a developer runs, so a release build and a local build
+      # are the same build — with `-Sign` added for a channel that publishes.
+      - name: Build
+        id: build
         shell: pwsh
         working-directory: desktop
         env:
@@ -184,38 +207,26 @@ jobs:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
         run: |
-          if (-not $env:AICOUNTLY_SIGN_METHOD) {
-            $missingSigningMessage = @(
-              'This channel publishes a signed build, and no signing method is configured.',
-              '',
-              'Set the variable AICOUNTLY_SIGN_METHOD (and its companions) on the',
-              'windows-release environment. See docs/desktop/WINDOWS_RELEASE.md.'
-            ) -join "`n"
-            throw $missingSigningMessage
-          }
+          $arguments = @(
+            '-File', 'scripts/windows/build.ps1',
+            '-Configuration', 'release',
+            '-Target', 'x86_64-pc-windows-msvc'
+          )
 
-          $target = 'target/x86_64-pc-windows-msvc/release'
+          if ($env:INPUT_CHANNEL -ne 'sandbox') { $arguments += '-Sign' }
 
-          # '&' runs the script in THIS PowerShell session rather than
-          # spawning a nested pwsh.exe. That distinction matters here: an
-          # external process only receives a flat argv array, so PowerShell
-          # would have to serialise the comma-separated -Path list into
-          # separate command-line tokens, and the script's own parameter
-          # binder would only pick up the first one — exactly the failure
-          # `-Path "a", "b"` produced against verify.ps1 below. Staying in
-          # this session keeps the array an array.
-          & 'scripts/windows/sign.ps1' -Path `
-            "$target/AicountlyRemote.exe", `
-            "$target/AicountlyRemoteService.exe", `
-            "$target/bundle/nsis/*.exe"
+          pwsh @arguments
+          if ($LASTEXITCODE -ne 0) { throw 'The build failed.' }
 
-          "signed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $signed = if ($env:INPUT_CHANNEL -eq 'sandbox') { 'false' } else { 'true' }
+          "signed=$signed" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      # Verified after signing, and verified again on exactly the files that
-      # are about to be uploaded. A signature that did not take, or took
-      # without a timestamp, is something a release process should catch rather
-      # than a customer.
+      # Verified on exactly the files that are about to be uploaded, and on the
+      # two executables that go inside them — which is the check that was
+      # missing. A signature that did not take, or took without a timestamp, is
+      # something a release process should catch rather than a customer.
       - name: Verify signatures
         shell: pwsh
         working-directory: desktop
@@ -225,12 +236,19 @@ jobs:
           $target = 'target/x86_64-pc-windows-msvc/release'
           $allowUnsigned = $env:INPUT_CHANNEL -eq 'sandbox'
 
-          # See the comment on the Sign step: '&' keeps this in the current
-          # session so the comma-separated -Path list stays one array
-          # instead of being flattened into a bare argv for a new process.
-          & 'scripts/windows/verify.ps1' `
-            -Path "$target/bundle/nsis/*.exe" `
+          # '&' runs the script in THIS PowerShell session rather than
+          # spawning a nested pwsh.exe. That distinction matters here: an
+          # external process only receives a flat argv array, so PowerShell
+          # would have to serialise the comma-separated -Path list into
+          # separate command-line tokens, and the script's own parameter
+          # binder would only pick up the first one.
+          & 'scripts/windows/verify.ps1' -Path `
+            "$target/bundle/nsis/*.exe", `
+            "$target/AicountlyRemote.exe", `
+            "src-tauri/binaries/AicountlyRemoteService-x86_64-pc-windows-msvc.exe" `
             -AllowUnsigned:$allowUnsigned
+
+          if ($LASTEXITCODE -ne 0) { throw 'The artifacts are not fit to publish.' }
 
       - name: Collect artifacts
         shell: pwsh

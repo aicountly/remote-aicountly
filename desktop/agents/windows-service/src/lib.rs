@@ -48,6 +48,7 @@
 pub mod ipc;
 pub mod machine;
 pub mod pipe;
+pub mod storage;
 
 #[cfg(windows)]
 pub mod service;

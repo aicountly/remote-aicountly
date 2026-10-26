@@ -36,11 +36,13 @@ desktop/package.json                 "version": "1.1.0"
 
 ```powershell
 cd desktop
-pwsh -File scripts/windows/build.ps1
+pwsh -File scripts/windows/build.ps1           # unsigned: a development build
+pwsh -File scripts/windows/build.ps1 -Sign     # signed all the way through
 ```
 
 Which is, in order: build the service → stage it as a Tauri sidecar → `npm ci`
-→ `tauri build` → report what was produced and whether any of it is signed.
+→ `tauri build` → report what was produced and whether each piece of it is
+signed.
 
 Output:
 
@@ -57,8 +59,40 @@ one target that actually works beats building two where only one does — see
 [DEVICE_ENROLMENT.md](DEVICE_ENROLMENT.md#uninstalling) for what the
 uninstall is supposed to guarantee.
 
-The script signs nothing. That is deliberate: it means it can be run on any
-machine, including one that has no business holding a signing credential.
+Without `-Sign` the script signs nothing, and can be run on any machine,
+including one that has no business holding a signing credential.
+
+## What "signed" has to mean
+
+**Signing the installer is not signing the product.** The installer is a
+container: by the time it exists, the application and the service have already
+been packaged into it. A signature applied to the installer afterwards says
+nothing about the two executables a customer actually runs, and they were the
+ones SmartScreen complained about.
+
+This was a real defect here, and the shape of it is worth remembering: the
+release signed `bundle/nsis/*.exe` after the build, verified *that file*,
+found it correctly signed and timestamped, and published an installer
+containing two unsigned binaries. Every check passed. The check simply was not
+looking at them.
+
+So signing happens **during** the build. `build.ps1 -Sign` passes
+`scripts/windows/sign.ps1` to the Tauri bundler as its `signCommand`, and the
+bundler calls it, in this order, on:
+
+1. `AicountlyRemote.exe` — the application;
+2. `AicountlyRemoteService.exe` — the service sidecar;
+3. the NSIS plugin DLLs that go inside the installer;
+4. the uninstaller (through NSIS's `!uninstfinalize`);
+5. the installer itself.
+
+Each one before it is packaged into the next, which is the only order in which
+the result is signed all the way down. `sign.ps1` still owns every credential
+and still refuses to run without one, so `-Sign` with nothing configured fails
+on the first binary rather than quietly producing an unsigned build.
+
+`verify.ps1` is then run on the installer **and** on both executables, because
+a verification that only reads the installer is the one that missed this.
 
 ## Signing
 
@@ -112,13 +146,21 @@ machines that downloaded the installer years earlier. `verify.ps1` fails a
 release whose signature has no timestamp.
 
 ```powershell
+# What the bundler runs per file, and what you can run by hand on one.
 pwsh -File scripts/windows/sign.ps1   -Path target/.../bundle/nsis/*.exe
-pwsh -File scripts/windows/verify.ps1 -Path target/.../bundle/nsis/*.exe
+
+pwsh -File scripts/windows/verify.ps1 -Path `
+  target/.../bundle/nsis/*.exe, `
+  target/.../AicountlyRemote.exe, `
+  src-tauri/binaries/AicountlyRemoteService-x86_64-pc-windows-msvc.exe
 ```
 
 `verify.ps1` checks four things and exits non-zero on any of them: the
 signature is valid, it is timestamped, the certificate is not self-signed, and
-the digest is SHA-256.
+the digest is SHA-256. `sign.ps1` runs it on whatever it just signed and
+**throws** if it fails — a signature that did not take used to be printed and
+then ignored, because a script called with `&` that exits does not stop its
+caller.
 
 ## The release workflow
 

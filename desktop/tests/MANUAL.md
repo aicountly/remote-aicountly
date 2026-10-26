@@ -32,14 +32,16 @@ Record the build under test — the version, the commit and whether it is signed
 | 1.2 | *(unsigned build)* Read the SmartScreen warning | It appears. **This is correct.** Do not add an exclusion; note it and continue |
 | 1.3 | `sc.exe query AicountlyRemoteService` | `STATE : 4 RUNNING` |
 | 1.4 | `services.msc` | "AICOUNTLY Remote Service", Automatic (Delayed Start), Local System |
-| 1.5 | `Get-Acl C:\ProgramData\AICOUNTLY\Remote \| Format-List` | SYSTEM and Administrators full; Users read; **no** Everyone entry |
+| 1.5 | `Get-Acl C:\ProgramData\AICOUNTLY\Remote \| Format-List` | SYSTEM and Administrators full; Users **modify**; **no** Everyone entry. Modify, not read — the tray application writes all three files in there as the signed-in person; see docs/desktop/WINDOWS_AGENT.md |
 | 1.6 | Start Menu | An "AICOUNTLY Remote" entry that launches the tray application |
 | 1.7 | Task Manager → Startup apps | "AICOUNTLY Remote", enabled, removable |
 | 1.8 | Check UAC settings before and after | **Unchanged.** `ConsentPromptBehaviorAdmin` and `PromptOnSecureDesktop` untouched |
 | 1.9 | Check Windows Security | No exclusion added; no setting changed |
 | 1.10 | Finish the installer with "Run AICOUNTLY Remote" ticked | The window opens |
 | 1.11 | Sign out and back in (or restart) | The tray icon appears and the window does **not** open: the Run entry passes `--background` |
-| 1.12 | With the agent already running, start `"AICOUNTLY Remote.exe" --background` again | Nothing opens. Start it again without the flag: the existing window comes to the front |
+| 1.11a | `Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AICOUNTLY Remote"`, then `Test-Path` the executable in it | The path exists. It names `AicountlyRemote.exe` — the `[[bin]]` name, not the product name. A Run value naming a missing file is not an error Windows reports to anybody, so the tray application simply never started |
+| 1.11b | `Get-ChildItem C:\ProgramData\AICOUNTLY\Remote\logs` | `agent.log` and `service.log`, both with recent lines in them. Neither contains a key, a token, a clipboard payload or a frame |
+| 1.12 | With the agent already running, start `"AicountlyRemote.exe" --background` again | Nothing opens. Start it again without the flag: the existing window comes to the front |
 
 ### 1a. Upgrade and reinstall over a running install
 
@@ -51,6 +53,12 @@ Record the build under test — the version, the commit and whether it is signed
 | 1a.4 | Install the same build twice in a row | Still one service, one Run entry, one Start Menu entry |
 
 ## 2. Registration
+
+**Do this as an ordinary, non-administrator account**, signed in normally, with
+no elevation anywhere. That is who registers a computer, and it is the case a
+read-only data directory broke: every write — the key, the enrolment record,
+the configuration — failed with "Access is denied" on a freshly installed
+product.
 
 | # | Do | Expect |
 |---|---|---|
@@ -71,8 +79,8 @@ Record the build under test — the version, the commit and whether it is signed
 
 | # | Do | Expect |
 |---|---|---|
-| 2a.1 | As a **standard** user, change Screen quality and press Save | A clear message that settings can only be changed by an administrator, not "could not be read" |
-| 2a.2 | As an administrator, run the agent elevated and Save | It saves; `config.json` in `C:\ProgramData\AICOUNTLY\Remote` changes; the service picks it up on its next start |
+| 2a.1 | As a **standard** user, change Screen quality and press Save | It saves. `config.json` in `C:\ProgramData\AICOUNTLY\Remote` changes, and the service picks it up on its next start. No elevation, no "Access is denied" — the data directory grants the Users group modify for exactly this |
+| 2a.2 | Then open `config.json` in Notepad as that same user | The new value is in it, and the file is the machine-wide one — not a per-user copy somewhere else |
 | 2a.3 | Turn "Keep running when the window is closed" **off**, Save, close the window | The agent exits and the tray icon goes |
 | 2a.4 | Same setting off, but with a session running, close the window | The window hides and the agent keeps running: a running session is never left without its tray icon |
 | 2a.5 | The Settings page | No "Start when I sign in" switch; the text points to Task Manager → Startup apps |
@@ -87,8 +95,13 @@ Record the build under test — the version, the commit and whether it is signed
 | 3.4 | Sleep the machine, wake it | It recovers |
 | 3.5 | Turn `allow_remote_control` **off** in Remote policy | Within one poll the agent's Permissions panel says remote control is not permitted |
 | 3.6 | Turn it back on | It comes back |
-| 3.7 | `sc.exe stop AicountlyRemoteService` while the agent is open | The agent says the background service is not running and does **not** crash |
+| 3.7 | `sc.exe stop AicountlyRemoteService` while the agent is open | The agent says the background service is not running and does **not** crash. The About panel says so within a few seconds rather than hanging — the IPC round trip has a three-second deadline |
 | 3.8 | `sc.exe start` it | It reconnects |
+| 3.9 | **Quit** the agent from the tray (not just close the window) and wait two presence intervals | The Computers page still shows the machine online. The service holds its own device credential — `service.log` has "this computer authenticated with AICOUNTLY Remote" and an expiry — and reports presence without the window. This is the whole point of the service |
+| 3.10 | Sign out of Windows entirely, wait two presence intervals | Still online. That is what "reachable before anybody signs in" means, and it is what a machine with no credential in the service could never do |
+| 3.11 | Open the agent again and read the About panel | The background service reports **enrolled**, with this machine's device uuid and the same key fingerprint the window shows — not "not registered" |
+| 3.12 | Revoke the device on the Computers page, then watch `service.log` | It stops reporting and says the computer is no longer accepted. It does **not** keep retrying for ever, and it does **not** stop the service |
+| 3.13 | Register the machine again from the window, **without** restarting the service | `service.log` shows the service authenticating within seconds, not at its next interval — the window tells it to look — and the machine is online again. A revoked-then-reregistered machine must not need a service restart |
 
 ## 4. Attended control
 
@@ -183,7 +196,7 @@ to do the thing.
 | 10.4 | Connect, and send a frame claiming version 99 | `VERSION_MISMATCH`, with the fix in the message |
 | 10.5 | Connect and send a request without `Hello` | `NOT_AUTHENTICATED` |
 | 10.6 | Send a frame claiming 4 GB of payload | Refused before anything is allocated; the service does not grow |
-| 10.7 | Connect nine times at once | The ninth is dropped; the service stays responsive |
+| 10.7 | Connect nine times at once, hold them all open, then close them and connect again | The ninth is dropped and the service **stays responsive** — including afterwards. A busy pipe is not a broken one, and the accept loop used to treat "every instance in use" as fatal and stop serving altogether |
 | 10.8 | Connect and go silent | Dropped after the idle timeout |
 | 10.9 | `netstat -ano \| findstr LISTENING` | **No** listening TCP port belongs to either AICOUNTLY process |
 

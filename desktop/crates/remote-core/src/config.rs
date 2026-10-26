@@ -184,11 +184,13 @@ impl AgentConfig {
 
 /// A failed write, said as what it is.
 ///
-/// The data directory is writable by SYSTEM and administrators only (see
-/// `installers/windows/hooks.nsh`), and the tray application runs as whoever is
-/// signed in — so "access denied" is the ordinary outcome of Save for a person
-/// who is not an administrator, and it must not be reported as a configuration
-/// that "could not be read".
+/// The data directory is writable by SYSTEM, administrators **and the Users
+/// group** (see `installers/windows/hooks.nsh`), because the tray application
+/// runs as whoever is signed in and Save is theirs to press. So "access
+/// denied" here is not the ordinary outcome of Save by a non-administrator —
+/// it means the directory's own permissions are wrong, which is what the
+/// message says and what reinstalling repairs. Either way it is not a
+/// configuration that "could not be read".
 fn not_saved(error: std::io::Error) -> ConfigError {
     if error.kind() == std::io::ErrorKind::PermissionDenied {
         ConfigError::NotPermitted
@@ -285,7 +287,15 @@ pub enum ConfigError {
     NotSaved(String),
 
     /// The configuration file is not writable by this account.
-    #[error("the settings can only be changed by an administrator of this computer")]
+    ///
+    /// Not an ordinary outcome: the installer grants the Users group modify
+    /// on the data directory precisely so that the person at the machine can
+    /// change a setting. Seeing this means the directory's permissions are
+    /// not the ones the installer sets.
+    #[error(
+        "the settings could not be saved: this computer's AICOUNTLY Remote data folder is not \
+         writable. Reinstalling AICOUNTLY Remote repairs its permissions."
+    )]
     NotPermitted,
 
     /// A plaintext endpoint outside a debug build.
@@ -479,14 +489,24 @@ mod tests {
         assert!(config.endpoint("//evil.example.com/steal").is_err());
     }
 
+    /// The installer grants the Users group modify on the data directory, so
+    /// a refused write is a broken installation rather than a person without
+    /// rights — and the message has to point at the thing that fixes it.
     #[test]
-    fn a_refused_write_says_it_needs_an_administrator() {
+    fn a_refused_write_says_the_data_folder_is_not_writable() {
         let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
 
         assert_eq!(not_saved(denied), ConfigError::NotPermitted);
-        assert!(ConfigError::NotPermitted
-            .to_string()
-            .contains("administrator"));
+
+        let message = ConfigError::NotPermitted.to_string();
+
+        assert!(message.contains("not"), "{message}");
+        assert!(message.contains("writable"), "{message}");
+        assert!(message.contains("Reinstalling"), "{message}");
+        assert!(
+            !message.contains("administrator"),
+            "an ordinary person pressing Save is not the problem: {message}"
+        );
     }
 
     #[test]

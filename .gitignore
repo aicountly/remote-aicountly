@@ -61,3 +61,7 @@ Thumbs.db
 # Installer artifacts. Built by the release workflow, never committed.
 /desktop/installers/windows/out/
 /desktop/installers/macos/out/
+# Where the release workflow and scripts/windows/build.ps1 collect the
+# installers and their checksums before uploading them. An installer is a
+# release artifact; it does not belong in the history.
+/desktop/release/

@@ -23,13 +23,21 @@
 //!
 //! # Authentication
 //!
-//! The pipe's ACL is the first gate: only `LocalSystem` and `Administrators`
-//! may connect ([`crate::PipeSecurity`]). The second is
+//! The pipe's ACL is the first gate: only `LocalSystem`, `Administrators` and
+//! the **interactive** user — the account a person is actually signed in at
+//! this machine as, which is what the tray application runs as — may connect,
+//! and a mandatory label keeps anything below medium integrity out
+//! ([`crate::PipeSecurity`]). The second is
 //! [`IpcRequest::Hello`], which both ends exchange before anything else — the
-//! service verifies the client is the signed executable it expects, and the
-//! client verifies the service's version. Neither is sufficient alone: an ACL
-//! without a handshake accepts any elevated process, and a handshake without
-//! an ACL is a protocol anyone can speak.
+//! two ends agree a protocol version and refuse a half-updated pair of
+//! binaries. Neither gate is sufficient alone: an ACL without a handshake
+//! accepts a peer speaking an older protocol, and a handshake without an ACL
+//! is a protocol anyone on the machine can speak.
+//!
+//! What the handshake is **not** is proof that the peer is the genuine
+//! application: a process already running as the signed-in person could speak
+//! this protocol, and nothing at this layer could tell the difference. That is
+//! why the protocol is the size it is — see [`crate::machine`].
 
 use serde::{Deserialize, Serialize};
 
