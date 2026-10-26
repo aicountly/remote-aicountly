@@ -135,6 +135,8 @@ try {
     $tauriArgs = @('run', 'tauri', '--', 'build', '--target', $Target)
     if ($Configuration -eq 'debug') { $tauriArgs += '--debug' }
 
+    $signLog = $null
+
     if ($Sign) {
         $signScript = Join-Path $desktopRoot 'scripts/windows/sign.ps1'
         if (-not (Test-Path $signScript)) {
@@ -156,15 +158,37 @@ try {
         $overlay = @{ bundle = @{ windows = @{ signCommand = $signCommand } } } |
             ConvertTo-Json -Depth 8 -Compress
 
+        # The bundler captures the signing command's output and logs it at
+        # debug level, so a signtool failure inside it surfaces as `failed to
+        # run pwsh` and nothing else -- which is how a release run failed with
+        # no cause attached. sign.ps1 writes everything here as well, and this
+        # prints it whether the build succeeded or not: a signature is the one
+        # part of a release nobody can inspect afterwards without the log.
+        $signLog = Join-Path $desktopRoot "target/$Target/$Configuration/signing.log"
+        New-Item -ItemType Directory -Force -Path (Split-Path $signLog) | Out-Null
+        Remove-Item $signLog -Force -ErrorAction SilentlyContinue
+        $env:AICOUNTLY_SIGN_LOG = $signLog
+
         Write-Host ''
         Write-Host 'Signing is on: every binary and the installer.' -ForegroundColor Cyan
         Write-Host "  sign command: pwsh -File $signScript -Path <file>"
+        Write-Host "  signing log:  $signLog"
 
         $tauriArgs += @('--config', $overlay)
     }
 
     & npm @tauriArgs
-    if ($LASTEXITCODE -ne 0) { throw 'The application did not build.' }
+    $tauriExit = $LASTEXITCODE
+
+    if ($signLog -and (Test-Path $signLog)) {
+        Write-Host ''
+        Write-Host '----- signing log -----' -ForegroundColor DarkGray
+        Get-Content $signLog | ForEach-Object { Write-Host $_ }
+        Write-Host '----- end of signing log -----' -ForegroundColor DarkGray
+        Write-Host ''
+    }
+
+    if ($tauriExit -ne 0) { throw 'The application did not build.' }
 
     # ----------------------------------------------------------------- the report
     #

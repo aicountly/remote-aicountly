@@ -48,6 +48,40 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# Everything this script says also goes to a file, when the caller names one.
+#
+# The Tauri bundler runs this script per binary and captures its output:
+# tauri-bundler's `output_ok` pipes stdout and stderr, logs each line at
+# **debug** level, and on a non-zero exit returns `failed to run pwsh` and
+# nothing else. So a signtool failure inside the bundler -- a refused
+# credential, a missing file, anything -- reaches a release log as four words
+# with no cause attached. That is exactly what happened: a release run died
+# here and said only `failed to bundle project: failed to run pwsh`.
+#
+# `build.ps1` names the file and prints it when the bundler fails.
+$log = $env:AICOUNTLY_SIGN_LOG
+
+function Write-Signing {
+    param([string] $Message)
+
+    Write-Host $Message
+
+    if ($log) {
+        Add-Content -Path $log -Value $Message -Encoding utf8 -ErrorAction SilentlyContinue
+    }
+}
+
+# `break` in a trap re-throws and stops the script, which is what we want: the
+# reason reaches the log on its way out instead of disappearing into the
+# bundler's debug stream.
+trap {
+    if ($log) {
+        Add-Content -Path $log -Value "FAILED: $_" -Encoding utf8 -ErrorAction SilentlyContinue
+    }
+
+    break
+}
+
 # RFC 3161. A signature without one expires with the certificate; with one it
 # keeps verifying for the life of the timestamp authority's own certificate.
 $timestampUrl = if ($env:AICOUNTLY_SIGN_TIMESTAMP_URL) {
@@ -79,13 +113,51 @@ docs/desktop/WINDOWS_RELEASE.md.
 '@
 }
 
+# The bundler substitutes the file it has just produced for `%1` **verbatim**,
+# while making every other relative argument absolute (tauri-bundler's
+# `sign_command_custom`). That path is relative to the bundler's working
+# directory, which is not necessarily this script's: the sidecar arrives as
+# `binaries\AicountlyRemoteService-<triple>.exe`, relative to `src-tauri`, and
+# the uninstaller arrives from inside makensis, from somewhere else again. So a
+# pattern that matches nothing here is tried against the roots this build
+# actually uses before it is called a failure.
+$desktopRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+
+$roots = @(
+    (Get-Location).Path,
+    $desktopRoot,
+    (Join-Path $desktopRoot 'src-tauri')
+) | Select-Object -Unique
+
+Write-Signing "sign.ps1: $($Path -join ', ')"
+Write-Signing "  working directory: $((Get-Location).Path)"
+
 $files = @()
 foreach ($pattern in $Path) {
-    $files += Get-ChildItem $pattern -File -ErrorAction SilentlyContinue
+    $matched = @(Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue)
+
+    if ($matched.Count -eq 0 -and -not [System.IO.Path]::IsPathRooted($pattern)) {
+        foreach ($root in $roots) {
+            $candidate = @(Get-ChildItem -Path (Join-Path $root $pattern) -File -ErrorAction SilentlyContinue)
+
+            if ($candidate.Count -gt 0) {
+                Write-Signing "  resolved against $root"
+                $matched = $candidate
+                break
+            }
+        }
+    }
+
+    $files += $matched
 }
 
 if ($files.Count -eq 0) {
-    throw "Nothing matched: $($Path -join ', ')"
+    throw @"
+Nothing matched: $($Path -join ', ')
+
+Working directory: $((Get-Location).Path)
+Roots tried:       $($roots -join '; ')
+"@
 }
 
 function Resolve-SignTool {
@@ -116,7 +188,7 @@ function Resolve-SignTool {
 }
 
 $signtool = Resolve-SignTool
-Write-Host "signtool: $signtool" -ForegroundColor DarkGray
+Write-Signing "signtool: $signtool"
 
 switch ($method) {
     'trusted-signing' {
@@ -148,12 +220,27 @@ switch ($method) {
 
         try {
             foreach ($file in $files) {
-                Write-Host "Signing $($file.Name)..." -ForegroundColor Cyan
+                Write-Signing "Signing $($file.Name)..."
 
-                & $signtool sign /v /fd SHA256 /tr $timestampUrl /td SHA256 `
-                    /dlib $dlib /dmdf $metadata $file.FullName
+                # Captured rather than left to the console, because the console
+                # is the bundler's debug stream. `2>&1` on a native command
+                # turns its stderr into error records, which with
+                # ErrorActionPreference=Stop would throw before the exit code
+                # is read -- hence the narrow Continue around this one call.
+                $previous = $ErrorActionPreference
+                $ErrorActionPreference = 'Continue'
+                try {
+                    $output = & $signtool sign /v /fd SHA256 /tr $timestampUrl /td SHA256 `
+                        /dlib $dlib /dmdf $metadata $file.FullName 2>&1
+                    $exit = $LASTEXITCODE
+                }
+                finally {
+                    $ErrorActionPreference = $previous
+                }
 
-                if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($file.Name)." }
+                foreach ($line in $output) { Write-Signing "  $line" }
+
+                if ($exit -ne 0) { throw "signtool failed on $($file.Name) (exit $exit)." }
             }
         }
         finally {
@@ -188,12 +275,23 @@ signing path here and this script will not use one.
         }
 
         foreach ($file in $files) {
-            Write-Host "Signing $($file.Name)..." -ForegroundColor Cyan
+            Write-Signing "Signing $($file.Name)..."
 
-            & $signtool sign /v /fd SHA256 /tr $timestampUrl /td SHA256 `
-                /sha1 $thumbprint $file.FullName
+            # Captured for the same reason as the Trusted Signing path above.
+            $previous = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $output = & $signtool sign /v /fd SHA256 /tr $timestampUrl /td SHA256 `
+                    /sha1 $thumbprint $file.FullName 2>&1
+                $exit = $LASTEXITCODE
+            }
+            finally {
+                $ErrorActionPreference = $previous
+            }
 
-            if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($file.Name)." }
+            foreach ($line in $output) { Write-Signing "  $line" }
+
+            if ($exit -ne 0) { throw "signtool failed on $($file.Name) (exit $exit)." }
         }
     }
 
@@ -202,8 +300,8 @@ signing path here and this script will not use one.
     }
 }
 
-Write-Host ''
-Write-Host 'Verifying...' -ForegroundColor Cyan
+Write-Signing ''
+Write-Signing 'Verifying...'
 
 # Verifying after signing is not ceremony: a signature that did not take, or
 # took without a timestamp, is one a customer discovers rather than the release
