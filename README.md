@@ -119,7 +119,7 @@ is no local login to fake. See
 cd backend    && vendor/bin/phpunit      # 211 — policy, tenant isolation, devices, control
 cd web        && npm test                # 104 — capture, capability gating, control input
 cd signalling && npm test                #  27 — tokens, rooms, device rooms, live relay
-cd desktop    && cargo test --workspace  # 427 — protocol, gate, identity, state, session, service, the installer
+cd desktop    && cargo test --workspace  # 432 — protocol, gate, identity, state, session, service, the installer
 cd desktop    && npm test                #  36 — the agent's own interface
 ```
 
