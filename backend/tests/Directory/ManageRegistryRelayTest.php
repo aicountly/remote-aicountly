@@ -197,6 +197,16 @@ final class ManageRegistryRelayTest extends CIUnitTestCase
         $this->assertCount(3, $relay->sent, 'nothing else reaches Manage');
     }
 
+    /** CodeIgniter throws for a status it has no reason phrase for (a CDN's 522, a host's 509): a 502 instead. */
+    public function testAnUpstreamStatusCodeIgniterDoesNotKnowIsA502(): void
+    {
+        Services::injectMock('manageRegistryRelay', self::scripted(['status' => 522, 'contentType' => 'application/json', 'body' => '{"error":"origin_timeout"}', 'correlationId' => '']));
+
+        $result = $this->withHeaders(['Authorization' => 'Bearer ses-1'])->call('get', 'manage/v1/workspaces');
+        $result->assertStatus(502);
+        $this->assertSame('{"error":"origin_timeout"}', (string) $result->response()->getBody());
+    }
+
     public function testSignOutIsRelayedToThePortal(): void
     {
         $portal = new class (Services::remoteConfig()) extends PortalClient {

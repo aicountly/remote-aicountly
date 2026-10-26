@@ -1,0 +1,136 @@
+name: Find a support reference (manual, read-only)
+
+# Prints the server log lines for a support reference — the "Ref: …" a user's error shows, which the
+# API logged with the failure (X-Request-Id). Read-only: scripts/ops/find-ref.sh is piped over SSH
+# and greps the API's log folders: the live api/ (given with a trailing slash — since atomic deploys
+# it is a symlink to the current release) and the releases' shared folder
+# ~/aicountly-releases/<document root folder>-api/shared, which holds writable/ (writable/logs).
+# Secrets and e-mail addresses are masked; nothing is installed or written. SSH is set up exactly as
+# verify-live.yml does (same secrets, host key scanned per run).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: The reference to look up (6-64 characters of A-Z a-z 0-9 . _ -)
+        type: string
+        required: true
+      environment:
+        description: Server to search
+        type: choice
+        options:
+          - production
+          - sandbox
+        default: production
+      days:
+        description: Search log files modified in the last N days (1-31)
+        type: string
+        default: '7'
+
+permissions:
+  contents: read
+
+jobs:
+  find:
+    name: Find a reference (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Validate the reference
+        env:
+          REF: ${{ inputs.ref }}
+          DAYS: ${{ inputs.days }}
+        run: |
+          if ! printf '%s' "$REF" | grep -Eq '^[A-Za-z0-9._-]{6,64}$'; then
+            echo "::error::The reference must be 6-64 characters of letters, digits, '.', '_' or '-'."
+            exit 1
+          fi
+          case "$DAYS" in '' | *[!0-9]*) echo "::error::days must be a number"; exit 1 ;; esac
+
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # The same SSH setup as verify-live.yml.
+      - name: Configure SSH
+        env:
+          TARGET: ${{ inputs.environment }}
+          SSH_PRIVATE_KEY: ${{ inputs.environment == 'production' && secrets.PROD_SSH_PRIVATE_KEY || secrets.SANDBOX_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ inputs.environment == 'production' && secrets.PROD_SSH_HOST || secrets.SANDBOX_SSH_HOST }}
+          SSH_USER: ${{ inputs.environment == 'production' && secrets.PROD_SSH_USER || secrets.SANDBOX_SSH_USER }}
+          # The port is optional (default 22). The default sits inside each
+          # branch, so an unset production port cannot fall through to the
+          # sandbox one.
+          SSH_PORT: ${{ inputs.environment == 'production' && (secrets.PROD_SSH_PORT || '22') || (secrets.SANDBOX_SSH_PORT || '22') }}
+        run: |
+          if [ "$TARGET" = production ]; then p=PROD; else p=SANDBOX; fi
+          missing=""
+          [ -n "$SSH_HOST" ]        || missing="$missing ${p}_SSH_HOST"
+          [ -n "$SSH_USER" ]        || missing="$missing ${p}_SSH_USER"
+          [ -n "$SSH_PRIVATE_KEY" ] || missing="$missing ${p}_SSH_PRIVATE_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing or empty required secret(s):$missing"
+            exit 1
+          fi
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          sed -i 's/\r$//' ~/.ssh/deploy_key
+          if ! ssh-keygen -y -f ~/.ssh/deploy_key > /dev/null 2>&1; then
+            echo "::error::${p}_SSH_PRIVATE_KEY is not a usable OpenSSH private key."
+            exit 1
+          fi
+
+          # Pin the host key so the check fails closed rather than trusting
+          # whatever answers on that address.
+          if ! ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/tmp/keyscan.err; then
+            echo "::error::ssh-keyscan could not reach the host on the configured port."
+            sed 's/^/    /' /tmp/keyscan.err
+            exit 1
+          fi
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error::The host returned no SSH host key. Check ${p}_SSH_HOST and ${p}_SSH_PORT."
+            exit 1
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+          # Older cPanel hosts offer only RSA with SHA-1, hence the +ssh-rsa.
+          cat > ~/.ssh/config <<CFG
+          Host deploy-target
+            HostName $SSH_HOST
+            User $SSH_USER
+            Port $SSH_PORT
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            PubkeyAcceptedAlgorithms +ssh-rsa
+            HostKeyAlgorithms +ssh-rsa
+            BatchMode yes
+          CFG
+          chmod 600 ~/.ssh/config
+
+      - name: Search the API logs
+        env:
+          REF: ${{ inputs.ref }}
+          DAYS: ${{ inputs.days }}
+          TARGET: ${{ inputs.environment }}
+          REMOTE_ROOT: ${{ inputs.environment == 'production' && secrets.PROD_SSH_REMOTE_ROOT || secrets.SANDBOX_SSH_REMOTE_ROOT }}
+        run: |
+          printf '%s' "$REF" | grep -Eq '^[A-Za-z0-9._-]{6,64}$' || { echo "::error::bad reference"; exit 1; }
+          case "$DAYS" in '' | *[!0-9]*) DAYS=7 ;; esac
+          [ -n "$REMOTE_ROOT" ] || { echo "::error::the document root secret is not set for $TARGET"; exit 1; }
+          # The document root as the deploys resolve it (relative to the SSH home), its api/ with a trailing
+          # slash, and the releases' shared folder named after the document root's folder, as
+          # backend/bin/ops/atomic-switch.sh names it.
+          root="$(printf '%q' "${REMOTE_ROOT#\~/}")"
+          DIRS="\"\$(cd $root && pwd)/api/\" \"\$HOME/aicountly-releases/\$(basename \"\$(cd $root && pwd -P)\")-api/shared\""
+          rc=0
+          ssh deploy-target "bash -s -- '$REF' '$DAYS' $DIRS" < scripts/ops/find-ref.sh || rc=$?
+          [ "$rc" = 1 ] && echo "::notice::No log line carries ${REF} on ${TARGET} in the last ${DAYS} days."
+          [ "$rc" -le 1 ] || exit "$rc"
+
+      - name: Clean up SSH credentials
+        if: always()
+        run: rm -f ~/.ssh/deploy_key ~/.ssh/config

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Domain\Support\RelayStatus;
 use CodeIgniter\Controller;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
@@ -103,8 +104,9 @@ class PortalRelayController extends Controller
                 ]);
         }
 
+        // RelayStatus: CodeIgniter throws for a code it has no reason phrase for (a CDN's 520-527, a host's 509).
         $response = $this->response
-            ->setStatusCode($result['status'])
+            ->setStatusCode(RelayStatus::forClient((int) $result['status']))
             ->setContentType($result['contentType'])
             ->setHeader('Cache-Control', 'no-store');
 

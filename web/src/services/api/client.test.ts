@@ -51,3 +51,48 @@ describe('an outage of the sign-in service is not a signed-out person (I-16)', (
     await expect(apiFetch('/bootstrap')).rejects.toMatchObject({ code: 'AUTH_UNAVAILABLE', status: 503 })
   })
 })
+
+describe('a server failure carries a support reference (no blank errors)', () => {
+  beforeEach(() => {
+    vi.mocked(ensureSesKey).mockResolvedValue('ses-key')
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.resetAllMocks()
+  })
+
+  it('sends a fresh X-Request-Id and quotes it when a 500 comes back with no body', async () => {
+    const fetchMock = vi.fn(async () => new Response('', { status: 500 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const error = (await apiFetch('/bootstrap').catch((e: unknown) => e)) as RemoteApiError
+    const sent = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].headers as Record<string, string>
+    expect(sent['X-Request-Id']).toMatch(/^[0-9a-f]{32}$/)
+    expect(error.status).toBe(500)
+    expect(error.message).toBe(`Something went wrong. Please try again. (Ref: ${sent['X-Request-Id']})`)
+  })
+
+  it("prefers the reference the server logged, and leaves a 4xx's sentence alone", async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: { code: 'SERVER_ERROR', message: 'Something went wrong at our end. Please try again.', request_id: 'srv-ref-123456' }, request_id: 'srv-ref-123456' }), {
+            status: 500,
+          }),
+      ),
+    )
+    await expect(apiFetch('/bootstrap')).rejects.toMatchObject({
+      message: 'Something went wrong at our end. Please try again. (Ref: srv-ref-123456)',
+    })
+
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Not found.' } }), { status: 404 })))
+    await expect(apiFetch('/bootstrap')).rejects.toMatchObject({ message: 'Not found.', status: 404 })
+  })
+
+  it('reads an HTML error page on the metadata variant as a failure with a reference, not a parse error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<html>502 Bad Gateway</html>', { status: 502, headers: { 'X-Request-Id': 'proxy-ref-abcdef' } })))
+    const error = (await apiFetchWithMeta('/sessions/history').catch((e: unknown) => e)) as RemoteApiError
+    expect(error).toBeInstanceOf(RemoteApiError)
+    expect(error.message).toBe('Something went wrong. Please try again. (Ref: proxy-ref-abcdef)')
+  })
+})

@@ -48,6 +48,41 @@ export class RemoteApiError extends Error {
 }
 
 // ---------------------------------------------------------------------------
+// Support reference
+// ---------------------------------------------------------------------------
+
+/**
+ * A fresh X-Request-Id for one call (32 hex). The API logs a failure under the
+ * id it was sent and answers it back as `request_id`, so a 5xx can show it as
+ * "Ref: …" — what support searches the server log for (find-ref workflow).
+ */
+export function newRequestId(): string {
+  const bytes = new Uint8Array(16)
+  try {
+    crypto.getRandomValues(bytes)
+  } catch {
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256)
+  }
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/** The reference a failed call was logged under: the body's, else the header's, else the one sent. */
+function referenceOf(response: Response, payload: unknown, sent: string): string {
+  const body = payload as { request_id?: unknown; error?: { request_id?: unknown } } | null
+  const fromBody = body?.request_id ?? body?.error?.request_id
+  if (typeof fromBody === 'string' && fromBody.trim() !== '') return fromBody.trim()
+  const fromHeader = response.headers?.get?.('X-Request-Id')?.trim() ?? ''
+  return fromHeader !== '' ? fromHeader : sent
+}
+
+/** A 5xx message carries the reference, even when the server sent no body at all. */
+function withReference(message: string, response: Response, payload: unknown, sent: string): string {
+  if (response.status < 500) return message
+  const ref = referenceOf(response, payload, sent)
+  return ref !== '' && !message.includes(ref) ? `${message} (Ref: ${ref})` : message
+}
+
+// ---------------------------------------------------------------------------
 // Guest credential
 // ---------------------------------------------------------------------------
 
@@ -166,7 +201,8 @@ function authFailure(error: AuthError): RemoteApiError {
 export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const { method = 'GET', body, withLaunchContext = false, anonymous = false, signal } = options
 
-  const headers: Record<string, string> = { Accept: 'application/json' }
+  const requestId = newRequestId()
+  const headers: Record<string, string> = { Accept: 'application/json', 'X-Request-Id': requestId }
 
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json'
@@ -241,7 +277,7 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
 
     throw new RemoteApiError(
       error?.code ?? 'REQUEST_FAILED',
-      error?.message ?? 'Something went wrong. Please try again.',
+      withReference(error?.message ?? 'Something went wrong. Please try again.', response, payload, requestId),
       response.status,
       error?.details ?? {},
     )
@@ -257,7 +293,8 @@ export async function apiFetchWithMeta<T>(
 ): Promise<{ data: T; meta: Record<string, unknown> }> {
   const { method = 'GET', body, anonymous = false, signal } = options
 
-  const headers: Record<string, string> = { Accept: 'application/json' }
+  const requestId = newRequestId()
+  const headers: Record<string, string> = { Accept: 'application/json', 'X-Request-Id': requestId }
   if (body !== undefined) headers['Content-Type'] = 'application/json'
 
   try {
@@ -292,13 +329,22 @@ export async function apiFetchWithMeta<T>(
   }
 
   const text = await response.text()
-  const payload = text ? (JSON.parse(text) as ApiEnvelope<T> & { error?: { code: string; message: string; details?: Record<string, unknown> } }) : null
+  type MetaPayload = ApiEnvelope<T> & { error?: { code: string; message: string; details?: Record<string, unknown> } }
+  let payload: MetaPayload | null = null
+  if (text) {
+    try {
+      payload = JSON.parse(text) as MetaPayload
+    } catch {
+      // A body that is not JSON (an HTML error page): the status and the reference still say what happened.
+      payload = null
+    }
+  }
 
   if (!response.ok) {
     noteRestrictedResponse(activeCompanyForRestrictions(), response.status, payload)
     throw new RemoteApiError(
       payload?.error?.code ?? 'REQUEST_FAILED',
-      payload?.error?.message ?? 'Something went wrong. Please try again.',
+      withReference(payload?.error?.message ?? 'Something went wrong. Please try again.', response, payload, requestId),
       response.status,
       payload?.error?.details ?? {},
     )
@@ -313,7 +359,8 @@ export async function apiFetchWithMeta<T>(
  * cut at its row cap.
  */
 export async function apiFetchText(path: string): Promise<{ text: string; partial: boolean }> {
-  const headers: Record<string, string> = { Accept: 'text/csv' }
+  const requestId = newRequestId()
+  const headers: Record<string, string> = { Accept: 'text/csv', 'X-Request-Id': requestId }
 
   try {
     const auth = await authorization(false)
@@ -333,15 +380,16 @@ export async function apiFetchText(path: string): Promise<{ text: string; partia
   const text = await response.text()
 
   if (!response.ok) {
-    let error: { code?: string; message?: string } | undefined
+    let parsed: { error?: { code?: string; message?: string } } | null = null
     try {
-      error = (JSON.parse(text) as { error?: { code?: string; message?: string } }).error
+      parsed = JSON.parse(text) as { error?: { code?: string; message?: string } }
     } catch {
-      error = undefined
+      parsed = null
     }
+    const error = parsed?.error
     throw new RemoteApiError(
       error?.code ?? 'REQUEST_FAILED',
-      error?.message ?? 'Something went wrong. Please try again.',
+      withReference(error?.message ?? 'Something went wrong. Please try again.', response, parsed, requestId),
       response.status,
     )
   }

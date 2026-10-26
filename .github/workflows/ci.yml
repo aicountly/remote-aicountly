@@ -113,6 +113,11 @@ jobs:
         if: ${{ failure() }}
         run: python3 scripts/ci/junit-annotate.py "$RUNNER_TEMP/phpunit.xml" "PHPUnit (backend)"
 
+      # Atomic deploys: the real API across releases through the api/ symlink, as scripts/ci/remote-release.sh
+      # switches it (backend/bin/ops/atomic-switch.sh), against the CI test database above.
+      - name: Atomic release test (php -S, through the api symlink)
+        run: bash scripts/ci/atomic-release-test.sh
+
       # The failover chain on two throwaway local relays (health probe -> health file -> grant), as an
       # unprivileged user. A test of the selection logic only; it says nothing about the real nodes.
       - name: ICE failover simulation (local relays, selection logic only)

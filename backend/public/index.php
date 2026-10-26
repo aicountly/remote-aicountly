@@ -1,5 +1,17 @@
 <?php
 
+// >>> aicountly atomic entry (bin/ops/atomic-entry.php.txt) >>>
+if (PHP_SAPI !== 'cli' && !defined('AICOUNTLY_ATOMIC_ENTRY') && isset($_SERVER['SCRIPT_FILENAME'])) {
+    define('AICOUNTLY_ATOMIC_ENTRY', true);
+    clearstatcache(true);
+    $aicountlyEntry = realpath((string) $_SERVER['SCRIPT_FILENAME']);
+    if ($aicountlyEntry !== false && $aicountlyEntry !== __FILE__ && is_file($aicountlyEntry)) {
+        return require $aicountlyEntry;
+    }
+    unset($aicountlyEntry);
+}
+// <<< aicountly atomic entry <<<
+
 use CodeIgniter\Boot;
 use Config\Paths;
 
