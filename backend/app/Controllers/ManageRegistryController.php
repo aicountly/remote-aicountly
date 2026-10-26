@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Domain\Support\RelayStatus;
 use CodeIgniter\Controller;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
@@ -43,8 +44,9 @@ class ManageRegistryController extends Controller
             $method === 'GET' ? '' : (string) $this->request->getBody(),
         );
 
+        // RelayStatus: CodeIgniter throws for a code it has no reason phrase for (a CDN's 520-527, a host's 509).
         $response = $this->response
-            ->setStatusCode($answer['status'])
+            ->setStatusCode(RelayStatus::forClient((int) $answer['status']))
             ->setContentType($answer['contentType'])
             ->setHeader('Cache-Control', 'no-store');
         if ($answer['correlationId'] !== '') {

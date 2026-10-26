@@ -767,6 +767,12 @@ final class RemoteApiTest extends RemoteTestCase
         $spent = $this->withBodyFormat('json')->post('global/sso/exchange', $body);
         $spent->assertStatus(401);
         $this->assertSame('invalid_grant', json_decode((string) $spent->response()->getBody(), true)['error']);
+
+        // A status CodeIgniter has no reason phrase for (a CDN's 522) would throw in setStatusCode(): a 502.
+        $portal->answer = ['status' => 522, 'body' => '{"status":0,"error":"origin_timeout"}', 'contentType' => 'application/json', 'retryAfter' => ''];
+        $cdn = $this->withBodyFormat('json')->post('global/sso/exchange', $body);
+        $cdn->assertStatus(502);
+        $this->assertSame('origin_timeout', json_decode((string) $cdn->response()->getBody(), true)['error']);
     }
 
     // ------------------------------------------------------- rate limiting

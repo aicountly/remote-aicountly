@@ -34,6 +34,10 @@ on:
         description: After the deploy, run the read-only TURN checks on the server (probe status, authenticated allocation and negative tests per node) and report them as annotations
         type: boolean
         default: false
+      business_hours_reason:
+        description: Deploying between 08:00 and 20:00 IST needs the owner's explicit permission — say who allowed it and why (empty = refused in business hours)
+        type: string
+        default: ''
 
 # Never let two deploys to the same target overlap.
 concurrency:
@@ -64,6 +68,13 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # Owner's rule (2026-10-26, console-react-app ops/estate/kit/DEPLOY_SAFETY.md §2): production deploys run
+      # 20:00-08:00 IST; in business hours only with the owner's recorded permission. Before any build or upload.
+      - name: Production deploy window (20:00-08:00 IST)
+        env:
+          BUSINESS_HOURS_REASON: ${{ inputs.business_hours_reason }}
+        run: bash scripts/ops/deploy-window.sh production "$BUSINESS_HOURS_REASON"
 
       # Fail before doing any work if the deploy target is not fully
       # configured. Without this an unset secret would silently expand to an
@@ -320,16 +331,19 @@ jobs:
           # --delete keeps the docroot free of files removed from the build.
           # The excludes below protect paths that are not part of the web build
           # and must survive a deploy:
-          #   api/         — the PHP backend lives inside the document root and
+          #   /api         — the PHP backend lives inside the document root and
           #                  is deployed by the next step. Without this exclude
-          #                  this step would delete the entire API.
+          #                  this step would delete the entire API. Since atomic
+          #                  deploys api/ is a SYMLINK to the current release:
+          #                  'api/' (trailing slash) matches only real folders,
+          #                  so --delete would remove the symlink — never 'api/'.
           #   .env         — server-side env file, if one is placed there
           #   .well-known/ — Let's Encrypt / AutoSSL validation; deleting it
           #                  breaks certificate renewal
           #   cgi-bin/     — cPanel-managed, present in every docroot
           #   .git*        — never publish repository metadata
           rsync -avz --delete \
-            --exclude='api/' \
+            --exclude='/api' \
             --exclude='.env' \
             --exclude='.env.*' \
             --exclude='.git*' \
@@ -339,6 +353,11 @@ jobs:
             -e ssh \
             web/dist/ "deploy-target:$REMOTE_ROOT/"
 
+      # Atomic deploys (console-react-app ops/estate/kit/DEPLOY_SAFETY.md §1): backend/ is uploaded to a stage
+      # OUTSIDE the document root (~/.aicountly-deploy/remote-production/stage, same filters the api/ rsync had), then
+      # scripts/ci/remote-release.sh switches api/ to a complete release folder built from it in ONE rename
+      # (backend/bin/ops/atomic-switch.sh), writable/ shared, /api/health checked — or the previous code is put
+      # back. Nothing is ever rsynced into the live api/ again.
       - name: Deploy backend to the api folder
         env:
           REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
@@ -358,6 +377,7 @@ jobs:
           # tracked skeleton (index.html, .htaccess) is still uploaded. It comes
           # first because rsync filters are first-match. Same rule as Connect's
           # deploy (server-php/tests/unit/DeployRsyncProtectsWritableTest.php).
+          ssh deploy-target 'mkdir -p .aicountly-deploy/remote-production/stage && chmod 700 .aicountly-deploy'
           rsync -avz --delete \
             --filter='P /writable/***' \
             --exclude='.env' \
@@ -373,7 +393,10 @@ jobs:
             --exclude='composer.lock' \
             --chmod=D755,F644 \
             -e ssh \
-            backend/ "deploy-target:$REMOTE_ROOT/api/"
+            backend/ "deploy-target:.aicountly-deploy/remote-production/stage/"
+
+          # The switch itself (remote-release.sh): api/ -> the new release, /api/health must answer.
+          ssh deploy-target "bash -s -- $(printf '%q ' "$REMOTE_ROOT" ".aicountly-deploy/remote-production/stage" "$GITHUB_SHA" "https://remote.aicountly.com/api/health")" < scripts/ci/remote-release.sh
 
           # writable/ must be writable by PHP or every request fails on the
           # first cache write — CodeIgniter's page-cache service throws in its
@@ -400,14 +423,16 @@ jobs:
             sed 's/^/    /' /tmp/chmod.err
           fi
 
-          unwritable=$(ssh deploy-target "find '$REMOTE_ROOT/api/writable' -type d ! -perm -0020" || true)
+          # The trailing slash: api/ and its writable/ are symlinks since atomic deploys, and find does not
+          # descend into a symlink given without one (the check would find nothing and always pass).
+          unwritable=$(ssh deploy-target "find '$REMOTE_ROOT/api/writable/' -type d ! -perm -0020" || true)
           if [ -n "$unwritable" ]; then
             echo "::error::These writable/ subdirectories are not group-writable after chmod — the API will 500 on every request that touches them:"
             echo "$unwritable" | sed 's/^/    /'
             echo "::error::Fix by hand: ssh in and run chmod -R 775 '$REMOTE_ROOT/api/writable', then confirm with the command above that the list is empty."
           fi
 
-          echo "Deployed backend to \$REMOTE_ROOT/api/"
+          echo "Deployed backend to \$REMOTE_ROOT/api/ (atomic release)"
           echo "::notice::First API deploy: run it with migrate = skip, create api/.env on the server from backend/.env.example, then deploy again with migrate = apply — see docs/DEPLOYMENT.md."
 
       # Schema changes ship as CodeIgniter migrations in backend/app/Database/Migrations. The deploy
