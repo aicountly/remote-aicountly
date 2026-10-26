@@ -16,6 +16,7 @@
  *   dead                     the portal's 401 {"status":0}
  *   boom                     a 503 from either service
  *   html                     a 200 that is not JSON (a maintenance page)
+ *   echo                     a 200 carrying the headers the caller sent, on any path
  *   mgr-ok-<cmp>             a Manage session that owns company <cmp>
  *   mgr-eval-<cmp>           companyinfo that does not say how the session relates
  *   mgr-none                 a Manage session with no companies
@@ -62,7 +63,7 @@ if ($bearer === 'html') {
 // What the caller actually sent. A request with no Accept and no User-Agent is
 // what a WAF in front of the real portal answers with its own HTML page instead
 // of the portal's JSON, so PortalClient has to send both.
-if ($path === '/api/echo-request') {
+if ($path === '/api/echo-request' || $bearer === 'echo') {
     $seen = [];
     foreach ($header as $name => $value) {
         $seen[strtolower((string) $name)] = (string) $value;
