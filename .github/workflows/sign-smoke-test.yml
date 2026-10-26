@@ -1,0 +1,138 @@
+# ---------------------------------------------------------------------------
+# Does signing work?
+#
+# MANUAL ONLY, and it publishes nothing: no GitHub release, no artifact, no
+# host. It builds the smallest thing worth signing -- the Windows service, a
+# minute of cargo -- signs a copy of it with the real credentials, and prints
+# everything signtool says.
+#
+# It exists because the release workflow is a bad place to find out that a
+# credential is wrong. A release run spends thirteen minutes in the gate
+# before it reaches the signing step, and the Tauri bundler captures the
+# signing command's output and logs it at debug level, so the first failure
+# there read `failed to bundle project: failed to run pwsh` and nothing else.
+# Here sign.ps1 runs in the open and its output is the step's output.
+#
+# Two cases, because two different things can be wrong:
+#
+#   absolute path   the credentials, the dlib, the endpoint, the profile, the
+#                   role assignment -- everything Azure.
+#   relative path   how the bundler actually calls this script. It substitutes
+#                   the file it has just produced for `%1` verbatim, and that
+#                   path is relative to ITS working directory: the sidecar
+#                   arrives as `binaries\...exe`, relative to `src-tauri`.
+# ---------------------------------------------------------------------------
+name: Signing smoke test
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: sign-smoke-test
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    name: Sign one binary
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    # The same protected environment the release uses. Without it there is
+    # nothing to sign with, which is the point.
+    environment: windows-release
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Check that a signing method is configured
+        shell: pwsh
+        env:
+          AICOUNTLY_SIGN_METHOD: ${{ vars.AICOUNTLY_SIGN_METHOD }}
+        run: |
+          if (-not $env:AICOUNTLY_SIGN_METHOD) {
+            throw 'AICOUNTLY_SIGN_METHOD is not set on the windows-release environment.'
+          }
+          Write-Host "method: $env:AICOUNTLY_SIGN_METHOD"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: desktop
+
+      - name: Install the Trusted Signing client
+        if: vars.AICOUNTLY_SIGN_METHOD == 'trusted-signing'
+        shell: pwsh
+        run: pwsh -NoProfile -NonInteractive -File desktop/scripts/windows/install-signing-client.ps1
+
+      - name: Build one binary
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          cargo build --release -p aicountly-remote-service --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'The service did not build.' }
+
+      - name: Sign it, by an absolute path
+        shell: pwsh
+        working-directory: desktop
+        env:
+          AICOUNTLY_SIGN_METHOD: ${{ vars.AICOUNTLY_SIGN_METHOD }}
+          AICOUNTLY_SIGN_TIMESTAMP_URL: ${{ vars.AICOUNTLY_SIGN_TIMESTAMP_URL }}
+          AICOUNTLY_SIGN_ENDPOINT: ${{ vars.AICOUNTLY_SIGN_ENDPOINT }}
+          AICOUNTLY_SIGN_ACCOUNT: ${{ vars.AICOUNTLY_SIGN_ACCOUNT }}
+          AICOUNTLY_SIGN_PROFILE: ${{ vars.AICOUNTLY_SIGN_PROFILE }}
+          AICOUNTLY_SIGN_THUMBPRINT: ${{ secrets.AICOUNTLY_SIGN_THUMBPRINT }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: |
+          $scratch = Join-Path $env:RUNNER_TEMP 'signing-smoke-test'
+          New-Item -ItemType Directory -Force -Path $scratch | Out-Null
+
+          $built = 'target/x86_64-pc-windows-msvc/release/AicountlyRemoteService.exe'
+          if (-not (Test-Path $built)) { throw "The built service is missing: $built" }
+
+          $copy = Join-Path $scratch 'AicountlyRemoteService.exe'
+          Copy-Item $built $copy -Force
+
+          # A child process, the way the bundler runs it -- but with its output
+          # going straight to this log rather than into a debug stream.
+          pwsh -NoProfile -NonInteractive -File scripts/windows/sign.ps1 -Path $copy
+          if ($LASTEXITCODE -ne 0) { throw 'Signing by an absolute path failed. The cause is above.' }
+
+      - name: Sign it, the way the bundler does
+        shell: pwsh
+        working-directory: desktop
+        env:
+          AICOUNTLY_SIGN_METHOD: ${{ vars.AICOUNTLY_SIGN_METHOD }}
+          AICOUNTLY_SIGN_TIMESTAMP_URL: ${{ vars.AICOUNTLY_SIGN_TIMESTAMP_URL }}
+          AICOUNTLY_SIGN_ENDPOINT: ${{ vars.AICOUNTLY_SIGN_ENDPOINT }}
+          AICOUNTLY_SIGN_ACCOUNT: ${{ vars.AICOUNTLY_SIGN_ACCOUNT }}
+          AICOUNTLY_SIGN_PROFILE: ${{ vars.AICOUNTLY_SIGN_PROFILE }}
+          AICOUNTLY_SIGN_THUMBPRINT: ${{ secrets.AICOUNTLY_SIGN_THUMBPRINT }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: |
+          # The sidecar, named exactly as the bundler names it, and addressed
+          # by a path relative to src-tauri while the working directory is
+          # desktop. If this step passes and the one before it passed, the
+          # bundler's own call has nothing left to trip over.
+          $binaries = 'src-tauri/binaries'
+          New-Item -ItemType Directory -Force -Path $binaries | Out-Null
+
+          $sidecar = Join-Path $binaries 'AicountlyRemoteService-x86_64-pc-windows-msvc.exe'
+          Copy-Item 'target/x86_64-pc-windows-msvc/release/AicountlyRemoteService.exe' $sidecar -Force
+
+          pwsh -NoProfile -NonInteractive -File scripts/windows/sign.ps1 -Path 'binaries/AicountlyRemoteService-x86_64-pc-windows-msvc.exe'
+          if ($LASTEXITCODE -ne 0) { throw 'Signing by the path the bundler passes failed. The cause is above.' }
+
+      - name: Say so
+        shell: pwsh
+        run: Write-Host 'Signing works. Nothing was published.'
