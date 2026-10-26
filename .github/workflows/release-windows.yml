@@ -145,6 +145,22 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
+      - name: Check that a signing method is configured
+        if: inputs.channel != 'sandbox'
+        shell: pwsh
+        env:
+          AICOUNTLY_SIGN_METHOD: ${{ vars.AICOUNTLY_SIGN_METHOD }}
+        run: |
+          if (-not $env:AICOUNTLY_SIGN_METHOD) {
+            $missingSigningMessage = @(
+              'This channel publishes a signed build, and no signing method is configured.',
+              '',
+              'Set the variable AICOUNTLY_SIGN_METHOD (and its companions) on the',
+              'windows-release environment. See docs/desktop/WINDOWS_RELEASE.md.'
+            ) -join "`n"
+            throw $missingSigningMessage
+          }
+
       # ---------------------------------------------------------------- signing
       #
       # The signing client is installed BEFORE the build, because the build is
@@ -169,28 +185,86 @@ jobs:
         shell: pwsh
         run: |
           # Installed at release time rather than committed: a signing client
-          # is somebody else's software to keep current.
+          # is somebody else's software to keep current. Which makes its
+          # layout somebody else's to change as well, and that is exactly
+          # what happened: this step used to join
+          # `Bin/x64/Azure.CodeSigning.Dlib.dll` onto the module base, and
+          # TrustedSigning 0.5.8 does not keep the dlib there. The module
+          # installed, the path did not exist, and a release that had passed
+          # the whole gate died on the step after it.
+          #
+          # So the dlib is searched for rather than assumed. If the module
+          # does not carry it at all, the signing client is also published as
+          # a NuGet package, which is fetched straight from the flat
+          # container — no nuget.exe, no package provider, nothing else that
+          # can be missing from a runner image. And if neither route finds
+          # it, the failure prints what the module actually contains, so the
+          # next person reads the layout instead of guessing at it again.
           Install-Module -Name TrustedSigning -Force -Scope CurrentUser -AllowClobber
-          $module = (Get-Module -ListAvailable TrustedSigning | Sort-Object Version -Descending | Select-Object -First 1)
-          $dlib = Join-Path $module.ModuleBase 'Bin/x64/Azure.CodeSigning.Dlib.dll'
-          if (-not (Test-Path $dlib)) { throw "The signing dlib was not found at $dlib." }
-          "AICOUNTLY_SIGN_DLIB=$dlib" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Check that a signing method is configured
-        if: inputs.channel != 'sandbox'
-        shell: pwsh
-        env:
-          AICOUNTLY_SIGN_METHOD: ${{ vars.AICOUNTLY_SIGN_METHOD }}
-        run: |
-          if (-not $env:AICOUNTLY_SIGN_METHOD) {
-            $missingSigningMessage = @(
-              'This channel publishes a signed build, and no signing method is configured.',
-              '',
-              'Set the variable AICOUNTLY_SIGN_METHOD (and its companions) on the',
-              'windows-release environment. See docs/desktop/WINDOWS_RELEASE.md.'
-            ) -join "`n"
-            throw $missingSigningMessage
+          $module = Get-Module -ListAvailable TrustedSigning |
+            Sort-Object Version -Descending | Select-Object -First 1
+          if (-not $module) { throw 'The TrustedSigning module did not install.' }
+          Write-Host "TrustedSigning $($module.Version): $($module.ModuleBase)"
+
+          function Find-Dlib {
+              param([string] $Root)
+
+              if (-not $Root -or -not (Test-Path $Root)) { return $null }
+
+              # signtool and the dlib have to be the same architecture, and
+              # the runner's signtool is x64 — so an x64 copy wins over any
+              # other that happens to be in the same tree.
+              Get-ChildItem -Path $Root -Recurse -File -Filter 'Azure.CodeSigning.Dlib.dll' -ErrorAction SilentlyContinue |
+                  Sort-Object @{ Expression = { $_.FullName -match '[\\/]x64[\\/]' }; Descending = $true } |
+                  Select-Object -First 1 -ExpandProperty FullName
           }
+
+          $dlib = Find-Dlib $module.ModuleBase
+
+          if (-not $dlib) {
+              Write-Host 'Not in the module. Fetching the NuGet signing client.'
+
+              $temp = Join-Path $env:RUNNER_TEMP 'signing-client'
+              New-Item -ItemType Directory -Force -Path $temp | Out-Null
+
+              # Trusted Signing was renamed Azure Artifact Signing, and the
+              # client package went with it. Both ids are tried: whichever
+              # of them this account's tooling is current with.
+              foreach ($id in @('Microsoft.Trusted.Signing.Client', 'Microsoft.ArtifactSigning.Client')) {
+                  try {
+                      $package = $id.ToLowerInvariant()
+                      $feed = "https://api.nuget.org/v3-flatcontainer/$package"
+
+                      $version = (Invoke-RestMethod "$feed/index.json").versions |
+                          Where-Object { $_ -notmatch '-' } | Select-Object -Last 1
+                      if (-not $version) { continue }
+
+                      $archive = Join-Path $temp "$package.$version.zip"
+                      $expanded = Join-Path $temp "$package-$version"
+
+                      Invoke-WebRequest "$feed/$version/$package.$version.nupkg" -OutFile $archive
+                      Expand-Archive -Path $archive -DestinationPath $expanded -Force
+
+                      Write-Host "$id $version"
+                      $dlib = Find-Dlib $expanded
+                      if ($dlib) { break }
+                  } catch {
+                      Write-Host "$id : $($_.Exception.Message)"
+                  }
+              }
+          }
+
+          if (-not $dlib) {
+              Write-Host '--- TrustedSigning module contents ---'
+              Get-ChildItem -Path $module.ModuleBase -Recurse -File |
+                  ForEach-Object { Write-Host $_.FullName.Substring($module.ModuleBase.Length) }
+
+              throw 'Azure.CodeSigning.Dlib.dll was not found in the TrustedSigning module or in the NuGet signing client.'
+          }
+
+          Write-Host "dlib: $dlib"
+          "AICOUNTLY_SIGN_DLIB=$dlib" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       # The same script a developer runs, so a release build and a local build
       # are the same build — with `-Sign` added for a channel that publishes.
