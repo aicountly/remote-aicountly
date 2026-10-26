@@ -41,8 +41,32 @@ export class RemoteCaptureError extends Error {
   }
 }
 
+/** The captured surface's size in pixels, as the browser reports it for the track. */
+export interface SurfaceSize {
+  width: number
+  height: number
+}
+
+/**
+ * `track.getSettings()` width and height, or null when the browser reports
+ * neither (or nonsense). A control companion matches its monitors against
+ * this; it is reported with share-started and never trusted for anything else.
+ */
+export function readSurfaceSize(track: MediaStreamTrack): SurfaceSize | null {
+  const settings = typeof track.getSettings === 'function' ? track.getSettings() : {}
+  const width = Math.round(Number(settings.width))
+  const height = Math.round(Number(settings.height))
+
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null
+  if (width < 1 || height < 1 || width > 16384 || height > 16384) return null
+
+  return { width, height }
+}
+
 export interface CaptureResult {
   stream: MediaStream
+  /** The captured size, when the browser reports it. */
+  size: SurfaceSize | null
   /** What the browser said it was — `unknown` when it does not report. */
   surface: DisplaySurface
   /** False when `surface` is `unknown`; the UI must not claim verification. */
@@ -193,6 +217,7 @@ export async function requestScreenShare(
 
   return {
     stream,
+    size: readSurfaceSize(videoTrack),
     surface,
     surfaceVerified: surface !== 'unknown',
     hasSystemAudio: stream.getAudioTracks().length > 0,

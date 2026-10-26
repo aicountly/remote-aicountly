@@ -19,8 +19,10 @@ import {
   resumeSession,
   revokeControl,
 } from '../../services/api/remote'
+import { linkCompanion, unlinkCompanion } from '../../services/api/remote'
 import { RemoteApiError } from '../../services/api/client'
-import { RemoteSessionEngine } from '../../services/webrtc/RemoteSessionEngine'
+import { COMPANION_ROLE, RemoteSessionEngine } from '../../services/webrtc/RemoteSessionEngine'
+import { nudgeDevice } from '../../services/signalling/deviceNudge'
 import { probeRelay } from '../../ice-kit/index.js'
 import type { RelayProbeResult } from '../../ice-kit/index.js'
 import type { AnnotationShape, EngineSnapshot } from '../../services/webrtc/RemoteSessionEngine'
@@ -198,8 +200,15 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     }
   }, [sessionUuid, isGuestParticipant])
 
+  // A control companion waiting to be confirmed or to find its screen is also
+  // something two people are waiting on (docs/desktop/CONTROL_COMPANION.md).
+  const companionSettling =
+    control?.companion?.status === 'PENDING' ||
+    control?.companion?.status === 'JOINED' ||
+    (control?.companion?.status === 'ACTIVE' && !control.companion.ready)
+
   const controlOutstanding =
-    (control?.pendingRequests.length ?? 0) > 0 || session?.me?.controlState === 'REQUESTED'
+    (control?.pendingRequests.length ?? 0) > 0 || session?.me?.controlState === 'REQUESTED' || companionSettling
 
   useEffect(() => {
     if (isGuestParticipant || ended) return
@@ -257,6 +266,13 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
         if (!mountedRef.current) return
 
         setControlNotice(controlEndedMessage(reason))
+        void refreshControl()
+        void reload()
+      },
+      // Somebody in the room changed control state: re-read it now.
+      onControlHint: () => {
+        if (!mountedRef.current) return
+
         void refreshControl()
         void reload()
       },
@@ -346,7 +362,7 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
         allowSystemAudio: intent.allowSystemAudio,
       })
 
-      await engineRef.current?.startSharing(capture.stream, capture.surface)
+      await engineRef.current?.startSharing(capture.stream, capture.surface, capture.size)
 
       // §12 — a cooperating AICOUNTLY tab can identify which company it belongs
       // to. When it names a different one, stop rather than expose it.
@@ -526,14 +542,29 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
    * the entitlement and the policy before anything is granted, so a peer that
    * lied about its capabilities gets a request the server refuses.
    */
+  const controllableHostUuid = control?.controllableHostUuid ?? null
   const controllableHost = useMemo(
-    () => live?.peers.find((peer) => peer.capabilities.remote_control === true) ?? null,
-    [live?.peers],
+    () =>
+      live?.peers.find(
+        (peer) =>
+          peer.capabilities.remote_control === true &&
+          // A control companion counts only when the API says it is the
+          // controllable host right now (its link is ready, the screen shared).
+          (peer.role !== COMPANION_ROLE || peer.participantUuid === controllableHostUuid),
+      ) ?? null,
+    [live?.peers, controllableHostUuid],
   )
 
   const hostPeerUuid = controllableHost?.participantUuid ?? null
   const controlChannelReady = controllableHost?.controlChannelReady ?? false
   const myControlState = session?.me?.controlState ?? null
+  const engineLive = live !== null
+
+  // A control companion is connected to only while this person's own control
+  // is requested or granted, and dropped again when it is not.
+  useEffect(() => {
+    engineRef.current?.setControlTarget(controllableHostUuid, myControlState)
+  }, [controllableHostUuid, myControlState, engineLive])
 
   // Input flows only while the server says GRANTED *and* the channel is open.
   // Anything else — denied, revoked, never asked, the peer gone — stops it,
@@ -561,6 +592,9 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
         const result = await call()
 
         if (mountedRef.current) setControl(result.control)
+
+        // The room (and a control companion in it) re-reads the state now.
+        engineRef.current?.sendControlHint()
 
         await reload()
       } catch (err) {
@@ -657,6 +691,20 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
 
   const dismissControlNotice = useCallback(() => setControlNotice(null), [])
 
+  /** Link one of my own computers as a control companion, and tell it to look now. */
+  const enableCompanion = useCallback(
+    (deviceUuid: string) =>
+      runControl(async () => {
+        const result = await linkCompanion(sessionUuid, deviceUuid)
+        void nudgeDevice(result.deviceInvite)
+
+        return result
+      }),
+    [runControl, sessionUuid],
+  )
+
+  const disableCompanion = useCallback(() => runControl(() => unlinkCompanion(sessionUuid)), [runControl, sessionUuid])
+
   // --- Collaboration -------------------------------------------------------
 
   const sendPointer = useCallback((x: number, y: number) => {
@@ -692,6 +740,8 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     controllableHost,
     /** Whether input is being sent right now — the persistent indicator (§18). */
     isControlling: live?.controllingPeerId !== null && live?.controllingPeerId !== undefined,
+    /** The machine paused remote input because somebody there is using it. */
+    controlPaused: live?.controlPaused ?? null,
     actions: {
       reload,
       beginShare,
@@ -721,6 +771,8 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
       refuseControl,
       stopControl,
       dismissControlNotice,
+      enableCompanion,
+      disableCompanion,
       sendControlPointer,
       sendControlButton,
       sendControlScroll,
@@ -747,6 +799,7 @@ function controlEndedMessage(reason: string): string {
       session_ended: 'The session ended, so remote control stopped with it.',
       connection_lost: 'The connection to that computer was lost, so remote control stopped.',
       shutting_down: 'That computer is restarting, so remote control stopped.',
+      local_input: 'The person at the computer took over, so remote control stopped.',
     }[reason] ?? 'Remote control stopped.'
   )
 }

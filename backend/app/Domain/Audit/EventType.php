@@ -90,6 +90,17 @@ final class EventType
 
     public const CLIPBOARD_SYNCED = 'CLIPBOARD_SYNCED';
 
+    // --- Control companions (docs/desktop/CONTROL_COMPANION.md) ------------
+    //
+    // A person's own desktop app joining a session they share from the browser, input-only. Every step of
+    // the link is recorded: who asked for it, that the machine confirmed (or declined) it, which monitor it
+    // maps input onto, and when and why it ended.
+    public const CONTROL_COMPANION_REQUESTED = 'CONTROL_COMPANION_REQUESTED';
+    public const CONTROL_COMPANION_JOINED    = 'CONTROL_COMPANION_JOINED';
+    public const CONTROL_COMPANION_DECLINED  = 'CONTROL_COMPANION_DECLINED';
+    public const CONTROL_COMPANION_READY     = 'CONTROL_COMPANION_READY';
+    public const CONTROL_COMPANION_ENDED     = 'CONTROL_COMPANION_ENDED';
+
     public const DEVICE_ENROLLED = 'DEVICE_ENROLLED';
     public const DEVICE_REVOKED  = 'DEVICE_REVOKED';
     public const DEVICE_UPDATED  = 'DEVICE_UPDATED';
@@ -124,6 +135,7 @@ final class EventType
             self::DEVICE_ENROLLED, self::DEVICE_REVOKED, self::DEVICE_AUTH_FAILED,
             self::UNATTENDED_ACCESS_ENABLED, self::UNATTENDED_ACCESS_DISABLED,
             self::COMPANY_CONTEXT_MISMATCH, self::POLICY_REJECTED, self::CONTROL_GRANTED,
+            self::CONTROL_COMPANION_REQUESTED, self::CONTROL_COMPANION_JOINED,
             self::DESKTOP_SIGNIN_CONFIRMED, self::DESKTOP_SIGNIN_DENIED,
             self::AUDIT_EXPORTED => 'security',
 
@@ -131,7 +143,9 @@ final class EventType
             self::PARTICIPANT_APPROVED, self::PARTICIPANT_DENIED, self::DEVICE_UPDATED,
             self::DEVICE_REBOOT_REQUESTED, self::UNATTENDED_SESSION_STARTED,
             self::FILE_TRANSFER_STARTED, self::FILE_TRANSFER_COMPLETED,
-            self::RECORDING_STARTED, self::RECORDING_STOPPED => 'material',
+            self::RECORDING_STARTED, self::RECORDING_STOPPED,
+            self::CONTROL_COMPANION_DECLINED, self::CONTROL_COMPANION_READY,
+            self::CONTROL_COMPANION_ENDED => 'material',
 
             default => 'info',
         };

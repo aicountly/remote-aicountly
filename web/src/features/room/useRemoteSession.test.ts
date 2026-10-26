@@ -15,8 +15,11 @@ vi.mock('../../services/webrtc/RemoteSessionEngine', () => ({
     this.dispose = vi.fn()
     this.startSharing = vi.fn().mockResolvedValue(undefined)
     this.stopSharing = vi.fn().mockResolvedValue(undefined)
+    this.setControlTarget = vi.fn()
+    this.sendControlHint = vi.fn()
     engines.push(this as never)
   }),
+  COMPANION_ROLE: 'CONTROL_COMPANION',
 }))
 
 const fetchSession = vi.fn()

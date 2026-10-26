@@ -117,6 +117,8 @@ final class Presenter
             'status'          => (string) $row['status'],
             'requestedShareMode'   => (string) $row['requested_share_mode'],
             'actualDisplaySurface' => $row['actual_display_surface'] ?? null,
+            'actualSurfaceWidth'   => isset($row['actual_surface_width']) ? (int) $row['actual_surface_width'] : null,
+            'actualSurfaceHeight'  => isset($row['actual_surface_height']) ? (int) $row['actual_surface_height'] : null,
             'sourceProduct'      => $row['source_product'] ?? null,
             'sourceProductLabel' => self::productLabel($row['source_product'] ?? null),
             'sourceRoute'        => $row['source_route'] ?? null,

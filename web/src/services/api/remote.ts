@@ -33,6 +33,7 @@ import type {
   DeviceListing,
   RemoteDevice,
   SessionControlState,
+  CompanionLink,
 } from '../../types/remote'
 
 // --- Bootstrap and policy ---------------------------------------------------
@@ -93,10 +94,15 @@ export function declareShareIntent(uuid: string, shareMode: ShareMode): Promise<
 }
 
 /** Report the surface the user actually picked. The server enforces it again. */
-export function reportShareStarted(uuid: string, displaySurface: string): Promise<SessionDetail> {
+export function reportShareStarted(
+  uuid: string,
+  displaySurface: string,
+  size?: { width: number; height: number } | null,
+): Promise<SessionDetail> {
   return apiFetch<SessionDetail>(`/sessions/${uuid}/share-started`, {
     method: 'POST',
-    body: { displaySurface },
+    // The size lets a control companion match the shared monitor; an older server ignores it.
+    body: size ? { displaySurface, surfaceWidth: size.width, surfaceHeight: size.height } : { displaySurface },
   })
 }
 
@@ -316,6 +322,43 @@ export function abortFileTransfer(
     method: 'POST',
     body: { status, errorCode },
   })
+}
+
+// --- Control companions (docs/desktop/CONTROL_COMPANION.md) -----------------
+//
+// The person sharing an entire screen from Chrome or Edge links their own
+// AICOUNTLY Remote app, which joins input-only. Every rule is the server's;
+// these only ask.
+
+export interface CompanionDeviceInvite {
+  token: string
+  url: string
+  room: string
+  expiresAt: string
+  sessionUuid: string
+  companionUuid: string
+}
+
+/** This person's own devices that could serve this session, and what stops them if nothing can. */
+export function fetchCompanionDevices(
+  sessionUuid: string,
+): Promise<{ devices: RemoteDevice[]; restrictions: string[] }> {
+  return apiFetch(`/sessions/${sessionUuid}/companion/devices`)
+}
+
+/** Link one of them. The machine still has to confirm it there. */
+export function linkCompanion(
+  sessionUuid: string,
+  deviceUuid: string,
+): Promise<{ companion: CompanionLink; control: SessionControlState; deviceInvite: CompanionDeviceInvite }> {
+  return apiFetch(`/sessions/${sessionUuid}/companion`, { method: 'POST', body: { deviceUuid } })
+}
+
+/** End the link, and any control that ran through it. */
+export function unlinkCompanion(
+  sessionUuid: string,
+): Promise<{ companion: CompanionLink | null; control: SessionControlState }> {
+  return apiFetch(`/sessions/${sessionUuid}/companion`, { method: 'DELETE' })
 }
 
 // --- Remote control (docs/DESKTOP_AGENT.md) ---------------------------------

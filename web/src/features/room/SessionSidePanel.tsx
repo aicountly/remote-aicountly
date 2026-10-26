@@ -43,6 +43,15 @@ interface RemoteControlProps {
   onStop: () => void
   onGrant: (participantUuid: string, allowClipboard: boolean) => void
   onDeny: (participantUuid: string) => void
+  /** The sharer's control-companion controls; null for everyone else. */
+  companion?: {
+    sessionUuid: string
+    isSharing: boolean
+    onLink: (deviceUuid: string) => void
+    onUnlink: () => void
+  } | null
+  /** The machine paused remote input (somebody there is using it). */
+  paused?: string | null
 }
 
 interface Props {
@@ -148,10 +157,19 @@ function RemoteControlPanel({
 }) {
   const [allowClipboard, setAllowClipboard] = useState(false)
 
-  const hostParticipant =
+  const controllable =
     session.participants.find(
       (participant) => participant.uuid === control.control?.controllableHostUuid,
     ) ?? null
+
+  // A control companion is a person's own app: the person it serves is who
+  // answers, so they are who the panel names.
+  const hostParticipant =
+    controllable?.role === 'CONTROL_COMPANION'
+      ? (session.participants.find(
+          (participant) => participant.uuid === control.control?.companion?.linkedParticipantUuid,
+        ) ?? controllable)
+      : controllable
 
   return (
     <ControlPanel
@@ -168,6 +186,8 @@ function RemoteControlPanel({
       allowClipboard={allowClipboard}
       onAllowClipboardChange={setAllowClipboard}
       busy={control.busy}
+      companion={control.companion ?? null}
+      paused={control.paused ?? null}
     />
   )
 }
@@ -510,6 +530,7 @@ function roleLabel(role: string): string {
       SUPPORT_TECHNICIAN: 'AICOUNTLY Support',
       OBSERVER: 'Observer',
       GUEST: 'External guest',
+      CONTROL_COMPANION: 'Remote app (control only)',
     }[role] ?? role
   )
 }

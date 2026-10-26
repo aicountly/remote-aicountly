@@ -122,6 +122,9 @@ class DeviceAgentController extends BaseApiController
                 static fn (array $row) => Presenter::session($row),
                 Services::deviceSessionService()->pendingFor($principal),
             ),
+            // Control-companion links waiting for somebody at this machine to confirm them
+            // (docs/desktop/CONTROL_COMPANION.md). Nothing here joins anything on its own.
+            'pendingCompanions' => Services::companionService()->pendingFor($principal),
         ]);
     }
 
@@ -179,6 +182,19 @@ class DeviceAgentController extends BaseApiController
 
         $participant = Services::deviceSessionService()->joinAsHost($session, $principal);
 
+        return $this->ok($this->joinPayload($session, $participant));
+    }
+
+    /**
+     * The session, the participant, a signalling token for it and its TURN grant — what an agent needs to
+     * enter the room, whether as the shared screen or as a control companion.
+     *
+     * @param  array<string, mixed> $session
+     * @param  array<string, mixed> $participant
+     * @return array<string, mixed>
+     */
+    private function joinPayload(array $session, array $participant): array
+    {
         $token = Services::signallingTokenService()->issue(
             (string) $session['uuid'],
             (string) $participant['uuid'],
@@ -199,7 +215,7 @@ class DeviceAgentController extends BaseApiController
             $ice->contextFor($session, [], fn (string $name): string => $this->request->getHeaderLine($name)),
         );
 
-        return $this->ok([
+        return [
             'session'     => Presenter::session($session),
             'participant' => Presenter::participant($participant),
             'signalling'  => [
@@ -211,7 +227,83 @@ class DeviceAgentController extends BaseApiController
             'iceServers'     => $grant->iceServers(),
             'relayAvailable' => $grant->relayAvailable(),
             'ice'            => $grant->toArray(),
+        ];
+    }
+
+    // ------------------------------------------------------ control companions
+
+    /**
+     * `POST /devices/me/companions/{uuid}/join`
+     *
+     * Called only after somebody at this machine confirmed the link there. Idempotent: calling it again
+     * returns a fresh signalling token for the same participant, which is how the companion renews.
+     */
+    public function companionJoin(string $uuid): ResponseInterface
+    {
+        $principal = $this->context()->requireDevice();
+        $principal->assertScope(DevicePrincipal::SCOPE_SESSION);
+
+        $result = Services::companionService()->join($principal, $uuid);
+
+        return $this->ok(array_merge(
+            $this->joinPayload($result['session'], $result['participant']),
+            ['companion' => Services::companionLinks()->present($result['link'], $result['session'])],
+        ));
+    }
+
+    /** `POST /devices/me/companions/{uuid}/decline` — somebody at the machine said no. */
+    public function companionDecline(string $uuid): ResponseInterface
+    {
+        $principal = $this->context()->requireDevice();
+        $principal->assertScope(DevicePrincipal::SCOPE_SESSION);
+
+        $result = Services::companionService()->decline($principal, $uuid);
+
+        return $this->ok(['companion' => Services::companionLinks()->present($result['link'], $result['session'])]);
+    }
+
+    /**
+     * `POST /devices/me/companions/{uuid}/monitor` `{monitor: {id, name, x, y, width, height, scale}, matchedBy}`
+     *
+     * Which of this machine's monitors the shared picture is, in its own injection space. Makes the link
+     * ACTIVE; control still needs the person at the browser to grant a request.
+     */
+    public function companionMonitor(string $uuid): ResponseInterface
+    {
+        $principal = $this->context()->requireDevice();
+        $principal->assertScope(DevicePrincipal::SCOPE_SESSION);
+
+        $body    = $this->body();
+        $monitor = $body['monitor'] ?? null;
+
+        if (! is_array($monitor)) {
+            throw ApiException::badRequest('VALIDATION_FAILED', 'Some of the details sent were not valid.', [
+                'fields' => ['monitor' => 'This is required.'],
+            ]);
+        }
+
+        $result = Services::companionService()->selectMonitor(
+            $principal,
+            $uuid,
+            $monitor,
+            $this->enum($body, 'matchedBy', ['AUTO_SINGLE', 'AUTO_ASPECT', 'USER'], 'USER'),
+        );
+
+        return $this->ok([
+            'companion' => Services::companionLinks()->present($result['link'], $result['session']),
+            'control'   => Services::controlService()->stateFor($result['session']),
         ]);
+    }
+
+    /** `POST /devices/me/companions/{uuid}/leave` — Stop at the machine, or the app going away. */
+    public function companionLeave(string $uuid): ResponseInterface
+    {
+        $principal = $this->context()->requireDevice();
+        $principal->assertScope(DevicePrincipal::SCOPE_SESSION);
+
+        $result = Services::companionService()->leave($principal, $uuid);
+
+        return $this->ok(['companion' => Services::companionLinks()->present($result['link'], $result['session'])]);
     }
 
     /**

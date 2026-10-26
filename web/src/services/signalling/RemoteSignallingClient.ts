@@ -26,6 +26,7 @@ export type SignallingMessageType =
   | 'annotation'
   | 'share-state'
   | 'session-ended'
+  | 'control-hint'
   | 'error'
   | 'pong'
 

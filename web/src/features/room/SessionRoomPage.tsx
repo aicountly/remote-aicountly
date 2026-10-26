@@ -75,6 +75,7 @@ export default function SessionRoomPage() {
     controlNotice,
     controllableHost,
     isControlling,
+    controlPaused,
     actions,
   } = useRemoteSession({
     sessionUuid: uuid,
@@ -190,11 +191,22 @@ export default function SessionRoomPage() {
   // A guest is excluded outright: control belongs to somebody with an
   // AICOUNTLY identity, an organisation and an audit trail behind them, and the
   // API refuses a guest token for every one of these routes.
-  const hasControllableHost = controllableHost !== null
+  // A control companion (docs/desktop/CONTROL_COMPANION.md) serving *my* screen
+  // is not something I request control of: I am the person who grants it.
+  const myCompanion = control?.companion != null && control.companion.linkedParticipantUuid === me?.uuid
+  const hasControllableHost =
+    !myCompanion && (controllableHost !== null || (control?.controllableHostUuid ?? null) !== null)
   const controlAllowedByPolicy = control?.allowRemoteControl === true
   const canRequestControl = !isGuest && can(PERMISSIONS.CONTROL_REQUEST)
   const canAnswerControl = !isGuest && session.isHost && can(PERMISSIONS.CONTROL_ACCEPT)
   const pendingControl = control?.pendingRequests.length ?? 0
+
+  // The sharer may enable control from their own computer when nothing else in
+  // the session can be controlled (a browser shares, not an agent).
+  const canEnableCompanion =
+    canAnswerControl &&
+    controlAllowedByPolicy &&
+    (myCompanion || (control?.controllableHostUuid ?? null) === null)
 
   const phase = controlPhase({
     hasControllableHost,
@@ -210,7 +222,7 @@ export default function SessionRoomPage() {
   const showControlTool =
     !isGuest &&
     controlAllowedByPolicy &&
-    ((hasControllableHost && canRequestControl) || (canAnswerControl && pendingControl > 0))
+    ((hasControllableHost && canRequestControl) || (canAnswerControl && pendingControl > 0) || canEnableCompanion)
 
   const waiting = session.waiting ?? []
 
@@ -310,6 +322,7 @@ export default function SessionRoomPage() {
             <strong>You’re controlling</strong>
             {controllableHost?.name ? ` ${controllableHost.name}` : ' this computer'}
             {control?.clipboardEnabled ? ' · clipboard shared' : ''}
+            {controlPaused ? ' · paused while someone uses it' : ''}
           </span>
           <button
             type="button"
@@ -442,6 +455,15 @@ export default function SessionRoomPage() {
               onGrant: (participantUuid, allowClipboard) =>
                 void actions.allowControl(participantUuid, allowClipboard),
               onDeny: (participantUuid) => void actions.refuseControl(participantUuid),
+              companion: canEnableCompanion
+                ? {
+                    sessionUuid: session.uuid,
+                    isSharing: live?.isSharing ?? false,
+                    onLink: (deviceUuid) => void actions.enableCompanion(deviceUuid),
+                    onUnlink: () => void actions.disableCompanion(),
+                  }
+                : null,
+              paused: controlPaused,
             }}
             onClose={() => setPanel(null)}
             onSendChat={actions.sendChat}

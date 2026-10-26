@@ -2,6 +2,7 @@ import { Keyboard, MousePointerClick, ShieldAlert, ShieldCheck } from 'lucide-re
 
 import type { EnginePeer } from '../../services/webrtc/RemoteSessionEngine'
 import type { Participant, SessionControlState } from '../../types/remote'
+import CompanionPanel from './CompanionPanel'
 
 /**
  * Remote control, as the browser side of it looks.
@@ -42,6 +43,18 @@ interface Props {
   allowClipboard: boolean
   onAllowClipboardChange: (value: boolean) => void
   busy: boolean
+  /**
+   * The sharer's "Enable control from this computer" (a control companion,
+   * docs/desktop/CONTROL_COMPANION.md). Null for everyone else.
+   */
+  companion?: {
+    sessionUuid: string
+    isSharing: boolean
+    onLink: (deviceUuid: string) => void
+    onUnlink: () => void
+  } | null
+  /** The machine paused remote input because somebody there is using it. */
+  paused?: string | null
 }
 
 export default function ControlPanel({
@@ -58,7 +71,12 @@ export default function ControlPanel({
   allowClipboard,
   onAllowClipboardChange,
   busy,
+  companion = null,
+  paused = null,
 }: Props) {
+  // Owner decision 3: no clipboard through a companion in v1, so it is not offered.
+  const viaCompanion = control?.companion?.ready === true && control.companion.participantUuid === control.controllableHostUuid
+
   return (
     <div className="control">
       <h3 className="control__heading">
@@ -79,7 +97,7 @@ export default function ControlPanel({
                 stop it at any moment, and stopping does not need their agreement.
               </p>
 
-              {control?.allowClipboardSync ? (
+              {control?.allowClipboardSync && !viaCompanion ? (
                 <label className="control__option">
                   <input
                     type="checkbox"
@@ -117,17 +135,43 @@ export default function ControlPanel({
           ))
         : null}
 
-      <ControlStatus
-        phase={phase}
-        control={control}
-        host={host}
-        hostParticipant={hostParticipant}
-        onRequest={onRequest}
-        onStop={onStop}
-        busy={busy}
-      />
+      {companion ? (
+        <CompanionPanel
+          sessionUuid={companion.sessionUuid}
+          control={control}
+          isSharing={companion.isSharing}
+          busy={busy}
+          onLink={companion.onLink}
+          onUnlink={companion.onUnlink}
+        />
+      ) : (
+        <ControlStatus
+          phase={phase}
+          control={control}
+          host={host}
+          hostParticipant={hostParticipant}
+          onRequest={onRequest}
+          onStop={onStop}
+          busy={busy}
+          paused={paused}
+        />
+      )}
     </div>
   )
+}
+
+/** Why there is nothing to control right now, when the reason is one a person can act on. */
+function unavailableMessage(control: SessionControlState | null): string {
+  switch (control?.controlBlockedReason) {
+    case 'COMPANION_NOT_READY':
+      return 'The computer being shared is not ready for control yet.'
+    case 'NOT_SHARING':
+      return 'Control works only while the screen is being shared.'
+    case 'SURFACE_NOT_MONITOR':
+      return 'Control works only while an entire screen is shared, not a window or tab.'
+    default:
+      return 'The computer in this session is a web browser, which cannot be controlled. AICOUNTLY Remote for Windows is needed at that end.'
+  }
 }
 
 function ControlStatus({
@@ -138,6 +182,7 @@ function ControlStatus({
   onRequest,
   onStop,
   busy,
+  paused,
 }: {
   phase: ControlPhase
   control: SessionControlState | null
@@ -146,18 +191,14 @@ function ControlStatus({
   onRequest: () => void
   onStop: () => void
   busy: boolean
+  paused: string | null
 }) {
   switch (phase) {
     // A browser cannot be controlled. Saying so plainly is more useful than a
     // greyed-out button, and it is what §2 asks for: the limitation is never
     // misrepresented in the interface.
     case 'unavailable':
-      return (
-        <p className="control__empty">
-          The computer in this session is a web browser, which cannot be controlled. AICOUNTLY
-          Remote for Windows is needed at that end.
-        </p>
-      )
+      return <p className="control__empty">{unavailableMessage(control)}</p>
 
     // The organisation, the plan or this person's permission says no. Which
     // one is in `restrictions`, and the wording avoids implying the person can
@@ -206,6 +247,11 @@ function ControlStatus({
               </span>
             </span>
           </p>
+          {paused ? (
+            <p className="control__hint" role="status">
+              Paused: someone is using that computer. Control resumes when they stop.
+            </p>
+          ) : null}
           <p className="control__hint">
             <Keyboard size={13} aria-hidden="true" /> Keyboard input goes to the remote computer
             while the shared screen has focus.

@@ -27,6 +27,17 @@ cooperating, or on the API being reachable. `ControlGate::revoke()` changes a
 value in the agent's own memory and the next message is dropped, whatever
 anything else believes.
 
+### When the screen is shared from a browser
+
+A control companion ([CONTROL_COMPANION.md](CONTROL_COMPANION.md)) adds checks rather than replacing any. On top
+of 1–5: the link was made by the person sharing, for their own device in the session's company, and confirmed
+at that machine within five minutes; the link is ACTIVE (it knows the monitor) and the person is sharing an
+entire screen right now (`SURFACE_NOT_MONITOR` / `NOT_SHARING` otherwise — Firefox and Safari never qualify);
+only that person grants each request, in the browser (the companion gets `COMPANION_CANNOT_GRANT`); there is no
+clipboard through a companion in v1; and a changed surface or size, a stopped share, the sharer leaving or the
+link ending revokes control with the reason recorded. Somebody using the machine's own mouse or keyboard pauses
+remote input until they stop.
+
 The capability mask is applied **last** in `EffectivePolicyResolver`, after
 every role and user grant. A user-level ALLOW cannot survive a company
 prohibition, and `backend/tests/Policy/DesktopPolicyTest.php` asserts exactly
@@ -235,8 +246,8 @@ worked around by a setting.
 | 13 | A persistent indicator | Tray, window and the browser's own banner |
 | 14 | Immediate local stop | `ControlGate::revoke()`, no permission, no network |
 | 15 | Server-side revocation | `DeviceAuthFilter` re-reads the row every request |
-| 16 | Audit | `CONTROL_*`, `DEVICE_*`, `UNATTENDED_SESSION_STARTED` |
-| 17 | Tenant isolation | Every device lookup resolves the caller's policy first |
-| 18 | Rate limiting | Enrolment, challenge, verify, presence, control, reboot |
+| 16 | Audit | `CONTROL_*`, `CONTROL_COMPANION_*`, `DEVICE_*`, `UNATTENDED_SESSION_STARTED` |
+| 17 | Tenant isolation | Every device lookup resolves the caller's policy first; a companion link is the caller's own device in the session's company, or 404 |
+| 18 | Rate limiting | Enrolment, challenge, verify, presence, control, reboot, companion link and join |
 | 19 | Replay protection | Single-use nonces; a monotonic control sequence |
 | 20 | Strict input validation | Bounds, UTF-8, identifier shapes, before anything acts |
