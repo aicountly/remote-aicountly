@@ -14,6 +14,8 @@
 #  4. the guarded entry files declare nothing at top level (functions/classes would be bound at compile
 #     time, before the guard, and redeclared when it hands the request to the other release's copy)
 set -uo pipefail
+# The first conversion waits ATOMIC_SWITCH_CONVERT_WAIT seconds (130 on a server) before the new release goes live.
+export ATOMIC_SWITCH_CONVERT_WAIT="${ATOMIC_SWITCH_CONVERT_WAIT:-2}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 API_SRC="$REPO/backend"
 SWITCH="$API_SRC/bin/ops/atomic-switch.sh"
@@ -112,7 +114,11 @@ make_release "$WORK/stage" v1
 out="$(bash "$SWITCH" --src="$WORK/stage" --live="$LIVE" --revision=v1 --shared=writable --check-url="http://127.0.0.1:$PORT/api/public/robots.txt" 2>&1)"
 rc=$?
 [ "$rc" = 0 ] && ok "conversion exit 0" || { no "conversion exit $rc"; echo "$out"; }
-echo "$out" | grep -q '(converted from a plain folder)' && ok "the log says it converted the plain folder" || no "no conversion line"
+echo "$out" | grep -q '(converted from a plain folder' && ok "the log says it converted the plain folder" || no "no conversion line"
+# Two steps since kit e3f2b28: the plain folder's own code goes live first as releases/<stamp>-pre-atomic
+# (one rename), then — after ATOMIC_SWITCH_CONVERT_WAIT — the new release.
+ls -d "$REL_DIR"/releases/*-pre-atomic >/dev/null 2>&1 && ok "the plain folder's code is kept as releases/*-pre-atomic" || no "no releases/*-pre-atomic"
+case "$(readlink "$LIVE")" in *-v1) ok "api/ -> the new release (v1) after the two-step conversion" ;; *) no "api/ -> $(readlink "$LIVE"), not the new release" ;; esac
 [ -L "$LIVE" ] && ok "api/ is a symlink" || no "api/ is not a symlink"
 [ "$(cat "$LIVE/REVISION")" = v1 ] && ok "REVISION written" || no "REVISION missing"
 [ "$(cat "$LIVE/writable/logs/keep.log" 2>/dev/null)" = "old log" ] && ok "writable/ kept (shared)" || no "writable/ lost"
