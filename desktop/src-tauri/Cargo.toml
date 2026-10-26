@@ -41,10 +41,15 @@ aicountly-remote-service = { path = "../agents/windows-service" }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
-# Signed automatic updates. Verification happens before installation and the
-# public key lives in `tauri.conf.json`; the private half is a release secret
-# that is never in this repository. See docs/desktop/WINDOWS_RELEASE.md.
-tauri-plugin-updater = "2"
+# No `tauri-plugin-updater`. It was here, switched off (`active: false`, no
+# endpoints, no public key) against the day updater keys and a release feed
+# exist — and it was the only thing pulling in `zip`, which carries three
+# advisories including a 9.1 critical (RUSTSEC-2026-0367/0368/0369, fixed in
+# zip 9, which the plugin does not take yet). Carrying a critical advisory in
+# a binary that runs as the signed-in person, for a feature that is turned
+# off, is not a trade worth making. Re-adding the plugin is one line here,
+# one in `lib.rs`, one in `capabilities/default.json` and the `plugins.updater`
+# block in `tauri.conf.json` — see docs/desktop/WINDOWS_RELEASE.md.
 tauri-plugin-single-instance = "2"
 # Stop control from anywhere, without finding the window: one system-wide
 # shortcut, registered by the Rust side only (the window cannot reach it).

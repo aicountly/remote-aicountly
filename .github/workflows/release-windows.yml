@@ -35,11 +35,12 @@
 #   * It will not sign with a self-signed certificate. `sign.ps1` refuses one.
 #   * It will not describe an unsigned artifact as a release. The sandbox
 #     channel cannot create a GitHub release at all.
-#   * It will not enable the auto-updater. The updater stays inactive in
-#     tauri.conf.json until updater-signing keys and a release feed are
-#     configured — see docs/desktop/WINDOWS_RELEASE.md. Those keys are a
-#     different thing from the Authenticode certificate and are not
-#     interchangeable with it.
+#   * It will not enable the auto-updater. There is no updater in the build:
+#     `tauri-plugin-updater` was removed because it was the only thing
+#     pulling in a crate carrying a critical advisory, for a feature that was
+#     switched off — see docs/desktop/WINDOWS_RELEASE.md. The updater-signing
+#     keys that would be needed to bring it back are a different thing from
+#     the Authenticode certificate and are not interchangeable with it.
 # ---------------------------------------------------------------------------
 name: Release AICOUNTLY Remote for Windows
 

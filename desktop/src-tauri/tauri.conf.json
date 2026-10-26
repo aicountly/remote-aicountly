@@ -66,16 +66,5 @@
         "installerHooks": "../installers/windows/hooks.nsh"
       }
     }
-  },
-  "plugins": {
-    "updater": {
-      "active": false,
-      "endpoints": [],
-      "dialog": true,
-      "pubkey": "",
-      "windows": {
-        "installMode": "passive"
-      }
-    }
   }
 }

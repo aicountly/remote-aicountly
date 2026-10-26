@@ -5,13 +5,22 @@
 # the build. That is only useful if the standing ones are listed here with a
 # reason — an audit whose output nobody reads is an audit that is not running.
 #
-# Every entry below is an `unmaintained` or `unsound` advisory, none is a
-# vulnerability, and every one of them is on the **Linux** build path only:
-# they come from `tauri`'s GTK3/webkit2gtk backend, which the shipped Windows
-# product does not contain. They are re-checked whenever Tauri is upgraded.
+# The rule, and the one exception
+# -------------------------------
+# A vulnerability advisory does not belong on this list: the dependency gets
+# upgraded, or removed. That has been held to — `zip`'s three advisories,
+# including a 9.1 critical, were removed from this product by deleting the
+# disabled `tauri-plugin-updater` that was the only thing pulling it in, and
+# the TLS advisories of 2026-10 were cleared by upgrading. There is exactly
+# one exception below (RUSTSEC-2026-0387), it is annotated as one, and it is
+# here because no upgrade exists to take: it is reached through a transitive
+# pin that this workspace does not choose.
 #
-# A vulnerability advisory must never be added to this list. If one appears,
-# the dependency gets upgraded or replaced.
+# Everything else below is an `unmaintained` or `unsound` advisory on code
+# that is **not in the shipped Windows binary** — the GTK3/webkit2gtk backend
+# Tauri uses on Linux, its DBus backend, or a Unix-only API. Each was checked
+# against `cargo tree --target x86_64-pc-windows-msvc` before it was added,
+# and they are re-checked whenever Tauri is upgraded.
 # ---------------------------------------------------------------------------
 [advisories]
 ignore = [
@@ -40,6 +49,44 @@ ignore = [
     "RUSTSEC-2025-0081",
     "RUSTSEC-2025-0098",
     "RUSTSEC-2025-0100",
+
+    # ----------------------------------------------------------- 2026-10
+    #
+    # zbus and its two companions, unmaintained. Reached only through
+    # `tauri-plugin-single-instance`, which talks DBus on Linux and uses a
+    # named mutex on Windows: `cargo tree -i zbus --target
+    # x86_64-pc-windows-msvc` finds nothing. Same category as the GTK entries
+    # above.
+    "RUSTSEC-2026-0371", # zbus_names
+    "RUSTSEC-2026-0370", # zvariant
+    "RUSTSEC-2026-0372", # zvariant_derive
+
+    # Unsoundness in `tokio::io::unix::AsyncFd`. A Unix-only module; it does
+    # not exist on the Windows target, and nothing in this workspace calls it
+    # on any target.
+    "RUSTSEC-2026-0386",
+
+    # THE EXCEPTION, and the only vulnerability on this list.
+    #
+    # crypto-bigint 0.5.5 — timing variability in operations meant to be
+    # constant-time. Fixed in 0.7.6, which is two breaking releases away and
+    # not ours to take: it arrives as
+    #
+    #     webrtc 0.20.5 -> rtc-dtls/rtc-shared -> p256/p384 0.13
+    #                   -> elliptic-curve 0.13 -> crypto-bigint 0.5.5
+    #
+    # and moving to crypto-bigint 0.7 needs elliptic-curve 0.14, which needs
+    # a webrtc release that takes it. `cargo update` cannot reach it.
+    #
+    # What it means here: the affected operations are in the DTLS key
+    # exchange of a peer connection, and exploiting timing variability in
+    # them needs a local attacker able to measure this process precisely —
+    # on a machine where, by then, they can already see the screen. That is
+    # the judgement, not an assertion that it does not matter.
+    #
+    # REVIEW ON EVERY WEBRTC UPGRADE, and remove this line the moment one
+    # ships that takes elliptic-curve 0.14 or later.
+    "RUSTSEC-2026-0387", # crypto-bigint
 ]
 informational_warnings = ["unmaintained", "unsound", "notice"]
 severity_threshold = "low"
