@@ -230,11 +230,41 @@ that has to be revoked.
 
 ## Automatic updates
 
-**Deliberately off.** `plugins.updater.active` is `false`, `endpoints` is
-empty, and `pubkey` is empty.
+**Not built in.** `tauri-plugin-updater` is not a dependency, there is no
+`plugins.updater` block in `tauri.conf.json`, and the window has no updater
+permission.
 
-Turning it on without the whole chain in place would mean an agent that
-downloads and installs something on the strength of an unauthenticated
+It used to be present and switched off — `active: false`, no endpoints, no
+public key — waiting for the chain below. What ended that was
+`cargo audit`: the plugin was the only thing pulling in `zip`, which carries
+three advisories including a 9.1 critical (RUSTSEC-2026-0367/0368/0369, fixed
+in a major release the plugin does not take yet). Carrying a critical
+advisory inside a binary that runs as the signed-in person, for a feature
+that was turned off, is not a trade worth making, so the dependency went
+instead of being annotated. See `desktop/.cargo/audit.toml`.
+
+Updating is therefore: download the new installer and run it. The installer
+stops the service first, so an upgrade over a running installation is an
+ordinary install rather than a reboot-required one.
+
+### Putting it back
+
+Four edits, and then the three things that were always the real blockers:
+
+```
+desktop/src-tauri/Cargo.toml              tauri-plugin-updater = "2"
+desktop/src-tauri/src/lib.rs              .plugin(tauri_plugin_updater::Builder::new().build())
+desktop/src-tauri/capabilities/default.json   "updater:default"
+desktop/src-tauri/tauri.conf.json         the "plugins": { "updater": { … } } block
+desktop/package.json                      @tauri-apps/plugin-updater
+```
+
+Check `cargo audit` at that point: re-adding the plugin re-adds `zip`, and
+whether that is acceptable depends on which version the plugin has moved to
+by then.
+
+Turning the updater on without the whole chain in place would mean an agent
+that downloads and installs something on the strength of an unauthenticated
 manifest, on machines it can control. Three things are needed first, and none
 of them exists yet:
 
@@ -249,13 +279,9 @@ of them exists yet:
    before installing. Tauri's updater does this check; what it cannot do is
    check a signature against a key nobody configured.
 
-Until all three are in place, updating is: download the new installer and run
-it. The installer stops the service first, so an upgrade over a running
-installation is an ordinary install rather than a reboot-required one.
-
-**No unsigned update will ever be executed.** The updater verifies before it
-installs, and with `pubkey` empty there is nothing it could verify against —
-which is exactly why it is off rather than "on and hoping".
+**No unsigned update will ever be executed** — today because there is no
+updater at all, and after it returns because it verifies before it installs
+and would have nothing to verify against until step 1 is done.
 
 ## Before the first production release
 
