@@ -82,15 +82,33 @@ trap {
     break
 }
 
-# RFC 3161. A signature without one expires with the certificate; with one it
-# keeps verifying for the life of the timestamp authority's own certificate.
-$timestampUrl = if ($env:AICOUNTLY_SIGN_TIMESTAMP_URL) {
-    $env:AICOUNTLY_SIGN_TIMESTAMP_URL
-} else {
-    'http://timestamp.digicert.com'
+# Every signing value is trimmed, and a value that is only whitespace counts
+# as absent.
+#
+# These arrive as GitHub environment variables, where a value pasted with a
+# leading space looks identical to one without in the settings UI and is fatal
+# here. A release run reached Azure with
+#
+#     "CertificateProfileName": " pno@aicountly.com"
+#
+# and was refused, and the space was invisible in every place a person would
+# have looked for it.
+function Get-SigningValue {
+    param([string] $Name)
+
+    $value = [System.Environment]::GetEnvironmentVariable($Name)
+
+    if ([string]::IsNullOrWhiteSpace($value)) { return $null }
+
+    return $value.Trim()
 }
 
-$method = $env:AICOUNTLY_SIGN_METHOD
+# RFC 3161. A signature without one expires with the certificate; with one it
+# keeps verifying for the life of the timestamp authority's own certificate.
+$timestampUrl = Get-SigningValue 'AICOUNTLY_SIGN_TIMESTAMP_URL'
+if (-not $timestampUrl) { $timestampUrl = 'http://timestamp.digicert.com' }
+
+$method = Get-SigningValue 'AICOUNTLY_SIGN_METHOD'
 
 if (-not $method) {
     throw @'
@@ -187,14 +205,44 @@ function Resolve-SignTool {
     return $newest.FullName
 }
 
+function Get-RefusalHint {
+    <#
+        A 403 is the one signtool failure whose cause is nowhere in signtool's
+        own output: the body is empty, and the stack trace is Azure's client
+        library. Both causes are things a person has to go and change, so they
+        are named here rather than left to be rediscovered.
+    #>
+    param($Output)
+
+    if (-not ($Output -match '403' -or $Output -match 'Forbidden')) { return '' }
+
+    return @"
+
+
+Azure refused the request with 403. Two things cause that, and the Metadata
+block above shows which values were sent:
+
+  * The signing identity is not allowed to sign. The app registration behind
+    AZURE_CLIENT_ID needs the "Trusted Signing Certificate Profile Signer"
+    role on the signing account. It is granted in that account's Access
+    control (IAM) and is separate from creating the client secret.
+
+  * CodeSigningAccountName or CertificateProfileName does not name a real
+    account and profile in that endpoint's region. Both are Azure resource
+    names -- not an email address, a subscription name, or a user.
+"@
+}
+
 $signtool = Resolve-SignTool
 Write-Signing "signtool: $signtool"
 
 switch ($method) {
     'trusted-signing' {
+        # `Get-Item env:NAME` only asked whether the variable existed, so a
+        # variable set to a space satisfied it.
         foreach ($name in 'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET',
                           'AICOUNTLY_SIGN_ENDPOINT', 'AICOUNTLY_SIGN_ACCOUNT', 'AICOUNTLY_SIGN_PROFILE') {
-            if (-not (Get-Item "env:$name" -ErrorAction SilentlyContinue)) {
+            if (-not (Get-SigningValue $name)) {
                 throw "$name is not set, and Trusted Signing needs it."
             }
         }
@@ -202,7 +250,7 @@ switch ($method) {
         # The dlib is the Trusted Signing client. It is installed by the
         # release workflow rather than committed, because a signing client is
         # somebody else's software to keep current.
-        $dlib = $env:AICOUNTLY_SIGN_DLIB
+        $dlib = Get-SigningValue 'AICOUNTLY_SIGN_DLIB'
         if (-not $dlib -or -not (Test-Path $dlib)) {
             throw 'AICOUNTLY_SIGN_DLIB must point at Azure.CodeSigning.Dlib.dll.'
         }
@@ -213,9 +261,9 @@ switch ($method) {
         # it.
         $metadata = Join-Path ([System.IO.Path]::GetTempPath()) 'aicountly-trusted-signing.json'
         @{
-            Endpoint               = $env:AICOUNTLY_SIGN_ENDPOINT
-            CodeSigningAccountName = $env:AICOUNTLY_SIGN_ACCOUNT
-            CertificateProfileName = $env:AICOUNTLY_SIGN_PROFILE
+            Endpoint               = Get-SigningValue 'AICOUNTLY_SIGN_ENDPOINT'
+            CodeSigningAccountName = Get-SigningValue 'AICOUNTLY_SIGN_ACCOUNT'
+            CertificateProfileName = Get-SigningValue 'AICOUNTLY_SIGN_PROFILE'
         } | ConvertTo-Json | Set-Content -Path $metadata -Encoding utf8
 
         try {
@@ -240,7 +288,9 @@ switch ($method) {
 
                 foreach ($line in $output) { Write-Signing "  $line" }
 
-                if ($exit -ne 0) { throw "signtool failed on $($file.Name) (exit $exit)." }
+                if ($exit -ne 0) {
+                    throw "signtool failed on $($file.Name) (exit $exit).$(Get-RefusalHint $output)"
+                }
             }
         }
         finally {
@@ -249,7 +299,7 @@ switch ($method) {
     }
 
     'certificate' {
-        $thumbprint = $env:AICOUNTLY_SIGN_THUMBPRINT
+        $thumbprint = Get-SigningValue 'AICOUNTLY_SIGN_THUMBPRINT'
         if (-not $thumbprint) {
             throw 'AICOUNTLY_SIGN_THUMBPRINT is not set.'
         }
