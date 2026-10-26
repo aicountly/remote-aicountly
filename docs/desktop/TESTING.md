@@ -122,8 +122,14 @@ Read this rather than assuming the test count covers it.
 * **No signed build exists**, so nothing has been verified against a real
   certificate chain. `verify.ps1` has been read, not exercised against a
   signature.
-* **macOS is not tested** because there is nothing to test: every provider
-  returns `Unsupported`, and a test asserting that is a test of the refusal.
+* **macOS's native calls run only on a Mac.** The key table, coordinates,
+  display description, permission summary and keychain fallback rule are
+  tested on every host; `mod imp` (CGEvent, Keychain, Accessibility, display
+  list) is compiled and clippy-checked by the `macos` job in
+  `desktop-ci.yml`, and exercised only by hand — `desktop/tests/MANUAL.md`
+  and the steps in `desktop/scripts/macos/README.md`. The companion's loop is
+  tested against a fake API, relay and peer on a paused clock
+  (`src-tauri/src/companion.rs`).
 
 ## Adding a test
 

@@ -1,8 +1,6 @@
 # macOS installers
 
-Deliberately empty. See `../../scripts/macos/README.md`.
-
-There is no macOS build to package: every provider in
-`src-tauri/src/platform/macos/` returns `PlatformError::Unsupported`, and
-shipping a `.dmg` of that would be shipping an application that opens and
-cannot do anything.
+None of its own: Tauri's bundler produces the `.app` and the `.dmg`
+(`src-tauri/tauri.macos.conf.json`), and `.github/workflows/build-macos-test.yml`
+packages a test build with its `config.json` and install steps. See
+`../../scripts/macos/README.md` for what is and is not done.

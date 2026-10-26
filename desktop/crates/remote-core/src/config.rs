@@ -220,10 +220,19 @@ pub fn config_path() -> Option<std::path::PathBuf> {
         })
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        // Per user, in Application Support: there is no background service on
+        // macOS yet, so the only reader is the application itself, running as
+        // the person signed in. The macOS test build's INSTALL.txt copies its
+        // config.json to exactly this path.
+        std::env::var_os("HOME").map(|home| macos_support_directory(&home).join("config.json"))
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         // Only used by developers running the agent's portable half on a
-        // workstation; the shipped product is Windows.
+        // workstation; the shipped product is Windows and macOS.
         std::env::var_os("XDG_CONFIG_HOME")
             .map(std::path::PathBuf::from)
             .or_else(|| {
@@ -231,6 +240,20 @@ pub fn config_path() -> Option<std::path::PathBuf> {
             })
             .map(|root| root.join("aicountly-remote").join("config.json"))
     }
+}
+
+/// `~/Library/Application Support/AICOUNTLY/Remote`, under a given home.
+///
+/// Where the macOS agent keeps its configuration and its enrolment record.
+/// Written out here rather than only inside the macOS branch so the path is
+/// tested on every host.
+#[must_use]
+pub fn macos_support_directory(home: &std::ffi::OsStr) -> std::path::PathBuf {
+    std::path::PathBuf::from(home)
+        .join("Library")
+        .join("Application Support")
+        .join("AICOUNTLY")
+        .join("Remote")
 }
 
 /// HTTPS, or `http://localhost` in a debug build and nowhere else.
@@ -309,6 +332,37 @@ mod tests {
         if let Some(path) = config_path() {
             assert!(path.ends_with("config.json"));
         }
+    }
+
+    /// The macOS test build tells its tester to copy config.json to exactly
+    /// this path, so it must not drift.
+    #[test]
+    fn the_macos_configuration_lives_in_application_support() {
+        let directory = macos_support_directory(std::ffi::OsStr::new("/Users/rahul"));
+
+        assert_eq!(
+            directory.join("config.json"),
+            std::path::PathBuf::from(
+                "/Users/rahul/Library/Application Support/AICOUNTLY/Remote/config.json"
+            )
+        );
+    }
+
+    /// The file the macOS test build ships parses as a configuration.
+    #[test]
+    fn the_macos_test_builds_config_file_is_a_valid_configuration() {
+        let shipped = r#"{
+            "apiBaseUrl": "https://remote.gh.aicountly.com/api",
+            "portalUrl": "https://my.aicountly.com",
+            "presenceIntervalSeconds": 60,
+            "runInBackground": true,
+            "startAtLogin": false,
+            "captureQuality": "adaptive"
+        }"#;
+
+        let config = AgentConfig::from_json(shipped).expect("valid");
+        assert_eq!(config.api_base_url, "https://remote.gh.aicountly.com/api");
+        assert!(!config.start_at_login);
     }
 
     #[test]

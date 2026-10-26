@@ -92,6 +92,35 @@ export function stopControl(): Promise<AgentState> {
   return invoke<AgentState>('stop_control')
 }
 
+/** Yes: let people in this session control this computer while its owner shares it. */
+export function allowCompanion(companionUuid: string): Promise<AgentState> {
+  return invoke<AgentState>('allow_companion', { companionUuid })
+}
+
+export function declineCompanion(companionUuid: string): Promise<AgentState> {
+  return invoke<AgentState>('decline_companion', { companionUuid })
+}
+
+/** The person picked which monitor they are sharing from the browser. */
+export function chooseCompanionMonitor(companionUuid: string, monitorId: number): Promise<AgentState> {
+  return invoke<AgentState>('choose_companion_monitor', { companionUuid, monitorId })
+}
+
+/** Stop being this session's control companion. Control stops at once. */
+export function leaveCompanion(): Promise<AgentState> {
+  return invoke<AgentState>('leave_companion')
+}
+
+/** Put each monitor's name on the monitor itself for a few seconds. */
+export function identifyMonitors(): Promise<void> {
+  return invoke<void>('identify_monitors')
+}
+
+/** Ask the operating system to prompt for a permission (macOS Accessibility). */
+export function requestPermission(permission: 'input_injection'): Promise<PermissionSummary> {
+  return invoke<PermissionSummary>('request_permission', { permission })
+}
+
 export function endSession(): Promise<AgentState> {
   return invoke<AgentState>('end_session')
 }

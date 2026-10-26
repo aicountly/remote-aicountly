@@ -15,6 +15,7 @@
 use std::time::Duration;
 
 use remote_device::AgentCapabilities;
+use remote_protocol::Monitor;
 use remote_security::DeviceKeypair;
 use serde::{Deserialize, Serialize};
 
@@ -195,6 +196,40 @@ pub struct DeviceSelf {
     /// Unattended sessions waiting for this machine to join.
     #[serde(default)]
     pub pending_sessions: Vec<PendingSession>,
+    /// Sessions this machine's owner is sharing from a browser and has asked
+    /// this machine to join as their control companion. Each waits for the
+    /// person at the machine to confirm it, here, before anything is joined.
+    #[serde(default)]
+    pub pending_companions: Vec<PendingCompanion>,
+}
+
+/// A control-companion link waiting for the person at the machine to confirm.
+///
+/// The owner shares a screen from the browser and links this machine to that
+/// share, so somebody they grant control to can use its mouse and keyboard.
+/// Nothing is joined until the person here says yes, once, for this link.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingCompanion {
+    /// The link's own identifier — what join, decline and leave are called on.
+    pub companion_uuid: String,
+    /// The session the owner is sharing in.
+    pub session_uuid: String,
+    /// `123-456` — the label to read out loud, as the browser shows it.
+    #[serde(default)]
+    pub display_id: String,
+    /// Which organisation the session belongs to.
+    #[serde(default)]
+    pub company_name: Option<String>,
+    /// Who asked — the owner, from their browser.
+    #[serde(default)]
+    pub requested_by_name: Option<String>,
+    /// When they asked.
+    #[serde(default)]
+    pub requested_at: Option<String>,
+    /// When the request lapses unanswered (five minutes).
+    #[serde(default)]
+    pub expires_at: Option<String>,
 }
 
 /// ICE and presence configuration from the API.
@@ -267,6 +302,172 @@ pub struct SessionControlView {
     /// Whether a restart may be asked for at all.
     #[serde(default)]
     pub allow_device_reboot: bool,
+    /// The opaque identifier of the grant `controller_uuid` holds (the
+    /// controller and the instant it was granted). What re-arms the gate after
+    /// a local Stop: only a grant with a different identifier does.
+    #[serde(default)]
+    pub grant_id: Option<String>,
+    /// The control-companion link in this session, when there is one.
+    #[serde(default)]
+    pub companion: Option<CompanionView>,
+    /// What the companion's owner is sharing from the browser.
+    #[serde(default)]
+    pub shared_surface: Option<SharedSurface>,
+    /// Why control cannot be offered right now: `NO_COMPANION`,
+    /// `COMPANION_NOT_READY`, `NOT_SHARING`, `SURFACE_NOT_MONITOR`.
+    #[serde(default)]
+    pub control_blocked_reason: Option<String>,
+}
+
+/// A control-companion link, as the control view describes it.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanionView {
+    /// The link's identifier.
+    #[serde(default)]
+    pub uuid: String,
+    /// `PENDING`, `JOINED`, `ACTIVE`, `DECLINED`, `ENDED`, `EXPIRED`.
+    #[serde(default)]
+    pub status: String,
+    /// The machine's name.
+    #[serde(default)]
+    pub device_name: Option<String>,
+    /// The machine's device uuid.
+    #[serde(default)]
+    pub device_uuid: Option<String>,
+    /// The browser participant whose share this machine is the companion of —
+    /// the sharer. If they leave, the link is over.
+    #[serde(default)]
+    pub linked_participant_uuid: Option<String>,
+    /// This machine's own participant in the session, once joined.
+    #[serde(default)]
+    pub participant_uuid: Option<String>,
+    /// The monitor this machine reported as the one being shared.
+    #[serde(default)]
+    pub monitor: Option<serde_json::Value>,
+    /// Whether the server considers the companion controllable.
+    #[serde(default)]
+    pub ready: bool,
+}
+
+impl CompanionView {
+    /// Whether the link is finished, one way or another. A finished link is
+    /// the one thing — with the sharer leaving and the session ending — that
+    /// ends a companion.
+    #[must_use]
+    pub fn is_over(&self) -> bool {
+        matches!(self.status.as_str(), "ENDED" | "EXPIRED" | "DECLINED")
+    }
+}
+
+/// The surface the companion's owner is sharing, as their browser reported it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedSurface {
+    /// `monitor`, `window`, `browser`, or `unknown` (Firefox, Safari).
+    #[serde(default, deserialize_with = "surface_kind")]
+    pub display_surface: SurfaceKind,
+    /// The captured track's width, from `track.getSettings()`.
+    #[serde(default)]
+    pub width: Option<u32>,
+    /// The captured track's height.
+    #[serde(default)]
+    pub height: Option<u32>,
+    /// Whether the browser reported the surface itself, rather than the server
+    /// assuming it.
+    #[serde(default)]
+    pub verified: bool,
+}
+
+/// What kind of surface a browser is sharing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SurfaceKind {
+    /// An entire screen — the only kind a companion can be controlled through.
+    Monitor,
+    /// One window, a browser tab, or anything else.
+    Other,
+    /// The browser did not say.
+    #[default]
+    Unknown,
+}
+
+fn surface_kind<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<SurfaceKind, D::Error> {
+    let value: Option<String> = Option::deserialize(deserializer)?;
+
+    Ok(match value.as_deref() {
+        Some("monitor") => SurfaceKind::Monitor,
+        None | Some("unknown") | Some("") => SurfaceKind::Unknown,
+        Some(_) => SurfaceKind::Other,
+    })
+}
+
+impl SharedSurface {
+    /// The size to match a monitor against, when the browser reported one.
+    #[must_use]
+    pub fn size(&self) -> Option<(u32, u32)> {
+        match (self.width, self.height) {
+            (Some(width), Some(height)) if width > 0 && height > 0 => Some((width, height)),
+            _ => None,
+        }
+    }
+}
+
+/// How the companion decided which monitor is being shared (`matchedBy`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MonitorMatch {
+    /// The machine has one monitor.
+    AutoSingle,
+    /// Exactly one monitor has the shared surface's aspect ratio.
+    AutoAspect,
+    /// The person at the machine picked it.
+    User,
+}
+
+impl MonitorMatch {
+    /// The API's spelling.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AutoSingle => "AUTO_SINGLE",
+            Self::AutoAspect => "AUTO_ASPECT",
+            Self::User => "USER",
+        }
+    }
+
+    /// From [`remote_protocol::SurfaceMatch::matched_by`]'s spelling.
+    #[must_use]
+    pub fn from_api(value: &str) -> Option<Self> {
+        match value {
+            "AUTO_SINGLE" => Some(Self::AutoSingle),
+            "AUTO_ASPECT" => Some(Self::AutoAspect),
+            "USER" => Some(Self::User),
+            _ => None,
+        }
+    }
+}
+
+/// The body of `POST /devices/me/companions/{uuid}/monitor`.
+///
+/// The monitor in the companion's injection space — points on macOS, physical
+/// pixels on Windows — which is the space its normalised coordinates are
+/// mapped into.
+#[must_use]
+pub fn companion_monitor_body(monitor: &Monitor, matched_by: MonitorMatch) -> serde_json::Value {
+    serde_json::json!({
+        "monitor": {
+            "id": monitor.id,
+            "name": monitor.name,
+            "x": monitor.x,
+            "y": monitor.y,
+            "width": monitor.width,
+            "height": monitor.height,
+            "scale": monitor.scale,
+        },
+        "matchedBy": matched_by.as_str(),
+    })
 }
 
 /// Somebody waiting for control of this machine.
@@ -564,6 +765,72 @@ impl ApiClient {
             }),
         )
         .await
+    }
+
+    /// Join a session as its owner's control companion, after the person at
+    /// the machine confirmed the link.
+    ///
+    /// Idempotent: called again, it returns a fresh signalling token for the
+    /// same participant — which is how the companion renews its connection.
+    /// The response has the shape of [`Self::join_session`]'s, plus the link.
+    pub async fn join_companion(
+        &self,
+        companion_uuid: &str,
+    ) -> Result<serde_json::Value, ApiError> {
+        require_identifier(companion_uuid)?;
+
+        self.post(
+            &format!("/v1/remote/devices/me/companions/{companion_uuid}/join"),
+            &serde_json::json!({}),
+        )
+        .await
+    }
+
+    /// The person at the machine said no to the link.
+    pub async fn decline_companion(&self, companion_uuid: &str) -> Result<(), ApiError> {
+        require_identifier(companion_uuid)?;
+
+        let _: serde_json::Value = self
+            .post(
+                &format!("/v1/remote/devices/me/companions/{companion_uuid}/decline"),
+                &serde_json::json!({}),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    /// Report which monitor is the one being shared. Makes the link `ACTIVE`.
+    pub async fn report_companion_monitor(
+        &self,
+        companion_uuid: &str,
+        monitor: &Monitor,
+        matched_by: MonitorMatch,
+    ) -> Result<(), ApiError> {
+        require_identifier(companion_uuid)?;
+
+        let _: serde_json::Value = self
+            .post(
+                &format!("/v1/remote/devices/me/companions/{companion_uuid}/monitor"),
+                &companion_monitor_body(monitor, matched_by),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    /// Leave: the person at the machine ended the link, or the app is quitting.
+    pub async fn leave_companion(&self, companion_uuid: &str) -> Result<(), ApiError> {
+        require_identifier(companion_uuid)?;
+
+        let _: serde_json::Value = self
+            .post(
+                &format!("/v1/remote/devices/me/companions/{companion_uuid}/leave"),
+                &serde_json::json!({}),
+            )
+            .await?;
+
+        Ok(())
     }
 
     /// Switch this machine's own unattended access off.
@@ -911,6 +1178,224 @@ mod tests {
                 matches!(&error, ApiError::Refused { code, .. } if code == "IDENTIFIER_INVALID")
             );
         }
+    }
+
+    /// The companion endpoints carry an identifier that arrived over the
+    /// network, and refuse one that could escape the path.
+    #[tokio::test]
+    async fn a_companion_identifier_that_could_escape_the_path_is_refused() {
+        let mut client = ApiClient::new(AgentConfig::default()).expect("builds");
+        client.credential = Some(credential());
+
+        let monitor = Monitor {
+            id: 1,
+            name: "Built-in display".into(),
+            primary: true,
+            x: 0,
+            y: 0,
+            width: 1512,
+            height: 982,
+            scale: 2.0,
+            refresh_hz: None,
+            orientation: remote_protocol::Orientation::Landscape,
+        };
+
+        for candidate in ["../sessions/1", "a/b", "", "x?y=1"] {
+            let refused = |error: ApiError| matches!(&error, ApiError::Refused { code, .. } if code == "IDENTIFIER_INVALID");
+
+            assert!(refused(client.join_companion(candidate).await.unwrap_err()));
+            assert!(refused(
+                client.decline_companion(candidate).await.unwrap_err()
+            ));
+            assert!(refused(
+                client.leave_companion(candidate).await.unwrap_err()
+            ));
+            assert!(refused(
+                client
+                    .report_companion_monitor(candidate, &monitor, MonitorMatch::User)
+                    .await
+                    .unwrap_err()
+            ));
+        }
+    }
+
+    /// `GET /devices/me` with a link waiting, in the shape the API renders.
+    #[test]
+    fn pending_companions_are_read_from_the_device_description() {
+        let body = serde_json::json!({
+            "device": {
+                "uuid": "device-1", "deviceName": "Rahul's MacBook", "status": "ACTIVE",
+                "companyId": 481, "keyFingerprint": "AAAA", "unattendedAccessEnabled": false,
+                "unattendedEnabledAt": null, "unattendedLastUsedAt": null,
+                "capabilities": AgentCapabilities::companion_only(),
+            },
+            "capabilities": AgentCapabilities::companion_only(),
+            "policy": {
+                "allowRemoteControl": true, "allowUnattendedAccess": false,
+                "allowClipboardSync": false, "allowDeviceReboot": false, "allowFileTransfer": false,
+            },
+            "realtime": { "iceServers": [], "relayAvailable": false, "presenceIntervalSeconds": 60 },
+            "agent": { "minimumVersion": "1.0.0", "updateFeedUrl": null, "clipboardMaxBytes": 65536 },
+            "pendingSessions": [],
+            "pendingCompanions": [{
+                "companionUuid": "companion-1",
+                "sessionUuid": "session-1",
+                "displayId": "123-456",
+                "companyName": "Northwind",
+                "requestedByName": "Rahul Gupta",
+                "requestedAt": "2026-10-25T09:00:00Z",
+                "expiresAt": "2026-10-25T09:05:00Z",
+            }],
+        });
+
+        let described: DeviceSelf = serde_json::from_value(body.clone()).expect("parses");
+        let pending = &described.pending_companions[0];
+
+        assert_eq!(pending.companion_uuid, "companion-1");
+        assert_eq!(pending.session_uuid, "session-1");
+        assert_eq!(pending.display_id, "123-456");
+        assert_eq!(pending.company_name.as_deref(), Some("Northwind"));
+        assert_eq!(pending.requested_by_name.as_deref(), Some("Rahul Gupta"));
+        assert_eq!(pending.expires_at.as_deref(), Some("2026-10-25T09:05:00Z"));
+
+        // An API from before companions sends no such key: none waiting.
+        let mut older = body;
+        older.as_object_mut().unwrap().remove("pendingCompanions");
+        let described: DeviceSelf = serde_json::from_value(older).expect("parses");
+        assert!(described.pending_companions.is_empty());
+    }
+
+    /// The device control view with the companion's additions.
+    #[test]
+    fn the_control_view_carries_the_companion_the_surface_and_the_grant() {
+        let view: SessionControlView = serde_json::from_value(serde_json::json!({
+            "controllableHostUuid": "companion-participant",
+            "controllerUuid": "participant-b",
+            "controllerName": "Sam",
+            "clipboardEnabled": false,
+            "pendingRequests": [],
+            "allowRemoteControl": true,
+            "allowClipboardSync": false,
+            "allowDeviceReboot": false,
+            "grantId": "participant-b:2026-10-25T09:01:00Z",
+            "companion": {
+                "uuid": "companion-1",
+                "status": "ACTIVE",
+                "deviceName": "Rahul's MacBook",
+                "deviceUuid": "device-1",
+                "linkedParticipantUuid": "participant-a",
+                "participantUuid": "companion-participant",
+                "monitor": { "id": 1, "name": "Built-in display", "x": 0, "y": 0, "width": 1512, "height": 982, "scale": 2.0 },
+                "ready": true,
+            },
+            "sharedSurface": { "displaySurface": "monitor", "width": 3024, "height": 1964, "verified": true },
+            "controlBlockedReason": null,
+        }))
+        .expect("parses");
+
+        assert_eq!(
+            view.grant_id.as_deref(),
+            Some("participant-b:2026-10-25T09:01:00Z")
+        );
+
+        let companion = view.companion.as_ref().expect("a companion");
+        assert_eq!(
+            companion.linked_participant_uuid.as_deref(),
+            Some("participant-a")
+        );
+        assert!(companion.ready);
+        assert!(!companion.is_over());
+
+        let surface = view.shared_surface.expect("a surface");
+        assert_eq!(surface.display_surface, SurfaceKind::Monitor);
+        assert_eq!(surface.size(), Some((3024, 1964)));
+        assert!(surface.verified);
+        assert!(view.control_blocked_reason.is_none());
+
+        for status in ["ENDED", "EXPIRED", "DECLINED"] {
+            let over = CompanionView {
+                status: status.into(),
+                ..companion.clone()
+            };
+            assert!(over.is_over(), "{status}");
+        }
+    }
+
+    /// Firefox and Safari report `unknown`; a window is not a monitor; a
+    /// browser that reported no size cannot be matched by size.
+    #[test]
+    fn a_surface_that_is_not_a_monitor_reads_as_what_it_is() {
+        let parse = |value: serde_json::Value| -> SharedSurface {
+            serde_json::from_value(value).expect("parses")
+        };
+
+        assert_eq!(
+            parse(serde_json::json!({"displaySurface": "window", "width": 800, "height": 600}))
+                .display_surface,
+            SurfaceKind::Other
+        );
+        assert_eq!(
+            parse(serde_json::json!({"displaySurface": "unknown"})).display_surface,
+            SurfaceKind::Unknown
+        );
+        assert_eq!(
+            parse(serde_json::json!({})).display_surface,
+            SurfaceKind::Unknown
+        );
+        assert_eq!(
+            parse(serde_json::json!({"width": 0, "height": 900})).size(),
+            None
+        );
+
+        // An older API's control view has none of the companion's keys.
+        let view: SessionControlView = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(
+            view.companion.is_none() && view.shared_surface.is_none() && view.grant_id.is_none()
+        );
+    }
+
+    /// What `POST …/monitor` sends: the monitor in injection space and how it
+    /// was chosen, in the API's spelling.
+    #[test]
+    fn the_monitor_report_is_shaped_the_way_the_api_reads_it() {
+        let monitor = Monitor {
+            id: 69_733_382,
+            name: "Built-in display".into(),
+            primary: true,
+            x: 0,
+            y: 0,
+            width: 1512,
+            height: 982,
+            scale: 2.0,
+            refresh_hz: Some(120),
+            orientation: remote_protocol::Orientation::Landscape,
+        };
+
+        let body = companion_monitor_body(&monitor, MonitorMatch::AutoAspect);
+
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "monitor": {
+                    "id": 69_733_382, "name": "Built-in display", "x": 0, "y": 0,
+                    "width": 1512, "height": 982, "scale": 2.0,
+                },
+                "matchedBy": "AUTO_ASPECT",
+            })
+        );
+
+        for kind in [
+            MonitorMatch::AutoSingle,
+            MonitorMatch::AutoAspect,
+            MonitorMatch::User,
+        ] {
+            assert_eq!(MonitorMatch::from_api(kind.as_str()), Some(kind));
+            assert_eq!(
+                serde_json::to_value(kind).unwrap(),
+                serde_json::json!(kind.as_str())
+            );
+        }
+        assert_eq!(MonitorMatch::from_api("GUESSED"), None);
     }
 
     /// The clipboard is a separate exposure and never rides along with a

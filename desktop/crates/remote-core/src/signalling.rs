@@ -157,6 +157,25 @@ pub enum Signal {
         message: String,
     },
 
+    /// "Poll now": somebody changed control in the API and is nudging the
+    /// room to read it. Carries nothing and grants nothing — the agent's
+    /// answer is to ask the API, which is the only authority.
+    ControlHint {
+        /// Who sent it.
+        #[serde(default)]
+        from: String,
+    },
+
+    /// In a device's own presence room: somebody asked this machine to join a
+    /// session, or linked it as a control companion. "Re-read
+    /// `GET /devices/me` now" and nothing more — the API decides whether there
+    /// is anything to join, never this message.
+    DeviceInvite {
+        /// Who sent it.
+        #[serde(default)]
+        from: String,
+    },
+
     /// The heartbeat's answer.
     Pong,
 
@@ -412,6 +431,40 @@ mod tests {
         assert_eq!(
             connect_url("wss://example.test/s", "a b&c=d#e"),
             "wss://example.test/s?token=a%20b%26c%3Dd%23e"
+        );
+    }
+
+    /// `control-hint` is a "poll now" nudge with an empty payload. It parses
+    /// as itself — not as Unknown — so the companion can act on it, and it
+    /// carries nothing that could grant anything.
+    #[test]
+    fn a_control_hint_parses_as_a_nudge_and_nothing_more() {
+        assert_eq!(
+            parse(r#"{"type":"control-hint","from":"participant-a","payload":{}}"#).unwrap(),
+            Signal::ControlHint {
+                from: "participant-a".into()
+            }
+        );
+        assert_eq!(
+            parse(r#"{"type":"control-hint"}"#).unwrap(),
+            Signal::ControlHint {
+                from: String::new()
+            }
+        );
+    }
+
+    /// The browser's nudge into a device's presence room parses as itself, and
+    /// its payload (a session and a link) is not even read.
+    #[test]
+    fn a_device_invite_is_a_nudge_whose_payload_is_ignored() {
+        assert_eq!(
+            parse(
+                r#"{"type":"device-invite","from":"invite-s1","payload":{"sessionUuid":"s1","companionUuid":"c1"}}"#
+            )
+            .unwrap(),
+            Signal::DeviceInvite {
+                from: "invite-s1".into()
+            }
         );
     }
 

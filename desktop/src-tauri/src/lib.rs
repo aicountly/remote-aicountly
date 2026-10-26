@@ -22,6 +22,7 @@
 
 pub mod agent;
 pub mod commands;
+pub mod companion;
 pub mod ipc;
 pub mod platform;
 pub mod runtime;
@@ -41,6 +42,44 @@ pub const VERSION: &str = AGENT_VERSION;
 /// The argument the installer's sign-in `Run` entry starts the agent with
 /// (`installers/windows/hooks.nsh`).
 pub const BACKGROUND_ARGUMENT: &str = "--background";
+
+/// Stop control from anywhere: a system-wide shortcut, registered by the Rust
+/// side alone, that revokes control locally exactly as the Stop button does.
+pub const STOP_CONTROL_SHORTCUT: &str = "CommandOrControl+Alt+Shift+S";
+
+/// [`STOP_CONTROL_SHORTCUT`], the way this platform writes it.
+#[must_use]
+pub fn stop_shortcut_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "⌘⌥⇧S"
+    } else {
+        "Ctrl+Alt+Shift+S"
+    }
+}
+
+/// Whether a state change should bring the window forward: a companion link
+/// waiting for an answer, or a monitor to pick — each once, when it first
+/// appears. `last` is the previous answer's key.
+#[must_use]
+pub fn needs_attention(state: &remote_core::AgentState, last: &mut Option<String>) -> bool {
+    use remote_core::CompanionPhase;
+
+    let key = state
+        .active_companion()
+        .filter(|companion| {
+            matches!(
+                companion.phase,
+                CompanionPhase::AwaitingConfirmation | CompanionPhase::ChoosingMonitor
+            ) && !(companion.phase == CompanionPhase::ChoosingMonitor
+                && companion.monitors.is_empty())
+        })
+        .map(|companion| format!("{}:{:?}", companion.companion_uuid, companion.phase));
+
+    let raise = key.is_some() && key != *last;
+    *last = key;
+
+    raise
+}
 
 /// Whether the agent was started in the background — by the sign-in `Run`
 /// entry — rather than by a person opening it.
@@ -87,7 +126,41 @@ pub fn run() {
 
     let agent = std::sync::Arc::new(agent::Agent::load());
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // Stop control from anywhere. Registered only where there is something to
+    // stop; a shortcut that cannot be registered (another application holds
+    // it) costs the shortcut, never the application.
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    let builder =
+        match tauri_plugin_global_shortcut::Builder::new().with_shortcut(STOP_CONTROL_SHORTCUT) {
+            Ok(shortcuts) => builder.plugin(
+                shortcuts
+                    .with_handler(|app, _shortcut, event| {
+                        use tauri::Manager;
+
+                        if event.state() != tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                            return;
+                        }
+
+                        let agent = app.state::<std::sync::Arc<Agent>>();
+
+                        if agent.state().is_being_controlled() {
+                            let state = agent.stop_control();
+                            tray::refresh(app, &state);
+                            let _ = tauri::Emitter::emit(app, "aicountly-remote://state", state);
+                        }
+                    })
+                    .build(),
+            ),
+            Err(error) => {
+                tracing::warn!(%error, "the Stop control shortcut could not be registered");
+
+                builder
+            }
+        };
+
+    builder
         // One instance. A second copy of the agent would mean two tray icons,
         // two presence connections claiming the same device, and two processes
         // each believing it owns the session.
@@ -117,6 +190,12 @@ pub fn run() {
             commands::deny_control,
             commands::stop_control,
             commands::end_session,
+            commands::allow_companion,
+            commands::decline_companion,
+            commands::choose_companion_monitor,
+            commands::leave_companion,
+            commands::request_permission,
+            commands::identify_monitors,
             commands::open_url,
             commands::about,
         ])
@@ -138,10 +217,22 @@ pub fn run() {
             // application does.
             let agent = app.state::<std::sync::Arc<Agent>>().inner().clone();
             let handle = app.handle().clone();
+            let attention = std::sync::Mutex::new(None::<String>);
 
             app.manage(runtime::start(
                 agent,
                 std::sync::Arc::new(move |state: remote_core::AgentState| {
+                    // A question for the person at this machine — a companion
+                    // link to allow, a monitor to pick — brings the window
+                    // forward once, rather than waiting in a hidden window.
+                    if let Ok(mut last) = attention.lock() {
+                        if needs_attention(&state, &mut last) {
+                            tray::show_window(&handle);
+                        }
+                    }
+
+                    tray::refresh(&handle, &state);
+
                     // One event, one payload, the same one the tray and the
                     // window both render from — so there is no path by which
                     // the two disagree about whether a session is running.
@@ -182,7 +273,51 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_background_launch, keep_running_after_close};
+    use super::{is_background_launch, keep_running_after_close, needs_attention};
+    use remote_core::{AgentEvent, AgentState, CompanionPhase, CompanionSummary};
+
+    fn asked() -> AgentState {
+        AgentState::not_enrolled("1.0.0")
+            .apply(AgentEvent::Enrolled {
+                device_uuid: "d".into(),
+                device_name: "Mac".into(),
+                company_name: None,
+                key_fingerprint: "AAAA".into(),
+            })
+            .apply(AgentEvent::Authenticated)
+            .apply(AgentEvent::CompanionRequested(CompanionSummary {
+                companion_uuid: "companion-1".into(),
+                session_uuid: "s".into(),
+                display_id: "123-456".into(),
+                company_name: None,
+                requested_by_name: None,
+                expires_at: None,
+                started_at: None,
+                phase: CompanionPhase::AwaitingConfirmation,
+                monitors: Vec::new(),
+                monitor: None,
+                controller_name: None,
+            }))
+    }
+
+    /// The window comes forward once per question, not on every poll that
+    /// repeats it.
+    #[test]
+    fn a_companion_question_raises_the_window_once() {
+        let mut last = None;
+
+        assert!(needs_attention(&asked(), &mut last));
+        assert!(
+            !needs_attention(&asked(), &mut last),
+            "the same question again"
+        );
+
+        let idle = asked().apply(AgentEvent::CompanionDismissed {
+            companion_uuid: "companion-1".into(),
+        });
+        assert!(!needs_attention(&idle, &mut last));
+        assert!(needs_attention(&asked(), &mut last), "asked again later");
+    }
 
     #[test]
     fn closing_the_window_exits_only_when_the_setting_is_off_and_nothing_is_running() {

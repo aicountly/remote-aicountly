@@ -365,10 +365,26 @@ fn enrolment_path() -> Option<std::path::PathBuf> {
         })
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        // Beside `AgentConfig`'s own file, in the signed-in person's
+        // `~/Library/Application Support/AICOUNTLY/Remote` — there is no
+        // background service on macOS yet, so the application is the only
+        // reader. The key itself is in the Keychain, never here.
+        std::env::var_os("HOME").map(|home| {
+            std::path::PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("AICOUNTLY")
+                .join("Remote")
+                .join("enrolment.json")
+        })
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         // Only used by developers running the agent's portable half on a
-        // workstation; the shipped product is Windows.
+        // workstation; the shipped product is Windows and macOS.
         std::env::var_os("XDG_CONFIG_HOME")
             .map(std::path::PathBuf::from)
             .or_else(|| {
