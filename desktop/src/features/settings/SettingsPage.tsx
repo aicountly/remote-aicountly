@@ -127,6 +127,13 @@ function Diagnostics({ about }: { about: About }) {
           {/* The store's name. Never anything in it. */}
           <span className="row__value">{about.keyStorage}</span>
         </div>
+        {about.logFile ? (
+          <div className="row">
+            <span className="row__label">Log file</span>
+            {/* The path. The agent has no command that reads it back. */}
+            <span className="row__value row__value--mono">{about.logFile}</span>
+          </div>
+        ) : null}
         <div className="row">
           <span className="row__label">Background service</span>
           <span className="row__value">

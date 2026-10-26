@@ -178,6 +178,14 @@ export interface About {
   stopShortcut: string
   /** Where the device key is kept. The store's name, never anything in it. */
   keyStorage: string
+  /**
+   * Where this process writes its log — the path, never the contents.
+   *
+   * A release build has no console (`windows_subsystem = "windows"`), so the
+   * file is the only place the log exists and the only thing a support
+   * engineer can be asked for.
+   */
+  logFile: string | null
   service: ServiceStatus
 }
 

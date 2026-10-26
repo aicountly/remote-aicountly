@@ -14,6 +14,7 @@
 pub mod api;
 pub mod backoff;
 pub mod config;
+pub mod logging;
 pub mod signalling;
 pub mod state;
 
@@ -24,6 +25,7 @@ pub use api::{
 };
 pub use backoff::Backoff;
 pub use config::{config_path, macos_support_directory, AgentConfig, ConfigError};
+pub use logging::{log_directory, log_path};
 pub use signalling::{Outbound, Peer, Signal, SignallingError, SignallingSocket};
 pub use state::{
     AgentEvent, AgentState, AgentStatus, CompanionPhase, CompanionSummary, ControlStateView,

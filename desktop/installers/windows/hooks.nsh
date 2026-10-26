@@ -30,7 +30,14 @@
 !define AICOUNTLY_DATA_DIR "$COMMONPROGRAMDATA\AICOUNTLY\Remote"
 !define AICOUNTLY_SERVICE_NAME "AicountlyRemoteService"
 !define AICOUNTLY_SERVICE_EXE "AicountlyRemoteService.exe"
-!define AICOUNTLY_APP_EXE "AICOUNTLY Remote.exe"
+; The executable Tauri actually installs, which is the `[[bin]]` name from
+; `src-tauri/Cargo.toml` — NOT the product name. Tauri renames the main
+; binary only when `mainBinaryName` is set in tauri.conf.json, and it is not;
+; the bundler installs, shortcuts and registers `AicountlyRemote.exe`. This
+; said "AICOUNTLY Remote.exe", so the sign-in Run entry below pointed at a
+; path that does not exist and the tray application never started with
+; Windows.
+!define AICOUNTLY_APP_EXE "AicountlyRemote.exe"
 !define AICOUNTLY_RUN_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
 
 ; For the icon-cache refresh at the end of NSIS_HOOK_POSTINSTALL — see the
@@ -80,17 +87,31 @@
   ; ---------------------------------------------------------------------
   ; The machine-wide data directory.
   ;
-  ; The ACL is reset and rebuilt rather than inherited: this directory holds
-  ; the DPAPI blob containing the device private key, and a directory that
-  ; inherited "Users: Modify" from somewhere would be a directory any account
-  ; on the machine could replace a device identity in.
+  ; The ACL is reset and rebuilt rather than inherited, so whatever
+  ; %ProgramData% happens to hand down does not decide who can read a device
+  ; identity:
   ;
-  ;   SYSTEM          full control   the service
+  ;   SYSTEM          full control   the service, as LocalSystem
   ;   Administrators  full control   installation and support
-  ;   Users           read           the tray application reads the config
+  ;   Users           modify         the tray application, as whoever signed in
   ;
+  ; "Users: modify" and not "Users: read", because every file in here is
+  ; WRITTEN by the tray application running as an ordinary, non-elevated
+  ; person: `config.json` when they change a setting, `enrolment.json` and
+  ; `device-signing-key.key` when they register the computer
+  ; (docs/desktop/DEVICE_ENROLMENT.md — enrolling is a signed-in person's act,
+  ; not an administrator's). With read-only access every one of those writes
+  ; fails with "Access is denied", which is a product that installs and then
+  ; cannot be registered.
+  ;
+  ; What that costs, stated plainly: another account on this machine can
+  ; delete or replace this machine's enrolment. It cannot gain access with it
+  ; — a key only authenticates against the device row the server already
+  ; issued for it, so a replaced key authenticates as nothing — and anyone who
+  ; can sign in here can register the machine through the application's own
+  ; enrolment screen anyway. The directory is still not world-readable, and
   ; DPAPI machine scope plus additional entropy is what protects the key's
-  ; contents; this is what protects the file itself.
+  ; contents rather than the ACL.
   ; ---------------------------------------------------------------------
   DetailPrint "Preparing the AICOUNTLY Remote data directory..."
   CreateDirectory "${AICOUNTLY_DATA_DIR}"
@@ -101,7 +122,7 @@
   Pop $0
   nsExec::ExecToLog 'icacls "${AICOUNTLY_DATA_DIR}" /grant:r "*S-1-5-32-544":(OI)(CI)F'
   Pop $0
-  nsExec::ExecToLog 'icacls "${AICOUNTLY_DATA_DIR}" /grant:r "*S-1-5-32-545":(OI)(CI)R'
+  nsExec::ExecToLog 'icacls "${AICOUNTLY_DATA_DIR}" /grant:r "*S-1-5-32-545":(OI)(CI)M'
   Pop $0
 
   ; ---------------------------------------------------------------------

@@ -40,6 +40,12 @@ pub struct About {
     /// The store's *name*, never anything in it. A support engineer needs to
     /// know where the key lives; nobody needs the key.
     pub key_storage: String,
+    /// Where this process is writing its log, if it has one.
+    ///
+    /// The *path*, so a support engineer can be asked for the file. There is
+    /// no command that returns its contents: a log is read by the person who
+    /// owns the machine, not shipped anywhere by the agent.
+    pub log_file: Option<String>,
     /// The background service, as this process sees it.
     pub service: ipc::ServiceStatus,
 }
@@ -172,7 +178,19 @@ pub fn confirm_enrolment(
         enrolled_at: now_iso(),
     };
 
-    Ok(agent.record_enrolment(&record))
+    let state = agent.record_enrolment(&record);
+
+    // The service holds its own credential and reports presence with it, so
+    // that a registered machine is reachable before anybody signs in. It
+    // reads the record this call just wrote — telling it to look now is what
+    // turns "registered" into "reachable" without waiting for its next
+    // interval. Fail-soft: the service not running is a normal state, and the
+    // record on disk is what matters.
+    if let Err(error) = ipc::authenticate() {
+        tracing::debug!(%error, "the background service was not told to authenticate");
+    }
+
+    Ok(state)
 }
 
 /// Remove this machine's device key.
@@ -490,6 +508,7 @@ pub fn about(agent: tauri::State<'_, Arc<Agent>>) -> About {
         supports_companion: platform::supports_companion(),
         stop_shortcut: crate::stop_shortcut_label().to_owned(),
         key_storage: platform::secure_storage().describe().to_owned(),
+        log_file: remote_core::log_path("agent").map(|path| path.display().to_string()),
         service: ipc::service_status(),
     }
 }

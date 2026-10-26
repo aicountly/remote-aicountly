@@ -94,6 +94,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "time",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4043,6 +4044,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

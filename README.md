@@ -119,8 +119,8 @@ is no local login to fake. See
 cd backend    && vendor/bin/phpunit      # 211 — policy, tenant isolation, devices, control
 cd web        && npm test                # 104 — capture, capability gating, control input
 cd signalling && npm test                #  27 — tokens, rooms, device rooms, live relay
-cd desktop    && cargo test --workspace  # 299 — protocol, gate, identity, state, session, service
-cd desktop    && npm test                #  12 — the agent's own interface
+cd desktop    && cargo test --workspace  # 427 — protocol, gate, identity, state, session, service, the installer
+cd desktop    && npm test                #  36 — the agent's own interface
 ```
 
 The backend suite runs against a real PostgreSQL and applies the migrations
@@ -128,7 +128,9 @@ itself. `.github/workflows/ci.yml` runs the first three on every pull request
 and every push to `main` and verifies that the migrations roll back cleanly;
 `.github/workflows/desktop-ci.yml` runs the desktop workspace on Linux **and**
 on a Windows runner, with `cargo audit` and `npm audit`, for changes under
-`desktop/`. Neither deploys. The manual deploys call `ci.yml` first and the
+`desktop/` — and builds the Windows installer there, unsigned and thrown away,
+so a broken `installers/windows/hooks.nsh` fails a check rather than a
+release. Neither deploys. The manual deploys call `ci.yml` first and the
 manual Windows release calls `desktop-ci.yml` first; the shipping job `needs:`
 it, so a red suite stops the deploy or release.
 

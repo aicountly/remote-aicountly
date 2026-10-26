@@ -54,6 +54,36 @@ impl DeviceCredential {
     pub fn has_scope(&self, scope: &str) -> bool {
         self.scopes.iter().any(|held| held == scope)
     }
+
+    /// Seconds from now until it expires, or `None` if the expiry is not an
+    /// instant this build can read.
+    #[must_use]
+    pub fn seconds_remaining(&self) -> Option<i64> {
+        let expires = time::OffsetDateTime::parse(
+            &self.expires_at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .ok()?
+        .unix_timestamp();
+
+        Some(expires - time::OffsetDateTime::now_utc().unix_timestamp())
+    }
+
+    /// Whether it is close enough to expiry to be renewed now.
+    ///
+    /// An expiry that cannot be parsed counts as expiring: a spare round trip
+    /// costs nothing, and a session refused because the credential had
+    /// quietly run out costs a support call. Both halves of the agent — the
+    /// window's connection loop and the service's presence loop — renew
+    /// through this one answer so they cannot disagree about what "expiring"
+    /// means.
+    #[must_use]
+    pub fn is_expiring(&self, margin: Duration) -> bool {
+        match self.seconds_remaining() {
+            Some(remaining) => remaining <= margin.as_secs() as i64,
+            None => true,
+        }
+    }
 }
 
 /// Prints the expiry and the scopes. Never the token.
@@ -1046,6 +1076,41 @@ mod tests {
 
         assert!(!rendered.contains("super-secret-token-value"));
         assert!(rendered.contains("expires_at"));
+    }
+
+    /// Both loops renew through this, so a credential that is about to expire
+    /// has to read as expiring in one place rather than two.
+    #[test]
+    fn a_credential_knows_when_it_is_nearly_expired() {
+        let soon = DeviceCredential {
+            token: "t".into(),
+            expires_at: (time::OffsetDateTime::now_utc() + Duration::from_secs(30))
+                .format(&time::format_description::well_known::Rfc3339)
+                .expect("formats"),
+            scopes: vec![],
+        };
+        assert!(soon.is_expiring(Duration::from_secs(60)));
+        assert!(!soon.is_expiring(Duration::from_secs(5)));
+
+        let later = DeviceCredential {
+            token: "t".into(),
+            expires_at: (time::OffsetDateTime::now_utc() + Duration::from_secs(3_600))
+                .format(&time::format_description::well_known::Rfc3339)
+                .expect("formats"),
+            scopes: vec![],
+        };
+        assert!(!later.is_expiring(Duration::from_secs(60)));
+        assert!(later.seconds_remaining().unwrap_or_default() > 3_500);
+
+        // An expiry this build cannot read is treated as expiring: renewing
+        // costs a round trip, trusting it costs a refused session.
+        let unreadable = DeviceCredential {
+            token: "t".into(),
+            expires_at: "whenever".into(),
+            scopes: vec![],
+        };
+        assert_eq!(unreadable.seconds_remaining(), None);
+        assert!(unreadable.is_expiring(Duration::from_secs(60)));
     }
 
     #[test]

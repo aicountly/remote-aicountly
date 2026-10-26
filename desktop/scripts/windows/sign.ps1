@@ -208,4 +208,15 @@ Write-Host 'Verifying...' -ForegroundColor Cyan
 # Verifying after signing is not ceremony: a signature that did not take, or
 # took without a timestamp, is one a customer discovers rather than the release
 # process.
+#
+# The exit code is checked rather than trusted. `verify.ps1` reports a failure
+# by exiting non-zero, and a script called with `&` that exits does not stop
+# its caller — so without this, "Verifying..." printed FAILED and signing
+# reported success, which is the one outcome the verification exists to
+# prevent. It matters more now that the Tauri bundler calls this script per
+# binary: a throw here stops the build rather than packaging the binary.
 & (Join-Path $PSScriptRoot 'verify.ps1') -Path ($files | ForEach-Object { $_.FullName })
+
+if ($LASTEXITCODE -ne 0) {
+    throw 'The signature did not verify. Nothing here is fit to publish.'
+}

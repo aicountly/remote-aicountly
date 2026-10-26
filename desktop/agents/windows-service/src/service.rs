@@ -211,6 +211,11 @@ fn status(state: ServiceState, accepted: ServiceControlAccept) -> ServiceStatus 
 fn serve() -> Result<(), ServiceError> {
     let stopping = Arc::new(AtomicBool::new(false));
     let state = Arc::new(Mutex::new(MachineState::default()));
+    // Set when the UI asks the service to authenticate — see
+    // `Effect::Authenticate`. It shortens the presence loop's next sleep so
+    // "I have just registered this computer" is acted on now rather than at
+    // the next interval.
+    let nudge = Arc::new(AtomicBool::new(false));
 
     let handler = {
         let stopping = Arc::clone(&stopping);
@@ -260,11 +265,12 @@ fn serve() -> Result<(), ServiceError> {
     let presence = {
         let stopping = Arc::clone(&stopping);
         let state = Arc::clone(&state);
+        let nudge = Arc::clone(&nudge);
 
-        std::thread::spawn(move || presence_loop(&stopping, &state))
+        std::thread::spawn(move || presence_loop(&stopping, &state, &nudge))
     };
 
-    let result = accept_loop(&stopping, &state);
+    let result = accept_loop(&stopping, &state, &nudge);
 
     stopping.store(true, Ordering::SeqCst);
     let _ = presence.join();
@@ -279,7 +285,7 @@ fn serve() -> Result<(), ServiceError> {
 mod win {
     pub use windows::core::PCWSTR;
     pub use windows::Win32::Foundation::{
-        CloseHandle, LocalFree, ERROR_PIPE_CONNECTED, HANDLE, HLOCAL, LUID,
+        CloseHandle, LocalFree, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, HANDLE, HLOCAL, LUID,
     };
     pub use windows::Win32::Security::Authorization::{
         ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -392,6 +398,7 @@ unsafe impl Send for PipeInstance {}
 fn accept_loop(
     stopping: &Arc<AtomicBool>,
     state: &Arc<Mutex<MachineState>>,
+    nudge: &Arc<AtomicBool>,
 ) -> Result<(), ServiceError> {
     let security = PipeSecurityDescriptor::build()?;
     let name = wide(&pipe_name());
@@ -424,9 +431,24 @@ fn accept_loop(
         };
 
         if handle.is_invalid() {
+            let error = windows::core::Error::from_thread();
+
+            // Every instance is in use. That is a *busy* pipe, not a broken
+            // one: the one before this is still being served, and returning
+            // here would end the accept loop — which stops the service and
+            // leaves the machine with no IPC channel until somebody restarts
+            // it. Nothing more than MAX_PIPE_INSTANCES clients, each holding
+            // its slot until the idle timeout, would be needed to do that.
+            // So wait for a slot and try again.
+            if error.code() == windows::core::HRESULT::from_win32(win::ERROR_PIPE_BUSY.0) {
+                sleep_interruptibly(stopping, POLL_INTERVAL);
+
+                continue;
+            }
+
             return Err(ServiceError::Windows {
                 context: "opening the IPC channel",
-                source: windows::core::Error::from_thread(),
+                source: error,
             });
         }
 
@@ -462,10 +484,11 @@ fn accept_loop(
 
         let state = Arc::clone(state);
         let stopping = Arc::clone(stopping);
+        let nudge = Arc::clone(nudge);
         let live_for_thread = Arc::clone(&live);
 
         std::thread::spawn(move || {
-            serve_connection(instance, &stopping, &state);
+            serve_connection(instance, &stopping, &state, &nudge);
             live_for_thread.fetch_sub(1, Ordering::SeqCst);
         });
     }
@@ -499,6 +522,7 @@ fn serve_connection(
     instance: PipeInstance,
     stopping: &Arc<AtomicBool>,
     state: &Arc<Mutex<MachineState>>,
+    nudge: &Arc<AtomicBool>,
 ) {
     let mut connection = Connection::default();
     let mut last_heard = Instant::now();
@@ -566,7 +590,16 @@ fn serve_connection(
                     tracing::error!(%error, "the restart was refused by Windows");
                 }
             }
-            Some(Effect::Authenticate) | None => {}
+            // The presence loop is what holds the credential, so this hands
+            // the work to it rather than authenticating on a pipe thread —
+            // two authentications racing for one device would each invalidate
+            // the other's challenge. Ignoring the effect, which is what this
+            // arm used to do, left the UI's request answered and nothing
+            // done.
+            Some(Effect::Authenticate) => {
+                nudge.store(true, Ordering::SeqCst);
+            }
+            None => {}
         }
     }
 }
@@ -724,10 +757,36 @@ fn enable_shutdown_privilege() -> Result<(), ServiceError> {
 
 /// Keep saying the machine is there.
 ///
+/// # What this needs, and where it comes from
+///
+/// Presence is a device-authenticated call, so the service has to hold a
+/// device credential — and it obtains that itself, from the two things the
+/// machine already has on disk:
+///
+/// * `enrolment.json`, written by the user-session process when a person
+///   registered the computer — the device uuid and the key fingerprint;
+/// * the DPAPI blob, machine scope, which only `LocalSystem` and an
+///   administrator can decrypt — the private key it signs the challenge with.
+///
+/// Neither ever crosses the pipe, and this loop holds the credential in
+/// memory only: the UI asks whether the machine is authenticated and when
+/// that expires ([`IpcRequest::Authenticate`]), never for the credential
+/// itself.
+///
+/// The enrolment is re-read on every pass rather than once at startup,
+/// because the ordinary sequence is the service starting on a machine that is
+/// not registered yet and somebody registering it minutes later. A service
+/// that read the record once would need restarting before the machine was
+/// ever reachable.
+///
 /// Bounded exponential backoff with jitter, and it never gives up except on a
 /// revoked device: a machine that stops reporting because a network blipped
 /// during a night is a machine somebody cannot help in the morning.
-fn presence_loop(stopping: &Arc<AtomicBool>, state: &Arc<Mutex<MachineState>>) {
+fn presence_loop(
+    stopping: &Arc<AtomicBool>,
+    state: &Arc<Mutex<MachineState>>,
+    nudge: &Arc<AtomicBool>,
+) {
     let config = remote_core::AgentConfig::load();
 
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -751,52 +810,245 @@ fn presence_loop(stopping: &Arc<AtomicBool>, state: &Arc<Mutex<MachineState>>) {
         return;
     };
 
+    // An identity the server has refused: revoked, suspended, or a key it no
+    // longer accepts. Remembered rather than returned on, so the loop stops
+    // knocking on the API for *that* identity without ending — registering
+    // the machine again writes a different uuid and a different key, and the
+    // next pass picks it up. Returning here meant a machine that was revoked
+    // and then registered again stayed unreachable until somebody restarted
+    // the service.
+    let mut refused: Option<(String, String)> = None;
+
     while !stopping.load(Ordering::SeqCst) {
-        let outcome = runtime.block_on(async {
-            // Without a credential there is nothing to report with. The UI is
-            // what enrols; until it has, the machine is simply not registered.
-            if client.credential().is_none() {
-                return Err(remote_core::ApiError::NoCredential);
+        // What this machine is, as of now. Written by the other process, so
+        // it is read again every pass.
+        let identity = match machine_identity() {
+            Some(identity) => identity,
+            None => {
+                // Not registered — the normal state of a machine between the
+                // installer finishing and somebody signing in to register it.
+                // Not an error, and not something backoff should grow over.
+                if let Ok(mut held) = state.lock() {
+                    held.enrolled = false;
+                    held.online = false;
+                    held.device_uuid = None;
+                    held.key_fingerprint = None;
+                    held.credential_expires_at = None;
+                }
+
+                client.clear_credential();
+                sleep_or_nudged(stopping, nudge, interval);
+
+                continue;
             }
+        };
 
-            client.report_presence(true).await
-        });
+        let fingerprint = identity.keypair.fingerprint();
 
-        match outcome {
+        if let Ok(mut held) = state.lock() {
+            held.enrolled = true;
+            held.device_uuid = Some(identity.device_uuid.clone());
+            held.key_fingerprint = Some(fingerprint.clone());
+        }
+
+        if refused
+            .as_ref()
+            .is_some_and(|(uuid, key)| *uuid == identity.device_uuid && *key == fingerprint)
+        {
+            // Already refused, and nothing about this machine has changed
+            // since. Wait rather than ask again.
+            sleep_or_nudged(stopping, nudge, interval);
+
+            continue;
+        }
+
+        // Renewed a little before it runs out, on the same reading the
+        // window's own loop uses.
+        let needs_credential = client
+            .credential()
+            .is_none_or(|credential| credential.is_expiring(RENEW_MARGIN));
+
+        if needs_credential {
+            let outcome =
+                runtime.block_on(client.authenticate(&identity.device_uuid, &identity.keypair));
+
+            match outcome {
+                Ok(credential) => {
+                    backoff.reset();
+
+                    if let Ok(mut held) = state.lock() {
+                        held.credential_expires_at = Some(credential.expires_at.clone());
+                    }
+
+                    tracing::info!(
+                        device = %identity.device_uuid,
+                        expires_at = %credential.expires_at,
+                        "this computer authenticated with AICOUNTLY Remote"
+                    );
+
+                    // Once per credential, not once per presence report: the
+                    // UI's diagnostics panel shows whether unattended access
+                    // is on as the *service* sees it, and a field that was
+                    // always false there was a panel telling a support
+                    // engineer the opposite of the truth. The window has its
+                    // own, more frequent, reading of the same thing.
+                    if let Ok(description) = runtime.block_on(client.describe_self()) {
+                        if let Ok(mut held) = state.lock() {
+                            held.unattended_enabled = description.device.unattended_access_enabled;
+                        }
+                    }
+                }
+
+                Err(error) if error.is_device_rejected() => {
+                    // Revoked, suspended, or a key the server no longer
+                    // accepts. Retrying for ever would look like a bug and
+                    // would keep a removed machine knocking on the API, so
+                    // this identity is set aside — until the machine is
+                    // registered again, which gives it a different one.
+                    tracing::warn!(
+                        device = %identity.device_uuid,
+                        "this computer is no longer accepted; presence stopped until it is registered again"
+                    );
+
+                    refused = Some((identity.device_uuid.clone(), fingerprint));
+
+                    if let Ok(mut held) = state.lock() {
+                        held.online = false;
+                        held.credential_expires_at = None;
+                    }
+
+                    client.clear_credential();
+                    sleep_or_nudged(stopping, nudge, interval);
+
+                    continue;
+                }
+
+                Err(error) => {
+                    tracing::warn!(%error, "this computer could not authenticate; retrying");
+
+                    if let Ok(mut held) = state.lock() {
+                        held.online = false;
+                        held.credential_expires_at = None;
+                    }
+
+                    sleep_or_nudged(stopping, nudge, backoff.next_delay());
+
+                    continue;
+                }
+            }
+        }
+
+        match runtime.block_on(client.report_presence(true)) {
             Ok(()) => {
                 backoff.reset();
 
                 if let Ok(mut held) = state.lock() {
                     held.online = true;
+                    held.last_reported_at = now_iso8601();
                 }
 
-                sleep_interruptibly(stopping, interval);
+                sleep_or_nudged(stopping, nudge, interval);
             }
 
             Err(error) if error.is_device_rejected() => {
-                // Revoked or no longer accepted. Stopping is the correct
-                // behaviour: retrying for ever would look like a bug and would
-                // keep a removed machine knocking on the API.
-                tracing::warn!("this device is no longer accepted; presence stopped");
-
-                if let Ok(mut held) = state.lock() {
-                    held.online = false;
-                    held.enrolled = false;
-                }
+                // Either the credential stopped being accepted — in which
+                // case the next pass authenticates again — or the device was
+                // removed, in which case that authentication is what returns.
+                // Both are decided in one place rather than guessed from a
+                // presence call's status code.
+                tracing::warn!("presence was refused; authenticating again");
 
                 client.clear_credential();
 
-                return;
+                if let Ok(mut held) = state.lock() {
+                    held.online = false;
+                    held.credential_expires_at = None;
+                }
+
+                sleep_or_nudged(stopping, nudge, backoff.next_delay());
             }
 
-            Err(_) => {
+            Err(error) => {
+                tracing::debug!(%error, "presence could not be reported; retrying");
+
                 if let Ok(mut held) = state.lock() {
                     held.online = false;
                 }
 
-                sleep_interruptibly(stopping, backoff.next_delay());
+                sleep_or_nudged(stopping, nudge, backoff.next_delay());
             }
         }
+    }
+}
+
+/// How long before expiry the service renews its credential.
+///
+/// The same margin the window's connection loop uses.
+const RENEW_MARGIN: Duration = Duration::from_secs(60);
+
+/// This machine's device identity: what it is, and what it signs with.
+struct MachineIdentity {
+    device_uuid: String,
+    keypair: remote_security::DeviceKeypair,
+}
+
+/// Read the enrolment record and the device key.
+///
+/// `None` whenever the machine cannot prove who it is — never registered, the
+/// record removed, or a DPAPI blob this Windows installation can no longer
+/// decrypt (a machine rename, a restored image). All three mean the same
+/// thing to this loop: there is nothing to report presence with yet.
+fn machine_identity() -> Option<MachineIdentity> {
+    use remote_security::{SecureStorageProvider, StorageScope};
+
+    let record = remote_security::EnrolmentRecord::load()?;
+
+    let secret = crate::storage::DpapiStorage::new()
+        .load(
+            remote_security::DEVICE_KEY_ENTRY,
+            StorageScope::LocalMachine,
+        )
+        .map_err(|error| {
+            tracing::warn!(%error, "this computer's device key could not be read");
+        })
+        .ok()??;
+
+    let keypair = remote_security::DeviceKeypair::from_secret_bytes(&secret)
+        .map_err(|error| {
+            tracing::warn!(%error, "this computer's device key is not usable");
+        })
+        .ok()?;
+
+    Some(MachineIdentity {
+        device_uuid: record.device_uuid,
+        keypair,
+    })
+}
+
+/// Now, as the API writes instants.
+fn now_iso8601() -> Option<String> {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .ok()
+}
+
+/// Sleep, but wake early when the UI has asked for an authentication.
+///
+/// The flag is cleared as it is read, so one request produces one extra pass
+/// rather than a loop that never sleeps again.
+fn sleep_or_nudged(stopping: &Arc<AtomicBool>, nudge: &Arc<AtomicBool>, total: Duration) {
+    let deadline = Instant::now() + total;
+
+    while Instant::now() < deadline {
+        if stopping.load(Ordering::SeqCst) {
+            return;
+        }
+
+        if nudge.swap(false, Ordering::SeqCst) {
+            return;
+        }
+
+        std::thread::sleep(POLL_INTERVAL);
     }
 }
 

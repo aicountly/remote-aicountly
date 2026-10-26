@@ -17,8 +17,11 @@ const DEFAULT_DPI: f64 = 96.0;
 
 /// The longest display name that is carried.
 ///
-/// A display name is a string the operating system read out of the monitor's
-/// own EDID — which is to say, out of hardware somebody else manufactured.
+/// A display name can be a string the operating system read out of the
+/// monitor's own EDID — which is to say, out of hardware somebody else
+/// manufactured — so it is bounded and stripped of control characters like
+/// any other value from outside. (On Windows it is
+/// [`friendly_display_name`]'s output instead, which is already neither.)
 const MAX_NAME_CHARS: usize = 120;
 
 /// Whether the Secure Desktop is in front of the user's own.
@@ -120,6 +123,35 @@ pub fn describe_monitor(
     }
 }
 
+/// What a person should see instead of a GDI device path.
+///
+/// `GetMonitorInfoW` fills `szDevice` with `\\.\DISPLAY1` — a device path,
+/// not a name anybody recognises, and not (as the enumeration loop's comment
+/// once claimed) anything out of the monitor's EDID. The monitor picker asks
+/// "which screen are you sharing?" and the answer has to be something a
+/// person can match against the screens in front of them, so the path becomes
+/// "Display 1". The **Identify** overlay draws the same string onto the
+/// monitor itself, which is what makes it answerable.
+///
+/// The number comes from the device path when it has one, because that is the
+/// number Windows itself shows in Settings > Display; the enumeration index is
+/// the fallback.
+#[must_use]
+pub fn friendly_display_name(device: &str, index: u32) -> String {
+    let bare = device
+        .trim()
+        .trim_matches('\0')
+        .trim_start_matches(r"\\.\")
+        .trim_start_matches(r"\\?\");
+
+    let digits: String = bare.chars().filter(|c| c.is_ascii_digit()).collect();
+
+    match digits.parse::<u32>() {
+        Ok(number) if number > 0 => format!("Display {number}"),
+        _ => format!("Display {index}"),
+    }
+}
+
 /// Windows' `DMDO_*` display orientation, as the protocol spells it.
 #[must_use]
 pub fn orientation_from_windows(value: u32) -> Orientation {
@@ -135,6 +167,40 @@ pub fn orientation_from_windows(value: u32) -> Orientation {
 mod tests {
     use super::*;
     use remote_protocol::PointerPosition;
+
+    /// "Which screen are you sharing?" is a question somebody has to be able
+    /// to answer by looking at their desk. `\\.\DISPLAY1` is not an answer.
+    #[test]
+    fn a_device_path_becomes_a_name_a_person_can_match_to_a_screen() {
+        assert_eq!(friendly_display_name(r"\\.\DISPLAY1", 1), "Display 1");
+        assert_eq!(friendly_display_name(r"\\.\DISPLAY2", 2), "Display 2");
+        // The number Windows itself shows wins over the enumeration order.
+        assert_eq!(friendly_display_name(r"\\.\DISPLAY3", 2), "Display 3");
+
+        // Windows pads szDevice with NULs.
+        assert_eq!(
+            friendly_display_name("\\\\.\\DISPLAY4\0\0\0", 4),
+            "Display 4"
+        );
+    }
+
+    /// A device name with no number in it, or one this build cannot read,
+    /// falls back to the position in the layout — never to the raw path, and
+    /// never to an empty label.
+    #[test]
+    fn a_nameless_device_falls_back_to_its_place_in_the_layout() {
+        assert_eq!(friendly_display_name("", 2), "Display 2");
+        assert_eq!(friendly_display_name(r"\\.\DISPLAY0", 3), "Display 3");
+        assert_eq!(friendly_display_name("something else", 1), "Display 1");
+
+        for device in ["", r"\\.\DISPLAY1", "\0", "oddity"] {
+            let name = friendly_display_name(device, 1);
+
+            assert!(name.starts_with("Display "));
+            assert!(!name.contains('\\'));
+            assert!(!name.contains('\0'));
+        }
+    }
 
     /// The arithmetic that decides where a click lands. On a 150% display the
     /// physical pixels are what travel and the scale is reported beside them,

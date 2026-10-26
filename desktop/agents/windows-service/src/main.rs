@@ -16,6 +16,14 @@
 fn main() {
     let argument = std::env::args().nth(1).unwrap_or_default();
 
+    // Before anything else that might want to say why it failed. A service
+    // has no console — the SCM starts it in Session 0 — so without this every
+    // `tracing::error!` in the service went nowhere at all, including the one
+    // that says why it stopped.
+    if argument != "--version" {
+        remote_core::logging::init("service");
+    }
+
     if argument == "--version" {
         println!(
             "{} {}",

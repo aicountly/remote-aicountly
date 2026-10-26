@@ -128,8 +128,56 @@ mod imp {
 
     use super::{IPC_TIMEOUT_MS, SERVICE_NAME};
 
-    /// Connect, send, read one answer, disconnect.
+    /// Connect, send, read one answer, disconnect — and give up after
+    /// [`IPC_TIMEOUT_MS`].
+    ///
+    /// The exchange itself is synchronous and a named pipe read has no
+    /// deadline of its own, so it happens on a thread of its own and this
+    /// function waits on a channel. That is what makes the timeout real:
+    /// `service_status()` is called from a Tauri command, and before this the
+    /// window hung for as long as a wedged service took to answer — which is
+    /// exactly the failure the timeout was documented to prevent.
+    ///
+    /// One exchange at a time, process-wide. A thread waiting on a service
+    /// that never answers cannot be cancelled — it ends when the pipe does —
+    /// so the lock is what stops a window that polls the service from
+    /// accumulating one stuck thread per poll.
     pub fn round_trip(request: &IpcRequest) -> Result<IpcResponse, IpcError> {
+        static IN_FLIGHT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+        let framed = IpcFrame::encode(request)?;
+        let (answer, wait) = std::sync::mpsc::channel();
+
+        let spawned = std::thread::Builder::new()
+            .name("aicountly-remote-ipc".into())
+            .spawn(move || {
+                let Ok(_busy) = IN_FLIGHT.try_lock() else {
+                    let _ = answer.send(Err(IpcError::Transport(
+                        "the background service is not answering".into(),
+                    )));
+
+                    return;
+                };
+
+                let _ = answer.send(exchange(&framed));
+            });
+
+        if spawned.is_err() {
+            return Err(IpcError::Transport(
+                "the background service could not be reached".into(),
+            ));
+        }
+
+        match wait.recv_timeout(std::time::Duration::from_millis(IPC_TIMEOUT_MS)) {
+            Ok(result) => result,
+            Err(_) => Err(IpcError::Transport(
+                "the background service did not answer".into(),
+            )),
+        }
+    }
+
+    /// The exchange, on the thread that can afford to block.
+    fn exchange(framed: &[u8]) -> Result<IpcResponse, IpcError> {
         use std::fs::OpenOptions;
 
         // Opened without FILE_FLAG_OVERLAPPED: this is one synchronous
@@ -145,8 +193,7 @@ mod imp {
                 _ => IpcError::Transport(error.to_string()),
             })?;
 
-        let framed = IpcFrame::encode(request)?;
-        pipe.write_all(&framed)
+        pipe.write_all(framed)
             .map_err(|error| IpcError::Transport(error.to_string()))?;
         pipe.flush()
             .map_err(|error| IpcError::Transport(error.to_string()))?;
@@ -237,11 +284,6 @@ mod imp {
             })
         }
     }
-
-    // Keeps the timeout constant referenced on Windows builds where the
-    // synchronous pipe read is bounded by the pipe's own timeout instead.
-    #[allow(dead_code)]
-    const _TIMEOUT: u64 = IPC_TIMEOUT_MS;
 }
 
 #[cfg(test)]

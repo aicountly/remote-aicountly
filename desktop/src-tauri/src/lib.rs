@@ -114,15 +114,11 @@ pub fn keep_running_after_close(run_in_background: bool, session_active: bool) -
 /// in the library.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("AICOUNTLY_REMOTE_LOG")
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        // No timestamps in the message body and no ANSI: this goes to a file
-        // a support engineer reads.
-        .with_ansi(false)
-        .init();
+    // To a file, and to standard error. A release build has
+    // `windows_subsystem = "windows"` and therefore no console at all, so a
+    // subscriber that only wrote to standard output was a subscriber whose
+    // every line Windows discarded — see `remote_core::logging`.
+    remote_core::logging::init("agent");
 
     let agent = std::sync::Arc::new(agent::Agent::load());
 

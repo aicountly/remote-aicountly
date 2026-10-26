@@ -14,9 +14,23 @@
          installers;
       4. reports exactly what it produced and whether any of it is signed.
 
-    It does NOT sign anything. Signing is `sign.ps1`, it needs credentials this
-    script never sees, and keeping them apart is what makes it safe to run this
-    on any machine.
+    Without `-Sign` it signs nothing, and a developer's build needs no
+    credential of any kind.
+
+    With `-Sign` it hands `sign.ps1` to the Tauri bundler as its signing
+    command, which is what makes a release signed *all the way through*. This
+    is not cosmetic. The bundler signs, in this order: the application
+    binary, the service sidecar, the NSIS plugin DLLs, the uninstaller, and
+    then the installer itself — each one before it is packaged into the next.
+    Signing the installer afterwards, which is what this script used to leave
+    the release workflow to do, produced a correctly signed installer
+    containing two unsigned executables: SmartScreen warned on every launch
+    of the installed application, and no check in the release caught it
+    because the file being verified was the one file that *was* signed.
+
+    `sign.ps1` still owns every credential and still refuses to run without
+    one, so `-Sign` on a machine with nothing configured fails at the first
+    binary rather than producing something unsigned and quiet.
 
 .PARAMETER Configuration
     `release` (default) or `debug`.
@@ -27,8 +41,16 @@
 .PARAMETER SkipFrontend
     Skip `npm ci`. For a rebuild where node_modules is already correct.
 
+.PARAMETER Sign
+    Sign every binary and the installer as they are built, through
+    `scripts/windows/sign.ps1`. Needs that script's credentials in the
+    environment.
+
 .EXAMPLE
     pwsh -File scripts/windows/build.ps1
+
+.EXAMPLE
+    pwsh -File scripts/windows/build.ps1 -Sign
 #>
 
 [CmdletBinding()]
@@ -38,7 +60,9 @@ param(
 
     [string] $Target = 'x86_64-pc-windows-msvc',
 
-    [switch] $SkipFrontend
+    [switch] $SkipFrontend,
+
+    [switch] $Sign
 )
 
 $ErrorActionPreference = 'Stop'
@@ -111,14 +135,51 @@ try {
     $tauriArgs = @('run', 'tauri', '--', 'build', '--target', $Target)
     if ($Configuration -eq 'debug') { $tauriArgs += '--debug' }
 
+    if ($Sign) {
+        $signScript = Join-Path $desktopRoot 'scripts/windows/sign.ps1'
+        if (-not (Test-Path $signScript)) {
+            throw "The signing script is missing: $signScript"
+        }
+
+        # The object form of signCommand, not the string form: Tauri splits
+        # the string form on spaces, and this path contains them on any
+        # machine whose checkout lives under a folder with a space in it.
+        #
+        # Absolute, because the bundler runs this command from more than one
+        # working directory — the uninstaller is signed from inside makensis,
+        # through NSIS's !uninstfinalize, which runs somewhere else entirely.
+        $signCommand = @{
+            cmd  = 'pwsh'
+            args = @('-NoProfile', '-NonInteractive', '-File', $signScript, '-Path', '%1')
+        }
+
+        $overlay = @{ bundle = @{ windows = @{ signCommand = $signCommand } } } |
+            ConvertTo-Json -Depth 8 -Compress
+
+        Write-Host ''
+        Write-Host 'Signing is on: every binary and the installer.' -ForegroundColor Cyan
+        Write-Host "  sign command: pwsh -File $signScript -Path <file>"
+
+        $tauriArgs += @('--config', $overlay)
+    }
+
     & npm @tauriArgs
     if ($LASTEXITCODE -ne 0) { throw 'The application did not build.' }
 
     # ----------------------------------------------------------------- the report
+    #
+    # The installers *and* the two executables that go inside them. A report
+    # that only looked at the installer is how an installer full of unsigned
+    # binaries passed for a signed release.
     $bundle = Join-Path $desktopRoot "target/$Target/$Configuration/bundle"
     $artifacts = @()
     foreach ($pattern in @('nsis/*.exe')) {
         $artifacts += Get-ChildItem (Join-Path $bundle $pattern) -ErrorAction SilentlyContinue
+    }
+
+    foreach ($binary in @("target/$Target/$Configuration/AicountlyRemote.exe",
+                          "src-tauri/binaries/AicountlyRemoteService-$Target.exe")) {
+        $artifacts += Get-ChildItem (Join-Path $desktopRoot $binary) -ErrorAction SilentlyContinue
     }
 
     Write-Host ''

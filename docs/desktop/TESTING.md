@@ -6,24 +6,29 @@ what is not covered at all.
 ## The numbers
 
 ```bash
-cd desktop    && cargo test --workspace   # 309 — protocol, gate, identity, state, session, service
-cd desktop    && npm test                 #  23 — the agent's own interface
+cd desktop    && cargo test --workspace   # 427 — protocol, gate, identity, state, session, service, the installer
+cd desktop    && npm test                 #  36 — the agent's own interface
 cd backend    && vendor/bin/phpunit       # 228 — devices, policy, control, unattended, desktop sign-in
-cd web        && npm test                 # 115 — capability gating, control input, devices, desktop sign-in
-cd signalling && npm test                 #  27 — tokens, rooms, device rooms, live relay
+cd web        && npm test                 # 294 — capability gating, control input, devices, desktop sign-in
+cd signalling && npm test                 #  31 — tokens, rooms, device rooms, live relay
 ```
 
-**702 automated tests.** The split by crate:
+**463 automated tests in `desktop/`** — 427 Rust and 36 for the interface —
+beside the backend, web and signalling suites above. The desktop, web and
+signalling figures are what those suites report on this commit; the backend's
+is what its own suite reports (it needs a PostgreSQL to run).
+
+The desktop split by crate:
 
 | | |
 |---|---|
-| `remote-protocol` | 58 — the wire format, the gate, clipboard bounds, monitors |
-| `remote-core` | 56 — configuration, the API client, signalling, backoff, the state machine |
-| `aicountly-remote-desktop` | 107 — the agent, its commands, the connection loop, the session, the platform layer's arithmetic |
-| `aicountly-remote-service` | 29 — the IPC protocol, the pipe ACL, the service's decisions |
-| `remote-device` | 21 — capture profiles, capability declaration |
+| `remote-protocol` | 79 — the wire format, the gate, clipboard bounds, monitors |
+| `remote-core` | 77 — configuration, the API client, signalling, backoff, the state machine, the log file |
+| `aicountly-remote-desktop` | 174 — the agent, its commands, the connection loop, the session, the platform layer's arithmetic, and what the installer claims |
+| `aicountly-remote-service` | 35 — the IPC protocol, the pipe ACL, the service's decisions |
+| `remote-device` | 23 — capture profiles, capability declaration |
 | `remote-security` | 21 — keys, the canonical payload, storage, the enrolment record |
-| `remote-webrtc` | 17 — peer connection, data channels, a real SDP negotiation |
+| `remote-webrtc` | 18 — peer connection, data channels, a real SDP negotiation |
 
 ## Why so much of it runs on Linux
 
@@ -37,9 +42,10 @@ without a Windows machine anywhere.
 **`src-tauri/src/platform/windows/` runs on Linux too.** The module is not
 gated on the target: each file keeps its native calls in an inner
 `#[cfg(target_os = "windows")] mod imp` and refuses with `Unsupported`
-elsewhere, so the 42 tests covering where a click lands, the virtual-key table,
-the extended-key set, wheel deltas, clipboard bounds, the IPC client and the
-storage refusal all run on every push. What a Linux runner genuinely cannot
+elsewhere, so the 53 tests covering where a click lands, the virtual-key table,
+the extended-key set, wheel deltas, clipboard bounds, the IPC client, the
+display names a person picks a screen by and the storage refusal all run on
+every push. What a Linux runner genuinely cannot
 check is the `imp` halves — `SendInput`, `Windows.Graphics.Capture`, DPAPI, the
 pipe, the SCM — and those are what the Windows CI job compiles and
 clippy-checks, and what `desktop/tests/MANUAL.md` covers by hand.
@@ -97,6 +103,41 @@ This checks that the code compiles and that every `windows` crate call has the
 right shape. It does **not** run any of it: `SendInput` is not called, no
 capture happens, no pipe is created.
 
+### The whole installer, from a Linux machine
+
+Further than a type-check: both executables link, the front end builds, and
+NSIS produces an installer with `installers/windows/hooks.nsh` compiled into
+it. Not a substitute for installing it on Windows — nothing here executes a
+single Windows instruction — but it is the difference between knowing the
+installer *builds* and finding out during a release.
+
+```bash
+sudo apt-get install gcc-mingw-w64-x86-64 nsis libayatana-appindicator3-dev
+
+cd desktop
+cargo build --release --target x86_64-pc-windows-gnu -p aicountly-remote-service
+cp target/x86_64-pc-windows-gnu/release/AicountlyRemoteService.exe \
+   src-tauri/binaries/AicountlyRemoteService-x86_64-pc-windows-gnu.exe
+npm run tauri -- build --target x86_64-pc-windows-gnu
+#   → target/x86_64-pc-windows-gnu/release/bundle/nsis/*.exe
+```
+
+Three notes, each of which costs an hour to rediscover:
+
+* **`nsis`** is what Tauri's bundler shells out to on a non-Windows host. On
+  Windows it downloads its own copy; on Linux it needs `makensis` on `PATH`.
+* **`libayatana-appindicator3-dev`** has nothing to do with the Windows build.
+  The Tauri CLI probes for an appindicator library whenever the `tray-icon`
+  feature is on and the *host* is Linux, whatever it is building for, and
+  panics when it finds none.
+* **It is the GNU target, not MSVC.** A release ships
+  `x86_64-pc-windows-msvc`, built on Windows by
+  `.github/workflows/release-windows.yml`. The two differ in the C runtime
+  they link; this one is a build check, not a shippable artifact.
+
+A shippable installer, and the one CI builds, comes from
+`pwsh -File scripts/windows/build.ps1` on Windows.
+
 ## What is not covered
 
 Read this rather than assuming the test count covers it.
@@ -105,8 +146,8 @@ Read this rather than assuming the test count covers it.
   `Windows.Graphics.Capture`, DPAPI, the named pipe, the SCM registration and
   the restart are compiled, clippy-clean and type-checked for the Windows
   target, and none of them has run on a Windows machine in this work. The
-  arithmetic and the tables around them are tested — that is what the 42 tests
-  in `platform/windows/` cover — but a passing `to_virtual_desktop` is not a
+  arithmetic and the tables around them are tested — that is what the 53 tests
+  in `platform/` cover — but a passing `to_virtual_desktop` is not a
   pointer that moved. `desktop/tests/MANUAL.md` is the pass
   that has to happen before a release, and it is not a formality.
 * **There is no end-to-end media test**, because there is no encoder — see
@@ -117,8 +158,14 @@ Read this rather than assuming the test count covers it.
   parsed and asserted against the shapes `signalling/src/server.js` relays, and
   the session loop's join handling is tested; nothing in CI opens a socket to a
   real relay. That is a step in `desktop/tests/MANUAL.md`.
-* **The installer has not been run.** `hooks.nsh` is reviewed and not executed;
-  NSIS is not on a Linux runner and the release workflow is manual.
+* **The installer has not been run.** It *builds* now — `desktop-ci.yml`'s
+  Windows job builds it on every run, and the section above builds it from a
+  Linux machine — and `src-tauri/tests/installer.rs` reads `hooks.nsh` and
+  checks what it claims against what cargo actually produces: the executable
+  names, the Run entry, the data directory's ACL, the files the uninstall
+  removes. What has still not happened is **installing** it: no service has
+  been registered by it, no ACL applied, no Run entry exercised at a real
+  sign-in. That is `desktop/tests/MANUAL.md`, and it is not a formality.
 * **No signed build exists**, so nothing has been verified against a real
   certificate chain. `verify.ps1` has been read, not exercised against a
   signature.

@@ -114,6 +114,13 @@ jobs:
         with:
           workspaces: desktop
 
+      # The installer build below runs `npm ci` and the Tauri CLI.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
       # The service is built first because Tauri's build script resolves the
       # sidecar at compile time on Windows: without the file, the application
       # crate does not even configure. Building it first is also the order the
@@ -137,6 +144,30 @@ jobs:
       - name: Test
         working-directory: desktop
         run: cargo test --workspace
+
+      # The installer, built unsigned and thrown away.
+      #
+      # Nothing used to build it outside a release, and `installers/windows/
+      # hooks.nsh` is a text file no compiler reads — so a hook that named a
+      # file which is never built, or an NSIS script that does not even
+      # assemble, could only be discovered by running a release and
+      # installing the result. `src-tauri/tests/installer.rs` checks what the
+      # hooks say; this checks that the installer builds at all, with the
+      # hooks in it.
+      #
+      # Unsigned deliberately: this job holds no credential, and a signed
+      # build is the release workflow's job.
+      - name: Build the installer
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          pwsh -File scripts/windows/build.ps1 -Configuration release -Target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'The installer did not build.' }
+
+          $installers = Get-ChildItem 'target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe' -ErrorAction SilentlyContinue
+          if (-not $installers) { throw 'The build produced no installer.' }
+
+          $installers | ForEach-Object { Write-Host "  $($_.Name)  $([math]::Round($_.Length / 1MB, 1)) MB" }
 
   # -------------------------------------------------------------------------
   # The macOS half: the control companion.

@@ -21,7 +21,7 @@ years and lies to unmanifested applications.
 
 | | |
 |---|---|
-| `AICOUNTLY Remote.exe` | the user-session process: tray, window, capture, input, clipboard, WebRTC |
+| `AicountlyRemote.exe` | the user-session process: tray, window, capture, input, clipboard, WebRTC |
 | `AicountlyRemoteService.exe` | the Session 0 service: device identity, presence, restart, the IPC pipe |
 
 The service's display name is **AICOUNTLY Remote Service**; its key name is
@@ -198,9 +198,25 @@ report to that vendor. It is not an exclusion the customer is asked to add.
 | `HKLM\SYSTEM\CurrentControlSet\Services\AicountlyRemoteService` | the service, written by the SCM |
 
 The data directory's ACL is reset and rebuilt by the installer rather than
-inherited: SYSTEM and Administrators full control, Users read. A directory that
-inherited "Users: Modify" from somewhere would be a directory any account on
-the machine could replace a device identity in.
+inherited, so whatever `%ProgramData%` hands down does not decide who can read
+a device identity: **SYSTEM** and **Administrators** full control, **Users**
+modify.
+
+Users *modify*, not read: every file in that directory is written by the tray
+application running as an ordinary, non-elevated person — `config.json` when
+they change a setting, `enrolment.json` and `device-signing-key.key` when they
+register the computer, which is a signed-in person's act and not an
+administrator's ([DEVICE_ENROLMENT.md](DEVICE_ENROLMENT.md)). With read-only
+access every one of those writes fails with "Access is denied", so the product
+installs and then cannot be registered.
+
+What that costs, stated plainly: another account on this machine can delete or
+replace this machine's enrolment. It cannot gain access with it — a key only
+authenticates against the device row the server already issued for it, so a
+replaced key authenticates as nothing — and anybody who can sign in here can
+register the machine from the application's own enrolment screen in any case.
+The directory is still not world-readable, and what protects the key's
+*contents* is DPAPI machine scope plus additional entropy, not the ACL.
 
 Uninstalling removes all of it, including the key — see
 [DEVICE_ENROLMENT.md](DEVICE_ENROLMENT.md#uninstalling).
@@ -209,7 +225,7 @@ Uninstalling removes all of it, including the key — see
 
 Every icon Windows shows — the desktop shortcut, the Start Menu entry, the
 Programs and Features list, the taskbar while the app is not running — is
-read from `AICOUNTLY Remote.exe` itself, at install time or on demand.
+read from `AicountlyRemote.exe` itself, at install time or on demand.
 Nothing in this installer hard-codes a separate icon reference anywhere;
 `installers/windows/hooks.nsh`'s `NSIS_HOOK_POSTINSTALL` also tells Explorer
 to drop its cached bitmaps once the install finishes, so a **first** install
@@ -260,7 +276,7 @@ after a reboot. This is a Windows/NSIS-ecosystem-wide limitation, not
 something specific to this installer.
 
 `DisplayIcon` itself is not the problem: Tauri's generated `installer.nsi`
-writes it as `"$INSTDIR\AICOUNTLY Remote.exe"` — the same file, the same
+writes it as `"$INSTDIR\AicountlyRemote.exe"` — the same file, the same
 icon resource, that the taskbar and window title bar read live and get
 right. What's stale is Programs and Features' own cached extraction from
 an *earlier* icon at that same path, and nothing this installer runs at
@@ -269,7 +285,7 @@ install time is able to force it to re-extract.
 A machine that has only ever had the current icon installed on it should
 never hit this — there is nothing stale to be showing. It shows up on a
 development machine specifically because the same path,
-`$INSTDIR\AICOUNTLY Remote.exe`, has carried several different icons
+`$INSTDIR\AicountlyRemote.exe`, has carried several different icons
 across repeated test installs in a single session; a customer's first
 install has no prior cache entry to collide with.
 
@@ -292,17 +308,53 @@ fixed together but are unrelated.
 
 ## Diagnostics
 
+### The log
+
+Both processes write to a file, and the file is the only place the log exists:
+
+```text
+C:\ProgramData\AICOUNTLY\Remote\logs\agent.log      the person's session
+C:\ProgramData\AICOUNTLY\Remote\logs\service.log    the machine
+```
+
+A release build of the application is linked with
+`windows_subsystem = "windows"` and has **no console**, so anything it wrote to
+standard output went nowhere — including, before this existed, every line it
+logged. Starting it from a terminal does not help: the process is detached from
+that console. The service has never had one either; the SCM starts it in
+Session 0.
+
+Each file is capped at 2 MiB and rolled once, to `agent.log.1` /
+`service.log.1`, so a machine that has been running for a year has two files of
+a known size rather than a disk somebody has to go and find.
+
+What is never in them: no device key, no credential, no clipboard contents, no
+frame. `DeviceCredential`, `DeviceKeypair` and the clipboard payload each have
+a `Debug` implementation that prints a fingerprint or a length, so a stray
+`{:?}` cannot put one in a file somebody is about to email.
+
+```powershell
+# More detail. Set it for the process that will be started, then restart it.
+[Environment]::SetEnvironmentVariable('AICOUNTLY_REMOTE_LOG', 'debug', 'Machine')
+Restart-Service AicountlyRemoteService
+
+Get-Content "C:\ProgramData\AICOUNTLY\Remote\logs\agent.log" -Tail 50 -Wait
+```
+
+### The rest
+
 ```powershell
 sc.exe query AicountlyRemoteService
-Get-AuthenticodeSignature "C:\Program Files\AICOUNTLY Remote\AICOUNTLY Remote.exe"
+Get-AuthenticodeSignature "C:\Program Files\AICOUNTLY Remote\AicountlyRemote.exe"
+Get-AuthenticodeSignature "C:\Program Files\AICOUNTLY Remote\AicountlyRemoteService.exe"
 Get-ChildItem "C:\ProgramData\AICOUNTLY\Remote"
 Get-Acl "C:\ProgramData\AICOUNTLY\Remote" | Format-List
-
-# Verbose logging, from a console
-$env:AICOUNTLY_REMOTE_LOG = 'debug'
-& "C:\Program Files\AICOUNTLY Remote\AICOUNTLY Remote.exe"
+Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "AICOUNTLY Remote"
 ```
+
+Both executables are signed in a release build, not only the installer — see
+[WINDOWS_RELEASE.md](WINDOWS_RELEASE.md#what-signed-has-to-mean).
 
 The About panel shows the version, the platform, whether this build has a real
 platform implementation, where the key is kept — the store's *name*, never
-anything in it — and whether the service is running.
+anything in it — where the log file is, and whether the service is running.

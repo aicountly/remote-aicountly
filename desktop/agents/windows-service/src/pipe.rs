@@ -54,18 +54,28 @@ impl PipeSecurity {
     ///   (A;;GA;;;SY)               Allow, Generic All,      LocalSystem
     ///   (A;;GA;;;BA)               Allow, Generic All,      Builtin Administrators
     ///   (A;;GRGW;;;IU)             Allow, Read + Write,     Interactive Users
-    ///   S:(ML;;NWNRNX;;;LW)        Low-integrity processes may not write,
-    ///                              read or execute — so a sandboxed browser
-    ///                              or a low-IL process cannot reach the pipe
-    ///                              even if it somehow satisfied the DACL.
+    ///   S:(ML;;NWNRNX;;;ME)        A process below MEDIUM integrity may not
+    ///                              write, read or execute — so a sandboxed
+    ///                              browser renderer, an AppContainer or any
+    ///                              other low/untrusted process cannot reach
+    ///                              the pipe even if it somehow satisfied the
+    ///                              DACL.
     /// ```
+    ///
+    /// The label is `ME` and not `LW`: a mandatory policy only blocks a
+    /// subject whose integrity is *lower* than the label, so a `LW` label
+    /// lets a Low-integrity process straight through — which is the one thing
+    /// the label is here to stop. Medium is where an ordinary signed-in
+    /// person's processes run, the tray application among them, so it is the
+    /// floor that excludes everything below without excluding the one client
+    /// this pipe exists for.
     ///
     /// There is deliberately **no** entry for `Everyone` (`WD`), for
     /// `Anonymous` (`AN`), or for `Users` (`BU`). A pipe that any process can
     /// open is a pipe whose only protection is the protocol on top of it.
     #[must_use]
     pub fn sddl() -> &'static str {
-        "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)S:(ML;;NWNRNX;;;LW)"
+        "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)S:(ML;;NWNRNX;;;ME)"
     }
 
     /// Whether an SDDL string would give a well-known unprivileged principal
@@ -150,11 +160,19 @@ mod tests {
 
     /// A sandboxed browser runs at low integrity. The mandatory label keeps it
     /// out even if it somehow satisfied the DACL.
+    ///
+    /// Labelled MEDIUM rather than LOW on purpose: a mandatory policy blocks
+    /// only a subject *below* the label, so a LOW label would let a
+    /// Low-integrity process through — the exact case the label is for.
     #[test]
     fn low_integrity_processes_are_kept_out_by_the_mandatory_label() {
         let sddl = PipeSecurity::sddl();
 
-        assert!(sddl.contains("S:(ML;;NWNRNX;;;LW)"));
+        assert!(sddl.contains("S:(ML;;NWNRNX;;;ME)"));
+        assert!(
+            !sddl.contains(";;LW)"),
+            "a LOW label admits the Low-integrity processes it is meant to exclude"
+        );
     }
 
     #[test]

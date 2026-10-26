@@ -599,30 +599,13 @@ async fn wait_for_decision(
 }
 
 /// Whether the credential is close enough to expiry to renew.
+///
+/// The answer itself is `DeviceCredential::is_expiring`, so the service's
+/// presence loop renews on exactly the same reading.
 fn credential_expiring(client: &ApiClient) -> bool {
-    let Some(credential) = client.credential() else {
-        return true;
-    };
-
-    match seconds_until(&credential.expires_at) {
-        Some(remaining) => remaining <= RENEW_MARGIN.as_secs() as i64,
-        // An expiry that cannot be parsed is one the agent cannot reason
-        // about. Renewing is the safe reading: a spare round trip costs
-        // nothing, and a session refused because the credential had quietly
-        // expired costs a support call.
-        None => true,
-    }
-}
-
-/// Seconds from now until an ISO-8601 UTC instant, or `None` if it is not one.
-fn seconds_until(iso: &str) -> Option<i64> {
-    let expires = time::OffsetDateTime::parse(iso, &time::format_description::well_known::Rfc3339)
-        .ok()?
-        .unix_timestamp();
-
-    let now = time::OffsetDateTime::now_utc().unix_timestamp();
-
-    Some(expires - now)
+    client
+        .credential()
+        .is_none_or(|credential| credential.is_expiring(RENEW_MARGIN))
 }
 
 /// What the status line says about an API failure.
@@ -682,34 +665,17 @@ async fn sleep_interruptibly(stopping: &Arc<AtomicBool>, total: Duration) {
 mod tests {
     use super::*;
 
-    /// A credential with no parseable expiry is one the agent cannot reason
-    /// about, and renewing is the safe reading.
+    /// Renewal is one reading, shared with the service's presence loop:
+    /// `DeviceCredential::is_expiring`, tested over the parsing cases in
+    /// `remote_core::api`. What this asserts is the part that belongs to this
+    /// loop — that holding no credential at all counts as expiring, so the
+    /// outer loop authenticates rather than sitting in the presence loop with
+    /// nothing to present.
     #[test]
-    fn an_unreadable_expiry_is_treated_as_expiring() {
-        assert_eq!(seconds_until("not a timestamp"), None);
-        assert_eq!(seconds_until(""), None);
-    }
+    fn no_credential_at_all_counts_as_expiring() {
+        let client = ApiClient::new(AgentConfig::default()).expect("builds");
 
-    #[test]
-    fn an_expiry_in_the_future_is_measured_from_now() {
-        let future = time::OffsetDateTime::now_utc() + time::Duration::seconds(600);
-        let text = future
-            .format(&time::format_description::well_known::Rfc3339)
-            .expect("formats");
-
-        let remaining = seconds_until(&text).expect("parses");
-
-        assert!(remaining > 500 && remaining <= 600, "was {remaining}");
-    }
-
-    #[test]
-    fn an_expiry_in_the_past_is_negative() {
-        let past = time::OffsetDateTime::now_utc() - time::Duration::seconds(120);
-        let text = past
-            .format(&time::format_description::well_known::Rfc3339)
-            .expect("formats");
-
-        assert!(seconds_until(&text).expect("parses") < 0);
+        assert!(credential_expiring(&client));
     }
 
     /// The status line is written for a person and never carries the raw
