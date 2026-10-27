@@ -22,13 +22,28 @@ use Tests\Support\RemoteTestCase;
  */
 final class DesktopPolicyTest extends RemoteTestCase
 {
-    public function testEveryDesktopCapabilityIsOffByDefault(): void
+    /**
+     * Registering a computer is Basic; being controlled on one is a decision
+     * the organisation still has to take.
+     *
+     * A fresh company turns nothing on. What changed is the floor beneath it:
+     * `desktop_devices` is part of Basic now, so a member may register the
+     * machine in front of them. Everything that machine can then *do* —
+     * control, clipboard, unattended, reboot — remains off until the
+     * organisation says otherwise, and that is what the rest of this asserts.
+     */
+    public function testRegisteringIsBasicAndEverythingElseIsStillOffByDefault(): void
     {
         $user    = $this->makeIdentity('Fresh Start');
         $company = $this->makeCompany(900, 'Default Company');
         $this->grantCompanyAccess($user, $company, 'MEMBER', true);
 
         $policy = Services::policyResolver()->resolve($user, 'COMPANY', $company);
+
+        $this->assertTrue(
+            $policy->can(PermissionCatalog::DEVICE_ENROL),
+            'Basic includes registering the computer you are sitting at',
+        );
 
         $this->assertFalse($policy->allowRemoteControl);
         $this->assertFalse($policy->allowUnattendedAccess);
@@ -38,7 +53,6 @@ final class DesktopPolicyTest extends RemoteTestCase
         $this->assertFalse($policy->can(PermissionCatalog::CONTROL_REQUEST));
         $this->assertFalse($policy->can(PermissionCatalog::CONTROL_ACCEPT));
         $this->assertFalse($policy->can(PermissionCatalog::UNATTENDED_ACCESS));
-        $this->assertFalse($policy->can(PermissionCatalog::DEVICE_ENROL));
     }
 
     /** Every preset, including OPEN. A preset is never a reason to hand out control. */
@@ -169,18 +183,42 @@ final class DesktopPolicyTest extends RemoteTestCase
         $this->assertFalse($after->allowDeviceReboot);
     }
 
-    /** A device belongs to a company; there is no personal-scope desktop agent. */
-    public function testDesktopCapabilitiesAreNeverAvailableInPersonalScope(): void
+    /**
+     * A device belongs to the person who registered it, and may belong to an
+     * organisation as well.
+     *
+     * This used to assert the opposite — that personal scope could hold no
+     * device at all — which is what produced a product where somebody could
+     * install the agent, sign in, and be told they had no permission to
+     * register the computer in front of them.
+     *
+     * What personal scope still does not grant is the pair that happens with
+     * nobody watching: unattended access, and restarting the machine.
+     */
+    public function testAPersonMayRegisterAndControlTheirOwnComputer(): void
     {
         $user = $this->makeIdentity('Personal');
 
         $policy = Services::policyResolver()->resolve($user, 'PERSONAL', null);
 
-        $this->assertFalse($policy->allowRemoteControl);
-        $this->assertFalse($policy->allowUnattendedAccess);
-        $this->assertFalse($policy->can(PermissionCatalog::DEVICE_ENROL));
+        $this->assertTrue($policy->can(PermissionCatalog::DEVICE_ENROL));
+        $this->assertTrue($policy->allowRemoteControl);
+        $this->assertTrue($policy->allowClipboardSync);
+
+        // `DEVICE_MANAGE` is the organisation-wide one — managing somebody
+        // else's machine — and stays an administrator's. Managing your own
+        // needs no permission at all: `DeviceService::assertManageable` lets
+        // the owner through, so a lost laptop never waits for an
+        // administrator who, for a personal device, does not exist.
         $this->assertFalse($policy->can(PermissionCatalog::DEVICE_MANAGE));
-        $this->assertFalse($policy->can(PermissionCatalog::CONTROL_REQUEST));
+
+        $this->assertFalse($policy->allowUnattendedAccess);
+        $this->assertFalse($policy->allowDeviceReboot);
+        $this->assertFalse($policy->can(PermissionCatalog::UNATTENDED_ACCESS));
+
+        // Company administration still is not a personal thing.
+        $this->assertFalse($policy->can(PermissionCatalog::POLICY_MANAGE));
+        $this->assertFalse($policy->can(PermissionCatalog::AUDIT_VIEW));
     }
 
     /**

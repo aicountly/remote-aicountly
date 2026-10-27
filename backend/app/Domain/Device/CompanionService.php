@@ -85,12 +85,19 @@ class CompanionService
     {
         $restrictions = $this->restrictionsFor($session, $policy);
 
-        if ($session['company_id'] === null || (string) $session['scope_type'] !== 'COMPANY') {
+        // A personal session can link a personal device: the person sharing
+        // their screen is the person whose computer it is, which is the only
+        // relationship this has ever required. What it cannot do is reach
+        // across that line — a company session lists that company's devices,
+        // a personal session lists the ones belonging to nobody but its owner.
+        $personal = $session['company_id'] === null && (string) $session['scope_type'] === 'PERSONAL';
+
+        if (! $personal && ($session['company_id'] === null || (string) $session['scope_type'] !== 'COMPANY')) {
             return ['devices' => [], 'restrictions' => $restrictions];
         }
 
         $rows = $this->db->table('remote_devices')
-            ->where('company_id', (int) $session['company_id'])
+            ->where('company_id', $personal ? null : (int) $session['company_id'])
             ->where('user_id', $identity->id)
             ->where('status', DeviceService::STATUS_ACTIVE)
             ->orderBy('device_name', 'ASC')

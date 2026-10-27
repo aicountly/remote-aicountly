@@ -24,6 +24,50 @@ final class UnattendedAccessTest extends RemoteTestCase
     private int $companyId = 1000;
 
     /**
+     * A personal device answers to its owner, and there is nobody else it
+     * could answer to.
+     *
+     * A company device is isolated by the tenant: somebody with no standing in
+     * the organisation is told the device could not be found. A personal
+     * device has no tenant to be isolated by, so the owner is the whole of it
+     * — and that check has to exist, or the only thing standing between a
+     * stranger and somebody's computer would be a resolve() that no longer
+     * throws.
+     */
+    public function testAStrangerCannotConnectToSomebodyElsesPersonalComputer(): void
+    {
+        $owner    = $this->makeIdentity('Owner');
+        $stranger = $this->makeIdentity('Stranger');
+
+        $device = $this->enrolDevice($owner, null)['device'];
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('That device could not be found');
+
+        Services::deviceSessionService()->startUnattended($stranger, (string) $device['uuid']);
+    }
+
+    /**
+     * And its owner is refused for the reason that is actually true, rather
+     * than being told their own computer does not exist.
+     *
+     * Unattended access is off in personal scope: being reachable with nobody
+     * watching is a deliberate act. Before the device's own scope was used to
+     * resolve the policy, `(int) null` asked about company 0 and the refusal
+     * that came back was "could not be found".
+     */
+    public function testTheOwnerOfAPersonalComputerIsToldUnattendedIsOffRatherThanItIsMissing(): void
+    {
+        $owner  = $this->makeIdentity('Owner');
+        $device = $this->enrolDevice($owner, null)['device'];
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Unattended access is not enabled');
+
+        Services::deviceSessionService()->startUnattended($owner, (string) $device['uuid']);
+    }
+
+    /**
      * @return array{owner: \App\Domain\Auth\RemoteIdentity, device: array<string, mixed>, secretKey: string}
      */
     private function enrolledDevice(array $policy = [], bool $unattendedEntitlement = true): array

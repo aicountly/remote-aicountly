@@ -145,12 +145,15 @@ class EffectivePolicyResolver
         // individual switch says, and the restrictions list explains which
         // half said no so the UI does not have to guess (§39).
         //
-        // A desktop capability is never available in PERSONAL scope: a device
-        // is enrolled into a company, and there is no company here to govern
-        // it. This is also why the whole group is off for a personal session
-        // rather than falling back to a permissive default.
-        $desktopEntitled = $companyId !== null
-            && $this->config->featureDesktopAgent
+        // A desktop capability no longer requires a company. A device belongs
+        // to the person who enrolled it and may belong to an organisation as
+        // well; what it may do is this entitlement intersected with the
+        // machine's own permissions and the agent's declaration, none of which
+        // needs a tenant to exist. The constraint that said otherwise is gone
+        // (`LetADeviceBelongToAPerson`), and with it the product where a
+        // person could install the agent, sign in, and be told they had no
+        // permission to register the computer in front of them.
+        $desktopEntitled = $this->config->featureDesktopAgent
             && (bool) $entitlement['desktop_devices'];
 
         $allowRemoteControl = $remoteEnabled
@@ -219,21 +222,16 @@ class EffectivePolicyResolver
             $granted[PermissionCatalog::SCREEN_SHARE] = false;
         }
 
-        // Company administration is meaningless outside a company.
+        // Company administration is meaningless outside a company — but
+        // registering, reaching and controlling your own computer is not.
+        // Those five used to be listed here, which is what made a personal
+        // scope unable to hold a device at all.
         if ($companyId === null) {
             foreach ([
                 PermissionCatalog::POLICY_VIEW,
                 PermissionCatalog::POLICY_MANAGE,
                 PermissionCatalog::SESSION_HISTORY_COMPANY,
                 PermissionCatalog::AUDIT_VIEW,
-                // A device is enrolled into a company. There is no such thing
-                // as a personal-scope device, so there is nothing to enrol,
-                // manage, control or reach unattended here.
-                PermissionCatalog::DEVICE_ENROL,
-                PermissionCatalog::DEVICE_MANAGE,
-                PermissionCatalog::CONTROL_REQUEST,
-                PermissionCatalog::CONTROL_ACCEPT,
-                PermissionCatalog::UNATTENDED_ACCESS,
             ] as $companyOnly) {
                 $granted[$companyOnly] = false;
             }
@@ -470,15 +468,26 @@ class EffectivePolicyResolver
 
         $row ??= $this->db->table('remote_entitlements')->where('company_id', null)->get()->getRowArray();
 
+        // Basic: what somebody gets for signing in, with no licence recorded
+        // anywhere yet. Engage is the licensing authority (its offers carry
+        // the entitlements, keyed to a holder, with Basic as the product's
+        // default offer), and until Remote reads from it this is Basic's
+        // definition.
+        //
+        // `desktop_devices` is true because it is the switch that decides
+        // whether a person may register the computer they are sitting at, and
+        // a remote-support product where they cannot is not a product.
+        // `unattended_access` stays false: being reachable with nobody
+        // watching is a deliberate act, not a default.
         $row ??= [
-            'plan_code'                    => 'REMOTE_FREE',
+            'plan_code'                    => 'REMOTE_BASIC',
             'max_monthly_sessions'         => null,
             'max_session_duration_minutes' => null,
             'external_guests'              => false,
             'recording'                    => false,
             'file_transfer'                => true,
             'advanced_audit'               => true,
-            'desktop_devices'              => false,
+            'desktop_devices'              => true,
             'unattended_access'            => false,
         ];
 

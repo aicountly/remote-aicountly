@@ -40,8 +40,11 @@ class DeviceController extends BaseApiController
         $body      = $this->body();
         $companyId = $this->optionalInt($body, 'companyId');
 
-        if ($companyId === null || $companyId <= 0) {
-            throw ApiException::badRequest('COMPANY_REQUIRED', 'Choose the organisation to register this device in.');
+        // Absent means a personal device: the person's own computer, belonging
+        // to no organisation. A number that is not a company id is still a
+        // mistake worth refusing rather than quietly treating as "personal".
+        if ($companyId !== null && $companyId <= 0) {
+            throw ApiException::badRequest('COMPANY_INVALID', 'That is not an organisation this device can be registered in.');
         }
 
         $device = Services::deviceService()->enrol($this->identity(), $companyId, [

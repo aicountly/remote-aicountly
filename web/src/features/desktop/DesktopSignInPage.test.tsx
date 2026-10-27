@@ -69,32 +69,41 @@ describe('DesktopSignInPage', () => {
     expect(screen.getByText('ABCD-1234')).toBeInTheDocument()
   })
 
-  it('lets the person choose which organisation to register the device in', () => {
+  /**
+   * The computer belongs to the person confirming it. There is nothing to
+   * choose, which is the point: the picker that used to be here listed every
+   * organisation somebody belonged to, including the ones that would refuse
+   * the registration, and said so only after they had picked one.
+   */
+  it('asks no organisation, because a computer belongs to the person', () => {
     renderPage('/desktop-signin?code=ABCD-1234', [
       northwind,
       { companyId: 482, name: 'Southwind', isCompanyAdmin: false, roleKey: 'MEMBER', branchId: null, financialYearId: null },
     ])
 
-    expect(screen.getByRole('option', { name: 'Northwind (ID: 481)' })).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: 'Southwind (ID: 482)' })).toBeInTheDocument()
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+    expect(screen.queryByText(/register it in/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /confirm and sign in/i })).toBeEnabled()
   })
 
-  it('explains there is nothing to register into when there are no companies', () => {
+  /** And belonging to no organisation at all is the ordinary case, not a wall. */
+  it('confirms for somebody who belongs to no organisation', () => {
     renderPage('/desktop-signin?code=ABCD-1234', [])
 
-    expect(screen.getByRole('button', { name: /confirm and sign in/i })).toBeDisabled()
-    expect(screen.getByText(/allows registering a desktop device/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /confirm and sign in/i })).toBeEnabled()
+    expect(screen.queryByText(/allows registering a desktop device/i)).not.toBeInTheDocument()
   })
 
-  it('confirms with the code and the chosen company, then says to go back to the computer', async () => {
+  it('confirms with the code alone, then says to go back to the computer', async () => {
     confirmMock.mockResolvedValue({ status: 'confirmed', deviceLabel: "Priya's laptop" })
     renderPage()
 
     await userEvent.click(screen.getByRole('button', { name: /confirm and sign in/i }))
 
-    expect(confirmMock).toHaveBeenCalledWith('ABCD-1234', 481)
+    expect(confirmMock).toHaveBeenCalledWith('ABCD-1234')
     await waitFor(() => expect(screen.getByText(/you're signed in/i)).toBeInTheDocument())
     expect(screen.getByText(/priya's laptop/i)).toBeInTheDocument()
+    expect(screen.getByText(/you can close this tab/i)).toBeInTheDocument()
   })
 
   it('shows the server’s message and stays on the form when confirming fails', async () => {

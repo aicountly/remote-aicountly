@@ -45,6 +45,67 @@ final class DeviceEnrolmentTest extends RemoteTestCase
         $this->assertHasAudit(EventType::DEVICE_ENROLLED);
     }
 
+    /**
+     * The machine in front of you, with no organisation involved.
+     *
+     * This is what the product is: somebody installs the agent, signs in, and
+     * registers their own computer. It used to be impossible — a database
+     * constraint forbade a device without a company, and personal scope
+     * granted no desktop capability at all — so every install ended at "You do
+     * not have permission to register a device for this organisation".
+     */
+    public function testAPersonEnrolsTheirOwnComputerWithNoCompany(): void
+    {
+        $user = $this->makeIdentity('Rahul');
+
+        ['device' => $device, 'publicKey' => $publicKey] = $this->enrolDevice($user, null);
+
+        $this->assertSame(DeviceService::STATUS_ACTIVE, $device['status']);
+        $this->assertNull($device['company_id'], 'a personal device belongs to nobody but its owner');
+        $this->assertSame($user->id, (int) $device['user_id']);
+        $this->assertSame($user->id, (int) $device['enrolled_by_user_id']);
+        $this->assertSame(
+            DeviceSignature::fingerprint($publicKey),
+            $device['public_key_fingerprint'],
+        );
+
+        // The one thing that stays off, company or not.
+        $this->assertFalse($device['unattended_access_enabled']);
+
+        $this->assertHasAudit(EventType::DEVICE_ENROLLED);
+    }
+
+    /**
+     * Re-registering the same machine is the same machine, not a conflict —
+     * and for a personal device "the same" means the same owner, since there
+     * is no company to compare.
+     */
+    public function testEnrollingTheSamePersonalKeyTwiceReturnsTheSameDevice(): void
+    {
+        $user = $this->makeIdentity('Rahul');
+        $keys = $this->makeDeviceKeypair();
+
+        $first  = $this->enrolDevice($user, null, ['publicKey' => $keys['publicKey']])['device'];
+        $second = $this->enrolDevice($user, null, ['publicKey' => $keys['publicKey']])['device'];
+
+        $this->assertSame($first['uuid'], $second['uuid']);
+    }
+
+    /** Somebody else's key is still somebody else's, company or not. */
+    public function testAPersonalKeyBelongingToSomebodyElseIsRefused(): void
+    {
+        $owner    = $this->makeIdentity('Owner');
+        $stranger = $this->makeIdentity('Stranger');
+        $keys     = $this->makeDeviceKeypair();
+
+        $this->enrolDevice($owner, null, ['publicKey' => $keys['publicKey']]);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('That device key is already registered');
+
+        $this->enrolDevice($stranger, null, ['publicKey' => $keys['publicKey']]);
+    }
+
     public function testEnrolmentIsRefusedWithoutThePermission(): void
     {
         $user    = $this->makeIdentity('Unprivileged');

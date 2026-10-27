@@ -18,11 +18,14 @@
  */
 export function SignInScreen({
   revoked,
+  deviceId,
   onSignIn,
   busy,
 }: {
   /** The device was enrolled and an administrator removed it. */
   revoked: boolean
+  /** This computer's ID, or null while it is still being read. */
+  deviceId: string | null
   onSignIn: () => void
   busy?: boolean
 }) {
@@ -34,6 +37,20 @@ export function SignInScreen({
           ? 'An administrator removed this computer from AICOUNTLY Remote. Sign in again to start using it.'
           : 'Sign in to let the people you approve connect to this computer.'}
       </p>
+
+      {/*
+        The ID is shown before anybody signs in, because somebody reading it
+        out to a colleague is the first thing that happens with a tool like
+        this. It is a hash of a public key and reaches nothing on its own:
+        nobody can connect to this computer, and this computer will accept no
+        incoming request, until the sign-in below has finished.
+      */}
+      <div className="card__rows" style={{ marginTop: 'var(--space-4)' }}>
+        <div className="row">
+          <span className="row__label">This computer's ID</span>
+          <span className="row__value row__value--mono">{deviceId ?? '—'}</span>
+        </div>
+      </div>
 
       <ol className="card__rows" style={{ marginTop: 'var(--space-4)' }}>
         <li className="row">
@@ -63,7 +80,8 @@ export function SignInScreen({
       </div>
 
       <p className="card__footnote" style={{ marginTop: 'var(--space-3)' }}>
-        Your password is never typed into this window.
+        Nobody can connect to this computer until you sign in. Your password is never typed into
+        this window.
       </p>
     </section>
   )

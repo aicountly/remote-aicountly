@@ -70,8 +70,10 @@ class DesktopSignInController extends BaseApiController
         $body      = $this->body();
         $companyId = $this->optionalInt($body, 'companyId');
 
-        if ($companyId === null || $companyId <= 0) {
-            throw ApiException::badRequest('COMPANY_REQUIRED', 'Choose the organisation to register this device in.');
+        // Absent means the person is registering their own computer, which is
+        // the ordinary case and needs no organisation at all.
+        if ($companyId !== null && $companyId <= 0) {
+            throw ApiException::badRequest('COMPANY_INVALID', 'That is not an organisation this device can be registered in.');
         }
 
         return $this->ok(Services::desktopSignInService()->confirmByUserCode(

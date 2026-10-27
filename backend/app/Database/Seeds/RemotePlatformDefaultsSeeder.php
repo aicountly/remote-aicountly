@@ -26,7 +26,7 @@ class RemotePlatformDefaultsSeeder extends Seeder
                     (company_id, plan_code, max_monthly_sessions, max_session_duration_minutes,
                      external_guests, recording, file_transfer, advanced_audit, desktop_devices, unattended_access,
                      created_at, updated_at)
-                SELECT NULL, 'REMOTE_PROFESSIONAL', NULL, 120, TRUE, FALSE, TRUE, TRUE, FALSE, FALSE, NOW(), NOW()
+                SELECT NULL, 'REMOTE_BASIC', NULL, 120, TRUE, FALSE, TRUE, TRUE, TRUE, FALSE, NOW(), NOW()
                 WHERE NOT EXISTS (SELECT 1 FROM remote_entitlements WHERE company_id IS NULL)
                 SQL,
         );

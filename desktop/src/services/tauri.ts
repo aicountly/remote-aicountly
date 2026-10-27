@@ -63,6 +63,18 @@ export function confirmEnrolment(confirmation: EnrolmentConfirmation): Promise<A
 }
 
 /**
+ * What this computer is called, before anybody signs in.
+ *
+ * The device key's fingerprint, created on first run and kept, so the ID a
+ * person reads out does not change when they sign in. It reaches nothing on
+ * its own: every connection needs a credential, and a credential needs a
+ * person to sign in for it.
+ */
+export function deviceIdentity(): Promise<string> {
+  return invoke<string>('device_identity')
+}
+
+/**
  * Start a device-code sign-in, and get back the code to show.
  *
  * Through the Rust side rather than `fetch`, because this window is a web
