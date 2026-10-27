@@ -24,6 +24,7 @@ import type {
   PermissionSummary,
 } from '../types/agent'
 import { activeCompanion, activeSession, isEnrolled, isUsable } from '../types/agent'
+import { SignInScreen } from '../features/device/SignInScreen'
 
 type Screen = 'home' | 'unattended' | 'settings' | 'register'
 
@@ -353,6 +354,12 @@ export default function App() {
     [run],
   )
 
+  // Signed in, or not. An administrator who revoked this device signed it out
+  // as surely as never having signed in did, so both land on the same screen
+  // — and everything the application can do is behind it.
+  const revoked = state?.status.status === 'revoked'
+  const signedOut = !state || !isEnrolled(state) || revoked
+
   if (!state || !permissions) {
     return (
       <div className="app">
@@ -370,9 +377,9 @@ export default function App() {
 
         <nav className="app__nav">
           <NavItem screen="home" current={screen} onSelect={setScreen}>
-            Home
+            {signedOut ? 'Sign in' : 'Home'}
           </NavItem>
-          {isEnrolled(state) && about?.supportsHosting !== false ? (
+          {!signedOut && about?.supportsHosting !== false ? (
             <NavItem screen="unattended" current={screen} onSelect={setScreen}>
               Unattended access
             </NavItem>
@@ -478,6 +485,12 @@ export default function App() {
             onRetry={() => void beginRegistration()}
             busy={busy}
           />
+        ) : signedOut && screen !== 'settings' ? (
+          <SignInScreen
+            revoked={revoked}
+            onSignIn={() => void beginRegistration()}
+            busy={busy}
+          />
         ) : screen === 'unattended' ? (
           <UnattendedCard
             state={state}
@@ -496,12 +509,7 @@ export default function App() {
           />
         ) : (
           <>
-            <DeviceCard
-              state={state}
-              onRegister={() => void beginRegistration()}
-              onUnregister={unregister}
-              busy={busy}
-            />
+            <DeviceCard state={state} onUnregister={unregister} busy={busy} />
 
             <PermissionsCard
               permissions={permissions}

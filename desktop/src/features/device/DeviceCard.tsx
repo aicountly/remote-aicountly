@@ -1,9 +1,14 @@
 import type { AgentState } from '../../types/agent'
-import { isEnrolled, isOnline } from '../../types/agent'
+import { isOnline } from '../../types/agent'
 import { StatusPill } from '../../components/StatusPill'
 
 /**
- * This device: what it is called, what it is, and whether it is reachable.
+ * This device, once it is signed in: what it is called, what it is, and
+ * whether it is reachable.
+ *
+ * A machine that is signed out — or that an administrator revoked — never
+ * reaches this card. `SignInScreen` is what it shows instead, so there is no
+ * state in which this card has to explain that there is nothing to show.
  *
  * The fingerprint is shown deliberately. It is the one thing an administrator
  * looking at the web console and a person looking at this window can compare
@@ -12,26 +17,17 @@ import { StatusPill } from '../../components/StatusPill'
  */
 export function DeviceCard({
   state,
-  onRegister,
   onUnregister,
   busy,
 }: {
   state: AgentState
-  onRegister: () => void
   onUnregister: () => void
   busy?: boolean
 }) {
-  const enrolled = isEnrolled(state)
-  const revoked = state.status.status === 'revoked'
-
   return (
     <section className="card">
       <h2 className="card__title">This device</h2>
-      <p className="card__subtitle">
-        {enrolled
-          ? 'Registered with AICOUNTLY Remote.'
-          : 'Not registered yet. Nobody can connect to this computer.'}
-      </p>
+      <p className="card__subtitle">Signed in to AICOUNTLY Remote.</p>
 
       <div className="card__rows">
         <div className="row">
@@ -68,37 +64,15 @@ export function DeviceCard({
         <div className="row">
           <span className="row__label">Registration</span>
           <span className="row__value">
-            {revoked ? (
-              <StatusPill tone="danger">Removed by an administrator</StatusPill>
-            ) : enrolled ? (
-              <StatusPill tone="ready">Protected</StatusPill>
-            ) : (
-              <StatusPill tone="attention">Not registered</StatusPill>
-            )}
+            <StatusPill tone="ready">Protected</StatusPill>
           </span>
         </div>
       </div>
 
-      {revoked ? (
-        <div className="notice notice--danger" style={{ marginTop: 'var(--space-4)' }}>
-          <p className="notice__title">This device was removed</p>
-          <p>
-            An administrator revoked it in AICOUNTLY Remote. Nobody can connect to this computer.
-            Register it again to start using it.
-          </p>
-        </div>
-      ) : null}
-
       <div style={{ marginTop: 'var(--space-4)', display: 'flex', gap: 'var(--space-2)' }}>
-        {enrolled && !revoked ? (
-          <button type="button" className="btn btn--secondary" onClick={onUnregister} disabled={busy}>
-            Unregister this device
-          </button>
-        ) : (
-          <button type="button" className="btn btn--primary" onClick={onRegister} disabled={busy}>
-            Register this device
-          </button>
-        )}
+        <button type="button" className="btn btn--secondary" onClick={onUnregister} disabled={busy}>
+          Sign this computer out
+        </button>
       </div>
     </section>
   )
