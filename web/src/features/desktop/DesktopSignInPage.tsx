@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Laptop, ShieldCheck } from 'lucide-react'
 
-import { useRemote } from '../../app/RemoteProvider'
 import { confirmDesktopSignIn, denyDesktopSignIn } from '../../services/api/remote'
 import { RemoteApiError } from '../../services/api/client'
 
@@ -21,15 +20,18 @@ import { RemoteApiError } from '../../services/api/client'
  * system browser. If this tab was not already signed in, `AuthProvider` sends
  * it to the portal and back first; `main.tsx` and `AppShell` are what bring it
  * back to this exact page with the code still in the address bar.
+ *
+ * There is one question on this page and it is "is this your computer". A
+ * computer belongs to the person who registered it, so there is no
+ * organisation to choose — the picker that used to be here offered every
+ * organisation somebody belonged to, including the ones that would refuse,
+ * and said so only after they had picked one.
  */
 export default function DesktopSignInPage() {
   const [params] = useSearchParams()
-  const { bootstrap } = useRemote()
 
   const userCode = useMemo(() => formatCode(params.get('code') ?? ''), [params])
-  const companies = bootstrap?.companies ?? []
 
-  const [companyId, setCompanyId] = useState<number | null>(companies[0]?.companyId ?? null)
   const [phase, setPhase] = useState<'idle' | 'busy' | 'confirmed' | 'denied'>('idle')
   const [deviceLabel, setDeviceLabel] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -51,16 +53,11 @@ export default function DesktopSignInPage() {
   }
 
   async function confirm() {
-    if (!companyId) {
-      setError('Choose which organisation to register this computer in.')
-      return
-    }
-
     setPhase('busy')
     setError(null)
 
     try {
-      const result = await confirmDesktopSignIn(userCode, companyId)
+      const result = await confirmDesktopSignIn(userCode)
       setDeviceLabel(result.deviceLabel)
       setPhase('confirmed')
     } catch (err) {
@@ -141,31 +138,6 @@ export default function DesktopSignInPage() {
               </p>
             </div>
 
-            {companies.length === 0 ? (
-              <p className="muted">
-                You don't belong to an organisation that allows registering a desktop device. Ask an administrator
-                for access, then reopen this page from the computer.
-              </p>
-            ) : (
-              <div className="field">
-                <label className="field__label" htmlFor="desktop-signin-company">
-                  Register it in
-                </label>
-                <select
-                  id="desktop-signin-company"
-                  className="select"
-                  value={companyId ?? ''}
-                  onChange={(event) => setCompanyId(Number(event.target.value))}
-                >
-                  {companies.map((company) => (
-                    <option key={company.companyId} value={company.companyId}>
-                      {`${company.name} (ID: ${company.companyId})`}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
             {error ? (
               <p className="field__error" role="alert">
                 {error}
@@ -176,7 +148,7 @@ export default function DesktopSignInPage() {
               <button
                 type="button"
                 className="btn btn--primary btn--lg btn--block"
-                disabled={phase === 'busy' || companies.length === 0}
+                disabled={phase === 'busy'}
                 onClick={() => void confirm()}
               >
                 {phase === 'busy' ? 'Confirming…' : 'Confirm and sign in'}

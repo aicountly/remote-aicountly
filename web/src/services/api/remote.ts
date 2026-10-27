@@ -720,11 +720,21 @@ export function exportAuditTrail(
 // session. `start` and `poll` are the agent's own calls, made straight from
 // the desktop app without a portal credential — this window never makes them.
 
+/**
+ * Confirm a computer's sign-in.
+ *
+ * `companyId` is optional and usually absent: a computer belongs to the
+ * person who registered it. Passing one registers it into that organisation
+ * as well, which the API still accepts for callers that have a reason to.
+ */
 export function confirmDesktopSignIn(
   userCode: string,
-  companyId: number,
+  companyId?: number,
 ): Promise<{ status: 'confirmed'; deviceLabel: string | null }> {
-  return apiFetch('/desktop-signin/confirm', { method: 'POST', body: { userCode, companyId } })
+  return apiFetch('/desktop-signin/confirm', {
+    method: 'POST',
+    body: companyId === undefined ? { userCode } : { userCode, companyId },
+  })
 }
 
 export function denyDesktopSignIn(userCode: string): Promise<{ status: 'denied' }> {
