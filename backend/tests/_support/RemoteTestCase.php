@@ -266,7 +266,7 @@ abstract class RemoteTestCase extends CIUnitTestCase
      * @param  array<string, mixed> $input
      * @return array{device: array<string, mixed>, publicKey: string, secretKey: string}
      */
-    protected function enrolDevice(RemoteIdentity $identity, int $companyId, array $input = []): array
+    protected function enrolDevice(RemoteIdentity $identity, ?int $companyId, array $input = []): array
     {
         $keys   = $this->makeDeviceKeypair();
         $device = Services::deviceService()->enrol($identity, $companyId, array_merge([

@@ -25,7 +25,7 @@ use Config\Remote as RemoteConfig;
  *
  *   agent opens verificationUriComplete in the system browser
  *
- *   POST /desktop-signin/confirm  { userCode, companyId }          browser, api-auth
+ *   POST /desktop-signin/confirm  { userCode, companyId? }         browser, api-auth
  *   POST /desktop-signin/deny     { userCode }                     browser, api-auth
  *
  *   POST /desktop-signin/poll     { deviceCode }                   agent, unauthenticated
@@ -170,7 +170,11 @@ class DesktopSignInService
         $identity = $this->identityFor((int) $row['identity_id']);
         $payload  = $this->decodePayload($row['device_payload']);
 
-        $device = $this->devices->enrol($identity, (int) $row['company_id'], $payload);
+        $device = $this->devices->enrol(
+            $identity,
+            $row['company_id'] !== null ? (int) $row['company_id'] : null,
+            $payload,
+        );
 
         return ['status' => 'confirmed', 'device' => $device, 'companyName' => $row['company_name']];
     }
@@ -179,7 +183,7 @@ class DesktopSignInService
      * A person, signed in through the browser's own working portal session,
      * confirming that the code on their screen matches the one on the machine.
      */
-    public function confirmByUserCode(RemoteIdentity $identity, string $userCode, int $companyId, ?string $ip): array
+    public function confirmByUserCode(RemoteIdentity $identity, string $userCode, ?int $companyId, ?string $ip): array
     {
         $userCode = $this->normaliseUserCode($userCode);
 
@@ -188,14 +192,28 @@ class DesktopSignInService
         // minutes later on a machine they may not be watching. Enrolling
         // still re-checks everything itself — this is a courtesy, not the
         // authority.
-        $policy = $this->policies->resolve($identity, 'COMPANY', $companyId);
+        // Null is a personal device — the person's own computer, which is the
+        // ordinary case and the one that needs no organisation.
+        $policy = $this->policies->resolve(
+            $identity,
+            $companyId === null ? 'PERSONAL' : 'COMPANY',
+            $companyId,
+        );
+
         if (! $policy->remoteEnabled) {
-            throw ApiException::forbidden('COMPANY_REMOTE_DISABLED', 'Remote is turned off for this organisation.');
+            throw ApiException::forbidden(
+                'COMPANY_REMOTE_DISABLED',
+                $companyId === null
+                    ? 'Remote is turned off for this account.'
+                    : 'Remote is turned off for this organisation.',
+            );
         }
         if (! $policy->can(PermissionCatalog::DEVICE_ENROL)) {
             throw ApiException::forbidden(
                 'DEVICE_ENROL_DENIED',
-                'You do not have permission to register a device for this organisation.',
+                $companyId === null
+                    ? 'Your licence does not include registering a computer.'
+                    : 'You do not have permission to register a device for this organisation.',
                 ['permission' => PermissionCatalog::DEVICE_ENROL],
             );
         }

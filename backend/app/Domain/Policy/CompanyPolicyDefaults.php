@@ -184,11 +184,18 @@ final class CompanyPolicyDefaults
             'allow_aicountly_support'      => true,
             'allow_recording'              => false,
             'recording_requires_consent'   => true,
-            // Personal scope has no organisation to govern a desktop agent, so
-            // it governs none: a device is always enrolled into a company.
-            'allow_remote_control'         => false,
+            // A person may register their own computers and let somebody they
+            // approve control one — which is the whole product, and used to be
+            // refused here because a device could not exist without a company.
+            //
+            // Unattended access and restarting a machine stay off. Both are
+            // things that happen with nobody watching, and neither should
+            // arrive switched on because somebody installed an application;
+            // unattended access has its own deliberate act, and reboot belongs
+            // to an administrator.
+            'allow_remote_control'         => true,
             'allow_unattended_access'      => false,
-            'allow_clipboard_sync'         => false,
+            'allow_clipboard_sync'         => true,
             'allow_device_reboot'          => false,
             'max_session_duration_minutes' => 60,
             'guest_link_expiry_minutes'    => 10,

@@ -81,21 +81,33 @@ class DeviceService
      *               capabilities?: array<string, mixed>} $input
      * @return array<string, mixed> the device row
      */
-    public function enrol(RemoteIdentity $identity, int $companyId, array $input): array
+    public function enrol(RemoteIdentity $identity, ?int $companyId, array $input): array
     {
-        $policy = $this->policies->resolve($identity, 'COMPANY', $companyId);
+        // Null is a personal device: one that belongs to the person who
+        // enrolled it and to no organisation. It is not a lesser device — the
+        // same key, the same credential, the same consent gate — it simply has
+        // no tenant whose policy also has to agree.
+        $policy = $this->policies->resolve(
+            $identity,
+            $companyId === null ? 'PERSONAL' : 'COMPANY',
+            $companyId,
+        );
 
         if (! $policy->remoteEnabled) {
             throw ApiException::forbidden(
                 'COMPANY_REMOTE_DISABLED',
-                'Remote is turned off for this organisation.',
+                $companyId === null
+                    ? 'Remote is turned off for this account.'
+                    : 'Remote is turned off for this organisation.',
             );
         }
 
         if (! $policy->can(PermissionCatalog::DEVICE_ENROL)) {
             throw ApiException::forbidden(
                 'DEVICE_ENROL_DENIED',
-                'You do not have permission to register a device for this organisation.',
+                $companyId === null
+                    ? 'Your licence does not include registering a computer.'
+                    : 'You do not have permission to register a device for this organisation.',
                 ['permission' => PermissionCatalog::DEVICE_ENROL],
             );
         }
@@ -120,7 +132,12 @@ class DeviceService
             ->getRowArray();
 
         if ($existing !== null) {
-            if ((int) $existing['company_id'] !== $companyId) {
+            $existingCompany = $existing['company_id'] === null ? null : (int) $existing['company_id'];
+            $sameOwner       = $companyId === null
+                ? $existingCompany === null && (int) $existing['user_id'] === $identity->id
+                : $existingCompany === $companyId;
+
+            if (! $sameOwner) {
                 throw ApiException::conflict(
                     'DEVICE_KEY_IN_USE',
                     'That device key is already registered. Reinstall the agent to generate a new one.',
@@ -137,29 +154,39 @@ class DeviceService
             return $this->refreshEnrolment($this->castRow($existing), $identity, $input);
         }
 
+        $live = [self::STATUS_PENDING, self::STATUS_ACTIVE, self::STATUS_SUSPENDED];
+
         // The company's Manage plan (remote.max_devices, CONTRACTS §3.6): 402 PLAN_LIMIT_REACHED. Absent =
         // unlimited; the hard ceiling below still applies. Re-enrolling a known machine (above) never counts.
-        PlanEntitlements::assertRoom(
-            $this->db,
-            $companyId,
-            PlanEntitlements::MAX_DEVICES,
-            fn (): int => $this->db->table('remote_devices')
-                ->where('company_id', $companyId)
-                ->whereIn('status', [self::STATUS_PENDING, self::STATUS_ACTIVE, self::STATUS_SUSPENDED])
-                ->countAllResults(),
-            'registered computer',
-            'registered computers',
-        );
+        // A personal device has no company plan to be counted against, so it is counted against its owner.
+        if ($companyId !== null) {
+            PlanEntitlements::assertRoom(
+                $this->db,
+                $companyId,
+                PlanEntitlements::MAX_DEVICES,
+                fn (): int => $this->db->table('remote_devices')
+                    ->where('company_id', $companyId)
+                    ->whereIn('status', $live)
+                    ->countAllResults(),
+                'registered computer',
+                'registered computers',
+            );
+        }
 
-        $deviceCount = $this->db->table('remote_devices')
-            ->where('company_id', $companyId)
-            ->whereIn('status', [self::STATUS_PENDING, self::STATUS_ACTIVE, self::STATUS_SUSPENDED])
-            ->countAllResults();
+        $countQuery = $this->db->table('remote_devices')->whereIn('status', $live);
 
-        if ($deviceCount >= self::MAX_DEVICES_PER_COMPANY) {
+        if ($companyId === null) {
+            $countQuery->where('company_id', null)->where('user_id', $identity->id);
+        } else {
+            $countQuery->where('company_id', $companyId);
+        }
+
+        if ($countQuery->countAllResults() >= self::MAX_DEVICES_PER_COMPANY) {
             throw ApiException::conflict(
                 'DEVICE_LIMIT_REACHED',
-                'This organisation has reached its registered device limit. Revoke a device you no longer use.',
+                $companyId === null
+                    ? 'You have reached your registered computer limit. Remove one you no longer use.'
+                    : 'This organisation has reached its registered device limit. Revoke a device you no longer use.',
             );
         }
 
@@ -326,7 +353,7 @@ class DeviceService
         $device = $this->findByUuidOrFail($uuid);
 
         try {
-            $policy = $this->policies->resolve($identity, 'COMPANY', (int) $device['company_id']);
+            $policy = $this->policyForDevice($identity, $device);
         } catch (ApiException) {
             throw ApiException::notFound('That device could not be found.');
         }
@@ -786,10 +813,30 @@ class DeviceService
 
     // ------------------------------------------------------------- internals
 
+    /**
+     * The policy that governs a device row.
+     *
+     * A personal device has no company, and `(int) null` is 0 — a company
+     * nobody has, resolved as though it were real. So the scope is chosen from
+     * the row rather than assumed.
+     *
+     * @param array<string, mixed> $device
+     */
+    private function policyForDevice(RemoteIdentity $identity, array $device): EffectivePolicy
+    {
+        $companyId = $device['company_id'] !== null ? (int) $device['company_id'] : null;
+
+        return $this->policies->resolve(
+            $identity,
+            $companyId === null ? 'PERSONAL' : 'COMPANY',
+            $companyId,
+        );
+    }
+
     /** @param array<string, mixed> $device */
     private function assertManageable(RemoteIdentity $identity, array $device): void
     {
-        $policy = $this->policies->resolve($identity, 'COMPANY', (int) $device['company_id']);
+        $policy = $this->policyForDevice($identity, $device);
 
         if ($policy->can(PermissionCatalog::DEVICE_MANAGE)) {
             return;
