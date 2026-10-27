@@ -9,14 +9,20 @@
  * the **device credential** the Rust side obtains by proving possession of
  * the private key, which likewise never crosses into this window.
  *
- * `sessionKey` below is accordingly never set by anything any more, which
- * means `enableUnattended`, `disableUnattended` and the best-effort revoke in
- * `unregisterDevice`'s caller always refuse with `UNAUTHENTICATED` — a known
- * gap, not a bug introduced here: those three calls have always needed a
- * person's credential this window no longer has a way to obtain. Use the
- * AICOUNTLY Remote web console for them until they are moved onto the device
- * credential the way `POST /devices/me/unattended/disable` already is
- * designed to be.
+ * `sessionKey` below is accordingly never set by anything any more, so the two
+ * calls that still need a person's credential — `enableUnattended` and the
+ * best-effort revoke in `unregisterDevice`'s caller — refuse with
+ * `UNAUTHENTICATED` and say where to go instead. That is not an oversight:
+ * both are decisions the API deliberately keeps with a person. Switching
+ * unattended access *on* needs the confirmation screen behind
+ * `POST /devices/{uuid}/unattended/enable`, and revoking a device is an
+ * administrator's act.
+ *
+ * Switching it *off* is not, and no longer lives here: the machine does that
+ * itself with its own device credential through
+ * `POST /devices/me/unattended/disable`, which the API has always provided for
+ * exactly this. See `disableUnattended` in `services/tauri.ts`. A machine may
+ * always stop being reachable; only turning it back on needs a person.
  */
 
 import type { DeviceResource, DesktopSignInOutcome, DesktopSignInStart, EnrolmentMaterial } from '../types/agent'
@@ -48,7 +54,14 @@ async function request<T>(baseUrl: string, path: string, options: RequestOptions
   const auth = options.auth ?? true
 
   if (auth && !sessionKey) {
-    throw new RemoteApiError('UNAUTHENTICATED', 'Sign in to AICOUNTLY to continue.', 401)
+    // Not "sign in": this window has no way to, by design. The person has to
+    // do this one in the console, and a message that sends them looking for a
+    // sign-in screen here sends them looking for something that is not there.
+    throw new RemoteApiError(
+      'UNAUTHENTICATED',
+      'This has to be done in the AICOUNTLY Remote console, signed in as yourself.',
+      401,
+    )
   }
 
   const headers: Record<string, string> = {
@@ -138,15 +151,6 @@ export function enableUnattended(
   return request<{ device: DeviceResource }>(baseUrl, `/devices/${deviceUuid}/unattended/enable`, {
     method: 'POST',
     body: { confirm: true },
-  })
-}
-
-export function disableUnattended(
-  baseUrl: string,
-  deviceUuid: string,
-): Promise<{ device: DeviceResource }> {
-  return request<{ device: DeviceResource }>(baseUrl, `/devices/${deviceUuid}/unattended/disable`, {
-    method: 'POST',
   })
 }
 

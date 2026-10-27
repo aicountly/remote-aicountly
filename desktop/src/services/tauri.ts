@@ -68,7 +68,13 @@ export function recordUnattendedEnabled(enabledAt: string | null): Promise<Agent
   return invoke<AgentState>('enable_unattended', { enabledAt })
 }
 
-export function recordUnattendedDisabled(): Promise<AgentState> {
+/**
+ * Switch unattended access off — on the server, with the machine's own device
+ * credential, and only then here. Rejects if the server refused, because a
+ * window that says unattended access is off while the machine is still
+ * reachable is the one outcome this switch exists to prevent.
+ */
+export function disableUnattended(): Promise<AgentState> {
   return invoke<AgentState>('disable_unattended')
 }
 
