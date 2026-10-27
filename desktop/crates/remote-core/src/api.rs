@@ -191,14 +191,53 @@ pub struct DevicePolicyView {
     /// Machine reasons a capability is off, for the interface to explain.
     #[serde(default)]
     pub restrictions: Vec<String>,
+    /// Which sharing surfaces the organisation permits, as the API spells
+    /// them: `SAFE_SHARE`, `BROWSER_TAB`, `APPLICATION_WINDOW`,
+    /// `ENTIRE_MONITOR`.
+    ///
+    /// `None` and `Some([])` are deliberately different things, which is why
+    /// this is an `Option` rather than a defaulted `Vec`. `None` is a server
+    /// that does not send the field at all, and it constrains nothing —
+    /// enforcing an absent policy would stop every agent sharing the moment it
+    /// met an older API. `Some([])` is an organisation that permits no
+    /// sharing anywhere, and it is honoured.
+    #[serde(default)]
+    pub allowed_share_modes: Option<Vec<String>>,
 }
 
+/// The whole of one screen — the only surface a desktop agent can offer.
+///
+/// A browser picker can hand back a tab or a single window; this agent
+/// captures a monitor and has no way to capture anything smaller. So this is
+/// the one mode its hosting has to be measured against, and an organisation
+/// that allows only `APPLICATION_WINDOW` allows this machine nothing.
+pub const ENTIRE_MONITOR: &str = "ENTIRE_MONITOR";
+
 impl DevicePolicyView {
+    /// Whether this organisation permits sharing a whole screen.
+    ///
+    /// True when the server did not say (see `allowed_share_modes`), because
+    /// an agent that refused on silence would be an agent that stops working
+    /// against an API that predates this field.
+    #[must_use]
+    pub fn allows_entire_monitor(&self) -> bool {
+        match self.allowed_share_modes.as_deref() {
+            None => true,
+            Some(modes) => modes.iter().any(|mode| mode == ENTIRE_MONITOR),
+        }
+    }
+
     /// The policy as a capability set, for intersecting with the declaration.
     #[must_use]
     pub fn as_capabilities(&self) -> AgentCapabilities {
         AgentCapabilities {
-            screen_share: true,
+            // Not an unconditional yes: this agent shares a whole screen or
+            // nothing, so a policy without `ENTIRE_MONITOR` is a policy under
+            // which it cannot share at all — whatever other surfaces a browser
+            // may still be offered.
+            screen_share: self.allows_entire_monitor(),
+            // Viewing somebody else's screen is not a surface this machine
+            // offers, so the share modes have nothing to say about it.
             screen_view: true,
             remote_control: self.allow_remote_control,
             unattended_access: self.allow_unattended_access,
@@ -1482,6 +1521,98 @@ mod tests {
         );
     }
 
+    /// An older API does not send `allowedShareModes` at all, and an agent
+    /// that read silence as refusal would stop sharing the day it met one.
+    #[test]
+    fn a_policy_that_does_not_mention_share_modes_constrains_nothing() {
+        let policy: DevicePolicyView = serde_json::from_value(serde_json::json!({
+            "allowRemoteControl": true,
+            "allowUnattendedAccess": true,
+            "allowClipboardSync": true,
+            "allowDeviceReboot": true,
+            "allowFileTransfer": true
+        }))
+        .unwrap();
+
+        assert_eq!(policy.allowed_share_modes, None);
+        assert!(policy.allows_entire_monitor());
+        assert!(policy.as_capabilities().screen_share);
+    }
+
+    /// And an organisation that permits no surface at all is a different
+    /// thing from a server that did not say, which is the whole reason the
+    /// field is an `Option`.
+    #[test]
+    fn a_policy_that_permits_no_surface_is_not_the_same_as_silence() {
+        let nothing = policy_allowing(Some(vec![]));
+
+        assert!(!nothing.allows_entire_monitor());
+        assert!(!nothing.as_capabilities().screen_share);
+    }
+
+    /// The surfaces a browser can offer and this agent cannot. An
+    /// organisation that allows a window but not a screen allows this machine
+    /// nothing: there is no window picker here.
+    #[test]
+    fn the_surfaces_this_agent_cannot_offer_do_not_let_it_share() {
+        for modes in [
+            vec!["SAFE_SHARE".to_owned()],
+            vec!["BROWSER_TAB".to_owned()],
+            vec!["APPLICATION_WINDOW".to_owned()],
+            vec!["SAFE_SHARE".to_owned(), "APPLICATION_WINDOW".to_owned()],
+        ] {
+            let policy = policy_allowing(Some(modes.clone()));
+
+            assert!(
+                !policy.allows_entire_monitor(),
+                "a whole screen is not among {modes:?}"
+            );
+        }
+
+        for modes in [
+            vec![ENTIRE_MONITOR.to_owned()],
+            vec!["APPLICATION_WINDOW".to_owned(), ENTIRE_MONITOR.to_owned()],
+        ] {
+            assert!(policy_allowing(Some(modes)).allows_entire_monitor());
+        }
+    }
+
+    /// The field as the API actually sends it, parsed from the wire rather
+    /// than built in Rust.
+    #[test]
+    fn share_modes_are_read_from_the_policy_block() {
+        let policy: DevicePolicyView = serde_json::from_value(serde_json::json!({
+            "allowRemoteControl": true,
+            "allowUnattendedAccess": true,
+            "allowClipboardSync": true,
+            "allowDeviceReboot": true,
+            "allowFileTransfer": true,
+            "allowedShareModes": ["SAFE_SHARE", "APPLICATION_WINDOW"],
+            "restrictions": []
+        }))
+        .unwrap();
+
+        assert!(!policy.allows_entire_monitor());
+
+        let effective = AgentCapabilities::windows().intersect(policy.as_capabilities());
+        assert!(
+            !effective.screen_share,
+            "the declaration cannot add it back"
+        );
+    }
+
+    fn policy_allowing(modes: Option<Vec<String>>) -> DevicePolicyView {
+        DevicePolicyView {
+            allow_remote_control: true,
+            allow_unattended_access: true,
+            allow_clipboard_sync: true,
+            allow_device_reboot: true,
+            allow_file_transfer: true,
+            restrictions: Vec::new(),
+            allowed_share_modes: modes,
+        }
+    }
+
     #[test]
     fn the_policy_view_becomes_a_capability_ceiling() {
         let policy = DevicePolicyView {
@@ -1491,6 +1622,7 @@ mod tests {
             allow_device_reboot: true,
             allow_file_transfer: true,
             restrictions: vec!["UNATTENDED_ACCESS_NOT_ENTITLED".into()],
+            allowed_share_modes: Some(vec![ENTIRE_MONITOR.into()]),
         };
 
         let ceiling = policy.as_capabilities();
@@ -1498,6 +1630,7 @@ mod tests {
         assert!(ceiling.remote_control);
         assert!(!ceiling.unattended_access);
         assert!(!ceiling.clipboard_sync);
+        assert!(ceiling.screen_share);
 
         // And the declaration intersected with it removes what policy refuses.
         let effective = AgentCapabilities::windows().intersect(ceiling);
