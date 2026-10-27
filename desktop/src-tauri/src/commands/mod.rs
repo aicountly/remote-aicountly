@@ -106,6 +106,18 @@ pub fn enrol_device(agent: tauri::State<'_, Arc<Agent>>) -> Result<EnrolmentMate
     })
 }
 
+/// What this computer is called on the network, before anybody signs in.
+///
+/// The device key's fingerprint, created on first run and kept. It is shown
+/// on the sign-in screen so somebody can read it out — the way AnyDesk shows
+/// an ID — while every control the machine has stays shut until the sign-in
+/// finishes. An identifier on its own reaches nothing: a connection needs a
+/// credential, and a credential needs a person to sign in for it.
+#[tauri::command]
+pub fn device_identity(agent: tauri::State<'_, Arc<Agent>>) -> Result<String, String> {
+    agent.device_identity().map_err(|error| error.to_string())
+}
+
 /// Start a device-code sign-in, and hand back the code to show.
 ///
 /// This call lives on this side of the bridge because the web view is a

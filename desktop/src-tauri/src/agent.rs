@@ -297,6 +297,37 @@ impl Agent {
         Ok(public_key)
     }
 
+    /// This machine's identity as a person reads it, creating it if this is
+    /// the first time the application has run.
+    ///
+    /// The fingerprint of the device key, grouped the way the console shows
+    /// it. It exists before anybody signs in and does not change when they
+    /// do, which is what makes it usable as the thing you read out to
+    /// somebody: the key is generated once and kept, rather than regenerated
+    /// per sign-in attempt.
+    ///
+    /// It identifies the machine and nothing else. It is a hash of a public
+    /// key, so showing it costs nothing — and on its own it reaches nothing,
+    /// because every connection still needs a credential this machine only
+    /// gets by signing in.
+    pub fn device_identity(&self) -> Result<String, AgentError> {
+        if let Ok(keypair) = self.device_key() {
+            return Ok(keypair.display_fingerprint());
+        }
+
+        let keypair = DeviceKeypair::generate();
+
+        platform::secure_storage()
+            .store(
+                DEVICE_KEY_ENTRY,
+                keypair.secret_bytes().as_ref(),
+                StorageScope::LocalMachine,
+            )
+            .map_err(|error| AgentError::Key(KeyError::Storage(error)))?;
+
+        Ok(keypair.display_fingerprint())
+    }
+
     /// The device key, if this machine has one.
     pub fn device_key(&self) -> Result<DeviceKeypair, AgentError> {
         let bytes = platform::secure_storage()

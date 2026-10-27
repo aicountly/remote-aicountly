@@ -38,6 +38,9 @@ type Screen = 'home' | 'unattended' | 'settings' | 'register'
  */
 export default function App() {
   const [screen, setScreen] = useState<Screen>('home')
+  // This computer's ID, read once and kept. Generated on first run, so it is
+  // there to be read out before anybody has signed in.
+  const [deviceId, setDeviceId] = useState<string | null>(null)
   const [state, setState] = useState<AgentState | null>(null)
   const [permissions, setPermissions] = useState<PermissionSummary | null>(null)
   const [config, setConfig] = useState<AgentConfig | null>(null)
@@ -61,6 +64,15 @@ export default function App() {
       await refresh()
       setConfig(await bridge.getConfiguration())
       setAbout(await bridge.about())
+
+      // The ID this computer is known by. Failing to read it costs the ID and
+      // nothing else — the window still signs in, and the row shows a dash —
+      // so it is not allowed to take the rest of this down with it.
+      try {
+        setDeviceId(await bridge.deviceIdentity())
+      } catch {
+        setDeviceId(null)
+      }
     })()
   }, [refresh])
 
@@ -488,6 +500,7 @@ export default function App() {
         ) : signedOut && screen !== 'settings' ? (
           <SignInScreen
             revoked={revoked}
+            deviceId={deviceId}
             onSignIn={() => void beginRegistration()}
             busy={busy}
           />
