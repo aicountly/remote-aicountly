@@ -342,15 +342,15 @@ export default function App() {
     [run, config, state],
   )
 
+  // One call, and it is the one that matters. This used to ask the API with a
+  // portal credential this window cannot obtain, swallow the refusal, and
+  // record the switch as off locally — so the switch appeared to work, and the
+  // next poll of `GET /devices/me` put it back, because the server had never
+  // been told. The machine tells the server itself now, with its own device
+  // credential, and a failure stays a failure.
   const disableUnattended = useCallback(
-    () =>
-      run(async () => {
-        if (!config || !state?.deviceUuid) throw new Error('This device is not registered.')
-
-        await api.disableUnattended(config.apiBaseUrl, state.deviceUuid).catch(() => undefined)
-        await bridge.recordUnattendedDisabled()
-      }),
-    [run, config, state],
+    () => run(async () => void (await bridge.disableUnattended())),
+    [run],
   )
 
   if (!state || !permissions) {

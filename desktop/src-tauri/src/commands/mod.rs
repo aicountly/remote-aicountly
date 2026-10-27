@@ -227,13 +227,43 @@ pub fn enable_unattended(
     })
 }
 
-/// Record that unattended access was switched off.
+/// Switch this machine's own unattended access off, on the server.
+///
+/// Not a recording, unlike [`enable_unattended`] above: this one *is* the
+/// decision, and it is made with the agent's own device credential against
+/// `POST /devices/me/unattended/disable` — the route the API provides for
+/// exactly this, and the asymmetry it was built with. A machine may always
+/// stop being reachable unattended; switching it back on needs a person in
+/// the console, with the confirmation that endpoint demands.
+///
+/// It awaits the server and returns the failure rather than swallowing it,
+/// because unattended access is the server's state and not this window's.
+/// Recording it locally without telling the server produced a window that
+/// said unattended access was off while the machine was still reachable —
+/// until the next poll of `GET /devices/me` quietly put the switch back,
+/// which is how somebody finds out that the button they pressed did nothing.
 #[tauri::command]
-pub fn disable_unattended(agent: tauri::State<'_, Arc<Agent>>) -> remote_core::AgentState {
-    agent.set_unattended(remote_core::UnattendedState {
-        enabled: false,
-        ..remote_core::UnattendedState::default()
-    })
+pub async fn disable_unattended(
+    agent: tauri::State<'_, Arc<Agent>>,
+) -> Result<remote_core::AgentState, String> {
+    let client = agent
+        .device_client()
+        .ok_or("This computer is not registered, so there is nothing to switch off.")?;
+
+    let device = client
+        .disable_unattended()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    // The server's answer, not an assumption about it. `allowed_by_policy` is
+    // the one field it does not carry: it belongs to the organisation's policy
+    // rather than to the device row, and the poll owns it.
+    Ok(agent.set_unattended(remote_core::UnattendedState {
+        enabled: device.unattended_access_enabled,
+        enabled_at: device.unattended_enabled_at,
+        last_used_at: device.unattended_last_used_at,
+        allowed_by_policy: agent.state().unattended.allowed_by_policy,
+    }))
 }
 
 /// The person at the machine says yes to control.
