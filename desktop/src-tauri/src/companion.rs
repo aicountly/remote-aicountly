@@ -941,12 +941,27 @@ impl<A: CompanionApi, F: PeerSessionFactory> Companion<'_, A, F> {
             }
         }
 
-        self.allowed = view
-            .pending_requests
-            .iter()
-            .map(|request| request.participant_uuid.clone())
-            .chain(view.controller_uuid.clone())
-            .collect();
+        // Who may drive this machine's mouse and keyboard -- and nobody at
+        // all when the organisation has remote control switched off. A
+        // companion exists only to be controlled, so that switch is the whole
+        // of its permission, and the peer check below closes a connection that
+        // was already open when the policy changed.
+        self.allowed = if view.allow_remote_control {
+            view.pending_requests
+                .iter()
+                .map(|request| request.participant_uuid.clone())
+                .chain(view.controller_uuid.clone())
+                .collect()
+        } else {
+            if !view.pending_requests.is_empty() || view.controller_uuid.is_some() {
+                tracing::warn!(
+                    "this organisation does not permit remote control; no companion peer is \
+                     being admitted"
+                );
+            }
+
+            Vec::new()
+        };
 
         // One peer at a time, for somebody who may hold it. A peer for
         // somebody no longer waiting or controlling — refused, revoked, or
@@ -1665,6 +1680,50 @@ mod tests {
         assert!(
             world.peers.is_empty(),
             "no connection was made for the intruder"
+        );
+        assert!(world.sent.iter().all(|(_, message)| !matches!(
+            message,
+            Outbound::Answer { .. } | Outbound::Offer { .. }
+        )));
+    }
+
+    /// The organisation's switch, applied where it lands. Somebody the API
+    /// says is waiting still cannot drive this machine when remote control is
+    /// switched off -- a companion exists only to be controlled, so that
+    /// switch is the whole of its permission.
+    #[tokio::test(start_paused = true)]
+    async fn nobody_is_admitted_when_the_organisation_forbids_remote_control() {
+        let mut refused = view(&[B], None, None);
+        refused.allow_remote_control = false;
+
+        let world = world(refused, vec![display(1, 0)]);
+        let agent = agent();
+
+        let outcome = run_with(&world, &agent, {
+            let world = Arc::clone(&world);
+            async move {
+                wait(1_000).await;
+
+                World::push(&world, offer(B));
+                World::push(&world, candidate(B));
+                wait(4_000).await;
+
+                World::push(
+                    &world,
+                    Signal::SessionEnded {
+                        from: SHARER.into(),
+                    },
+                );
+            }
+        })
+        .await;
+
+        assert_eq!(outcome, CompanionEnd::SessionEnded);
+
+        let world = world.lock().unwrap();
+        assert!(
+            world.peers.is_empty(),
+            "policy refuses control, so there is nobody to connect to"
         );
         assert!(world.sent.iter().all(|(_, message)| !matches!(
             message,
