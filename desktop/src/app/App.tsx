@@ -232,7 +232,7 @@ export default function App() {
         if (!config) throw new Error('Settings are not loaded yet.')
 
         const material = await bridge.createDeviceKey()
-        const start = await api.startDesktopSignIn(config.apiBaseUrl, material)
+        const start = await bridge.startDesktopSignIn(material)
 
         await bridge.openUrl(start.verificationUriComplete)
 
@@ -258,9 +258,9 @@ export default function App() {
 
     const timer = setInterval(() => {
       void (async () => {
-        let outcome: Awaited<ReturnType<typeof api.pollDesktopSignIn>>
+        let outcome: Awaited<ReturnType<typeof bridge.pollDesktopSignIn>>
         try {
-          outcome = await api.pollDesktopSignIn(config.apiBaseUrl, start.deviceCode)
+          outcome = await bridge.pollDesktopSignIn(start.deviceCode)
         } catch {
           return
         }

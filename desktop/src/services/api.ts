@@ -2,12 +2,22 @@
  * The Remote API, as the desktop agent calls it.
  *
  * Registration used to need a portal **`ses_key`** for its one enrolment
- * call. It no longer does: device-code sign-in (`startDesktopSignIn`,
- * `pollDesktopSignIn`, docs/desktop/DEVICE_ENROLMENT.md) enrols the machine
- * itself, server-side, once a person confirms the code in their own browser
- * — so this window never handles a portal credential of any kind, matching
- * the **device credential** the Rust side obtains by proving possession of
- * the private key, which likewise never crosses into this window.
+ * call. It no longer does: device-code sign-in (docs/desktop/
+ * DEVICE_ENROLMENT.md) enrols the machine itself, server-side, once a person
+ * confirms the code in their own browser — so this window never handles a
+ * portal credential of any kind, matching the **device credential** the Rust
+ * side obtains by proving possession of the private key, which likewise never
+ * crosses into this window.
+ *
+ * Those two device-code calls no longer live here either. They were the only
+ * requests this window made itself, and a window is a browser: a JSON request
+ * to another origin sends a preflight, and the API answers a preflight from an
+ * origin nobody configured with no CORS headers at all — which is right, since
+ * `corsAllowedOrigins` exists for `npm run dev` and the deployed app shares an
+ * origin with the API. The browser blocked it, `fetch` rejected, and the
+ * window told people to check a network connection that was working. They are
+ * `startDesktopSignIn` and `pollDesktopSignIn` in `services/tauri.ts` now,
+ * where `reqwest` has no origin to be refused.
  *
  * `sessionKey` below is accordingly never set by anything any more, so the two
  * calls that still need a person's credential — `enableUnattended` and the
@@ -25,7 +35,7 @@
  * always stop being reachable; only turning it back on needs a person.
  */
 
-import type { DeviceResource, DesktopSignInOutcome, DesktopSignInStart, EnrolmentMaterial } from '../types/agent'
+import type { DeviceResource } from '../types/agent'
 
 /** The portal session key. Memory only; never `localStorage`. Never set by anything any more — see above. */
 const sessionKey: string | null = null
@@ -46,14 +56,10 @@ interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
   body?: unknown
   signal?: AbortSignal
-  /** False for the two device-code calls, which carry their own proof instead of a credential. */
-  auth?: boolean
 }
 
 async function request<T>(baseUrl: string, path: string, options: RequestOptions = {}): Promise<T> {
-  const auth = options.auth ?? true
-
-  if (auth && !sessionKey) {
+  if (!sessionKey) {
     // Not "sign in": this window has no way to, by design. The person has to
     // do this one in the console, and a message that sends them looking for a
     // sign-in screen here sends them looking for something that is not there.
@@ -67,8 +73,8 @@ async function request<T>(baseUrl: string, path: string, options: RequestOptions
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Accept: 'application/json',
+    Authorization: `Bearer ${sessionKey}`,
   }
-  if (auth) headers.Authorization = `Bearer ${sessionKey}`
 
   let response: Response
 
@@ -100,42 +106,6 @@ async function request<T>(baseUrl: string, path: string, options: RequestOptions
   }
 
   return payload?.data as T
-}
-
-/**
- * Start a device-code sign-in. Unauthenticated: this window holds no
- * credential of any kind at this point, which is the entire reason this
- * exists rather than the machine somehow acquiring a portal session itself.
- */
-export function startDesktopSignIn(baseUrl: string, material: EnrolmentMaterial): Promise<DesktopSignInStart> {
-  return request<DesktopSignInStart>(baseUrl, '/desktop-signin/start', {
-    method: 'POST',
-    auth: false,
-    body: {
-      deviceName: material.hostName,
-      publicKey: material.publicKey,
-      deviceType: 'DESKTOP',
-      operatingSystem: material.operatingSystem,
-      osVersion: material.osVersion,
-      architecture: material.architecture,
-      hostname: material.hostName,
-      agentVersion: material.agentVersion,
-      capabilities: material.capabilities,
-    },
-  })
-}
-
-/**
- * Poll for an outcome. `deviceCode` is the proof — nobody who only saw the
- * short code this screen displays can call this, because they were never
- * given it.
- */
-export function pollDesktopSignIn(baseUrl: string, deviceCode: string): Promise<DesktopSignInOutcome> {
-  return request<DesktopSignInOutcome>(baseUrl, '/desktop-signin/poll', {
-    method: 'POST',
-    auth: false,
-    body: { deviceCode },
-  })
 }
 
 /**

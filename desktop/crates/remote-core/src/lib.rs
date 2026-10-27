@@ -19,9 +19,10 @@ pub mod signalling;
 pub mod state;
 
 pub use api::{
-    companion_monitor_body, ApiClient, ApiError, CompanionView, ControlDecision, DeviceCredential,
-    MonitorMatch, PendingCompanion, PendingControlRequest, SessionControlView, SharedSurface,
-    SurfaceKind,
+    companion_monitor_body, ApiClient, ApiError, CompanionView, ControlDecision,
+    DesktopSignInOutcome, DesktopSignInRequest, DesktopSignInStart, DesktopSignInStatus,
+    DeviceCredential, DeviceResource, MonitorMatch, PendingCompanion, PendingControlRequest,
+    SessionControlView, SharedSurface, SurfaceKind,
 };
 pub use backoff::Backoff;
 pub use config::{config_path, macos_support_directory, AgentConfig, ConfigError};

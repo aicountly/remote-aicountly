@@ -136,8 +136,89 @@ pub struct EnrolmentRequest {
     pub capabilities: AgentCapabilities,
 }
 
+/// What the agent sends to `POST /desktop-signin/start`.
+///
+/// The field names are the API's, and `deviceType` is always `DESKTOP`: this
+/// is the only kind of thing that enrols this way.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopSignInRequest {
+    /// What the device will be called.
+    pub device_name: String,
+    /// The **public** half of the device keypair.
+    pub public_key: String,
+    /// Always `DESKTOP`.
+    pub device_type: String,
+    /// `Windows`.
+    pub operating_system: String,
+    /// `11 24H2`.
+    pub os_version: String,
+    /// `x86_64`.
+    pub architecture: String,
+    /// The machine's name, as the console shows it.
+    pub hostname: String,
+    /// This build.
+    pub agent_version: String,
+    /// What the software can do, already constrained by what the machine
+    /// permits.
+    pub capabilities: AgentCapabilities,
+}
+
+/// What `POST /desktop-signin/start` answers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopSignInStart {
+    /// `ABCD-1234` — the short code to compare with the browser.
+    pub user_code: String,
+    /// The long one, which is the proof. Never shown to anybody.
+    pub device_code: String,
+    /// Where to go to confirm.
+    pub verification_uri: String,
+    /// The same, with the code already in it — what the agent opens.
+    pub verification_uri_complete: String,
+    /// When the code lapses, ISO-8601 UTC.
+    pub expires_at: String,
+    /// How often to poll, as the server asks.
+    pub interval_seconds: u64,
+}
+
+/// Where a device-code sign-in has got to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DesktopSignInStatus {
+    /// Nobody has answered yet.
+    Pending,
+    /// Somebody confirmed it, and the device is enrolled.
+    Confirmed,
+    /// Somebody refused it.
+    Denied,
+    /// Nobody answered in time.
+    Expired,
+}
+
+/// What one poll reports.
+///
+/// One struct rather than an enum, so a status this build does not know about
+/// is still a well-formed answer the window can render rather than a
+/// deserialisation failure in the middle of a sign-in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopSignInOutcome {
+    /// Pending, confirmed, denied or expired.
+    pub status: DesktopSignInStatus,
+    /// The enrolled device — only once confirmed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<DeviceResource>,
+    /// Which organisation it was enrolled into.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company_name: Option<String>,
+}
+
 /// The device resource, as the API renders it.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+///
+/// `Serialize` as well as `Deserialize` because a confirmed device-code
+/// sign-in carries one back to the window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceResource {
     /// The device's public identifier.
@@ -654,6 +735,65 @@ impl ApiClient {
         self.credential = Some(credential);
 
         self
+    }
+
+    /// Start a device-code sign-in.
+    ///
+    /// Unauthenticated, and deliberately: this runs before the machine has any
+    /// credential at all. The long `deviceCode` the server returns is the
+    /// proof, exactly as `devices/auth/challenge` works.
+    ///
+    /// # Why this is here rather than in the window
+    ///
+    /// It used to be a `fetch` in `services/api.ts`, and it was the only API
+    /// call the agent made from its web view. A web view is a browser: the
+    /// JSON content type makes it send a preflight, and the API answers a
+    /// cross-origin preflight from an origin nobody configured with no CORS
+    /// headers at all — correctly, since `corsAllowedOrigins` exists for
+    /// `npm run dev` and the deployed app shares an origin with the API. The
+    /// browser then blocked the response, `fetch` rejected, and the window
+    /// reported "AICOUNTLY Remote could not be reached. Check this computer's
+    /// network connection" on a machine whose network was fine.
+    ///
+    /// Here there is no origin, no preflight and no content security policy —
+    /// this is `reqwest`, the same client every other call already used.
+    pub async fn start_desktop_sign_in(
+        &self,
+        request: &DesktopSignInRequest,
+    ) -> Result<DesktopSignInStart, ApiError> {
+        let url = self.config.endpoint("/v1/remote/desktop-signin/start")?;
+
+        let response = self
+            .http
+            .post(url)
+            .json(request)
+            .send()
+            .await
+            .map_err(|error| ApiError::Transport(error.to_string()))?;
+
+        Self::read(response).await
+    }
+
+    /// Ask what became of a device-code sign-in.
+    ///
+    /// Unauthenticated for the same reason as `start_desktop_sign_in`: the
+    /// device code is the proof, and nobody who only saw the short code the
+    /// screen displays was ever given it.
+    pub async fn poll_desktop_sign_in(
+        &self,
+        device_code: &str,
+    ) -> Result<DesktopSignInOutcome, ApiError> {
+        let url = self.config.endpoint("/v1/remote/desktop-signin/poll")?;
+
+        let response = self
+            .http
+            .post(url)
+            .json(&serde_json::json!({ "deviceCode": device_code }))
+            .send()
+            .await
+            .map_err(|error| ApiError::Transport(error.to_string()))?;
+
+        Self::read(response).await
     }
 
     /// Register this machine.
@@ -1610,6 +1750,131 @@ mod tests {
             allow_file_transfer: true,
             restrictions: Vec::new(),
             allowed_share_modes: modes,
+        }
+    }
+
+    /// The body the API reads field by field, in the names it reads them by.
+    #[test]
+    fn a_sign_in_request_is_sent_in_the_names_the_api_reads() {
+        let body = serde_json::to_value(DesktopSignInRequest {
+            device_name: "WS-01".into(),
+            public_key: "AAAA".into(),
+            device_type: "DESKTOP".into(),
+            operating_system: "Windows".into(),
+            os_version: "11 24H2".into(),
+            architecture: "x86_64".into(),
+            hostname: "WS-01".into(),
+            agent_version: "1.0.0".into(),
+            capabilities: AgentCapabilities::windows(),
+        })
+        .unwrap();
+
+        assert_eq!(body["deviceName"], "WS-01");
+        assert_eq!(body["publicKey"], "AAAA");
+        assert_eq!(body["deviceType"], "DESKTOP");
+        assert_eq!(body["operatingSystem"], "Windows");
+        assert_eq!(body["osVersion"], "11 24H2");
+        assert_eq!(body["architecture"], "x86_64");
+        assert_eq!(body["hostname"], "WS-01");
+        assert_eq!(body["agentVersion"], "1.0.0");
+        assert!(body["capabilities"].is_object());
+    }
+
+    /// `POST /desktop-signin/start`, as the API answers it.
+    #[test]
+    fn the_code_to_show_is_read_from_the_start_response() {
+        let start: DesktopSignInStart = serde_json::from_value(serde_json::json!({
+            "userCode": "ABCD-1234",
+            "deviceCode": "a".repeat(64),
+            "verificationUri": "https://remote.aicountly.com/desktop-signin",
+            "verificationUriComplete": "https://remote.aicountly.com/desktop-signin?code=ABCD-1234",
+            "expiresAt": "2026-09-15T12:10:00Z",
+            "intervalSeconds": 2
+        }))
+        .unwrap();
+
+        assert_eq!(start.user_code, "ABCD-1234");
+        assert_eq!(start.interval_seconds, 2);
+        assert!(start.verification_uri_complete.ends_with("?code=ABCD-1234"));
+    }
+
+    /// A poll that is still waiting carries a status and nothing else, and
+    /// travels back to the window in the same shape it arrived in.
+    #[test]
+    fn a_pending_poll_carries_nothing_but_its_status() {
+        let outcome: DesktopSignInOutcome =
+            serde_json::from_value(serde_json::json!({ "status": "pending" })).unwrap();
+
+        assert_eq!(outcome.status, DesktopSignInStatus::Pending);
+        assert!(outcome.device.is_none());
+
+        assert_eq!(
+            serde_json::to_value(&outcome).unwrap(),
+            serde_json::json!({ "status": "pending" }),
+            "an absent device is absent, not null: the window reads a union on status"
+        );
+    }
+
+    /// And a confirmed one carries the device the server enrolled.
+    #[test]
+    fn a_confirmed_poll_carries_the_device() {
+        let outcome: DesktopSignInOutcome = serde_json::from_value(serde_json::json!({
+            "status": "confirmed",
+            "companyName": "Northwind",
+            "device": {
+                "uuid": "device-1",
+                "deviceName": "WS-01",
+                "status": "ACTIVE",
+                "companyId": 481,
+                "keyFingerprint": "AAAA BBBB",
+                "unattendedAccessEnabled": false,
+                "capabilities": {
+                    "screen_share": true,
+                    "screen_view": true,
+                    "remote_control": true,
+                    "unattended_access": false,
+                    "file_transfer": false,
+                    "clipboard_sync": true,
+                    "reboot": false
+                }
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(outcome.status, DesktopSignInStatus::Confirmed);
+        assert_eq!(outcome.company_name.as_deref(), Some("Northwind"));
+        assert_eq!(outcome.device.expect("a device").device_name, "WS-01");
+    }
+
+    /// The property that made these two calls move out of the web view: they
+    /// are the only ones that work before the machine has a credential.
+    #[tokio::test]
+    async fn signing_in_needs_no_credential() {
+        let client = ApiClient::new(AgentConfig::default()).unwrap();
+
+        // No `NoCredential`: whatever happens, it is not refused for want of
+        // one, which is what every other call on this client would do.
+        for error in [
+            client
+                .start_desktop_sign_in(&DesktopSignInRequest {
+                    device_name: "WS-01".into(),
+                    public_key: "AAAA".into(),
+                    device_type: "DESKTOP".into(),
+                    operating_system: "Windows".into(),
+                    os_version: "11".into(),
+                    architecture: "x86_64".into(),
+                    hostname: "WS-01".into(),
+                    agent_version: "1.0.0".into(),
+                    capabilities: AgentCapabilities::windows(),
+                })
+                .await
+                .err(),
+            client.poll_desktop_sign_in("a").await.err(),
+        ] {
+            assert!(
+                !matches!(error, Some(ApiError::NoCredential)),
+                "a device-code call must not ask for a credential"
+            );
         }
     }
 

@@ -177,6 +177,8 @@ pub fn run() {
             commands::get_configuration,
             commands::save_configuration,
             commands::enrol_device,
+            commands::start_desktop_sign_in,
+            commands::poll_desktop_sign_in,
             commands::confirm_enrolment,
             commands::unregister_device,
             commands::enable_unattended,
