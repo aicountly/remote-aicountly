@@ -67,14 +67,30 @@ class DeviceSessionService
     public function startUnattended(RemoteIdentity $identity, string $deviceUuid, ?string $issueSummary = null): array
     {
         $device    = $this->devices->findByUuidOrFail($deviceUuid);
-        $companyId = (int) $device['company_id'];
+        $companyId = $device['company_id'] !== null ? (int) $device['company_id'] : null;
 
         // (1) Tenant isolation. `resolve()` throws before reading a capability
         // if this person has no standing in the device's organisation, so a
         // device uuid from another tenant is refused here, not later.
+        //
+        // A personal device has no tenant to be isolated from, and resolving
+        // `(int) null` would have asked about company 0 — a company nobody
+        // has — turning "you may not connect to this" into "that device could
+        // not be found". Its owner is checked below instead.
         try {
-            $policy = $this->policies->resolve($identity, 'COMPANY', $companyId);
+            $policy = $this->policies->resolve(
+                $identity,
+                $companyId === null ? 'PERSONAL' : 'COMPANY',
+                $companyId,
+            );
         } catch (ApiException) {
+            throw ApiException::notFound('That device could not be found.');
+        }
+
+        // A personal device answers to its owner and to nobody else. There is
+        // no organisation whose administrators could also reach it, so this is
+        // the whole of its access control.
+        if ($companyId === null && (int) ($device['user_id'] ?? 0) !== $identity->id) {
             throw ApiException::notFound('That device could not be found.');
         }
 
