@@ -332,14 +332,34 @@ async fn connected<F>(
                     })),
                 );
 
+                // Which sharing surfaces the organisation permits. This agent
+                // captures a whole screen and has no way to capture anything
+                // smaller — no tab, no single window — so `ENTIRE_MONITOR` is
+                // the only surface it could ever offer, and a policy without
+                // it is a policy under which this machine cannot share at all.
+                //
+                // The server's own `capabilities` do not carry that
+                // distinction: it computes `screen_share` as "any surface is
+                // allowed", which is true of an organisation that permits only
+                // a browser window — something the browser can do and this
+                // machine cannot.
+                let may_share_a_screen = description.policy.allows_entire_monitor();
+
                 // What this machine may currently do — the declaration
                 // intersected with the organisation's ceiling, as the server
-                // computed it. The Permissions panel's "your organisation"
-                // column has no other source, and this keeps it current
-                // without anybody restarting anything.
+                // computed it, and then with the surface question above, so
+                // the Permissions panel cannot say screen sharing is allowed
+                // while the loop below refuses to host. The panel's "your
+                // organisation" column has no other source, and this keeps it
+                // current without anybody restarting anything.
+                let mut capabilities = description.capabilities;
+                if !may_share_a_screen {
+                    capabilities.screen_share = false;
+                }
+
                 emit(
                     sink,
-                    agent.apply(AgentEvent::CapabilitiesChanged(description.capabilities)),
+                    agent.apply(AgentEvent::CapabilitiesChanged(capabilities)),
                 );
 
                 // Somebody is waiting. Host one at a time — two sessions on
@@ -348,28 +368,43 @@ async fn connected<F>(
                 let hosting = platform::supports_hosting();
 
                 if let Some(pending) = description.pending_sessions.first().filter(|_| hosting) {
-                    tracing::info!(
+                    if may_share_a_screen {
+                        tracing::info!(
+                            session = %pending.uuid,
+                            display_id = %pending.display_id,
+                            "an unattended session is waiting for this computer"
+                        );
+
+                        let ended = session::host(
+                            Arc::clone(agent),
+                            Arc::clone(sink),
+                            factory.clone(),
+                            pending.uuid.clone(),
+                            true,
+                            Arc::clone(stopping),
+                        )
+                        .await;
+
+                        tracing::info!(?ended, session = %pending.uuid, "the session ended");
+
+                        // The credential may well have expired while it ran, so
+                        // the outer loop re-authenticates rather than this one
+                        // carrying on with a stale one.
+                        return;
+                    }
+
+                    // Refused here, at the machine, rather than discovered by
+                    // whoever is waiting at the other end once the screen is
+                    // already on its way. The session is left pending: it is
+                    // the organisation's policy that refuses it, so there is
+                    // nothing for this machine to retry, and an administrator
+                    // who changes the policy gets a join on the next poll.
+                    tracing::warn!(
                         session = %pending.uuid,
-                        display_id = %pending.display_id,
-                        "an unattended session is waiting for this computer"
+                        allowed = ?description.policy.allowed_share_modes,
+                        "a session is waiting, but this organisation does not permit sharing a \
+                         whole screen and that is the only surface this computer can share"
                     );
-
-                    let ended = session::host(
-                        Arc::clone(agent),
-                        Arc::clone(sink),
-                        factory.clone(),
-                        pending.uuid.clone(),
-                        true,
-                        Arc::clone(stopping),
-                    )
-                    .await;
-
-                    tracing::info!(?ended, session = %pending.uuid, "the session ended");
-
-                    // The credential may well have expired while it ran, so
-                    // the outer loop re-authenticates rather than this one
-                    // carrying on with a stale one.
-                    return;
                 }
 
                 // A control-companion link waiting for the person here. The
