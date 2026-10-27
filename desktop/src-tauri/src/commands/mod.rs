@@ -106,8 +106,56 @@ pub fn enrol_device(agent: tauri::State<'_, Arc<Agent>>) -> Result<EnrolmentMate
     })
 }
 
+/// Start a device-code sign-in, and hand back the code to show.
+///
+/// This call lives on this side of the bridge because the web view is a
+/// browser, and a browser making a JSON request to another origin sends a
+/// preflight first. The API answers a preflight from an origin nobody
+/// configured with no CORS headers — which is right, since the deployed app
+/// shares an origin with it — so the web view's own `fetch` was blocked and
+/// the window reported a network problem on a machine with a working network.
+/// `reqwest` has no origin and asks nobody's permission.
+#[tauri::command]
+pub async fn start_desktop_sign_in(
+    agent: tauri::State<'_, Arc<Agent>>,
+    material: EnrolmentMaterial,
+) -> Result<remote_core::DesktopSignInStart, String> {
+    let client = remote_core::ApiClient::new(agent.config()).map_err(|error| error.to_string())?;
+
+    let request = remote_core::DesktopSignInRequest {
+        device_name: material.host_name.clone(),
+        public_key: material.public_key,
+        device_type: "DESKTOP".to_owned(),
+        operating_system: material.operating_system,
+        os_version: material.os_version,
+        architecture: material.architecture,
+        hostname: material.host_name,
+        agent_version: material.agent_version,
+        capabilities: material.capabilities,
+    };
+
+    client
+        .start_desktop_sign_in(&request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Ask what became of a device-code sign-in.
+#[tauri::command]
+pub async fn poll_desktop_sign_in(
+    agent: tauri::State<'_, Arc<Agent>>,
+    device_code: String,
+) -> Result<remote_core::DesktopSignInOutcome, String> {
+    let client = remote_core::ApiClient::new(agent.config()).map_err(|error| error.to_string())?;
+
+    client
+        .poll_desktop_sign_in(&device_code)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// Everything the enrolment call needs, and nothing else.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnrolmentMaterial {
     /// The **public** half of the device keypair.

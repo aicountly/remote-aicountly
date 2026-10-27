@@ -16,6 +16,8 @@ import type {
   About,
   AgentConfig,
   AgentState,
+  DesktopSignInOutcome,
+  DesktopSignInStart,
   EnrolmentConfirmation,
   EnrolmentMaterial,
   PermissionSummary,
@@ -58,6 +60,24 @@ export function createDeviceKey(): Promise<EnrolmentMaterial> {
  */
 export function confirmEnrolment(confirmation: EnrolmentConfirmation): Promise<AgentState> {
   return invoke<AgentState>('confirm_enrolment', { confirmation })
+}
+
+/**
+ * Start a device-code sign-in, and get back the code to show.
+ *
+ * Through the Rust side rather than `fetch`, because this window is a web
+ * view: a JSON request to another origin sends a preflight first, and the API
+ * answers a preflight from an unconfigured origin with no CORS headers at all.
+ * The browser blocked it and the window reported a network problem on a
+ * machine whose network was fine. `reqwest` has no origin to be refused.
+ */
+export function startDesktopSignIn(material: EnrolmentMaterial): Promise<DesktopSignInStart> {
+  return invoke<DesktopSignInStart>('start_desktop_sign_in', { material })
+}
+
+/** Ask what became of it. */
+export function pollDesktopSignIn(deviceCode: string): Promise<DesktopSignInOutcome> {
+  return invoke<DesktopSignInOutcome>('poll_desktop_sign_in', { deviceCode })
 }
 
 export function unregisterDevice(): Promise<AgentState> {
