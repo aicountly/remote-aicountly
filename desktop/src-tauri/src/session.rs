@@ -556,6 +556,35 @@ async fn handle_signal<P: PeerSession>(
 /// person at the machine pressed Stop, a server that has not caught up does
 /// not put control back.
 fn adopt_control(agent: &Arc<Agent>, sink: &StateSink, view: &remote_core::SessionControlView) {
+    // The organisation's switch, which is exactly what the field is for --
+    // "so the dialog cannot offer what would be refused" -- and which nothing
+    // was reading. Without this the consent dialog appears for an
+    // organisation that has remote control switched off, and a grant reported
+    // by the API opens the gate through `sync_from_api` whether anybody was
+    // asked or not.
+    //
+    // Unlike the share modes, an absent `allowRemoteControl` is not a sign of
+    // an older server: the API sets it on every control payload and defaults
+    // it to false itself when there is no policy to read. False here means
+    // the same thing it means to the browser.
+    if !view.allow_remote_control {
+        if !view.pending_requests.is_empty() || view.controller_uuid.is_some() {
+            tracing::warn!(
+                waiting = view.pending_requests.len(),
+                controller = ?view.controller_uuid,
+                "this organisation does not permit remote control; nobody is being asked and no \
+                 grant is being adopted"
+            );
+        }
+
+        // Not merely "do not ask": a grant already in force is dropped, so an
+        // administrator switching remote control off ends control at the next
+        // read rather than at the end of the session.
+        sink(agent.sync_control(ControlState::None, None, false, None));
+
+        return;
+    }
+
     if let Some(waiting) = view.pending_requests.first() {
         // The API said somebody is waiting. That is the only thing that raises
         // a consent dialog on this machine, and their name travels with it —
@@ -752,6 +781,108 @@ mod tests {
             "iceServers": [{ "urls": ["stun:stun.example.test:3478"] }],
             "relayAvailable": true
         })
+    }
+
+    fn control_agent() -> Arc<Agent> {
+        let agent = Agent::new();
+        agent.apply(remote_core::AgentEvent::Enrolled {
+            device_uuid: "device-1".into(),
+            device_name: "WS-01".into(),
+            company_name: None,
+            key_fingerprint: "AAAA".into(),
+        });
+        agent.apply(remote_core::AgentEvent::Authenticated);
+        agent.begin_session(remote_core::SessionSummary {
+            session_uuid: "session-1".into(),
+            display_id: "AR-10282".into(),
+            connected_name: "Sam".into(),
+            company_name: None,
+            started_at: "2026-02-10T09:00:00Z".into(),
+            unattended: false,
+            control: remote_core::ControlSummary {
+                state: remote_core::ControlStateView::None,
+                clipboard: false,
+                requester_uuid: None,
+                requester_name: None,
+            },
+        });
+
+        Arc::new(agent)
+    }
+
+    fn requester(agent: &Arc<Agent>) -> Option<String> {
+        agent
+            .state()
+            .active_session()
+            .and_then(|session| session.control.requester_uuid.clone())
+    }
+
+    fn waiting_view(allow: bool) -> remote_core::SessionControlView {
+        remote_core::SessionControlView {
+            pending_requests: vec![remote_core::PendingControlRequest {
+                participant_uuid: "operator-1".into(),
+                display_name: "Sam".into(),
+                requested_at: None,
+            }],
+            allow_remote_control: allow,
+            ..remote_core::SessionControlView::default()
+        }
+    }
+
+    /// The organisation's switch. `allow_remote_control` exists "so the dialog
+    /// cannot offer what would be refused", and nothing used to read it: the
+    /// consent dialog appeared for an organisation that had remote control
+    /// switched off.
+    #[test]
+    fn nobody_is_asked_when_the_organisation_forbids_remote_control() {
+        let agent = control_agent();
+        let sink: StateSink = Arc::new(|_| {});
+
+        adopt_control(&agent, &sink, &waiting_view(false));
+
+        assert!(
+            requester(&agent).is_none(),
+            "no dialog is raised for a request policy would refuse"
+        );
+
+        // And the same view with the switch on does ask, so the test above is
+        // about the policy rather than about the view being ignored.
+        adopt_control(&agent, &sink, &waiting_view(true));
+
+        assert_eq!(requester(&agent).as_deref(), Some("operator-1"));
+    }
+
+    /// Switching it off mid-session ends control at the next read, rather than
+    /// leaving the grant in force until the session happens to end.
+    #[test]
+    fn a_grant_is_dropped_when_the_switch_goes_off() {
+        let agent = control_agent();
+        let sink: StateSink = Arc::new(|_| {});
+
+        let granted = remote_core::SessionControlView {
+            controller_uuid: Some("operator-1".into()),
+            controller_name: Some("Sam".into()),
+            grant_id: Some("grant-1".into()),
+            allow_remote_control: true,
+            ..remote_core::SessionControlView::default()
+        };
+
+        adopt_control(&agent, &sink, &granted);
+        assert!(agent.state().is_being_controlled());
+
+        adopt_control(
+            &agent,
+            &sink,
+            &remote_core::SessionControlView {
+                allow_remote_control: false,
+                ..granted
+            },
+        );
+
+        assert!(
+            !agent.state().is_being_controlled(),
+            "the organisation withdrew remote control, so the grant goes with it"
+        );
     }
 
     #[test]
