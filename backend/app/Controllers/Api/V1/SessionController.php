@@ -366,6 +366,8 @@ class SessionController extends BaseApiController
         $resource['companyName'] ??= $session['company_id'] !== null
             ? Services::policyResolver()->companyName((int) $session['company_id'])
             : null;
+        // The single-session read does not join the owner the way history does, which left every detail page at "Host —".
+        $resource['ownerName'] ??= Services::identityResolver()->findById((int) $session['owner_user_id'])?->displayName;
 
         $resource['participants'] = array_map(
             static fn (array $row) => Presenter::participant($row, $includeAudit),

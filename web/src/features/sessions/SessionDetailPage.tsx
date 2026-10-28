@@ -6,12 +6,15 @@ import { fetchSession, fetchSessionEvents } from '../../services/api/remote'
 import { RemoteApiError } from '../../services/api/client'
 import { useRemote } from '../../app/RemoteProvider'
 import { PERMISSIONS } from '../../types/remote'
-import StatusBadge from '../../components/ui/StatusBadge'
+import StatusBadge, { statusPresentation } from '../../components/ui/StatusBadge'
 import RestrictionNotice from '../../components/ui/RestrictionNotice'
 import type { SessionDetail, SessionEvent } from '../../types/remote'
 import {
+  describeEndReason,
   describeEvent,
+  describeRole,
   describeScope,
+  describeSessionType,
   describeShareMode,
   describeSurface,
   formatDateTime,
@@ -31,7 +34,8 @@ export default function SessionDetailPage() {
   const { can } = useRemote()
 
   const [session, setSession] = useState<SessionDetail | null>(null)
-  const [events, setEvents] = useState<SessionEvent[]>([])
+  // Null until the timeline has loaded — or if it could not be: then nothing below claims what it would have said.
+  const [events, setEvents] = useState<SessionEvent[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<RemoteApiError | null>(null)
 
@@ -49,7 +53,7 @@ export default function SessionDetailPage() {
 
         // The timeline is a second request on purpose: it can be long, and the
         // header should not wait for it.
-        const timeline = await fetchSessionEvents(uuid).catch(() => [])
+        const timeline = await fetchSessionEvents(uuid).catch(() => null)
         if (!cancelled) setEvents(timeline)
       } catch (err) {
         if (!cancelled) {
@@ -98,7 +102,9 @@ export default function SessionDetailPage() {
     )
   }
 
-  const policyBlocked = events.filter((event) => event.eventType === 'POLICY_REJECTED')
+  const timeline = events ?? []
+  const policyBlocked = timeline.filter((event) => event.eventType === 'POLICY_REJECTED')
+  const endedBy = timeline.find((event) => event.eventType === 'SESSION_ENDED')?.actorName ?? null
 
   return (
     <div className="page">
@@ -143,20 +149,20 @@ export default function SessionDetailPage() {
           </div>
 
           <div className="card__body detail-grid">
-            <Fact label="Status" value={session.status} />
-            <Fact label="Scope" value={session.scopeType} />
+            <Fact label="Status" value={statusPresentation(session.status).label} />
+            <Fact label="Scope" value={describeScope(session.scopeType, null)} />
             <Fact label="Organisation" value={session.companyName ?? 'Personal (no organisation)'} />
-            <Fact label="Session type" value={session.sessionType} />
+            <Fact label="Session type" value={describeSessionType(session.sessionType)} />
             <Fact label="Started from" value={session.sourceProductLabel ?? '—'} />
             <Fact label="Area" value={session.sourceRoute ?? '—'} />
             <Fact label="Support ticket" value={session.supportTicketId ?? '—'} />
-            <Fact label="Host" value={session.ownerName ?? '—'} />
+            <Fact label="Host" value={session.ownerName ?? session.participants.find((p) => p.isHost)?.displayName ?? '—'} />
             <Fact label="Requested sharing" value={describeShareMode(session.requestedShareMode)} />
-            <Fact label="Surface shared" value={describeSurface(session.actualDisplaySurface)} />
+            <Fact label="Surface shared" value={describeSharedSurfaces(session, events)} />
             <Fact label="Started" value={formatDateTime(session.startedAt)} />
             <Fact label="Ended" value={formatDateTime(session.endedAt)} />
             <Fact label="Duration" value={formatDuration(session.durationSeconds)} />
-            <Fact label="Ended because" value={session.endReason ?? '—'} />
+            <Fact label="Ended because" value={describeEndReason(session.endReason, endedBy)} />
 
             {/* Only present when the caller holds remote.audit.view (§42). */}
             {session.audit ? (
@@ -188,7 +194,7 @@ export default function SessionDetailPage() {
                 {session.participants.map((participant) => (
                   <tr key={participant.uuid}>
                     <td>{participant.displayName}</td>
-                    <td>{participant.role}</td>
+                    <td>{participant.isHost ? 'Host' : describeRole(participant.role)}</td>
                     <td>{formatDateTime(participant.joinedAt)}</td>
                     <td>{formatDateTime(participant.leftAt)}</td>
                     <td>
@@ -213,7 +219,7 @@ export default function SessionDetailPage() {
 
           <div className="card__body">
             <ol className="timeline">
-              {events.map((event, index) => (
+              {timeline.map((event, index) => (
                 <li key={`${event.occurredAt}-${index}`} className="timeline__item">
                   <span className="timeline__marker" aria-hidden="true" />
                   <div className="timeline__body">
@@ -233,6 +239,25 @@ export default function SessionDetailPage() {
       </div>
     </div>
   )
+}
+
+/**
+ * What was shared, over the whole session.
+ *
+ * The session row holds only the surface being shared *now* — it is cleared
+ * when sharing stops — so once a session is over the answer is in the timeline.
+ */
+function describeSharedSurfaces(session: SessionDetail, events: SessionEvent[] | null): string {
+  if (session.actualDisplaySurface) return describeSurface(session.actualDisplaySurface)
+  if (events === null) return '—'
+
+  const surfaces = new Set<string>()
+  for (const event of events) {
+    const surface = event.metadata.displaySurface
+    if (event.eventType === 'SCREEN_SHARE_STARTED' && typeof surface === 'string') surfaces.add(describeSurface(surface))
+  }
+
+  return surfaces.size > 0 ? [...surfaces].join(', ') : 'Nothing was shared'
 }
 
 function Fact({ label, value }: { label: string; value: string }) {

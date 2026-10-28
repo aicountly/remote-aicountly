@@ -121,6 +121,57 @@ export function describeScope(scopeType: string, companyName: string | null): st
   }
 }
 
+const SESSION_TYPE_LABELS: Record<string, string> = {
+  ASSISTANCE: 'Assistance',
+  SUPPORT: 'AICOUNTLY Support',
+  INTERNAL: 'Internal (company users)',
+  GUEST_VIEW: 'Guest view',
+}
+
+export function describeSessionType(sessionType: string): string {
+  return SESSION_TYPE_LABELS[sessionType] ?? plainWords(sessionType)
+}
+
+const ROLE_LABELS: Record<string, string> = {
+  SHARER: 'Sharer',
+  VIEWER: 'Viewer',
+  SUPPORT_TECHNICIAN: 'AICOUNTLY Support',
+  OBSERVER: 'Observer',
+  GUEST: 'External guest',
+  CONTROL_COMPANION: 'Remote app (control only)',
+}
+
+/** A participant's role, as a person would say it. */
+export function describeRole(role: string): string {
+  return ROLE_LABELS[role] ?? plainWords(role)
+}
+
+/**
+ * Why a session ended, worded to follow "Ended because". `endedBy` is the name
+ * on the SESSION_ENDED event, when there is one.
+ */
+export function describeEndReason(reason: string | null | undefined, endedBy?: string | null): string {
+  if (!reason) return '—'
+
+  switch (reason) {
+    case 'ENDED_BY_USER':
+      return endedBy ? `${endedBy} ended it` : 'Someone in the session ended it'
+    case 'EXPIRED':
+      return 'It reached its time limit'
+    case 'SUPPORT_CANCELLED':
+      return 'The support request was cancelled'
+    default:
+      return plainWords(reason)
+  }
+}
+
+/** `CLIENT_CLOSED` → `Client closed`, for a code no table above knows yet. */
+function plainWords(code: string): string {
+  const words = code.replace(/_/g, ' ').toLowerCase()
+
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
 const SHARE_MODE_LABELS: Record<string, string> = {
   SAFE_SHARE: 'AICOUNTLY Safe Share',
   BROWSER_TAB: 'Browser tab',

@@ -164,7 +164,10 @@ final class RemoteApiTest extends RemoteTestCase
 
         $read = $this->withHeaders($headers)->get('v1/remote/sessions/' . $session['uuid']);
         $read->assertStatus(200);
-        $this->assertSame($session['uuid'], json_decode($read->getJSON(), true)['data']['uuid']);
+        $detail = json_decode($read->getJSON(), true)['data'];
+        $this->assertSame($session['uuid'], $detail['uuid']);
+        // History joins the owner's name; the single read did not, so every detail page said "Host —".
+        $this->assertSame('Rahul Gupta', $detail['ownerName']);
     }
 
     public function testAnotherUserCannotReadTheSession(): void
