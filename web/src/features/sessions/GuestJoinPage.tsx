@@ -6,6 +6,7 @@ import { redeemInvitation } from '../../services/api/remote'
 import { RemoteApiError } from '../../services/api/client'
 import RestrictionNotice from '../../components/ui/RestrictionNotice'
 import AicountlyLogo, { RemoteMark } from '../../components/brand/AicountlyLogo'
+import { useAuth } from '../../auth/AuthProvider'
 
 /**
  * Opening a one-time invitation link (§6F, §23).
@@ -21,6 +22,7 @@ import AicountlyLogo, { RemoteMark } from '../../components/brand/AicountlyLogo'
 export default function GuestJoinPage() {
   const { token = '' } = useParams()
   const navigate = useNavigate()
+  const { status, signIn } = useAuth()
 
   const [displayName, setDisplayName] = useState('')
   const [joining, setJoining] = useState(false)
@@ -63,7 +65,22 @@ export default function GuestJoinPage() {
           and you will only see what they choose to share.
         </p>
 
-        {error ? <RestrictionNotice error={error} /> : null}
+        {error ? (
+          // An "AICOUNTLY colleague" link names an AICOUNTLY person, so somebody who is not signed in here is asked
+          // to — and comes back to this same link, which a refusal does not use up.
+          error.code === 'UNAUTHENTICATED' && status !== 'authenticated' ? (
+            <RestrictionNotice
+              error={new RemoteApiError('SIGN_IN_REQUIRED', error.message, error.status)}
+              action={
+                <button type="button" className="btn btn--primary" onClick={signIn}>
+                  Sign in to AICOUNTLY
+                </button>
+              }
+            />
+          ) : (
+            <RestrictionNotice error={error} />
+          )
+        ) : null}
 
         <form className="stack" onSubmit={submit}>
           <div className="field">

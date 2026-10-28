@@ -7,6 +7,7 @@
  */
 
 import { apiFetch, apiFetchText, apiFetchWithMeta, setGuestToken } from './client'
+import { getAuthToken } from '../../auth/tokens'
 import type { ConnectivityReport } from '../../ice-kit/index.js'
 import { latencyBody } from './iceLatency'
 import type {
@@ -546,9 +547,14 @@ export function joinByCode(code: string): Promise<{ session: RemoteSession; part
 /**
  * Redeem an invitation link.
  *
- * `anonymous` because an external guest has no AICOUNTLY account — that is the
- * purpose of a guest invitation. When the response carries a guest token it is
- * stored immediately, since every later call in the session needs it.
+ * Anonymous only for somebody who is not signed in: an external guest has no
+ * AICOUNTLY account, which is the purpose of a guest invitation. Somebody who
+ * is signed in redeems as themselves, because an "AICOUNTLY colleague"
+ * invitation names an AICOUNTLY person and the API refuses it to an anonymous
+ * caller — sent anonymously every time, it told a signed-in colleague to sign
+ * in, and that kind of link never worked. When the response carries a guest
+ * token it is stored immediately, since every later call in the session needs
+ * it.
  */
 export async function redeemInvitation(
   token: string,
@@ -557,7 +563,7 @@ export async function redeemInvitation(
 ): Promise<{ session: RemoteSession; participant: Participant; guestToken?: string }> {
   const result = await apiFetch<{ session: RemoteSession; participant: Participant; guestToken?: string }>(
     '/join/redeem',
-    { method: 'POST', body: { token, displayName, email }, anonymous: true },
+    { method: 'POST', body: { token, displayName, email }, anonymous: getAuthToken() === null },
   )
 
   if (result.guestToken) {
