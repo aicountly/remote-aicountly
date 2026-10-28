@@ -86,7 +86,11 @@ class SessionController extends BaseApiController
     {
         $session  = $this->resolveSession($uuid);
         $identity = $this->identity();
-        $policy   = $this->policyForSession($session);
+
+        // Before the policy is read, so somebody who may only read the session leaves no POLICY_REJECTED in it.
+        Services::sessionService()->assertHost($session, $identity, 'Only the person who started this session can share a screen in it.');
+
+        $policy = $this->policyForSession($session);
 
         $shareMode = $this->enum(
             $this->body(),

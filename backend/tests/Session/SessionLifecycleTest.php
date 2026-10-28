@@ -189,6 +189,8 @@ final class SessionLifecycleTest extends RemoteTestCase
         $this->assertSame(SessionStatus::EXPIRED, $reloaded['status']);
         $this->assertNull($reloaded['session_code']);
         $this->assertHasEvent($session, EventType::SESSION_EXPIRED);
+        // The read that expires it says when it ended, so the summary shows how long it ran rather than "—".
+        $this->assertNotNull($reloaded['ended_at']);
     }
 
     public function testPauseAndResumeAreHostOnly(): void
