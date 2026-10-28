@@ -11,6 +11,7 @@ const engines: Array<{
   dispose: ReturnType<typeof vi.fn>
   start: ReturnType<typeof vi.fn>
   announceSessionEnded: ReturnType<typeof vi.fn>
+  dropUnadmitted: ReturnType<typeof vi.fn>
   options: { onSessionEnded: () => void }
 }> = []
 
@@ -20,6 +21,7 @@ vi.mock('../../services/webrtc/RemoteSessionEngine', () => ({
     this.start = vi.fn().mockResolvedValue(undefined)
     this.dispose = vi.fn()
     this.announceSessionEnded = vi.fn()
+    this.dropUnadmitted = vi.fn()
     this.startSharing = vi.fn().mockResolvedValue(undefined)
     this.stopSharing = vi.fn().mockResolvedValue(undefined)
     this.setControlTarget = vi.fn()
@@ -297,5 +299,43 @@ describe('useRemoteSession — the waiting room', () => {
     status = 'APPROVED'
     await flush(2_000)
     expect(fetchControlState).toHaveBeenCalled()
+  })
+})
+
+describe('useRemoteSession — somebody the server no longer admits', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    engines.length = 0
+    fetchSession.mockReset()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('hands the engine everybody not admitted, with when the read was asked for', async () => {
+    let participants = [{ uuid: 'p-2', status: 'JOINED' }]
+    const askedAt: number[] = []
+    fetchSession.mockImplementation(async () => {
+      askedAt.push(Date.now())
+      // The answer takes a while: what counts is when it was asked for, not when it arrived.
+      await new Promise((resolve) => setTimeout(resolve, 300))
+
+      return { ...sessionRecord('JOINED', true), participants }
+    })
+
+    renderHook(() => useRemoteSession({ sessionUuid: 'sess-1', policy: null }))
+    await flush(300)
+    expect(engines).toHaveLength(1)
+    expect(engines[0].dropUnadmitted).not.toHaveBeenCalled()
+
+    // Closed by the server (the session expired, or they left), though their browser may still be in the room.
+    participants = [{ uuid: 'p-2', status: 'LEFT' }, { uuid: 'p-3', status: 'REQUESTED' }]
+    await flush(5_000)
+
+    expect(engines[0].dropUnadmitted).toHaveBeenCalled()
+    const [uuids, since] = engines[0].dropUnadmitted.mock.calls.at(-1) as [string[], number]
+    expect(uuids).toEqual(['p-2', 'p-3'])
+    expect(askedAt).toContain(since)
   })
 })

@@ -112,12 +112,21 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
 
   const reload = useCallback(
     async (signal?: AbortSignal) => {
+      const requestedAt = Date.now()
+
       try {
         const detail = await fetchSession(sessionUuid, signal)
         if (!mountedRef.current) return
 
         setSession(detail)
         setError(null)
+
+        // Whoever the server no longer admits — left, declined, closed when the session expired — stops receiving
+        // anything from this browser, even if their own browser never left the room (RemoteSessionEngine).
+        const unadmitted = (detail.participants ?? [])
+          .filter((participant) => participant.status !== 'APPROVED' && participant.status !== 'JOINED')
+          .map((participant) => participant.uuid)
+        if (unadmitted.length > 0) engineRef.current?.dropUnadmitted(unadmitted, requestedAt)
 
         if (['ENDED', 'EXPIRED', 'DECLINED', 'FAILED'].includes(detail.status)) {
           setEnded(true)

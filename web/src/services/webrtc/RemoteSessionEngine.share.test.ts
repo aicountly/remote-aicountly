@@ -297,3 +297,47 @@ describe('stopping a share and sharing again', () => {
     engine.dispose()
   })
 })
+
+/**
+ * Expiry closes the participants on the server, and the signalling service stops renewing their tokens — but a peer
+ * connection that already exists outlives both. The sharer's browser is the one sending the picture, so it is the one
+ * that must stop: it drops whoever the session record says is no longer admitted.
+ */
+describe('somebody the server no longer admits', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    FakePeerConnection.instances = []
+    signalling.sent = []
+    vi.stubGlobal('RTCPeerConnection', FakePeerConnection)
+    vi.stubGlobal('RTCSessionDescription', class { constructor(init: RTCSessionDescriptionInit) { return init } })
+    vi.stubGlobal('RTCIceCandidate', class { constructor(init: RTCIceCandidateInit) { return init } })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('stops sending to them, but not over a connection made after the read that said so', async () => {
+    const { engine, signal } = await startEngine('a-sharer')
+
+    // A session record asked for before they connected says nothing about this connection.
+    const staleRead = Date.now()
+    vi.setSystemTime(staleRead + 1_000)
+    signal({ type: 'peer-joined', peer: browserPeer('b-viewer') })
+    await flush()
+    const pc = FakePeerConnection.instances[0]
+    await engine.startSharing(stream(track('screen-1')), 'monitor')
+
+    engine.dropUnadmitted(['b-viewer'], staleRead)
+    expect(pc.connectionState).not.toBe('closed')
+
+    // One asked for after it does: the connection, and the picture on it, are closed.
+    vi.setSystemTime(staleRead + 2_000)
+    engine.dropUnadmitted(['b-viewer'], Date.now())
+    expect(pc.connectionState).toBe('closed')
+    expect(pc.removed).toBe(1)
+
+    engine.dispose()
+  })
+})

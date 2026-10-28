@@ -435,7 +435,27 @@ class SessionService
         // What was just written, so the read that expired it shows how long it ran — the summary said "Duration —".
         $row['ended_at']     = $endedAt;
 
+        // Over exactly as an ended session is. Without this everybody stayed JOINED in an expired session and its
+        // invitations stayed open, so the host's room still counted them as admitted.
+        $this->closeOut($row);
+
         return $row;
+    }
+
+    /**
+     * What ending a session — by End or by expiry — closes with it: everybody still in it or waiting to be, its
+     * control-companion link (recorded as ending), and every invitation that could still be redeemed.
+     *
+     * @param array<string, mixed> $session the session, already in its terminal status
+     */
+    private function closeOut(array $session): void
+    {
+        $this->participants->closeAll((int) $session['id']);
+        \Config\Services::companionLinks()->sweep($session);
+        $this->db->table('remote_invitations')
+            ->where('session_id', $session['id'])
+            ->where('revoked_at', null)
+            ->update(['revoked_at' => Clock::now(), 'updated_at' => Clock::now()]);
     }
 
     /**
@@ -555,13 +575,7 @@ class SessionService
             'session_code'     => null,
         ]);
 
-        $this->participants->closeAll((int) $session['id']);
-        // Its control-companion link ends with it (and is recorded as ending).
-        \Config\Services::companionLinks()->sweep($updated);
-        $this->db->table('remote_invitations')
-            ->where('session_id', $session['id'])
-            ->where('revoked_at', null)
-            ->update(['revoked_at' => Clock::now(), 'updated_at' => Clock::now()]);
+        $this->closeOut($updated);
 
         $this->audit->record($updated, EventType::SESSION_ENDED, $identity->id, 'USER', null, null, [
             'reason'          => $reason,

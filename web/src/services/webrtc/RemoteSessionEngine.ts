@@ -280,6 +280,8 @@ interface PeerEntry {
   lastRestartAt: number
   /** Whether the first successful connection has been reported. */
   reportedConnected: boolean
+  /** When this connection was set up (Date.now()), so a session record read before it cannot end it. */
+  createdAt: number
 }
 
 export class RemoteSessionEngine {
@@ -560,6 +562,28 @@ export class RemoteSessionEngine {
     const message = { type: 'session-ended', payload: {} }
 
     if (this.broadcast(message)) this.signalling?.send(message)
+  }
+
+  /**
+   * Close the connections to people the server no longer admits.
+   *
+   * The signalling service stops a token from being renewed, not a peer
+   * connection that already exists: a browser that did not leave the room —
+   * one that was closed as the session expired, or a modified one — kept
+   * receiving the picture. The room hands over everybody whose participant row
+   * is not APPROVED or JOINED, read in a request that started at `since`; a
+   * connection set up after that may belong to somebody admitted in between,
+   * so it is left alone until a later read says otherwise.
+   */
+  dropUnadmitted(participantUuids: readonly string[], since: number): void {
+    for (const peerId of participantUuids) {
+      const entry = this.peers.get(peerId)
+      if (!entry || entry.createdAt >= since) continue
+
+      // As if they had left: a companion is not reconnected until it joins again.
+      this.companionPeers.delete(peerId)
+      this.removePeer(peerId)
+    }
   }
 
   // ------------------------------------------------------- file transfer
@@ -1278,6 +1302,7 @@ export class RemoteSessionEngine {
       path: null,
       lastRestartAt: 0,
       reportedConnected: false,
+      createdAt: Date.now(),
     }
 
     this.peers.set(peerId, entry)
