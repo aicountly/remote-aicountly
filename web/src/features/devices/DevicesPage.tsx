@@ -10,7 +10,8 @@ import {
   revokeDevice,
 } from '../../services/api/remote'
 import { RemoteApiError } from '../../services/api/client'
-import { useRemote } from '../../app/RemoteProvider'
+import { useDesktopAgentEnabled, useRemote } from '../../app/RemoteProvider'
+import { DesktopAppDownloadLink } from '../desktop/DesktopAppDownload'
 import EmptyState from '../../components/ui/EmptyState'
 import Modal from '../../components/ui/Modal'
 import RestrictionNotice from '../../components/ui/RestrictionNotice'
@@ -43,9 +44,10 @@ import { PERMISSIONS } from '../../types/remote'
  */
 
 /**
- * Remote launches on the web first: the Windows app is not released, so nothing
- * here may read as an instruction to install it. Said wherever this page would
- * otherwise send somebody looking for a download, with what works today.
+ * With the desktop agent switched off (`remote.allowDesktopAgent = false`)
+ * nothing here may read as an instruction to install the Windows app. Said
+ * wherever this page would otherwise send somebody looking for a download, with
+ * what works today.
  */
 export function DesktopAppComingSoon() {
   return (
@@ -58,6 +60,26 @@ export function DesktopAppComingSoon() {
       </p>
     </div>
   )
+}
+
+/** The same place with the desktop agent on: what needs the Windows app, and where to get it. */
+export function DesktopAppDownloadNotice() {
+  return (
+    <div className="notice notice--info">
+      <p className="notice__title">Get AICOUNTLY Remote for Windows</p>
+      <p className="notice__body">
+        Registering a computer, controlling one with permission and unattended access need the Windows app. Install
+        it on the computer and sign in with your AICOUNTLY account.
+      </p>
+      <p className="notice__body">
+        <DesktopAppDownloadLink />
+      </p>
+    </div>
+  )
+}
+
+function DesktopAppNotice() {
+  return useDesktopAgentEnabled() ? <DesktopAppDownloadNotice /> : <DesktopAppComingSoon />
 }
 
 export default function DevicesPage() {
@@ -156,7 +178,7 @@ export default function DevicesPage() {
             <p className="muted">Machines running AICOUNTLY Remote for Windows.</p>
           </header>
 
-          <DesktopAppComingSoon />
+          <DesktopAppNotice />
 
           <EmptyState
             icon={<MonitorSmartphone size={26} />}
@@ -185,7 +207,7 @@ export default function DevicesPage() {
 
         {error ? <RestrictionNotice error={error} /> : null}
 
-        {!loading && devices.length === 0 ? <DesktopAppComingSoon /> : null}
+        {!loading && devices.length === 0 ? <DesktopAppNotice /> : null}
 
         {policy && !policy.allowRemoteControl && devices.length > 0 ? (
           <div className="notice notice--info notice--row">

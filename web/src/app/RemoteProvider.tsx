@@ -245,6 +245,17 @@ export function useRemote(): RemoteContextValue {
   return context
 }
 
+/**
+ * Whether this deployment offers AICOUNTLY Remote for Windows — the API's
+ * `remote.allowDesktopAgent`, as bootstrap's `features.desktopAgent`. False
+ * until a bootstrap says so, and for a guest (who never fetches one), so
+ * nothing offers a download the server has switched off. Safe outside a
+ * provider, unlike {@link useRemote}.
+ */
+export function useDesktopAgentEnabled(): boolean {
+  return useContext(RemoteContext)?.bootstrap?.features?.desktopAgent === true
+}
+
 /** The company the user is currently acting in, or null in Personal scope. */
 export function useActiveCompany() {
   const { bootstrap, companyId } = useRemote()

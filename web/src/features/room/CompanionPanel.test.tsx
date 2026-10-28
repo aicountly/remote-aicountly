@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
@@ -10,6 +10,15 @@ import type { CompanionLink, RemoteDevice, SessionControlState } from '../../typ
  * "Enable control from this computer" (docs/desktop/CONTROL_COMPANION.md), and what a viewer sees while a
  * companion is not ready or the machine has paused input.
  */
+
+/** Bootstrap's `features.desktopAgent` (remote.allowDesktopAgent): off unless a test turns it on. */
+const desktop = vi.hoisted(() => ({ agent: false }))
+
+vi.mock('../../app/RemoteProvider', () => ({ useDesktopAgentEnabled: () => desktop.agent }))
+
+beforeEach(() => {
+  desktop.agent = false
+})
 
 function link(overrides: Partial<CompanionLink> = {}): CompanionLink {
   return {
@@ -105,7 +114,7 @@ describe('CompanionPanel', () => {
     expect(onLink).toHaveBeenCalledWith('device-1')
   })
 
-  it('says the desktop app is coming soon when there is no computer to use', async () => {
+  it('says the desktop app is coming soon when there is no computer to use, while the desktop agent is off', async () => {
     const loadDevices = vi.fn(async () => ({ devices: [], restrictions: ['NO_ELIGIBLE_DEVICE'] }))
 
     render(
@@ -118,13 +127,46 @@ describe('CompanionPanel', () => {
     expect(screen.getByText(/desktop app is coming soon; if you already have it/i)).toBeInTheDocument()
   })
 
-  it('never asks for an unreleased app without saying it is coming soon', () => {
+  it('never asks for an app that is switched off without saying it is coming soon', () => {
     render(
       <CompanionPanel sessionUuid="s-1" control={control()} isSharing busy={false} onLink={() => {}} onUnlink={() => {}} />,
     )
 
     expect(screen.getByText(/the desktop app is coming soon/i)).toBeInTheDocument()
     expect(screen.getByText(/can point and draw on what you share/i)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /download AICOUNTLY Remote for Windows/i })).not.toBeInTheDocument()
+  })
+
+  it('links the Windows app download, in a new tab, while the desktop agent is on', () => {
+    desktop.agent = true
+    render(
+      <CompanionPanel sessionUuid="s-1" control={control()} isSharing busy={false} onLink={() => {}} onUnlink={() => {}} />,
+    )
+
+    const download = screen.getByRole('link', { name: /^Download AICOUNTLY Remote for Windows/ })
+    expect(download).toHaveAttribute('href', 'https://aicountly.com/remote')
+    // A link that replaced the page would leave the live session.
+    expect(download).toHaveAttribute('target', '_blank')
+    expect(screen.getByText(/needs AICOUNTLY Remote for Windows open on it/i)).toBeInTheDocument()
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /enable control from this computer/i })).toBeEnabled()
+  })
+
+  it('asks for the desktop app to be opened, not awaited, when none is signed in and the desktop agent is on', async () => {
+    desktop.agent = true
+    const loadDevices = vi.fn(async () => ({ devices: [], restrictions: ['NO_ELIGIBLE_DEVICE'] }))
+
+    render(
+      <CompanionPanel sessionUuid="s-1" control={control()} isSharing busy={false} onLink={() => {}} onUnlink={() => {}} loadDevices={loadDevices} />,
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: /enable control from this computer/i }))
+
+    expect(
+      await screen.findByText('No AICOUNTLY Remote desktop app is signed in for you. Open it on this computer, sign in and try again.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /^Download AICOUNTLY Remote for Windows/ })).toBeInTheDocument()
   })
 
   it('cannot be enabled before sharing', () => {

@@ -3,7 +3,7 @@ import { Search, ShieldAlert } from 'lucide-react'
 
 import { fetchPermissionMatrix, updateUserPermissions } from '../../services/api/remote'
 import { RemoteApiError } from '../../services/api/client'
-import { useRemote } from '../../app/RemoteProvider'
+import { useDesktopAgentEnabled, useRemote } from '../../app/RemoteProvider'
 import Modal from '../../components/ui/Modal'
 import EmptyState from '../../components/ui/EmptyState'
 import RestrictionNotice from '../../components/ui/RestrictionNotice'
@@ -314,6 +314,7 @@ function PermissionDrawer({
   onSave: (changes: Record<string, 'ALLOW' | 'DENY' | 'INHERIT'>) => void
 }) {
   const [changes, setChanges] = useState<Record<string, 'ALLOW' | 'DENY' | 'INHERIT'>>({})
+  const desktopAgent = useDesktopAgentEnabled()
 
   function currentValue(permission: string): 'ALLOW' | 'DENY' | 'INHERIT' {
     return changes[permission] ?? user.overrides[permission] ?? 'INHERIT'
@@ -358,7 +359,7 @@ function PermissionDrawer({
                   <li key={permission} className="permission-row">
                     <div className="permission-row__label">
                       <span className={blocked ? 'permission-row__name permission-row__name--blocked' : 'permission-row__name'}>
-                        {describePermission(permission)}
+                        {describePermission(permission, desktopAgent)}
                       </span>
 
                       {blocked ? (
@@ -375,7 +376,7 @@ function PermissionDrawer({
 
                     <div className="permission-row__control">
                       <label className="sr-only" htmlFor={`perm-${permission}`}>
-                        {describePermission(permission)}
+                        {describePermission(permission, desktopAgent)}
                       </label>
                       <select
                         id={`perm-${permission}`}

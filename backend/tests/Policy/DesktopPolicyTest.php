@@ -222,26 +222,25 @@ final class DesktopPolicyTest extends RemoteTestCase
     }
 
     /**
-     * The web-only launch: desktop agents ship switched off, so no plan offers
-     * Computers or remote control for an app nobody can install yet, until the
-     * environment turns them on when the Windows app is released.
+     * AICOUNTLY Remote for Windows is released: desktop agents ship switched
+     * on, and the environment can still switch every desktop feature off.
      */
-    public function testDesktopAgentsShipSwitchedOffUntilTheEnvironmentTurnsThemOn(): void
+    public function testDesktopAgentsShipSwitchedOnAndTheEnvironmentCanTurnThemOff(): void
     {
-        $this->assertFalse((new RemoteConfig())->featureDesktopAgent);
+        $this->assertTrue((new RemoteConfig())->featureDesktopAgent);
 
-        $_ENV['remote.allowDesktopAgent'] = 'true';
+        $_ENV['remote.allowDesktopAgent'] = 'false';
 
         try {
-            $this->assertTrue((new RemoteConfig())->featureDesktopAgent);
+            $this->assertFalse((new RemoteConfig())->featureDesktopAgent);
         } finally {
             unset($_ENV['remote.allowDesktopAgent']);
         }
 
         $this->assertMatchesRegularExpression(
-            '/^remote\.allowDesktopAgent = false$/m',
+            '/^remote\.allowDesktopAgent = true$/m',
             (string) file_get_contents(dirname(__DIR__, 2) . '/.env.example'),
-            'An api/.env copied from .env.example must not switch desktop agents on.',
+            'An api/.env copied from .env.example offers the released Windows app.',
         );
     }
 

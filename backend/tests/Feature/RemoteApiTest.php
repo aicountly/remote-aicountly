@@ -9,6 +9,7 @@ use App\Domain\Auth\PortalClient;
 use App\Domain\Auth\RemoteIdentity;
 use App\Domain\Policy\PermissionCatalog;
 use CodeIgniter\Test\FeatureTestTrait;
+use Config\Remote as RemoteConfig;
 use Config\Services;
 use Tests\Support\FakeIdentityResolver;
 use Tests\Support\RemoteTestCase;
@@ -123,6 +124,34 @@ final class RemoteApiTest extends RemoteTestCase
         $this->assertSame('ABC Private Limited', $body['companies'][0]['name']);
         $this->assertTrue($body['policy']['permissions'][PermissionCatalog::SESSION_CREATE]);
         $this->assertArrayHasKey('signallingConfigured', $body['realtime']);
+    }
+
+    /**
+     * The web offers the Windows app download, or says it is coming soon, from
+     * this flag alone: it has to follow remote.allowDesktopAgent both ways.
+     */
+    public function testBootstrapSaysWhetherTheWindowsAppIsOffered(): void
+    {
+        $identity = $this->makeIdentity('Rahul Gupta');
+        $headers  = $this->asUser($identity);
+
+        $on = json_decode($this->withHeaders($headers)->get('v1/remote/bootstrap')->getJSON(), true)['data'];
+        $this->assertTrue($on['features']['desktopAgent']);
+
+        $this->configureRemote(static function (RemoteConfig $config): void {
+            $config->contextSecret       = 'test-context-secret';
+            $config->signallingSecret    = 'test-signalling-secret';
+            $config->featureDesktopAgent = false;
+        });
+
+        $off = $this->withHeaders($headers)->get('v1/remote/bootstrap');
+        $off->assertStatus(200);
+        $body = json_decode($off->getJSON(), true)['data'];
+
+        $this->assertFalse($body['features']['desktopAgent']);
+        // Off means off everywhere: the policy the same response carries offers no desktop permission either.
+        $this->assertFalse($body['policy']['permissions'][PermissionCatalog::DEVICE_ENROL]);
+        $this->assertFalse($body['policy']['permissions'][PermissionCatalog::CONTROL_ACCEPT]);
     }
 
     public function testEffectivePolicyIsRefusedForACompanyTheUserIsNotIn(): void

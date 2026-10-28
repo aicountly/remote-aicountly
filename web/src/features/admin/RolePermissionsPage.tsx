@@ -3,7 +3,7 @@ import { ShieldAlert } from 'lucide-react'
 
 import { fetchRolePermissions, updateRolePermissions } from '../../services/api/remote'
 import { RemoteApiError } from '../../services/api/client'
-import { useRemote } from '../../app/RemoteProvider'
+import { useDesktopAgentEnabled, useRemote } from '../../app/RemoteProvider'
 import EmptyState from '../../components/ui/EmptyState'
 import RestrictionNotice from '../../components/ui/RestrictionNotice'
 import { PERMISSIONS } from '../../types/remote'
@@ -31,6 +31,7 @@ interface RoleRule {
 
 export default function RolePermissionsPage() {
   const { companyId, scopeType, can, policy } = useRemote()
+  const desktopAgent = useDesktopAgentEnabled()
 
   const [roles, setRoles] = useState<Record<string, Record<string, RoleRule>>>({})
   const [catalog, setCatalog] = useState<Record<string, string[]>>({})
@@ -251,7 +252,7 @@ export default function RolePermissionsPage() {
                       return (
                         <li key={permission} className="permission-row">
                           <div className="permission-row__label">
-                            <span className="permission-row__name">{describePermission(permission)}</span>
+                            <span className="permission-row__name">{describePermission(permission, desktopAgent)}</span>
 
                             {rule?.inheritedFromPlatform ? (
                               <span className="permission-row__blocked">
@@ -263,7 +264,7 @@ export default function RolePermissionsPage() {
 
                           <div className="permission-row__control">
                             <label className="sr-only" htmlFor={`role-perm-${permission}`}>
-                              {describePermission(permission)}
+                              {describePermission(permission, desktopAgent)}
                             </label>
                             <select
                               id={`role-perm-${permission}`}

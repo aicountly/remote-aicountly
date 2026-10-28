@@ -310,6 +310,12 @@ export interface FeatureFlags {
   safeShare: boolean;
   microphone: boolean;
   multiViewer: boolean;
+  /**
+   * AICOUNTLY Remote for Windows is offered (`remote.allowDesktopAgent`): where
+   * the web needs the app it links to the download rather than saying it is
+   * coming soon. Absent from an older API, which counts as off.
+   */
+  desktopAgent?: boolean;
   fileTransferMaxBytes: number;
 }
 
