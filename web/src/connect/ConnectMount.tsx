@@ -53,10 +53,10 @@ export function isLiveSessionPath(pathname: string): boolean {
  * is exactly as it was, with no launcher and at most one console warning.
  */
 export function ConnectMount() {
-  const { status, bootstrap, scopeType, companyId } = useRemote()
+  const { status, scopeType, companyId } = useRemote()
   const { pathname } = useLocation()
 
-  const scope = connectScopeFrom(scopeType, companyId, bootstrap?.companies)
+  const scope = connectScopeFrom(scopeType, companyId)
   const suspended = isLiveSessionPath(pathname)
 
   // Start once the bootstrap has settled, so the first init() already carries
@@ -75,7 +75,7 @@ export function ConnectMount() {
   })
 
   const active = settled && !suspended
-  const scopeKey = `${scope.companyId}:${scope.fyId}:${scope.boId}`
+  const scopeKey = `${scope.companyId}`
   /** The scope the widget has now — init() or the last update(). */
   const sent = useRef<string | null>(null)
 

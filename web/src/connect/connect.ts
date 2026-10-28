@@ -14,7 +14,7 @@
  * 'unavailable' and there is simply no launcher.
  */
 
-import type { CompanySummary, ScopeType } from '../types/remote'
+import type { ScopeType } from '../types/remote'
 import { loadConnect } from './loader'
 import type { ConnectApi, ConnectInitOptions, ConnectScopePatch, ConnectUpdate } from './types'
 
@@ -130,52 +130,30 @@ function positiveId(value: unknown): number | null {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null
 }
 
-function branchId(value: unknown): number | null {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null
-}
-
 /**
- * Remote's scope as Connect takes it.
+ * Remote's scope as Connect takes it: the company only.
  *
  * Remote's organisation comes from the bootstrap's `activeScope` (and the
  * person's later choice in the header), not from cmp/fy/bo query parameters.
- * Only a COMPANY scope carries a company; its financial year and branch are
- * passed only when Remote knows them (the company's entry in the bootstrap).
- * Personal (and AICOUNTLY Support) scope has no company: Pulse then answers
- * without one.
+ * Only a COMPANY scope carries a company. Personal (and AICOUNTLY Support)
+ * scope has no company: Pulse then answers without one.
  *
- * Keys that are unknown are null here: init() leaves them out
- * ({@link initialScope}), update() sends them so a previous company's year and
- * branch are cleared rather than carried over.
+ * No financial year or branch is passed: Remote has none of its own. The ones a
+ * company's bootstrap entry carries are left from the person's last launch from
+ * another product, which they can neither see nor change here, and would have
+ * Pulse answer for them. Without a year Pulse answers for the company's current
+ * financial year.
  */
-export function connectScopeFrom(
-  scopeType: ScopeType,
-  companyId: number | null,
-  companies: readonly CompanySummary[] = [],
-): { companyId: number | null; fyId: number | null; boId: number | null } {
-  const company = scopeType === 'COMPANY' ? positiveId(companyId) : null
-  if (company === null) return { companyId: null, fyId: null, boId: null }
-
-  const entry = companies.find((candidate) => candidate.companyId === company)
-  return {
-    companyId: company,
-    fyId: positiveId(entry?.financialYearId),
-    boId: branchId(entry?.branchId),
-  }
+export function connectScopeFrom(scopeType: ScopeType, companyId: number | null): { companyId: number | null } {
+  return { companyId: scopeType === 'COMPANY' ? positiveId(companyId) : null }
 }
 
-/** The scope for init(): only the keys Remote actually knows. */
+/** The scope for init(): the company, when there is one. */
 export function initialScope(scope: ReturnType<typeof connectScopeFrom>): ConnectScopePatch {
-  const out: ConnectScopePatch = {}
-  if (scope.companyId !== null) {
-    out.companyId = scope.companyId
-    if (scope.fyId !== null) out.fyId = scope.fyId
-    if (scope.boId !== null) out.boId = scope.boId
-  }
-  return out
+  return scope.companyId !== null ? { companyId: scope.companyId } : {}
 }
 
-/** The scope for update(): every key, so a company switch clears what it does not replace. */
+/** The scope for update(): every key — no year, no branch — so a switch never leaves one set. */
 export function scopeUpdate(scope: ReturnType<typeof connectScopeFrom>): ConnectScopePatch {
-  return { companyId: scope.companyId, fyId: scope.fyId, boId: scope.boId ?? 0 }
+  return { companyId: scope.companyId, fyId: null, boId: 0 }
 }

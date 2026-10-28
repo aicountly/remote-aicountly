@@ -112,22 +112,15 @@ describe('the lifecycle', () => {
     expect(options).not.toHaveProperty('boId')
   })
 
-  it('an organisation scope passes its company, with year and branch only when known', async () => {
+  it("an organisation scope passes its company only, never the year and branch in the company's bootstrap entry", async () => {
+    // Acme's entry carries financial year 5 and branch 2, left from a launch in another product.
     remote = { ...remote, scopeType: 'COMPANY', companyId: 77 }
     loaded = fakeApi()
     render(shell())
     await settle()
-    expect(initOptions(loaded)).toMatchObject({ companyId: 77, fyId: 5, boId: 2 })
 
-    cleanup()
-    connect.stopConnect()
-    remote = { ...remote, scopeType: 'COMPANY', companyId: 78 }
-    const second = fakeApi()
-    loaded = second
-    render(shell())
-    await settle()
-    const options = initOptions(second)
-    expect(options.companyId).toBe(78)
+    const options = initOptions(loaded)
+    expect(options.companyId).toBe(77)
     expect(options).not.toHaveProperty('fyId')
     expect(options).not.toHaveProperty('boId')
   })
@@ -142,11 +135,11 @@ describe('the lifecycle', () => {
     remote = { status: 'ready', scopeType: 'COMPANY', companyId: 77, bootstrap: { companies } }
     view.rerender(shell())
     await settle()
-    expect(initOptions(loaded)).toMatchObject({ companyId: 77, fyId: 5, boId: 2 })
+    expect(initOptions(loaded)).toMatchObject({ companyId: 77 })
     expect(loaded.update).not.toHaveBeenCalled()
   })
 
-  it('passes an organisation switch on with update(), clearing what the new scope does not know', async () => {
+  it('passes an organisation switch on with update(): the company, no year and no branch', async () => {
     remote = { ...remote, scopeType: 'COMPANY', companyId: 77 }
     loaded = fakeApi()
     const view = render(shell())
@@ -163,10 +156,16 @@ describe('the lifecycle', () => {
     await settle()
     expect(loaded.update).toHaveBeenLastCalledWith({ companyId: null, fyId: null, boId: 0 })
 
+    // Back to Acme: still no year or branch from its bootstrap entry.
+    remote = { ...remote, scopeType: 'COMPANY', companyId: 77 }
+    view.rerender(shell())
+    await settle()
+    expect(loaded.update).toHaveBeenLastCalledWith({ companyId: 77, fyId: null, boId: 0 })
+
     // A re-render with the same scope is not a change.
     view.rerender(shell())
     await settle()
-    expect(loaded.update).toHaveBeenCalledTimes(2)
+    expect(loaded.update).toHaveBeenCalledTimes(3)
     expect(loaded.init).toHaveBeenCalledTimes(1)
   })
 
@@ -176,12 +175,12 @@ describe('the lifecycle', () => {
     vi.mocked(loadConnect).mockImplementationOnce(() => new Promise((resolve) => (release = resolve)))
 
     const start = connect.startConnect('https://connect.example.test', { getSesKey: async () => null, product: 'remote' })
-    connect.updateConnect({ companyId: 12, fyId: 3, boId: 0 })
+    connect.updateConnect({ companyId: 12, fyId: null, boId: 0 })
     expect(api.update).not.toHaveBeenCalled()
     release(api)
 
     await expect(start).resolves.toBe(true)
-    expect(initOptions(api)).toMatchObject({ companyId: 12, fyId: 3, boId: 0 })
+    expect(initOptions(api)).toMatchObject({ companyId: 12, fyId: null, boId: 0 })
   })
 
   it('destroys the widget on sign-out (the shell unmounting)', async () => {
@@ -302,11 +301,17 @@ describe('a Connect that is not there', () => {
 })
 
 describe('connectScopeFrom', () => {
-  it('only a COMPANY scope carries a company', () => {
-    expect(connect.connectScopeFrom('PERSONAL', 77, companies)).toEqual({ companyId: null, fyId: null, boId: null })
-    expect(connect.connectScopeFrom('AICOUNTLY_SUPPORT', 77, companies)).toEqual({ companyId: null, fyId: null, boId: null })
-    expect(connect.connectScopeFrom('COMPANY', null, companies)).toEqual({ companyId: null, fyId: null, boId: null })
-    expect(connect.connectScopeFrom('COMPANY', 77, companies)).toEqual({ companyId: 77, fyId: 5, boId: 2 })
-    expect(connect.connectScopeFrom('COMPANY', 99, companies)).toEqual({ companyId: 99, fyId: null, boId: null })
+  it('only a COMPANY scope carries a company, and it carries nothing else', () => {
+    expect(connect.connectScopeFrom('PERSONAL', 77)).toEqual({ companyId: null })
+    expect(connect.connectScopeFrom('AICOUNTLY_SUPPORT', 77)).toEqual({ companyId: null })
+    expect(connect.connectScopeFrom('COMPANY', null)).toEqual({ companyId: null })
+    expect(connect.connectScopeFrom('COMPANY', 77)).toEqual({ companyId: 77 })
+  })
+
+  it('init() gets the company alone; update() also clears any year and branch', () => {
+    expect(connect.initialScope({ companyId: 77 })).toEqual({ companyId: 77 })
+    expect(connect.initialScope({ companyId: null })).toEqual({})
+    expect(connect.scopeUpdate({ companyId: 77 })).toEqual({ companyId: 77, fyId: null, boId: 0 })
+    expect(connect.scopeUpdate({ companyId: null })).toEqual({ companyId: null, fyId: null, boId: 0 })
   })
 })
