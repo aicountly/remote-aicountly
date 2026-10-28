@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, describe, it } from 'node:test'
 
-import { canonicalName, classify, labelFor, makeManifest, parseSums } from './make-manifest.mjs'
+import { canonicalName, classify, labelFor, makeManifest, parseSums, peIsSigned } from './make-manifest.mjs'
 
 const made = []
 
@@ -35,6 +35,51 @@ const sha = (body) => createHash('sha256').update(body).digest('hex')
 after(async () => {
   const { rm } = await import('node:fs/promises')
   await Promise.all(made.map((dir) => rm(dir, { recursive: true, force: true })))
+})
+
+/**
+ * A PE just real enough to be read: DOS stub, PE signature, an optional
+ * header of the given flavour, and a certificate-table entry whose size is
+ * the only thing under test.
+ */
+function fakePe({ certSize = 0, plus = true } = {}) {
+  const buf = Buffer.alloc(512)
+  buf.write('MZ', 0, 'ascii')
+  buf.writeUInt32LE(0x80, 0x3c)
+  buf.writeUInt32LE(0x00004550, 0x80) // "PE\0\0"
+  const optional = 0x80 + 24
+  buf.writeUInt16LE(plus ? 0x20b : 0x10b, optional)
+  const directories = optional + (plus ? 112 : 96)
+  const entry = directories + 4 * 8 // entry 4: the certificate table
+  buf.writeUInt32LE(certSize === 0 ? 0 : 0x1000, entry) // address
+  buf.writeUInt32LE(certSize, entry + 4) // size
+  return buf
+}
+
+describe('peIsSigned', () => {
+  it('reads a signature out of the certificate table, in either PE flavour', () => {
+    for (const plus of [true, false]) {
+      assert.equal(peIsSigned(fakePe({ certSize: 9000, plus })), true, `plus=${plus}`)
+      assert.equal(peIsSigned(fakePe({ certSize: 0, plus })), false, `plus=${plus}`)
+    }
+  })
+
+  /**
+   * null rather than false: a .dmg is not unsigned just because it is not a
+   * PE, and the caller has to be able to tell the two apart.
+   */
+  it('says nothing about bytes that are not a PE', () => {
+    assert.equal(peIsSigned(Buffer.from('not an executable at all, really')), null)
+    assert.equal(peIsSigned(Buffer.alloc(0)), null)
+    assert.equal(peIsSigned(Buffer.from('MZ')), null, 'a DOS header and nothing else')
+
+    const truncated = fakePe({ certSize: 9000 }).subarray(0, 0x90)
+    assert.equal(peIsSigned(truncated), null, 'headers that stop early')
+
+    const notPe = fakePe()
+    notPe.writeUInt32LE(0xdeadbeef, 0x80)
+    assert.equal(peIsSigned(notPe), null, 'MZ but no PE signature')
+  })
 })
 
 describe('classify', () => {
@@ -290,6 +335,56 @@ describe('makeManifest', () => {
       makeManifest({ dir, product: 'remote', version: '1.0.0', channel: 'production', signed: true }),
       /disagree about/,
     )
+  })
+
+  /**
+   * The field that decides whether the website offers a build at all, and
+   * whether it warns beside it. A caller that is wrong about it must not be
+   * able to make an unsigned remote-access agent look signed.
+   */
+  it('reads signing off the Windows binary, not off what it was told', async () => {
+    const dir = await release({})
+    await writeFile(join(dir, 'Remote_1.0.0_x64-setup.exe'), fakePe({ certSize: 0 }))
+
+    const manifest = await makeManifest({
+      dir,
+      product: 'remote',
+      version: '1.0.0',
+      channel: 'production',
+      signed: true,
+    })
+
+    assert.equal(manifest.files[0].signed, false, 'the file has no certificate table')
+  })
+
+  it('believes a signed binary for the same reason', async () => {
+    const dir = await release({})
+    await writeFile(join(dir, 'Remote_1.0.0_x64-setup.exe'), fakePe({ certSize: 9000 }))
+
+    const manifest = await makeManifest({
+      dir,
+      product: 'remote',
+      version: '1.0.0',
+      channel: 'sandbox',
+      signed: false,
+    })
+
+    assert.equal(manifest.files[0].signed, true)
+  })
+
+  /** A .dmg cannot answer for itself, so the caller's word stands. */
+  it('takes the caller at their word for a disk image', async () => {
+    const dir = await release({ 'Remote_1.0.0_aarch64.dmg': 'disk image bytes' })
+
+    const manifest = await makeManifest({
+      dir,
+      product: 'remote',
+      version: '1.0.0',
+      channel: 'production',
+      signed: true,
+    })
+
+    assert.equal(manifest.files[0].signed, true)
   })
 
   it('refuses a directory with nothing installable in it', async () => {

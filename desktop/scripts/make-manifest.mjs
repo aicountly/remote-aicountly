@@ -18,6 +18,12 @@
  * Authenticode signs a file's contents, not its name, so a rename costs
  * nothing.
  *
+ * `signed` is read from a Windows binary rather than taken on trust: it
+ * decides whether the website offers a build at all and whether it prints a
+ * SmartScreen warning beside it, so it must not come from a flag somebody can
+ * get wrong. A .dmg cannot answer for itself, so there the caller's word
+ * stands.
+ *
  * Hashes are computed from the files themselves rather than read out of a
  * `SHA256SUMS` file. If one is present it is cross-checked and a
  * disagreement is fatal: one of the two is describing a file that is not
@@ -37,7 +43,7 @@
 
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 
 /** What a person downloads, and what is only ever for an updater. */
@@ -47,7 +53,7 @@ const INSTALLABLE = new Set(['installer', 'disk-image'])
 const NOT_A_BUILD = [
   /^SHA256SUMS.*\.txt$/i,
   /^manifest\.json$/i,
-  /^UNSIGNED-/i,
+  /^UNSIGNED/i,
   /^INSTALL\.txt$/i,
   /\.blockmap$/i,
   /\.sig$/i,
@@ -148,6 +154,57 @@ export function canonicalName({ product, version, platform, arch, kind }) {
   throw new Error(`No published naming is defined for a ${platform} ${kind}.`)
 }
 
+/**
+ * Whether a Windows binary carries an Authenticode signature, read from the
+ * file rather than taken on trust.
+ *
+ * `signed` decides whether the website offers a build at all and whether it
+ * prints a SmartScreen warning beside it, so it is the one field that must
+ * not come from a flag somebody can get wrong or a marker file that can go
+ * missing. A signature lives in the PE certificate table -- data directory
+ * entry 4 -- and a non-zero size there is the whole question.
+ *
+ * Returns null when the bytes are not a PE at all, so the caller can fall
+ * back rather than silently report "unsigned" for a .dmg.
+ *
+ * @param {Buffer} head the first few KB of the file; headers live at the front
+ * @returns {boolean | null}
+ */
+export function peIsSigned(head) {
+  // DOS header: "MZ", with the PE offset at 0x3C.
+  if (head.length < 0x40 || head.readUInt16LE(0) !== 0x5a4d) {
+    return null
+  }
+
+  const peOffset = head.readUInt32LE(0x3c)
+  if (peOffset + 24 > head.length || head.readUInt32LE(peOffset) !== 0x00004550) {
+    return null
+  }
+
+  // COFF header is 20 bytes after the "PE\0\0" signature; the optional
+  // header follows, and its magic says how far in the data directory sits.
+  const optional = peOffset + 24
+  if (optional + 2 > head.length) {
+    return null
+  }
+
+  const magic = head.readUInt16LE(optional)
+  const directories =
+    magic === 0x20b ? optional + 112 : magic === 0x10b ? optional + 96 : null
+
+  if (directories === null) {
+    return null
+  }
+
+  // Entry 4 is the certificate table: 4 bytes of address, then 4 of size.
+  const entry = directories + 4 * 8
+  if (entry + 8 > head.length) {
+    return null
+  }
+
+  return head.readUInt32LE(entry + 4) > 0
+}
+
 /** SHA-256 of a file, streamed, because these are over a hundred megabytes. */
 async function sha256(path) {
   const hash = createHash('sha256')
@@ -244,6 +301,24 @@ export async function makeManifest({ dir, product, version, channel, signed }) {
       await rename(from, to)
     }
 
+    // Windows answers for itself. Everything else -- a .dmg, where only
+    // Apple's tools can say -- is the caller's word, which is why the caller
+    // has to establish it before it says so.
+    let fileSigned = signed
+    if (what.platform === 'windows') {
+      const handle = await open(to, 'r')
+      try {
+        const head = Buffer.alloc(4096)
+        const { bytesRead } = await handle.read(head, 0, head.length, 0)
+        const fromFile = peIsSigned(head.subarray(0, bytesRead))
+        if (fromFile !== null) {
+          fileSigned = fromFile
+        }
+      } finally {
+        await handle.close()
+      }
+    }
+
     files.push({
       source: name,
       platform: what.platform,
@@ -253,7 +328,7 @@ export async function makeManifest({ dir, product, version, channel, signed }) {
       file: published,
       size: (await stat(to)).size,
       sha256: digest,
-      signed,
+      signed: fileSigned,
     })
   }
 

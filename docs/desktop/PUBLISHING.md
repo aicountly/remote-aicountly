@@ -195,6 +195,42 @@ refuses, correctly, because the sums disagree with the files. So macOS writes
 finds, and what it uploads is one `SHA256SUMS.txt` written under the
 published names.
 
+## Publishing without a certificate
+
+Both release workflows take `allow_unsigned`. It exists for one situation —
+a certificate has been applied for and has not arrived — and it is the same
+thing Connect does today, which is why `aicountly.com` offers an unsigned
+Connect build with its warning described rather than withholding it.
+
+What it changes:
+
+* Windows skips the signing-method check and builds without `-Sign`.
+  SmartScreen shows "Windows protected your PC" on first run.
+* macOS builds ad-hoc signed, with no notarisation submitted. Gatekeeper
+  blocks the first launch; the user allows it from System Settings → Privacy
+  & Security.
+* Each writes `UNSIGNED.txt` beside the installers, saying plainly what is
+  missing and that AICOUNTLY Remote installs a service that runs as the
+  machine — so the checksum matters more here than it would for an app you
+  merely open.
+* The GitHub release body says it too, so a link to the release cannot be
+  mistaken for a signed one.
+
+The manifest does **not** take anyone's word for this. `make-manifest.mjs`
+reads the Windows binary's own certificate table — data directory entry 4 —
+and reports `signed` from the file. A build that failed to sign cannot be
+published as though it had, whatever flag was passed. A `.dmg` cannot answer
+for itself, so there the workflow's word stands.
+
+The download page then shows the warning beside the button, with the SHA-256
+under it. `includes/remote-downloads.php` in `aicountly/aicountly-com` carries
+the reasoning and the instruction to narrow the rule again once a certificate
+exists.
+
+**This is a stopgap, not a position.** An unsigned remote-access agent asks
+people to click past exactly the dialog that would warn them about an
+impersonation of it. Replace it with a signed build as soon as one exists.
+
 ## Publishing is not releasing
 
 A published manifest is not a visible download. `aicountly.com` has its own
