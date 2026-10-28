@@ -235,12 +235,14 @@ class Remote extends BaseConfig
      * it off, no device can enrol and no device capability resolves true, even
      * for an organisation whose policy and plan both permit it (§67).
      *
-     * Off by default: Remote launches on the web only, and with this on every
-     * plan that includes desktop devices is offered Computers and remote
-     * control for an app nobody can install yet. `remote.allowDesktopAgent =
-     * true` switches it on when the Windows app is released.
+     * On by default: AICOUNTLY Remote for Windows is released, and offered at
+     * https://aicountly.com/remote. `remote.allowDesktopAgent = false` still
+     * hides every desktop feature — Computers, remote control, unattended
+     * access — and the web then says the Windows app is coming soon. Bootstrap
+     * reports it as `features.desktopAgent`, which is how the web knows which
+     * of the two to say.
      */
-    public bool $featureDesktopAgent = false;
+    public bool $featureDesktopAgent = true;
 
     /** Conservative V1 ceiling for browser-to-browser file transfer (§36). */
     public int $fileTransferMaxBytes = 25 * 1024 * 1024;

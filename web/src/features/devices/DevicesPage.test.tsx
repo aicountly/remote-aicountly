@@ -5,19 +5,22 @@ import { MemoryRouter } from 'react-router-dom'
 import { describePermission } from '../../utils/format'
 
 /**
- * Remote launches on the web first. AICOUNTLY Remote for Windows is not
- * released, so the Computers page must not read as an instruction to install
- * it, and must not point at a policy switch the Remote policy page does not
- * have.
+ * The Computers page says how to get AICOUNTLY Remote for Windows while the
+ * deployment offers it (bootstrap `features.desktopAgent`, the API's
+ * remote.allowDesktopAgent), and that it is coming soon while it is switched
+ * off — never an instruction to install an app nobody can download, and never
+ * a pointer at a policy switch the Remote policy page does not have.
  */
 
 const remote = vi.hoisted(() => ({
   scopeType: 'COMPANY' as 'COMPANY' | 'PERSONAL',
   companyId: 481 as number | null,
+  desktopAgent: false,
 }))
 
 vi.mock('../../app/RemoteProvider', () => ({
   useRemote: () => ({ scopeType: remote.scopeType, companyId: remote.companyId, can: () => false }),
+  useDesktopAgentEnabled: () => remote.desktopAgent,
 }))
 
 const listing = vi.hoisted(() => ({ devices: [] as unknown[] }))
@@ -44,7 +47,12 @@ vi.mock('../../services/api/remote', () => ({
 
 const { default: DevicesPage } = await import('./DevicesPage')
 
-function renderPage() {
+function renderPage({ scopeType = 'COMPANY', desktopAgent = false }: { scopeType?: 'COMPANY' | 'PERSONAL'; desktopAgent?: boolean } = {}) {
+  remote.scopeType = scopeType
+  remote.companyId = scopeType === 'COMPANY' ? 481 : null
+  remote.desktopAgent = desktopAgent
+  listing.devices = []
+
   return render(
     <MemoryRouter>
       <DevicesPage />
@@ -52,40 +60,73 @@ function renderPage() {
   )
 }
 
-describe('the Computers page before the Windows app is released', () => {
+const DOWNLOAD = /^Download AICOUNTLY Remote for Windows/
+
+describe('the Computers page with the desktop agent switched off', () => {
   it('says the app is coming soon, and what works today, when nothing is registered', async () => {
-    remote.scopeType = 'COMPANY'
-    remote.companyId = 481
-    listing.devices = []
     renderPage()
 
     expect(await screen.findByText('AICOUNTLY Remote for Windows is coming soon')).toBeInTheDocument()
     expect(screen.getByText(/Remote works in your browser: share your screen/)).toBeInTheDocument()
     expect(screen.queryByText(/^Install AICOUNTLY Remote/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: DOWNLOAD })).not.toBeInTheDocument()
     // No switch for remote control exists on the Remote policy page; nothing sends an administrator there for one.
     expect(screen.queryByText(/change that in Remote policy/)).not.toBeInTheDocument()
   })
 
   it('says so in a personal scope too', () => {
-    remote.scopeType = 'PERSONAL'
-    remote.companyId = null
-    renderPage()
+    renderPage({ scopeType: 'PERSONAL' })
 
     expect(screen.getByText('AICOUNTLY Remote for Windows is coming soon')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: DOWNLOAD })).not.toBeInTheDocument()
+  })
+})
+
+describe('the Computers page with the desktop agent on', () => {
+  it('says how to get the Windows app, in a new tab, when nothing is registered', async () => {
+    renderPage({ desktopAgent: true })
+
+    const link = await screen.findByRole('link', { name: DOWNLOAD })
+    expect(link).toHaveAttribute('href', 'https://aicountly.com/remote')
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'))
+    expect(screen.getByText('Get AICOUNTLY Remote for Windows')).toBeInTheDocument()
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/not available to download/i)).not.toBeInTheDocument()
+  })
+
+  it('says so in a personal scope too', () => {
+    renderPage({ scopeType: 'PERSONAL', desktopAgent: true })
+
+    expect(screen.getByRole('link', { name: DOWNLOAD })).toHaveAttribute('href', 'https://aicountly.com/remote')
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
   })
 })
 
 describe('permission names', () => {
-  it('names the desktop permissions, and says they need the unreleased Windows app', () => {
-    for (const permission of [
-      'remote.control.request',
-      'remote.control.accept',
-      'remote.device.enrol',
-      'remote.device.manage',
-      'remote.unattended.access',
-    ]) {
+  const DESKTOP = [
+    'remote.control.request',
+    'remote.control.accept',
+    'remote.device.enrol',
+    'remote.device.manage',
+    'remote.unattended.access',
+  ]
+
+  it('names the desktop permissions, and says the Windows app is coming soon while it is switched off', () => {
+    for (const permission of DESKTOP) {
       expect(describePermission(permission)).not.toBe(permission)
       expect(describePermission(permission)).toMatch(/Windows app, coming soon/)
+      expect(describePermission(permission, false)).toBe(describePermission(permission))
     }
+  })
+
+  it('says they need the Windows app, and nothing about coming soon, while it is offered', () => {
+    for (const permission of DESKTOP) {
+      expect(describePermission(permission, true)).not.toBe(permission)
+      expect(describePermission(permission, true)).toMatch(/\(needs the Windows app\)$/)
+      expect(describePermission(permission, true)).not.toMatch(/coming soon/i)
+    }
+    // Nothing else changes with the switch.
+    expect(describePermission('remote.screen.share', true)).toBe(describePermission('remote.screen.share'))
   })
 })
