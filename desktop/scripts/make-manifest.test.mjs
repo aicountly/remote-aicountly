@@ -122,10 +122,11 @@ describe('canonicalName', () => {
 
 describe('labelFor', () => {
   it('names a build the way somebody choosing between two would', () => {
-    assert.equal(labelFor('windows', 'x64'), 'Windows 10 and 11, 64-bit')
-    assert.equal(labelFor('windows', 'arm64'), 'Windows on Arm')
-    assert.equal(labelFor('macos', 'arm64'), 'Apple Silicon')
+    assert.equal(labelFor('windows', 'x64'), '64-bit (most PCs)')
+    assert.equal(labelFor('windows', 'arm64'), 'ARM (Snapdragon, Surface Pro X)')
+    assert.equal(labelFor('macos', 'arm64'), 'Apple Silicon (M1 and later)')
     assert.equal(labelFor('macos', 'x64'), 'Intel')
+    assert.equal(labelFor('linux', 'x64'), 'x64', 'an unlabelled pair falls back to the architecture')
   })
 })
 
@@ -169,7 +170,7 @@ describe('makeManifest', () => {
         platform: 'windows',
         arch: 'x64',
         kind: 'installer',
-        label: 'Windows 10 and 11, 64-bit',
+        label: '64-bit (most PCs)',
         file: 'Aicountly-Remote-1.0.0-x64-Setup.exe',
         size: body.length,
         sha256: sha(body),
@@ -237,6 +238,57 @@ describe('makeManifest', () => {
     await assert.rejects(
       makeManifest({ dir, product: 'remote', version: '1.0.0', channel: 'production', signed: true }),
       /both be published as/,
+    )
+  })
+
+  /**
+   * Windows and macOS are built by separate workflows that attach to the same
+   * GitHub release, so each brings its own sums file. Both are read, and both
+   * are replaced by one written under the published names.
+   */
+  it('reads every checksum file, and leaves one behind under the published names', async () => {
+    const win = 'windows installer bytes'
+    const mac = 'mac disk image bytes'
+    const dir = await release({
+      'AICOUNTLY Remote_1.0.0_x64-setup.exe': win,
+      'AICOUNTLY Remote_1.0.0_aarch64.dmg': mac,
+      'SHA256SUMS.txt': `${sha(win)}  AICOUNTLY Remote_1.0.0_x64-setup.exe\n`,
+      'SHA256SUMS-macos.txt': `${sha(mac)}  AICOUNTLY Remote_1.0.0_aarch64.dmg\n`,
+    })
+
+    const manifest = await makeManifest({
+      dir,
+      product: 'remote',
+      version: '1.0.0',
+      channel: 'production',
+      signed: true,
+    })
+
+    assert.deepEqual(
+      manifest.files.map((file) => file.file),
+      ['Aicountly-Remote-1.0.0-x64-Setup.exe', 'Aicountly-Remote-1.0.0-arm64.dmg'],
+    )
+
+    const present = await readdir(dir)
+    assert.ok(!present.includes('SHA256SUMS-macos.txt'), 'the per-platform sums file is gone')
+    assert.equal(
+      await readFile(join(dir, 'SHA256SUMS.txt'), 'utf8'),
+      `${sha(win)}  Aicountly-Remote-1.0.0-x64-Setup.exe\n` +
+        `${sha(mac)}  Aicountly-Remote-1.0.0-arm64.dmg\n`,
+    )
+  })
+
+  it('refuses to publish when two checksum files disagree about one file', async () => {
+    const body = 'bytes'
+    const dir = await release({
+      'Remote_1.0.0_x64-setup.exe': body,
+      'SHA256SUMS.txt': `${sha(body)}  Remote_1.0.0_x64-setup.exe\n`,
+      'SHA256SUMS-macos.txt': `${'e'.repeat(64)}  Remote_1.0.0_x64-setup.exe\n`,
+    })
+
+    await assert.rejects(
+      makeManifest({ dir, product: 'remote', version: '1.0.0', channel: 'production', signed: true }),
+      /disagree about/,
     )
   })
 

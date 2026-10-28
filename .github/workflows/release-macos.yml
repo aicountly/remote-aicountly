@@ -1,0 +1,326 @@
+# Build, sign and notarise AICOUNTLY Remote for macOS.
+#
+# MANUAL ONLY, the same as the Windows release: merging something must never
+# produce a build anybody can be handed.
+#
+# This is the counterpart of `build-macos-test.yml`, and the difference is the
+# whole point of it. That one makes a disk image for somebody who already
+# knows what it is and is willing to run `xattr` at it. This one makes a disk
+# image a stranger can download from a website, which means two things that
+# are not optional on macOS:
+#
+#   * signed with a **Developer ID Application** certificate, not a
+#     Development one. A Development certificate is for machines in your own
+#     provisioning profile; Gatekeeper refuses it from a download.
+#   * **notarised** by Apple and stapled. Without the staple, the first launch
+#     on a machine that has never seen the app shows "cannot be opened because
+#     the developer cannot be verified" and offers no way past it — not a
+#     warning with a Run anyway, as on Windows, but a refusal.
+#
+# So an unsigned or un-notarised macOS build is not published at all: the
+# website refuses it (`REMOTE_DOWNLOAD_REQUIRES_SIGNING` in
+# aicountly/aicountly-com includes both platforms) and this workflow refuses
+# to pretend otherwise.
+#
+# The release tag is the same one release-windows.yml uses, deliberately, so
+# one tag carries every platform of a version and `publish-downloads.yml` can
+# collect them in a single fetch. Whichever workflow runs second adds its
+# artefacts to the release the first one created.
+name: Release AICOUNTLY Remote for macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. 1.0.0. Must match desktop/Cargo.toml.'
+        required: true
+        type: string
+      channel:
+        description: 'Release channel'
+        required: true
+        type: choice
+        default: beta
+        options:
+          - beta
+          - production
+
+concurrency:
+  group: release-macos-${{ inputs.channel }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # The same gate the Windows release uses: the full suite on this exact
+  # commit, as a reusable workflow, with the build `needs:`ing it.
+  verify:
+    name: Verify (Desktop CI)
+    uses: ./.github/workflows/desktop-ci.yml
+
+  build:
+    needs: verify
+    name: Build ${{ inputs.version }} (${{ inputs.channel }})
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    # Every credential comes from the protected environment. None has a
+    # default and none is a workflow input, so a fork has nothing to sign with.
+    environment: macos-release
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Check the macOS companion is in this build
+        run: |
+          # Without the macOS providers every platform call returns
+          # Unsupported: the app would install and do nothing.
+          if ! grep -rqs 'supports_companion' desktop/src-tauri/src/platform/; then
+            echo "::error::This ref has no macOS control-companion support (desktop/src-tauri/src/platform/*: supports_companion)."
+            exit 1
+          fi
+
+      # The version is one authoritative value in desktop/Cargo.toml and the
+      # input has to match it, so a release cannot be tagged 1.2.0 and contain
+      # a binary reporting 1.1.0.
+      - name: Check the version matches the workspace
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          requested="${REQUESTED_VERSION}"
+
+          if ! printf '%s' "${requested}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::The version input must look like 1.2.3 or 1.2.3-beta.1."
+            exit 1
+          fi
+
+          workspace=$(grep -m1 -E '^version[[:space:]]*=' desktop/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          conf=$(node -p "require('./desktop/src-tauri/tauri.conf.json').version")
+          pkg=$(node -p "require('./desktop/package.json').version")
+
+          echo "requested: ${requested}"
+          echo "Cargo.toml: ${workspace}"
+          echo "tauri.conf.json: ${conf}"
+          echo "package.json: ${pkg}"
+
+          [ "${requested}" = "${workspace}" ] || { echo "::error::The version input disagrees with desktop/Cargo.toml."; exit 1; }
+          [ "${conf}" = "${workspace}" ]      || { echo "::error::tauri.conf.json disagrees with the workspace version."; exit 1; }
+          [ "${pkg}" = "${workspace}" ]       || { echo "::error::package.json disagrees with the workspace version."; exit 1; }
+
+      # Named individually, and before the build, because a 40-minute build
+      # that fails at the notarisation step helps nobody.
+      - name: Check the signing and notarisation credentials are present
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_RELEASE_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_RELEASE_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.MACOS_RELEASE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -uo pipefail
+          missing=""
+          for name in MACOS_RELEASE_CERTIFICATE MACOS_RELEASE_CERTIFICATE_PASSWORD MACOS_RELEASE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            case "${name}" in
+              MACOS_RELEASE_CERTIFICATE)          value="${CERTIFICATE-}" ;;
+              MACOS_RELEASE_CERTIFICATE_PASSWORD) value="${CERTIFICATE_PASSWORD-}" ;;
+              MACOS_RELEASE_SIGNING_IDENTITY)     value="${IDENTITY-}" ;;
+              APPLE_ID)                           value="${APPLE_ID-}" ;;
+              APPLE_PASSWORD)                     value="${APPLE_PASSWORD-}" ;;
+              APPLE_TEAM_ID)                      value="${APPLE_TEAM_ID-}" ;;
+            esac
+            if [ -z "${value}" ]; then
+              printf '  %-36s EMPTY\n' "${name}"
+              missing="${missing} ${name}"
+            else
+              printf '  %-36s set\n' "${name}"
+            fi
+          done
+
+          if [ -n "${missing}" ]; then
+            echo "::error title=macOS release credentials missing::Empty on the macos-release environment:${missing}. A macOS build that is not signed with a Developer ID certificate AND notarised cannot be published -- Gatekeeper refuses it from a download with no way past, so the website will not offer it. See docs/desktop/PUBLISHING.md."
+            exit 1
+          fi
+
+          # The identity must be a Developer ID. A Development certificate
+          # signs a build that works on your own machines and is refused from
+          # a download, which is a failure nobody sees until a customer does.
+          case "${IDENTITY}" in
+            "Developer ID Application:"*) echo "Signing identity is a Developer ID Application certificate." ;;
+            *) echo "::error title=Wrong kind of certificate::MACOS_RELEASE_SIGNING_IDENTITY is '${IDENTITY}'. It must be a 'Developer ID Application: ...' certificate. A Development or Apple Distribution certificate produces a build Gatekeeper refuses from a download."; exit 1 ;;
+          esac
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: desktop
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm ci --no-audit --no-fund
+
+      # Into a keychain of this run's own, with a random password, deleted at
+      # the end whatever happened. The p12 is removed as soon as it is
+      # imported, so the only copy on disk is inside the keychain.
+      - name: Import the Developer ID certificate
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_RELEASE_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_RELEASE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          password="$(openssl rand -hex 16)"
+          echo "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 7200 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          echo "Imported. Identities now available:"
+          security find-identity -v -p codesigning "$keychain"
+
+      # One build per architecture rather than a universal binary: the app
+      # embeds a Rust service sidecar per target, and two disk images let a
+      # visitor on an Intel Mac download something that is not twice the size
+      # it needs to be.
+      #
+      # Tauri runs notarytool and staples the result itself when APPLE_ID,
+      # APPLE_PASSWORD and APPLE_TEAM_ID are present, so notarisation is not a
+      # separate step here -- but it is checked as one, below.
+      - name: Build, sign and notarise
+        working-directory: desktop
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.MACOS_RELEASE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CARGO_PROFILE_RELEASE_DEBUG: '0'
+        run: |
+          set -euo pipefail
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            echo "::group::$target"
+            npx tauri build --target "$target" --bundles app,dmg
+            echo "::endgroup::"
+          done
+
+      # The pass a file listing cannot give. Each of these answers a different
+      # question, and all three have to pass before anything is published:
+      #
+      #   codesign --verify   is it signed, and is the signature intact?
+      #   spctl --assess      would Gatekeeper let a user open it?
+      #   stapler validate    is the notarisation ticket attached, so that
+      #                       holds on a machine that has never been online?
+      #
+      # The last is the one that catches a build which notarised but was not
+      # stapled: it opens on this runner, which has just talked to Apple, and
+      # refuses on a customer's laptop.
+      - name: Verify the signature, Gatekeeper and the notarisation ticket
+        working-directory: desktop
+        run: |
+          set -euo pipefail
+          failed=0
+
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            app="target/${target}/release/bundle/macos/AICOUNTLY Remote.app"
+            echo "::group::${target}"
+
+            if codesign --verify --deep --strict --verbose=2 "${app}"; then
+              echo "  signature intact"
+            else
+              echo "::error title=Signature::${app} does not verify"; failed=1
+            fi
+
+            codesign --display --verbose=4 "${app}" 2>&1 | grep -E 'Authority|TeamIdentifier|flags' || true
+
+            if spctl --assess --type execute --verbose=4 "${app}"; then
+              echo "  Gatekeeper would open it"
+            else
+              echo "::error title=Gatekeeper::${app} would be refused on a customer's machine"; failed=1
+            fi
+
+            for dmg in target/${target}/release/bundle/dmg/*.dmg; do
+              if xcrun stapler validate "${dmg}"; then
+                echo "  notarisation ticket stapled to $(basename "${dmg}")"
+              else
+                echo "::error title=Not stapled::$(basename "${dmg}") has no notarisation ticket. It would open here, where Apple has just been asked, and be refused on a machine that is offline or has never seen it."
+                failed=1
+              fi
+            done
+
+            echo "::endgroup::"
+          done
+
+          if [ "${failed}" -ne 0 ]; then
+            echo "::error::These artefacts are not fit to publish."
+            exit 1
+          fi
+
+      - name: Collect artifacts
+        working-directory: desktop
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp target/*/release/bundle/dmg/*.dmg release/
+
+          # Its own name, because the Windows release attaches SHA256SUMS.txt
+          # to this same tag. One file, two uploads, and the second silently
+          # replaces the first -- after which every checksum describes a file
+          # from the other platform. make-manifest.mjs reads them all.
+          ( cd release && shasum -a 256 *.dmg > SHA256SUMS-macos.txt )
+          cat release/SHA256SUMS-macos.txt
+          ls -la release
+
+      - name: Upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: aicountly-remote-macos-${{ inputs.version }}-${{ inputs.channel }}
+          path: desktop/release/*
+          retention-days: 90
+          if-no-files-found: error
+
+      # The same tag the Windows release uses, so one tag carries every
+      # platform of a version. Whichever runs second adds to the release the
+      # first created.
+      - name: Publish to the GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          tag_name: desktop-v${{ inputs.version }}${{ inputs.channel == 'beta' && '-beta' || '' }}
+          name: AICOUNTLY Remote ${{ inputs.version }}
+          prerelease: ${{ inputs.channel == 'beta' }}
+          draft: false
+          files: desktop/release/*
+          body: |
+            AICOUNTLY Remote ${{ inputs.version }} (${{ inputs.channel }}).
+
+            macOS: signed with a Developer ID certificate and notarised by
+            Apple, so it opens from a download without a security warning.
+            Verify a download against `SHA256SUMS-macos.txt`, and check the
+            notarisation with:
+
+                xcrun stapler validate Aicountly-Remote-*.dmg
+
+            Built from ${{ github.sha }}.
+
+      # Whatever happened above. A signing keychain left on a runner is a
+      # credential left on a machine somebody else will get.
+      - name: Remove the build keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/release.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/cert.p12" || true

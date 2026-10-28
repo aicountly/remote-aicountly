@@ -48,11 +48,15 @@ did on the built one.
 1. **`release-windows.yml`**, `channel: beta` or `production`. It signs,
    verifies, and publishes a GitHub release tagged `desktop-v<version>` (or
    `desktop-v<version>-beta`).
-2. **`publish-downloads.yml`**, the same version and channel,
+2. **`release-macos.yml`**, the same version and channel, if there is a Mac
+   build to ship. It attaches to the same tag.
+3. **`publish-downloads.yml`**, the same version and channel,
    `mode: files-and-manifest`.
-3. Load `https://aicountly.com/remote#download`. The card should name the new
+4. Make sure `REMOTE_DESKTOP_RELEASED` is `true` on `aicountly/aicountly-com`
+   and that site has been deployed — see "Publishing is not releasing" below.
+5. Load `https://aicountly.com/remote#download`. The cards should name the new
    version, and the SHA-256 shown there should match `SHA256SUMS.txt` from the
-   release. The page caches for five minutes, so give it a moment.
+   downloads host. The page caches for ten minutes, so give it a moment.
 
 A rollback is step 2 again with the previous version and `mode: manifest-only`.
 The files are still on the host; only the manifest moves.
@@ -82,24 +86,123 @@ and again at the start of every publish.
 
 ## Secrets this needs
 
-The same five that `aicountly/aicountly-downloads` uses, as repository secrets
-here:
+Five, as **repository** secrets on `aicountly/remote-aicountly`:
 
 | Secret | What it is |
 |---|---|
-| `PROD_SSH_HOST` | the downloads host |
-| `PROD_SSH_PORT` | its SSH port |
-| `PROD_SSH_USER` | the SSH user |
-| `PROD_SSH_PRIVATE_KEY` | that user's private key |
-| `PROD_SSH_REMOTE_ROOT` | the **document root of downloads.aicountly.com** |
+| `DOWNLOAD_PROD_SSH_HOST` | the downloads host |
+| `DOWNLOAD_PROD_SSH_PORT` | its SSH port |
+| `DOWNLOAD_PROD_SSH_USER` | the SSH user |
+| `DOWNLOAD_PROD_SSH_PRIVATE_KEY` | that user's private key |
+| `DOWNLOAD_PROD_SSH_REMOTE_ROOT` | the **document root of downloads.aicountly.com** |
 
-`PROD_SSH_REMOTE_ROOT` is the one worth reading twice. It is the downloads
-host's document root, not aicountly.com's — the workflow appends
-`remote/<version>` to it, and pointing it at the website's root would write a
-`remote/` directory into the middle of the site.
+**The `DOWNLOAD_` prefix is load-bearing.** These repositories also carry a
+`PROD_SSH_*` set for a different cPanel account, and it is set — so an
+unprefixed name does not fail, it resolves to a real host that serves none of
+this. That is how Connect's first publish put 460 MB into an account no
+hostname points at, with every step green. Connect renamed them for this
+reason and Remote uses the same names.
 
-The first step of the workflow checks all five and names the ones that are
-missing, rather than failing later inside `rsync` with a blank hostname.
+`DOWNLOAD_PROD_SSH_REMOTE_ROOT` must be the same value it has in
+`aicountly/aicountly-downloads`. A secret belongs to one repository: copies
+in that repository, or in `connect-aicountly`, are invisible here.
+
+The `preflight` job checks all five before anything is downloaded, prints
+their lengths (never their values, because a secret pasted with a stray
+newline is set, wrong and otherwise invisible), and names the ones that are
+missing.
+
+The length is worth reading rather than skimming. The downloads host's
+document root is `/home/downloadsaic/public_html`, which is **30
+characters**; if `DOWNLOAD_PROD_SSH_REMOTE_ROOT` prints as 31 it has a
+trailing newline, and nothing else about the run will tell you.
+
+### Checking the secrets without publishing anything
+
+Run `publish-downloads.yml` with `mode: check-access`. It needs no version
+and no release, uploads nothing, and is green only if all five secrets are
+set here, the key opens that account, and the root is the one
+`downloads.aicountly.com` serves — proved by finding the landing page
+`aicountly/aicountly-downloads` deploys. It also lists what is already on the
+host, so the log shows `connect/` (Connect has published) and, once this
+workflow has run for real, `remote/`.
+
+This is the way to confirm the five secrets today, before the Windows signing
+credentials are sorted out and there is a release to publish.
+
+### Two guards worth knowing about
+
+Both are Connect's, and both exist because something went wrong without them.
+
+**The root is checked for what it is, not what it is not.** Ruling out the
+website does not find the downloads host: a root that is neither accepts the
+upload and serves nothing. So the workflow looks over SSH for the landing
+page that `aicountly/aicountly-downloads` deploys. Nothing else has it, and
+it is the only evidence from this side that the root is the one
+`downloads.aicountly.com` actually serves. If that deploy has never run, run
+it first.
+
+**The served manifest is compared on `generated`, not `version`.** Two runs
+of the same version produce the same version string and different timestamps,
+so `generated` is the only field that distinguishes "the manifest I just
+wrote" from "a manifest that was already there".
+
+## macOS
+
+`release-macos.yml`, which is the counterpart of `build-macos-test.yml` and
+differs from it in the two ways that decide whether a stranger can open the
+app at all:
+
+* **Developer ID Application certificate**, not a Development one. A
+  Development certificate signs a build that runs on machines in your own
+  provisioning profile and is refused from a download. The workflow checks
+  the identity starts with `Developer ID Application:` and stops if it does
+  not, because this is a failure nobody notices until a customer does.
+* **Notarised by Apple and stapled.** Without the staple the first launch on
+  a machine that has never seen the app shows "cannot be opened because the
+  developer cannot be verified", with no way past — not a warning with a
+  *Run anyway*, as on Windows, but a refusal.
+
+Three checks run before anything is published, and each answers a different
+question: `codesign --verify` (is the signature intact), `spctl --assess`
+(would Gatekeeper open it), and `xcrun stapler validate` (is the ticket
+attached). The last is the one that catches a build which notarised but was
+not stapled: it opens on the runner, which has just talked to Apple, and is
+refused on a customer's laptop.
+
+It needs six secrets on the `macos-release` environment:
+`MACOS_RELEASE_CERTIFICATE` (base64 .p12),
+`MACOS_RELEASE_CERTIFICATE_PASSWORD`, `MACOS_RELEASE_SIGNING_IDENTITY`,
+`APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`.
+
+Until those exist there is no macOS build to publish, the website refuses an
+unsigned one (`REMOTE_DOWNLOAD_REQUIRES_SIGNING` names both platforms), and
+`/remote` shows macOS as coming soon. That is the correct state, not a bug.
+
+### One tag, both platforms
+
+`release-windows.yml` and `release-macos.yml` attach their artefacts to the
+same tag — `desktop-v<version>` or `desktop-v<version>-beta` — so one tag
+carries every platform of a version and `publish-downloads.yml` collects them
+in a single fetch. Whichever runs second adds to the release the first one
+created.
+
+They cannot share a checksum file, though. One `SHA256SUMS.txt` uploaded
+twice means the second silently replaces the first, after which every
+checksum in it describes a file from the other platform — and the publish
+refuses, correctly, because the sums disagree with the files. So macOS writes
+`SHA256SUMS-macos.txt`, `make-manifest.mjs` reads every `SHA256SUMS*.txt` it
+finds, and what it uploads is one `SHA256SUMS.txt` written under the
+published names.
+
+## Publishing is not releasing
+
+A published manifest is not a visible download. `aicountly.com` has its own
+switch, `REMOTE_DESKTOP_RELEASED` in `includes/remote-downloads.php`, and
+while it is `false` the download section shows both platforms as coming soon
+whatever is on the downloads host. Releasing the desktop app means changing
+that line in a reviewed commit on `aicountly/aicountly-com`, and then
+deploying that site — it is deliberately not something a build can do.
 
 ## Until the certificate is issued
 

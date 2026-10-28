@@ -2,20 +2,35 @@
 # offer it.
 #
 # MANUAL ONLY, and separate from the build on purpose. Building an installer
-# and publishing one are different decisions: `release-windows.yml` produces a
-# signed, verified build and a GitHub release, and this takes that release and
-# makes it something a stranger can download. Nobody should be able to do the
-# second by merging something.
+# and publishing one are different decisions: `release-windows.yml` and
+# `release-macos.yml` produce signed, verified builds and GitHub releases, and
+# this takes those and makes them something a stranger can download. Nobody
+# should be able to do the second by merging something.
 #
-# The order of the steps below is the whole safety property. The website reads
+# This follows aicountly/connect-aicountly's `desktop.yml` publish job, which
+# learned two things the expensive way and whose checks are reproduced here:
+#
+#   * the secrets are DOWNLOAD_PROD_SSH_*, and the prefix is load-bearing.
+#     These repositories also have a PROD_SSH_* set for a different cPanel
+#     account, and it is set -- so an unprefixed name resolves to a real host
+#     that serves none of this. That is how a release reached an account no
+#     hostname points at, with every step green.
+#   * ruling out the wrong root is not the same as finding the right one. A
+#     root that is neither the website nor the downloads host accepts the
+#     upload and serves nothing. So this looks for the landing page that
+#     aicountly/aicountly-downloads deploys, which is the only evidence from
+#     this side that the root is the one downloads.aicountly.com serves.
+#
+# The order of the remaining steps is the safety property. The website reads
 # one file -- remote/manifest.json -- and puts a download button on everything
-# it names. It cannot check that those files are really there, because they are
-# on another host. So:
+# it names. It cannot check that those files are really there, because they
+# are on another host. So:
 #
-#   1. the installers go up,
+#   1. the installers go up, into the version's own directory,
 #   2. every one of them is fetched back over HTTPS and checked against the
-#      size and hash the manifest claims,
-#   3. and only then does the manifest go up.
+#      size the manifest claims,
+#   3. and only then does the manifest go up,
+#   4. and the manifest the host serves is checked to be the one just written.
 #
 # A manifest that names a file is this workflow's word that it already looked.
 # Nothing here may write the manifest first, and nothing may write it at all
@@ -26,8 +41,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: The version to publish, e.g. 1.0.0 (must already have a GitHub release)
-        required: true
+        description: The version to publish, e.g. 1.0.0 (must already have a GitHub release). Ignored by check-access.
+        required: false
+        default: ''
         type: string
       channel:
         description: Which channel's release to publish
@@ -39,11 +55,12 @@ on:
         description: >-
           files-and-manifest publishes a release. manifest-only re-points the
           manifest at a version already on the host, which is how a rollback
-          is done.
+          is done. check-access proves the five secrets reach the right host
+          and uploads nothing.
         required: true
         default: files-and-manifest
         type: choice
-        options: [files-and-manifest, manifest-only]
+        options: [files-and-manifest, manifest-only, check-access]
 
 concurrency:
   # One publish at a time. Two at once could upload one version's files and
@@ -59,9 +76,47 @@ env:
   BASE_URL: https://downloads.aicountly.com
 
 jobs:
+  # Before anything is built or downloaded, because the failure this catches
+  # is a secret that is missing or pasted wrong, and finding that out after a
+  # 400 MB download helps nobody.
+  preflight:
+    name: Check the downloads host is configured
+    runs-on: ubuntu-latest
+    steps:
+      - name: The five secrets
+        # Values are never printed. Lengths are, because a secret pasted with
+        # a stray newline or quote is set, wrong, and otherwise invisible.
+        env:
+          DOWNLOAD_PROD_SSH_HOST: ${{ secrets.DOWNLOAD_PROD_SSH_HOST }}
+          DOWNLOAD_PROD_SSH_PORT: ${{ secrets.DOWNLOAD_PROD_SSH_PORT }}
+          DOWNLOAD_PROD_SSH_USER: ${{ secrets.DOWNLOAD_PROD_SSH_USER }}
+          DOWNLOAD_PROD_SSH_REMOTE_ROOT: ${{ secrets.DOWNLOAD_PROD_SSH_REMOTE_ROOT }}
+          DOWNLOAD_PROD_SSH_PRIVATE_KEY: ${{ secrets.DOWNLOAD_PROD_SSH_PRIVATE_KEY }}
+        run: |
+          set -uo pipefail
+          missing=""
+          for name in DOWNLOAD_PROD_SSH_HOST DOWNLOAD_PROD_SSH_PORT DOWNLOAD_PROD_SSH_USER DOWNLOAD_PROD_SSH_REMOTE_ROOT DOWNLOAD_PROD_SSH_PRIVATE_KEY; do
+            value="${!name-}"
+            if [ -z "${value}" ]; then
+              printf '  %-30s EMPTY\n' "${name}"
+              missing="${missing} ${name}"
+            elif [ "${name}" = "DOWNLOAD_PROD_SSH_PRIVATE_KEY" ]; then
+              printf '  %-30s set\n' "${name}"
+            else
+              printf '  %-30s set (%s characters)\n' "${name}" "${#value}"
+            fi
+          done
+
+          if [ -n "${missing}" ]; then
+            echo "::error title=Secrets empty in this repository::Empty here:${missing}. They must be set in aicountly/remote-aicountly itself -- a secret belongs to one repository, and copies in aicountly/aicountly-downloads or aicountly/connect-aicountly are invisible to this job. If one shows EMPTY but you can see it in Settings, check WHERE it was added: an Environment secret is only visible to a job that declares that environment, and these are read as repository secrets. An Organization secret must also grant access to this repository. DOWNLOAD_PROD_SSH_REMOTE_ROOT is the document root of downloads.aicountly.com -- the same value it has in aicountly/aicountly-downloads, NOT this site's PROD_SSH_REMOTE_ROOT."
+            exit 1
+          fi
+          echo "All five are present."
+
   publish:
     name: Publish ${{ inputs.version }} (${{ inputs.channel }})
     runs-on: ubuntu-latest
+    needs: preflight
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -76,35 +131,27 @@ jobs:
         working-directory: desktop
         run: npm run test:scripts
 
-      # Named individually so a missing one says which, rather than failing
-      # later inside rsync with a blank host.
-      - name: Check the downloads host is configured
+      # The GitHub release, not a workflow artifact: a release only exists for
+      # a channel that signs, which makes "is this signed?" a question already
+      # answered rather than one asked here. Both platforms' releases carry
+      # the same tag, so this collects whatever built.
+      - name: Check the version was given
+        if: inputs.mode != 'check-access'
         env:
-          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
-          SSH_USER: ${{ secrets.PROD_SSH_USER }}
-          SSH_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
-          REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          missing=()
-          [ -n "${SSH_HOST}" ]    || missing+=(PROD_SSH_HOST)
-          [ -n "${SSH_PORT}" ]    || missing+=(PROD_SSH_PORT)
-          [ -n "${SSH_USER}" ]    || missing+=(PROD_SSH_USER)
-          [ -n "${SSH_KEY}" ]     || missing+=(PROD_SSH_PRIVATE_KEY)
-          [ -n "${REMOTE_ROOT}" ] || missing+=(PROD_SSH_REMOTE_ROOT)
-
-          if [ ${#missing[@]} -ne 0 ]; then
-            echo "::error title=The downloads host is not configured here::Missing repository secrets: ${missing[*]}. These are the same five secrets aicountly/aicountly-downloads uses; PROD_SSH_REMOTE_ROOT is the document root of downloads.aicountly.com. Add them under Settings -> Secrets and variables -> Actions."
+          if [ -z "${VERSION}" ]; then
+            echo "::error title=No version::This mode publishes something, so it needs a version. Only check-access runs without one."
+            exit 1
+          fi
+          if ! printf '%s' "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error title=Not a version::'${VERSION}' does not look like 1.2.3 or 1.2.3-beta.1."
             exit 1
           fi
 
-          echo "All five secrets are present."
-
-      # The GitHub release, not the build's workflow artifact: a release only
-      # exists for a channel that signs, which makes "is this signed?" a
-      # question already answered rather than one asked here.
       - name: Fetch the signed release
+        if: inputs.mode != 'check-access'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: desktop-v${{ inputs.version }}${{ inputs.channel == 'beta' && '-beta' || '' }}
@@ -115,11 +162,19 @@ jobs:
           gh release download "${TAG}" --dir staging --repo "${GITHUB_REPOSITORY}"
           ls -la staging
 
+      # Block maps are for differential updates and the macOS .zip is what an
+      # updater would consume; there is no updater, and uploading them would
+      # put a second copy of every build on the host.
+      - name: Keep only what a person downloads
+        if: inputs.mode != 'check-access'
+        run: rm -f staging/*.zip staging/*.blockmap
+
       # Renames each installer to a name that is safe in a URL and the same
       # every release, hashes it, cross-checks SHA256SUMS.txt, and writes the
       # manifest beside the workspace rather than into staging -- so the
       # upload below cannot carry it up early.
       - name: Describe the release
+        if: inputs.mode != 'check-access'
         env:
           VERSION: ${{ inputs.version }}
           CHANNEL: ${{ inputs.channel }}
@@ -131,21 +186,56 @@ jobs:
             --version "${VERSION}" \
             --channel "${CHANNEL}" \
             --out manifest.json
+          cat manifest.json
 
       - name: Setup SSH agent
         uses: webfactory/ssh-agent@dc588b651fe13675774614f8e6a936a468676387 # v0.9.0
         with:
-          ssh-private-key: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          ssh-private-key: ${{ secrets.DOWNLOAD_PROD_SSH_PRIVATE_KEY }}
 
       - name: Add host to known_hosts
         env:
-          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
+          SSH_HOST: ${{ secrets.DOWNLOAD_PROD_SSH_HOST }}
+          SSH_PORT: ${{ secrets.DOWNLOAD_PROD_SSH_PORT }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           ssh-keyscan -p "${SSH_PORT}" -H "${SSH_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || \
             echo "::warning::ssh-keyscan failed; rsync will use StrictHostKeyChecking=accept-new"
+
+      - name: Check REMOTE_ROOT is the downloads host, not the website
+        # Connect's publish ran twice into the wrong cPanel account before
+        # this check existed: rsync did exactly what it was asked, reported
+        # success, and nothing could fetch the result. Ruling out the website
+        # cannot catch a root that is neither -- so look for the landing page
+        # aicountly/aicountly-downloads deploys. Nothing else has it.
+        env:
+          SSH_HOST: ${{ secrets.DOWNLOAD_PROD_SSH_HOST }}
+          SSH_PORT: ${{ secrets.DOWNLOAD_PROD_SSH_PORT }}
+          SSH_USER: ${{ secrets.DOWNLOAD_PROD_SSH_USER }}
+          REMOTE_ROOT: ${{ secrets.DOWNLOAD_PROD_SSH_REMOTE_ROOT }}
+        run: |
+          set -euo pipefail
+          if ! ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=accept-new \
+                 "${SSH_USER}@${SSH_HOST}" \
+                 "grep -q 'Aicountly downloads' '${REMOTE_ROOT}/index.html' 2>/dev/null"; then
+            echo "::error title=Not the downloads document root::DOWNLOAD_PROD_SSH_REMOTE_ROOT does not hold the downloads host's landing page, so this is not the root downloads.aicountly.com serves -- uploading here would put hundreds of megabytes where nothing can fetch it. It must be the same value DOWNLOAD_PROD_SSH_REMOTE_ROOT has in aicountly/aicountly-downloads, whose deploy put that page there. If that deploy has never run, run it first."
+            exit 1
+          fi
+          echo "REMOTE_ROOT holds the downloads host's landing page."
+
+          # What is already up there. The root itself is a secret and is
+          # masked in these logs, but its contents are not secret and are the
+          # whole point: `connect` means Connect has published, `remote`
+          # means this workflow has, and a run that shows neither is pointed
+          # somewhere nothing has ever been uploaded.
+          echo "Top level of the downloads root:"
+          ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=accept-new \
+            "${SSH_USER}@${SSH_HOST}" "ls -la '${REMOTE_ROOT}'" || true
+
+          echo "What is published for ${PRODUCT} so far:"
+          ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=accept-new \
+            "${SSH_USER}@${SSH_HOST}" "ls -la '${REMOTE_ROOT}/${PRODUCT}' 2>/dev/null || echo '  nothing yet'" || true
 
       # Into the version's own directory, so publishing 1.1.0 cannot disturb
       # 1.0.0 and a link that worked yesterday still works. --delete is scoped
@@ -154,28 +244,30 @@ jobs:
       - name: Upload the installers
         if: inputs.mode == 'files-and-manifest'
         env:
-          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
-          SSH_USER: ${{ secrets.PROD_SSH_USER }}
-          REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
+          SSH_HOST: ${{ secrets.DOWNLOAD_PROD_SSH_HOST }}
+          SSH_PORT: ${{ secrets.DOWNLOAD_PROD_SSH_PORT }}
+          SSH_USER: ${{ secrets.DOWNLOAD_PROD_SSH_USER }}
+          REMOTE_ROOT: ${{ secrets.DOWNLOAD_PROD_SSH_REMOTE_ROOT }}
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           DEST="${REMOTE_ROOT%/}/${PRODUCT}/${VERSION}"
           echo "Uploading to ${DEST}"
           rsync -avz --delete --chmod=D755,F644 \
+            --exclude='manifest.json' \
             --rsync-path="mkdir -p '${DEST}' && rsync" \
             -e "ssh -p ${SSH_PORT} -o StrictHostKeyChecking=accept-new" \
             staging/ \
             "${SSH_USER}@${SSH_HOST}:${DEST}/"
 
-      # The check the website cannot do for itself. Every file the manifest
-      # names is fetched back from the public URL a visitor would use, over
-      # verified HTTPS, and must answer with the exact size the manifest
-      # claims. A failure here is a failure of the whole publish: the files
-      # stay where they are and the manifest is not written, so the download
-      # page goes on showing nothing rather than showing a broken button.
+      # The check the website cannot do for itself, and the reason the
+      # manifest has not been written yet. Every file it names is fetched from
+      # the public URL a visitor would use, over verified HTTPS, and must
+      # answer with the exact size claimed. A failure here leaves the files
+      # where they are and the manifest unwritten, so the download page goes
+      # on showing nothing rather than showing a broken button.
       - name: Verify every file is really there, over HTTPS
+        if: inputs.mode != 'check-access'
         env:
           VERSION: ${{ inputs.version }}
         run: |
@@ -224,11 +316,12 @@ jobs:
 
       # Last, and only now.
       - name: Publish the manifest
+        if: inputs.mode != 'check-access'
         env:
-          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
-          SSH_USER: ${{ secrets.PROD_SSH_USER }}
-          REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
+          SSH_HOST: ${{ secrets.DOWNLOAD_PROD_SSH_HOST }}
+          SSH_PORT: ${{ secrets.DOWNLOAD_PROD_SSH_PORT }}
+          SSH_USER: ${{ secrets.DOWNLOAD_PROD_SSH_USER }}
+          REMOTE_ROOT: ${{ secrets.DOWNLOAD_PROD_SSH_REMOTE_ROOT }}
         run: |
           set -euo pipefail
           DEST="${REMOTE_ROOT%/}/${PRODUCT}"
@@ -238,25 +331,31 @@ jobs:
             manifest.json \
             "${SSH_USER}@${SSH_HOST}:${DEST}/manifest.json"
 
-      # What the website will read, read the same way: over HTTPS, and it has
-      # to be the version this run published.
+      # What the website will read, read the same way. `generated` rather than
+      # `version`: two runs of the same version produce the same version and
+      # different timestamps, so this is the one field that can tell "the
+      # manifest I just wrote" from "a manifest that was already there".
       - name: Check the website will see this release
-        env:
-          VERSION: ${{ inputs.version }}
+        if: inputs.mode != 'check-access'
         run: |
           set -euo pipefail
           url="${BASE_URL}/${PRODUCT}/manifest.json"
 
-          body=$(curl -sS --proto '=https' --fail --max-time 30 --retry 3 --retry-delay 5 "${url}")
+          curl -sS --proto '=https' --fail --max-time 30 --retry 3 --retry-delay 5 \
+            -o manifest-live.json "${url}"
 
-          served=$(printf '%s' "${body}" | jq -r '.version')
-          if [ "${served}" != "${VERSION}" ]; then
-            echo "::error::${url} serves version ${served}, expected ${VERSION}."
-            exit 1
-          fi
-
-          echo "${url} now offers:"
-          printf '%s' "${body}" | jq '{version, channel, generated, files: [.files[] | {platform, arch, file, signed}]}'
+          node -e "
+            const live = require('./manifest-live.json');
+            const built = require('./manifest.json');
+            if (live.generated !== built.generated) {
+              console.error('the served manifest is not the one just uploaded:', live.generated, '!=', built.generated);
+              process.exit(1);
+            }
+            console.log('served manifest matches this run,', live.files.length, 'file(s)');
+            for (const f of live.files) {
+              console.log(' ', f.platform, f.arch, (f.size / 1048576).toFixed(1) + 'MB', 'signed=' + f.signed, f.file);
+            }
+          "
 
       - name: Summary
         if: always()
@@ -265,6 +364,21 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
           MODE: ${{ inputs.mode }}
         run: |
+          if [ "${MODE}" = "check-access" ]; then
+            {
+              echo "## Downloads host access check"
+              echo
+              echo "Nothing was uploaded. If this run is green, all five"
+              echo "\`DOWNLOAD_PROD_SSH_*\` secrets are set in this repository, the key"
+              echo "opens that account, and \`DOWNLOAD_PROD_SSH_REMOTE_ROOT\` is the"
+              echo "document root downloads.aicountly.com actually serves -- checked by"
+              echo "finding the landing page that aicountly/aicountly-downloads deploys."
+              echo
+              echo "The step log above lists what is already on the host."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
           {
             echo "## Remote ${VERSION} (${CHANNEL})"
             echo
@@ -279,5 +393,6 @@ jobs:
             fi
             echo
             echo "The download section on <https://aicountly.com/remote> reads that manifest."
-            echo "It caches an answer for five minutes, so allow a moment before checking the page."
+            echo "It shows nothing until \`REMOTE_DESKTOP_RELEASED\` is true in aicountly/aicountly-com"
+            echo "(includes/remote-downloads.php) -- publishing a build does not release it."
           } >> "${GITHUB_STEP_SUMMARY}"
