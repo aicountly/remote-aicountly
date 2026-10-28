@@ -18,10 +18,18 @@
  * Authenticode signs a file's contents, not its name, so a rename costs
  * nothing.
  *
- * Hashes are computed from the files themselves rather than read out of
- * `SHA256SUMS.txt`. If that file is present it is cross-checked and a
+ * Hashes are computed from the files themselves rather than read out of a
+ * `SHA256SUMS` file. If one is present it is cross-checked and a
  * disagreement is fatal: one of the two is describing a file that is not
  * there any more, and publishing either would be guessing which.
+ *
+ * There can be more than one. Windows and macOS are built by separate
+ * workflows that attach their artefacts to the same GitHub release, so each
+ * brings its own sums file under its own name -- if they shared one, the
+ * second upload would replace the first and every file it described would
+ * look like a mismatch. All of them are read, and all are then replaced by a
+ * single `SHA256SUMS.txt` written under the published names, because that is
+ * the one a person downloads beside an installer.
  *
  *     node scripts/make-manifest.mjs --dir release --product remote \
  *       --version 1.0.0 --channel production --out release/manifest.json
@@ -29,7 +37,7 @@
 
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 
 /** What a person downloads, and what is only ever for an updater. */
@@ -37,7 +45,7 @@ const INSTALLABLE = new Set(['installer', 'disk-image'])
 
 /** Names that belong to a release but are not part of it. */
 const NOT_A_BUILD = [
-  /^SHA256SUMS\.txt$/i,
+  /^SHA256SUMS.*\.txt$/i,
   /^manifest\.json$/i,
   /^UNSIGNED-/i,
   /^INSTALL\.txt$/i,
@@ -93,15 +101,23 @@ export function classify(name) {
   return { platform, arch, kind }
 }
 
-/** How a build is described on the page, once it has a button. */
+/**
+ * How a build is described on the page, once it has a button.
+ *
+ * The same words Connect uses (`scripts/make-manifest.mjs` there), because
+ * both products' cards are rendered by the same component on the same site
+ * and somebody comparing them should not have to work out whether "64-bit"
+ * and "64-bit (most PCs)" mean the same machine.
+ */
+export const ARCH_LABELS = Object.freeze({
+  'windows:x64': '64-bit (most PCs)',
+  'windows:arm64': 'ARM (Snapdragon, Surface Pro X)',
+  'macos:arm64': 'Apple Silicon (M1 and later)',
+  'macos:x64': 'Intel',
+})
+
 export function labelFor(platform, arch) {
-  if (platform === 'windows') {
-    return arch === 'arm64' ? 'Windows on Arm' : 'Windows 10 and 11, 64-bit'
-  }
-  if (platform === 'macos') {
-    return arch === 'arm64' ? 'Apple Silicon' : 'Intel'
-  }
-  return arch
+  return ARCH_LABELS[`${platform}:${arch}`] ?? arch
 }
 
 /**
@@ -171,9 +187,20 @@ function compare(a, b) {
 export async function makeManifest({ dir, product, version, channel, signed }) {
   const names = await readdir(dir)
 
-  let claimed = new Map()
-  if (names.includes('SHA256SUMS.txt')) {
-    claimed = parseSums(await readFile(join(dir, 'SHA256SUMS.txt'), 'utf8'))
+  const sumsFiles = names.filter((name) => /^SHA256SUMS.*\.txt$/i.test(name))
+
+  const claimed = new Map()
+  for (const name of sumsFiles) {
+    for (const [file, hash] of parseSums(await readFile(join(dir, name), 'utf8'))) {
+      const existing = claimed.get(file)
+      if (existing !== undefined && existing !== hash) {
+        throw new Error(
+          `Two checksum files disagree about ${file}: ${existing} and ${hash}. ` +
+            'Refusing to publish either.',
+        )
+      }
+      claimed.set(file, hash)
+    }
   }
 
   const files = []
@@ -240,6 +267,15 @@ export async function makeManifest({ dir, product, version, channel, signed }) {
   // describes what is published, not what the build called it.
   for (const file of files) {
     delete file.source
+  }
+
+  // The per-platform ones go, so what is uploaded is one checksum file under
+  // the published names: a person downloading an installer gets a sums file
+  // that names the installer they downloaded.
+  for (const name of sumsFiles) {
+    if (name !== 'SHA256SUMS.txt') {
+      await rm(join(dir, name))
+    }
   }
 
   // Rewritten for the published names, so a checksum file downloaded beside
