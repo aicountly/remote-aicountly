@@ -210,8 +210,14 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
   const controlOutstanding =
     (control?.pendingRequests.length ?? 0) > 0 || session?.me?.controlState === 'REQUESTED' || companionSettling
 
+  const myStatus = session?.me?.status ?? null
+  // A boolean, not the status: APPROVED -> JOINED is the same admitted participant and must keep the same engine.
+  const admitted = myStatus === 'APPROVED' || myStatus === 'JOINED'
+
   useEffect(() => {
-    if (isGuestParticipant || ended) return
+    // Only once admitted: before that the API answers AWAITING_APPROVAL, and asking anyway was a 403 every
+    // fifteen seconds for as long as somebody sat in the waiting room.
+    if (isGuestParticipant || ended || !admitted) return
 
     void refreshControl()
 
@@ -221,22 +227,24 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     )
 
     return () => clearInterval(interval)
-  }, [refreshControl, isGuestParticipant, ended, controlOutstanding])
+  }, [refreshControl, isGuestParticipant, ended, admitted, controlOutstanding])
 
   // --- Engine --------------------------------------------------------------
 
   const myParticipantUuid = guestParticipantUuid ?? session?.me?.uuid ?? null
-  const myStatus = session?.me?.status ?? null
-  // A boolean, not the status: APPROVED -> JOINED is the same admitted participant and must keep the same engine.
-  const admitted = myStatus === 'APPROVED' || myStatus === 'JOINED'
 
   // The engine depends on who I am and whether I am admitted, never on the session record itself. That record is a new
   // object on every poll, and an effect keyed on it tore the engine down each time — socket, peer connections and the
   // screen capture with it — so a share never reached the viewer and every poll was a reconnect.
+  //
+  // `ended` is the exception, and it only ever goes one way: however the session ended — End pressed here or by the
+  // other person, the session expiring, someone ending it elsewhere — the cleanup below stops the capture and closes
+  // the peer connections. An expired session used to keep its participants JOINED, so nothing tore the engine down
+  // and the screen kept streaming peer to peer under a screen that said sharing had stopped.
   useEffect(() => {
     // Start only once the host has admitted us. Before that there is no token
     // to be had, so connecting would be a guaranteed 403 (§19).
-    if (!myParticipantUuid || !admitted) return
+    if (ended || !myParticipantUuid || !admitted) return
     if (engineRef.current) return
 
     const engine = new RemoteSessionEngine({
@@ -256,9 +264,10 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
         )
       },
       onPeerShareState: () => void reload(),
-      onSessionEnded: () => {
-        if (mountedRef.current) setEnded(true)
-      },
+      // A peer's word is a reason to ask, not the answer: the session has ended when the API says so, and the
+      // re-read that confirms it is what stops the capture here. A participant cannot end it for the others by
+      // claiming to.
+      onSessionEnded: () => void reload(),
       // The agent has *already* stopped accepting input by the time this
       // arrives — its gate is local. This is the browser catching up: stop
       // sending, say why, and re-read the state the server now holds.
@@ -286,7 +295,7 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
       engine.dispose()
       engineRef.current = null
     }
-  }, [myParticipantUuid, admitted, sessionUuid, reload, refreshControl])
+  }, [myParticipantUuid, admitted, ended, sessionUuid, reload, refreshControl])
 
   // Stop capture if this component ever unmounts while sharing. Belt and
   // braces over the effect cleanup above, because a leaked screen capture is
@@ -470,10 +479,19 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
   }, [sessionUuid, reload])
 
   const end = useCallback(async () => {
-    engineRef.current?.announceSessionEnded()
-    await endSession(sessionUuid)
-    engineRef.current?.dispose()
-    engineRef.current = null
+    try {
+      await endSession(sessionUuid)
+      // Only a session the API has ended is announced as ended: told first, the other side showed "Remote session
+      // ended" for one that was still running whenever this call failed.
+      engineRef.current?.announceSessionEnded()
+    } finally {
+      // Pressing End stops this browser's capture and connections whatever the API answered. The person has said
+      // they are done, and a request that failed (offline, a 5xx) must not leave their screen being shared; the
+      // failure still reaches the caller, which says so and lets them press End again.
+      engineRef.current?.dispose()
+      engineRef.current = null
+      if (mountedRef.current) setLive(null)
+    }
     setEnded(true)
     await reload()
   }, [sessionUuid, reload])

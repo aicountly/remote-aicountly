@@ -548,8 +548,18 @@ export class RemoteSessionEngine {
     this.patch({ annotations: [] })
   }
 
+  /**
+   * Tell the room this session has ended.
+   *
+   * Over the signalling socket as well as the data channel: the connections are
+   * closed straight after this, and a socket delivers what was queued on it
+   * before it closes, where closing a peer connection can drop a message still
+   * on its way.
+   */
   announceSessionEnded(): void {
-    this.broadcast({ type: 'session-ended', payload: {} })
+    const message = { type: 'session-ended', payload: {} }
+
+    if (this.broadcast(message)) this.signalling?.send(message)
   }
 
   // ------------------------------------------------------- file transfer
@@ -1588,6 +1598,11 @@ export class RemoteSessionEngine {
         break
       case 'share-state':
         this.applyPeerShareState(peerId, Boolean((message.payload as { sharing?: boolean })?.sharing))
+        break
+      // The usual path for it while a data channel is open (broadcast() prefers one). Only the signalling path used
+      // to act on it, so the other side heard of an End from its own poll, up to 25 seconds later.
+      case 'session-ended':
+        this.options.onSessionEnded()
         break
 
       // File transfer control. None of these carry file content — the bytes are

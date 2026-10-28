@@ -194,6 +194,7 @@ async function startEngine(participantUuid: string) {
   const snapshots: Snapshot[] = []
   const hints: number[] = []
   const shareStates: Array<[string, boolean]> = []
+  const ended: number[] = []
 
   const engine = new RemoteSessionEngine({
     sessionUuid: 'session-1',
@@ -202,7 +203,7 @@ async function startEngine(participantUuid: string) {
     onSnapshot: (snapshot) => snapshots.push(snapshot as unknown as Snapshot),
     onChatMessage: () => {},
     onPeerShareState: (peer, sharing) => shareStates.push([peer, sharing]),
-    onSessionEnded: () => {},
+    onSessionEnded: () => ended.push(1),
     onControlHint: () => hints.push(1),
   })
   await engine.start()
@@ -212,6 +213,7 @@ async function startEngine(participantUuid: string) {
     latest: () => snapshots.at(-1) as Snapshot,
     hints,
     shareStates,
+    ended,
     signal: async (message: unknown) => {
       signalling.options?.onMessage(message)
       await flush()
@@ -430,6 +432,53 @@ describe('control companions in the engine', () => {
 
     await signal({ type: 'control-hint', from: 'a-sharer', payload: null })
     expect(hints).toHaveLength(1)
+
+    engine.dispose()
+  })
+})
+
+/**
+ * Ending a session has to reach the other side. broadcast() prefers the data channel, and only the signalling path
+ * acted on "session-ended", so the other person heard of an End from their own poll, up to 25 seconds later.
+ */
+describe('ending a session in the engine', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    FakePeerConnection.instances = []
+    signalling.sent = []
+    vi.stubGlobal('RTCPeerConnection', FakePeerConnection)
+    vi.stubGlobal('RTCSessionDescription', class { constructor(init: RTCSessionDescriptionInit) { return init } })
+    vi.stubGlobal('RTCIceCandidate', class { constructor(init: RTCIceCandidateInit) { return init } })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('hears "session-ended" over the data channel', async () => {
+    const { engine, signal, ended } = await startEngine('a-sharer')
+    await signal({ type: 'peer-joined', peer: viewerPeer })
+
+    const channel = FakePeerConnection.instances[0].channels[0]
+    channel.open()
+    channel.onmessage?.({ data: JSON.stringify({ type: 'session-ended', payload: {} }) })
+
+    expect(ended).toHaveLength(1)
+
+    engine.dispose()
+  })
+
+  it('announces the end on the signalling socket too, which still delivers as the connections close', async () => {
+    const { engine, signal } = await startEngine('a-sharer')
+    await signal({ type: 'peer-joined', peer: viewerPeer })
+
+    const channel = FakePeerConnection.instances[0].channels[0]
+    channel.open()
+    engine.announceSessionEnded()
+
+    expect(channel.sent.some((frame) => String(frame).includes('"session-ended"'))).toBe(true)
+    expect(signalling.sent.filter((message) => message.type === 'session-ended')).toHaveLength(1)
 
     engine.dispose()
   })

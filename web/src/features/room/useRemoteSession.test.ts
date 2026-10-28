@@ -7,12 +7,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  * tore the engine down each time, so a share never reached the viewer and every poll was a signalling reconnect.
  */
 
-const engines: Array<{ dispose: ReturnType<typeof vi.fn>; start: ReturnType<typeof vi.fn> }> = []
+const engines: Array<{
+  dispose: ReturnType<typeof vi.fn>
+  start: ReturnType<typeof vi.fn>
+  announceSessionEnded: ReturnType<typeof vi.fn>
+  options: { onSessionEnded: () => void }
+}> = []
 
 vi.mock('../../services/webrtc/RemoteSessionEngine', () => ({
-  RemoteSessionEngine: vi.fn().mockImplementation(function (this: Record<string, unknown>) {
+  RemoteSessionEngine: vi.fn().mockImplementation(function (this: Record<string, unknown>, options: unknown) {
+    this.options = options
     this.start = vi.fn().mockResolvedValue(undefined)
     this.dispose = vi.fn()
+    this.announceSessionEnded = vi.fn()
     this.startSharing = vi.fn().mockResolvedValue(undefined)
     this.stopSharing = vi.fn().mockResolvedValue(undefined)
     this.setControlTarget = vi.fn()
@@ -23,14 +30,16 @@ vi.mock('../../services/webrtc/RemoteSessionEngine', () => ({
 }))
 
 const fetchSession = vi.fn()
+const endSession = vi.fn()
+const fetchControlState = vi.fn(async (..._args: unknown[]) => ({ pendingRequests: [] }))
 
 vi.mock('../../services/api/remote', () => ({
   approveParticipant: vi.fn(),
   declareShareIntent: vi.fn(),
   denyControl: vi.fn(),
   denyParticipant: vi.fn(),
-  endSession: vi.fn(),
-  fetchControlState: vi.fn().mockResolvedValue({ pendingRequests: [] }),
+  endSession: (...args: unknown[]) => endSession(...args),
+  fetchControlState: (...args: unknown[]) => fetchControlState(...args),
   fetchMessages: vi.fn().mockResolvedValue([]),
   fetchSession: (...args: unknown[]) => fetchSession(...args),
   grantControl: vi.fn(),
@@ -132,5 +141,161 @@ describe('useRemoteSession engine lifetime', () => {
 
     await flush(5_000)
     expect(fetchSession.mock.calls.length).toBeGreaterThan(before)
+  })
+})
+
+/**
+ * However a session ends, this browser stops capturing and closes its peer connections. An expired session used to
+ * keep its participants JOINED, so the engine was never torn down: the screen kept streaming to the viewer under a
+ * screen that said "Screen sharing: Stopped".
+ */
+describe('useRemoteSession — an ended session keeps nothing running', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    engines.length = 0
+    fetchSession.mockReset()
+    endSession.mockReset()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** The session's own status this time, the participant still JOINED (as an expiry leaves it). */
+  function withStatus(status: string) {
+    return { ...sessionRecord('JOINED', true), status }
+  }
+
+  it('stops the engine when the server reports the session expired', async () => {
+    let status = 'ACTIVE'
+    fetchSession.mockImplementation(async () => withStatus(status))
+
+    const { result } = renderHook(() => useRemoteSession({ sessionUuid: 'sess-1', policy: null }))
+    await flush()
+    expect(engines).toHaveLength(1)
+
+    status = 'EXPIRED'
+    await flush(5_000)
+
+    expect(result.current.ended).toBe(true)
+    expect(engines[0].dispose).toHaveBeenCalled()
+
+    // And nothing starts again afterwards.
+    await flush(60_000)
+    expect(engines).toHaveLength(1)
+  })
+
+  it('stops the engine when the other person ends the session', async () => {
+    let status = 'ACTIVE'
+    fetchSession.mockImplementation(async () => withStatus(status))
+
+    const { result } = renderHook(() => useRemoteSession({ sessionUuid: 'sess-1', policy: null }))
+    await flush()
+    expect(engines).toHaveLength(1)
+
+    // They ended it with the API, then said so in the room.
+    status = 'ENDED'
+    act(() => engines[0].options.onSessionEnded())
+    await flush()
+
+    expect(result.current.ended).toBe(true)
+    expect(engines[0].dispose).toHaveBeenCalled()
+    expect(engines).toHaveLength(1)
+  })
+
+  it('does not end on a participant\'s word that the API contradicts', async () => {
+    fetchSession.mockImplementation(async () => withStatus('ACTIVE'))
+
+    const { result } = renderHook(() => useRemoteSession({ sessionUuid: 'sess-1', policy: null }))
+    await flush()
+
+    act(() => engines[0].options.onSessionEnded())
+    await flush()
+
+    expect(result.current.ended).toBe(false)
+    expect(engines[0].dispose).not.toHaveBeenCalled()
+  })
+
+  it('End stops this browser\'s capture even when the API call fails', async () => {
+    fetchSession.mockImplementation(async () => withStatus('ACTIVE'))
+    endSession.mockRejectedValue(new Error('offline'))
+
+    const { result } = renderHook(() => useRemoteSession({ sessionUuid: 'sess-1', policy: null }))
+    await flush()
+    expect(engines).toHaveLength(1)
+
+    let failure: unknown = null
+    await act(async () => {
+      await result.current.actions.end().catch((err: unknown) => {
+        failure = err
+      })
+    })
+
+    expect(failure).toBeInstanceOf(Error)
+    // The other side is not told a session ended that the API did not end.
+    expect(engines[0].announceSessionEnded).not.toHaveBeenCalled()
+    expect(engines[0].dispose).toHaveBeenCalled()
+    expect(result.current.live).toBeNull()
+    // The session itself was not ended, and the page does not claim it was.
+    expect(result.current.ended).toBe(false)
+  })
+})
+
+describe('useRemoteSession — End', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    engines.length = 0
+    fetchSession.mockReset()
+    endSession.mockReset()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('tells the other side once the API has ended the session, then stops everything here', async () => {
+    let status = 'ACTIVE'
+    fetchSession.mockImplementation(async () => ({ ...sessionRecord('JOINED', true), status }))
+    endSession.mockImplementation(async () => {
+      status = 'ENDED'
+    })
+
+    const { result } = renderHook(() => useRemoteSession({ sessionUuid: 'sess-1', policy: null }))
+    await flush()
+
+    await act(async () => {
+      await result.current.actions.end()
+    })
+
+    expect(endSession).toHaveBeenCalledWith('sess-1')
+    expect(engines[0].announceSessionEnded).toHaveBeenCalled()
+    expect(engines[0].dispose).toHaveBeenCalled()
+    expect(result.current.ended).toBe(true)
+  })
+})
+
+describe('useRemoteSession — the waiting room', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    engines.length = 0
+    fetchSession.mockReset()
+    fetchControlState.mockClear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('does not ask for control state until the host has admitted us', async () => {
+    let status = 'REQUESTED'
+    fetchSession.mockImplementation(async () => sessionRecord(status, false))
+
+    renderHook(() => useRemoteSession({ sessionUuid: 'sess-1', policy: null }))
+    await flush(30_000)
+    expect(fetchControlState).not.toHaveBeenCalled()
+
+    status = 'APPROVED'
+    await flush(2_000)
+    expect(fetchControlState).toHaveBeenCalled()
   })
 })

@@ -89,6 +89,7 @@ export default function SessionRoomPage() {
   const [annotationTool, setAnnotationTool] = useState<AnnotationTool>('none')
   const [pointerOn, setPointerOn] = useState(false)
   const [elapsed, setElapsed] = useState(0)
+  const [endError, setEndError] = useState<RemoteApiError | null>(null)
 
   // A visible clock is part of trusting a screen-sharing session: it says how
   // long this has been going on without anyone having to remember.
@@ -282,15 +283,39 @@ export default function SessionRoomPage() {
             )
           ) : null}
 
-          <button
-            type="button"
-            className="btn btn--danger btn--sm"
-            onClick={async () => {
-              await actions.end()
-            }}
-          >
-            End
-          </button>
+          {isGuest ? (
+            // A guest cannot end somebody else's session — the API refuses a guest token there — so the
+            // button that always failed for them is the one that works: leaving.
+            <button
+              type="button"
+              className="btn btn--danger btn--sm"
+              onClick={() => {
+                void actions.leave()
+                navigate('/')
+              }}
+            >
+              Leave
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn--danger btn--sm"
+              onClick={() => {
+                setEndError(null)
+                // Sharing has already stopped here whatever the answer (useRemoteSession `end`); a refusal or a
+                // network failure is said, not swallowed, so the person knows the session itself is still open.
+                actions.end().catch((err: unknown) =>
+                  setEndError(
+                    err instanceof RemoteApiError
+                      ? err
+                      : new RemoteApiError('UNKNOWN', 'The session could not be ended. Try again.', 0),
+                  ),
+                )
+              }}
+            >
+              End
+            </button>
+          )}
         </div>
       </header>
 
@@ -620,6 +645,20 @@ export default function SessionRoomPage() {
         onCancel={actions.cancelShare}
         onChangeMode={(mode) => actions.beginShare(mode)}
       />
+
+      {endError ? (
+        <div className="room__error-toast" role="alert">
+          <RestrictionNotice
+            compact
+            error={endError}
+            action={
+              <button type="button" className="btn btn--secondary btn--sm" onClick={() => setEndError(null)}>
+                Dismiss
+              </button>
+            }
+          />
+        </div>
+      ) : null}
 
       {controlNotice ? (
         <div className="room__notice room__notice--control" role="status">
