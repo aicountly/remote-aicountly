@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "AICOUNTLY Remote for Windows — the desktop agent's interface.",
+  "description": "AICOUNTLY Remote for Windows \u2014 the desktop agent's interface.",
   "engines": {
     "node": ">=22"
   },
@@ -14,6 +14,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:scripts": "node --test scripts/*.test.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
