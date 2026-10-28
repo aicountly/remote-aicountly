@@ -113,6 +113,11 @@
   min-width: 0;
 }
 
+/* The name truncates; the icons around it keep their size. */
+.scope-button svg {
+  flex-shrink: 0;
+}
+
 .scope-menu {
   position: absolute;
   top: calc(100% + 6px);
@@ -541,6 +546,9 @@
   border: 1px solid var(--warning-border);
   border-radius: var(--radius-lg);
   background: var(--warning-soft);
+  /* Its own text colour: inside the dark session room the title inherited the
+     room's light text and all but vanished against this light card. */
+  color: var(--text-primary);
 }
 
 .restriction--error {
@@ -1478,6 +1486,24 @@
 
   .detail-list__row dd {
     text-align: left;
+  }
+}
+
+/* A phone: every header control keeps its size — Log out and Manage profile
+   used to shrink to a 0px icon, so there was no visible way to sign out — and
+   the wordmark gives way instead, as the product name already has at 900px. */
+@media (max-width: 480px) {
+  .shell__header > :not(.shell__scope) {
+    flex-shrink: 0;
+  }
+
+  .shell__brand {
+    display: none;
+  }
+
+  /* The organisation's name truncates into whatever room is left. */
+  .scope-button {
+    max-width: 100%;
   }
 }
 

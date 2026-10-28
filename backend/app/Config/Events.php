@@ -24,6 +24,13 @@ use CodeIgniter\HotReloader\HotReloader;
  */
 
 Events::on('pre_system', static function (): void {
+    // PHP names its own version in X-Powered-By while php.ini's expose_php is on, which is the host's setting, not
+    // ours. Removed before anything is sent, so no response carries it — redirects and errors included.
+    // backend/.htaccess unsets it as well.
+    if (! is_cli()) {
+        header_remove('X-Powered-By');
+    }
+
     if (ENVIRONMENT !== 'testing') {
         $value = ini_get('zlib.output_compression');
 

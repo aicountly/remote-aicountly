@@ -442,6 +442,10 @@ video {
   /* Wide tables scroll inside their own box; the page never scrolls sideways. */
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  /* The containing block for anything absolutely positioned inside — a
+     visually hidden column heading escaped the scroll box and widened the whole
+     page to 966px on a phone. */
+  position: relative;
 }
 
 .table {

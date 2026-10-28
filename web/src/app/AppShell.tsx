@@ -27,7 +27,7 @@ import {
 import { useAuth } from '../auth/AuthProvider'
 import { useRemote } from './RemoteProvider'
 import { PERMISSIONS } from '../types/remote'
-import AicountlyLogo from '../components/brand/AicountlyLogo'
+import AicountlyLogo, { RemoteMark } from '../components/brand/AicountlyLogo'
 import { AppLauncher } from '../components/AppLauncher'
 import { consumeDesktopSignInReturnPath } from '../features/desktop/returnPath'
 import { ConnectMount } from '../connect/ConnectMount'
@@ -47,8 +47,40 @@ import CompanyIdTag from '../components/ui/CompanyIdTag'
  *     refused;
  *   * **the organisation is always visible** (§6B) — a person sharing their
  *     screen should never have to wonder which company the session belongs to.
+ *
+ * It is for somebody signed in. An external guest reaches it only by leaving
+ * their session (the room's back arrow goes to "/"), and is shown that the
+ * invitation is spent rather than company navigation, a dashboard or the
+ * Connect widget (§23).
  */
 export default function AppShell() {
+  const { status } = useAuth()
+
+  return status === 'guest' ? <GuestOutsideSession /> : <SignedInShell />
+}
+
+function GuestOutsideSession() {
+  return (
+    <div className="guest-page">
+      <div className="guest-card">
+        <div className="guest-card__brand">
+          <AicountlyLogo />
+          <span className="guest-card__product">
+            <RemoteMark size={16} />
+            Remote
+          </span>
+        </div>
+
+        <h1 className="guest-card__title">You are not in a Remote session</h1>
+        <p className="guest-card__body">
+          Your invitation gave you access to one session only. You can close this tab.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function SignedInShell() {
   const { signOut } = useAuth()
   const { bootstrap, policy, scopeType, companyId, switchScope, can } = useRemote()
   const navigate = useNavigate()

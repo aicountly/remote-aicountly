@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Session;
 
 use App\Domain\Audit\EventType;
+use App\Domain\Session\ParticipantService;
 use App\Domain\Session\SessionStatus;
 use App\Domain\Support\ApiException;
 use Config\Services;
@@ -189,6 +190,49 @@ final class SessionLifecycleTest extends RemoteTestCase
         $this->assertSame(SessionStatus::EXPIRED, $reloaded['status']);
         $this->assertNull($reloaded['session_code']);
         $this->assertHasEvent($session, EventType::SESSION_EXPIRED);
+        // The read that expires it says when it ended, so the summary shows how long it ran rather than "—".
+        $this->assertNotNull($reloaded['ended_at']);
+    }
+
+    /**
+     * Expired is as over as ended. It used to leave everybody JOINED and the invitations open, so the host's room
+     * still counted the viewer as admitted and the invitation list still offered links into a finished session.
+     */
+    public function testExpiryClosesEverybodyInTheSessionAndItsInvitations(): void
+    {
+        $host    = $this->makeIdentity('Host');
+        $viewer  = $this->makeIdentity('Viewer');
+        $session = $this->makeSession($host);
+        $policy  = Services::policyResolver()->resolve($host, 'PERSONAL', null);
+
+        $joining = Services::participantService()->requestJoin($session, $viewer, $viewer->displayName, ParticipantService::ROLE_VIEWER);
+        Services::participantService()->approve($session, (string) $joining['uuid'], $host);
+        $invited = Services::invitationService()->create($session, $host, $policy, 'INTERNAL', null, null);
+
+        $this->db->table('remote_sessions')
+            ->where('id', $session['id'])
+            ->update(['expires_at' => gmdate('Y-m-d H:i:s', time() - 60) . '+00']);
+
+        $this->assertSame(SessionStatus::EXPIRED, $this->reload($session)['status']);
+
+        $admitted = $this->db->table('remote_participants')
+            ->where('session_id', $session['id'])
+            ->whereIn('status', ['REQUESTED', 'APPROVED', 'JOINED'])
+            ->countAllResults();
+        $this->assertSame(0, $admitted, 'Nobody is still admitted to an expired session, the host included.');
+
+        $live = $this->db->table('remote_invitations')
+            ->where('session_id', $session['id'])
+            ->where('revoked_at', null)
+            ->countAllResults();
+        $this->assertSame(0, $live, 'Expiry withdraws the outstanding invitations, as ending does.');
+
+        try {
+            Services::joinService()->redeemInvitation((string) $invited['secret'], $this->makeIdentity('Late'), null, null, null, null);
+            $this->fail('An invitation into an expired session must not be redeemable.');
+        } catch (ApiException $e) {
+            $this->assertSame('INVITATION_REVOKED', $e->errorCode());
+        }
     }
 
     public function testPauseAndResumeAreHostOnly(): void

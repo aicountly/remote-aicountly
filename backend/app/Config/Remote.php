@@ -234,8 +234,13 @@ class Remote extends BaseConfig
      * Like every other feature flag it can only ever *remove* capability: with
      * it off, no device can enrol and no device capability resolves true, even
      * for an organisation whose policy and plan both permit it (§67).
+     *
+     * Off by default: Remote launches on the web only, and with this on every
+     * plan that includes desktop devices is offered Computers and remote
+     * control for an app nobody can install yet. `remote.allowDesktopAgent =
+     * true` switches it on when the Windows app is released.
      */
-    public bool $featureDesktopAgent = true;
+    public bool $featureDesktopAgent = false;
 
     /** Conservative V1 ceiling for browser-to-browser file transfer (§36). */
     public int $fileTransferMaxBytes = 25 * 1024 * 1024;

@@ -86,7 +86,11 @@ class SessionController extends BaseApiController
     {
         $session  = $this->resolveSession($uuid);
         $identity = $this->identity();
-        $policy   = $this->policyForSession($session);
+
+        // Before the policy is read, so somebody who may only read the session leaves no POLICY_REJECTED in it.
+        Services::sessionService()->assertHost($session, $identity, 'Only the person who started this session can share a screen in it.');
+
+        $policy = $this->policyForSession($session);
 
         $shareMode = $this->enum(
             $this->body(),
@@ -362,6 +366,8 @@ class SessionController extends BaseApiController
         $resource['companyName'] ??= $session['company_id'] !== null
             ? Services::policyResolver()->companyName((int) $session['company_id'])
             : null;
+        // The single-session read does not join the owner the way history does, which left every detail page at "Host —".
+        $resource['ownerName'] ??= Services::identityResolver()->findById((int) $session['owner_user_id'])?->displayName;
 
         $resource['participants'] = array_map(
             static fn (array $row) => Presenter::participant($row, $includeAudit),

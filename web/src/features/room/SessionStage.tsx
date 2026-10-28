@@ -263,7 +263,12 @@ export default function SessionStage({
     [live?.annotations, drawing],
   )
 
-  const sharingParticipant = session.participants.find((participant) => participant.isSharing)
+  // Somebody else who is sharing. Your own row can still say sharing after this
+  // page lost the stream (a reload, the browser's own Stop), and "Waiting for
+  // <your own name>'s screen" would leave the host waiting for themselves.
+  const sharingParticipant = session.participants.find(
+    (participant) => participant.isSharing && participant.uuid !== session.me?.uuid,
+  )
 
   return (
     <div className="stage">

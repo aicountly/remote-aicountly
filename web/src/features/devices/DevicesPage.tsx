@@ -42,6 +42,24 @@ import { PERMISSIONS } from '../../types/remote'
  * an empty table.
  */
 
+/**
+ * Remote launches on the web first: the Windows app is not released, so nothing
+ * here may read as an instruction to install it. Said wherever this page would
+ * otherwise send somebody looking for a download, with what works today.
+ */
+export function DesktopAppComingSoon() {
+  return (
+    <div className="notice notice--info" role="status">
+      <p className="notice__title">AICOUNTLY Remote for Windows is coming soon</p>
+      <p className="notice__body">
+        Registering a computer, controlling one with permission and unattended access need the Windows app,
+        which is not available to download yet. Until then Remote works in your browser: share your screen,
+        view someone else’s, chat, point, draw and send files.
+      </p>
+    </div>
+  )
+}
+
 export default function DevicesPage() {
   const navigate = useNavigate()
   const { scopeType, companyId, can } = useRemote()
@@ -138,6 +156,8 @@ export default function DevicesPage() {
             <p className="muted">Machines running AICOUNTLY Remote for Windows.</p>
           </header>
 
+          <DesktopAppComingSoon />
+
           <EmptyState
             icon={<MonitorSmartphone size={26} />}
             title="Computers belong to an organisation"
@@ -165,12 +185,14 @@ export default function DevicesPage() {
 
         {error ? <RestrictionNotice error={error} /> : null}
 
-        {policy && !policy.allowRemoteControl ? (
+        {!loading && devices.length === 0 ? <DesktopAppComingSoon /> : null}
+
+        {policy && !policy.allowRemoteControl && devices.length > 0 ? (
           <div className="notice notice--info notice--row">
             <ShieldAlert size={16} aria-hidden="true" />
             <span>
               Remote control is turned off for this organisation, so these computers can be seen here
-              but not controlled. An administrator can change that in Remote policy.
+              but not controlled.
             </span>
           </div>
         ) : null}
@@ -193,7 +215,7 @@ export default function DevicesPage() {
             <EmptyState
               icon={<Laptop size={26} />}
               title="No computers registered yet"
-              description="Install AICOUNTLY Remote for Windows on a machine and sign in with an AICOUNTLY account. It appears here once it has registered."
+              description="A computer appears here once AICOUNTLY Remote for Windows is installed on it and signed in with an AICOUNTLY account."
             />
           ) : (
             <ul className="device-list">

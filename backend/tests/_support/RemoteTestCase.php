@@ -104,6 +104,9 @@ abstract class RemoteTestCase extends CIUnitTestCase
         // starts off, and a test that is about it opts in (and supplies a
         // FakeManageClient) — the same arrangement as the Auditor's company guard.
         $config->membershipEnforcement = false;
+        // Desktop agents ship switched off (web-only launch), but the suite covers
+        // them, so they start on here; a test about the switch turns it off.
+        $config->featureDesktopAgent = true;
         $mutate($config);
 
         Services::injectMock('remoteConfig', $config);

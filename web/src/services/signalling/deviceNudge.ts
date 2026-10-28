@@ -9,6 +9,8 @@
  * request anyway — so this is best effort and never throws.
  */
 
+import { signallingProtocols } from './protocol'
+
 export interface DeviceInvite {
   token: string
   url: string
@@ -42,8 +44,7 @@ export function nudgeDevice(invite: DeviceInvite, timeoutMs = 5000): Promise<boo
     const timer = setTimeout(() => finish(false), timeoutMs)
 
     try {
-      const separator = invite.url.includes('?') ? '&' : '?'
-      socket = new WebSocket(`${invite.url}${separator}token=${encodeURIComponent(invite.token)}`)
+      socket = new WebSocket(invite.url, signallingProtocols(invite.token))
     } catch {
       finish(false)
 

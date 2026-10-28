@@ -105,7 +105,7 @@ describe('CompanionPanel', () => {
     expect(onLink).toHaveBeenCalledWith('device-1')
   })
 
-  it('says how to get the app when there is no computer to use', async () => {
+  it('says the desktop app is coming soon when there is no computer to use', async () => {
     const loadDevices = vi.fn(async () => ({ devices: [], restrictions: ['NO_ELIGIBLE_DEVICE'] }))
 
     render(
@@ -114,7 +114,17 @@ describe('CompanionPanel', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /enable control from this computer/i }))
 
-    expect(await screen.findByText(/No AICOUNTLY Remote app found/i)).toBeInTheDocument()
+    expect(await screen.findByText(/No AICOUNTLY Remote desktop app is signed in for you/i)).toBeInTheDocument()
+    expect(screen.getByText(/desktop app is coming soon; if you already have it/i)).toBeInTheDocument()
+  })
+
+  it('never asks for an unreleased app without saying it is coming soon', () => {
+    render(
+      <CompanionPanel sessionUuid="s-1" control={control()} isSharing busy={false} onLink={() => {}} onUnlink={() => {}} />,
+    )
+
+    expect(screen.getByText(/the desktop app is coming soon/i)).toBeInTheDocument()
+    expect(screen.getByText(/can point and draw on what you share/i)).toBeInTheDocument()
   })
 
   it('cannot be enabled before sharing', () => {

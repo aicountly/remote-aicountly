@@ -280,6 +280,8 @@ interface PeerEntry {
   lastRestartAt: number
   /** Whether the first successful connection has been reported. */
   reportedConnected: boolean
+  /** When this connection was set up (Date.now()), so a session record read before it cannot end it. */
+  createdAt: number
 }
 
 export class RemoteSessionEngine {
@@ -548,8 +550,40 @@ export class RemoteSessionEngine {
     this.patch({ annotations: [] })
   }
 
+  /**
+   * Tell the room this session has ended.
+   *
+   * Over the signalling socket as well as the data channel: the connections are
+   * closed straight after this, and a socket delivers what was queued on it
+   * before it closes, where closing a peer connection can drop a message still
+   * on its way.
+   */
   announceSessionEnded(): void {
-    this.broadcast({ type: 'session-ended', payload: {} })
+    const message = { type: 'session-ended', payload: {} }
+
+    if (this.broadcast(message)) this.signalling?.send(message)
+  }
+
+  /**
+   * Close the connections to people the server no longer admits.
+   *
+   * The signalling service stops a token from being renewed, not a peer
+   * connection that already exists: a browser that did not leave the room —
+   * one that was closed as the session expired, or a modified one — kept
+   * receiving the picture. The room hands over everybody whose participant row
+   * is not APPROVED or JOINED, read in a request that started at `since`; a
+   * connection set up after that may belong to somebody admitted in between,
+   * so it is left alone until a later read says otherwise.
+   */
+  dropUnadmitted(participantUuids: readonly string[], since: number): void {
+    for (const peerId of participantUuids) {
+      const entry = this.peers.get(peerId)
+      if (!entry || entry.createdAt >= since) continue
+
+      // As if they had left: a companion is not reconnected until it joins again.
+      this.companionPeers.delete(peerId)
+      this.removePeer(peerId)
+    }
   }
 
   // ------------------------------------------------------- file transfer
@@ -1268,6 +1302,7 @@ export class RemoteSessionEngine {
       path: null,
       lastRestartAt: 0,
       reportedConnected: false,
+      createdAt: Date.now(),
     }
 
     this.peers.set(peerId, entry)
@@ -1588,6 +1623,11 @@ export class RemoteSessionEngine {
         break
       case 'share-state':
         this.applyPeerShareState(peerId, Boolean((message.payload as { sharing?: boolean })?.sharing))
+        break
+      // The usual path for it while a data channel is open (broadcast() prefers one). Only the signalling path used
+      // to act on it, so the other side heard of an End from its own poll, up to 25 seconds later.
+      case 'session-ended':
+        this.options.onSessionEnded()
         break
 
       // File transfer control. None of these carry file content — the bytes are

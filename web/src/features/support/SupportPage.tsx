@@ -99,14 +99,32 @@ export default function SupportPage() {
     }
   }
 
+  // A refusal is said, not swallowed, after the list is re-read to show what is true now — in that order,
+  // because a re-read that works clears the page's error.
+  async function refused(err: unknown, fallback: string) {
+    await load()
+    setError(err instanceof RemoteApiError ? err : new RemoteApiError('UNKNOWN', fallback, 0))
+  }
+
   async function accept(uuid: string) {
     try {
       const result = await acceptSupportRequest(uuid)
       navigate(`/room/${result.session.uuid}`)
     } catch (err) {
-      setError(err instanceof RemoteApiError ? err : null)
-      await load()
+      await refused(err, 'The request could not be accepted. Try again.')
     }
+  }
+
+  async function answer(act: (uuid: string) => Promise<unknown>, uuid: string, fallback: string) {
+    try {
+      await act(uuid)
+    } catch (err) {
+      await refused(err, fallback)
+
+      return
+    }
+
+    await load()
   }
 
   const pending = requests.filter((request) => request.status === 'PENDING')
@@ -257,7 +275,9 @@ export default function SupportPage() {
                         <button
                           type="button"
                           className="btn btn--secondary btn--sm"
-                          onClick={() => void declineSupportRequest(request.uuid).then(load)}
+                          onClick={() =>
+                            void answer(declineSupportRequest, request.uuid, 'The request could not be declined. Try again.')
+                          }
                         >
                           Decline
                         </button>
@@ -274,7 +294,9 @@ export default function SupportPage() {
                         <button
                           type="button"
                           className="btn btn--secondary btn--sm"
-                          onClick={() => void cancelSupportRequest(request.uuid).then(load)}
+                          onClick={() =>
+                            void answer(cancelSupportRequest, request.uuid, 'The request could not be cancelled. Try again.')
+                          }
                         >
                           Cancel
                         </button>

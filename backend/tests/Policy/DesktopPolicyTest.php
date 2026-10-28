@@ -222,6 +222,30 @@ final class DesktopPolicyTest extends RemoteTestCase
     }
 
     /**
+     * The web-only launch: desktop agents ship switched off, so no plan offers
+     * Computers or remote control for an app nobody can install yet, until the
+     * environment turns them on when the Windows app is released.
+     */
+    public function testDesktopAgentsShipSwitchedOffUntilTheEnvironmentTurnsThemOn(): void
+    {
+        $this->assertFalse((new RemoteConfig())->featureDesktopAgent);
+
+        $_ENV['remote.allowDesktopAgent'] = 'true';
+
+        try {
+            $this->assertTrue((new RemoteConfig())->featureDesktopAgent);
+        } finally {
+            unset($_ENV['remote.allowDesktopAgent']);
+        }
+
+        $this->assertMatchesRegularExpression(
+            '/^remote\.allowDesktopAgent = false$/m',
+            (string) file_get_contents(dirname(__DIR__, 2) . '/.env.example'),
+            'An api/.env copied from .env.example must not switch desktop agents on.',
+        );
+    }
+
+    /**
      * The global flag can only ever remove capability (§67) — with desktop
      * agents switched off platform-wide, no policy and no plan restores them.
      */

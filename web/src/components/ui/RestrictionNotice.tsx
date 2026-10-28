@@ -125,6 +125,7 @@ const PRESENTATION: Record<string, Presentation> = {
   },
   TIMEOUT: { title: 'That took too long', alternatives: ['Try again'], tone: 'error' },
   UNAUTHENTICATED: { title: 'Your session has expired', alternatives: ['Sign in again'], tone: 'error' },
+  SIGN_IN_REQUIRED: { title: 'Sign in to join this session', tone: 'restricted' },
 }
 
 interface Props {

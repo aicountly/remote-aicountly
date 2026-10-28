@@ -9,6 +9,7 @@ use App\Domain\Policy\EffectivePolicy;
 use App\Domain\Support\ApiException;
 use App\Domain\Support\RequestContext;
 use CodeIgniter\Controller;
+use CodeIgniter\HTTP\Exceptions\HTTPException;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
 
@@ -102,7 +103,12 @@ abstract class BaseApiController extends Controller
      */
     protected function body(): array
     {
-        $json = $this->request->getJSON(true);
+        try {
+            $json = $this->request->getJSON(true);
+        } catch (HTTPException) {
+            // A body that is not JSON is the caller's mistake: a 400 saying so, not a 500 and a critical log line.
+            throw ApiException::badRequest('INVALID_JSON', 'The request body was not valid JSON.');
+        }
 
         return is_array($json) ? $json : [];
     }

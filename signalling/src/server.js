@@ -167,7 +167,9 @@ server.on('upgrade', (request, socket, head) => {
 
   // The token may arrive as a query parameter or as the WebSocket subprotocol.
   // The browser WebSocket API cannot set an Authorization header, which is why
-  // there is no header form: pretending otherwise would just not work.
+  // there is no header form: pretending otherwise would just not work. The web
+  // app sends the subprotocol (a URL is what proxies log); the desktop agent
+  // still sends the query parameter.
   const token = url.searchParams.get('token') ?? subprotocolToken(request);
 
   let participant;

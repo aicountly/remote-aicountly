@@ -206,6 +206,38 @@ export function RemoteProvider({ children }: { children: ReactNode }) {
   return <RemoteContext.Provider value={value}>{children}</RemoteContext.Provider>
 }
 
+/**
+ * What an external guest's screens read instead of {@link RemoteProvider}.
+ *
+ * A guest has no AICOUNTLY account, so there is no bootstrap to fetch and no
+ * organisation to choose (§23) — but the session room still reads this
+ * context, and without a provider it threw, so every guest invitation ended on
+ * an error page. Nothing is granted here: no policy, no bootstrap, and `can()`
+ * is always false. The room gates a guest on the session's own capabilities
+ * (`isGuest || can(…)`), and the server holds them to exactly that.
+ */
+export function GuestRemoteProvider({ children }: { children: ReactNode }) {
+  const capabilities = useMemo(() => getCapabilities(), [])
+
+  const value = useMemo<RemoteContextValue>(
+    () => ({
+      status: 'ready',
+      error: null,
+      bootstrap: null,
+      policy: null,
+      scopeType: 'PERSONAL',
+      companyId: null,
+      capabilities,
+      switchScope: async () => undefined,
+      refresh: async () => undefined,
+      can: () => false,
+    }),
+    [capabilities],
+  )
+
+  return <RemoteContext.Provider value={value}>{children}</RemoteContext.Provider>
+}
+
 export function useRemote(): RemoteContextValue {
   const context = useContext(RemoteContext)
   if (!context) throw new Error('useRemote must be used inside <RemoteProvider>')

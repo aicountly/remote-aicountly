@@ -1,7 +1,7 @@
 import { RouterProvider } from 'react-router-dom'
 
 import { useAuth } from './auth/AuthProvider'
-import { RemoteProvider } from './app/RemoteProvider'
+import { GuestRemoteProvider, RemoteProvider } from './app/RemoteProvider'
 import { router } from './app/router'
 import SignIn from './pages/SignIn'
 import AicountlyLogo from './components/brand/AicountlyLogo'
@@ -12,7 +12,8 @@ import AicountlyLogo from './components/brand/AicountlyLogo'
  * Three states, and the third is the one worth noting: an external guest has no
  * AICOUNTLY account, so they get the router without {@link RemoteProvider} —
  * there is no bootstrap to fetch, no organisation to select, and no navigation
- * they should see (§23).
+ * they should see (§23). {@link GuestRemoteProvider} stands in for it, granting
+ * nothing, because the session room reads that context for everyone.
  */
 export default function App() {
   const { status } = useAuth()
@@ -22,7 +23,11 @@ export default function App() {
   }
 
   if (status === 'guest') {
-    return <RouterProvider router={router} />
+    return (
+      <GuestRemoteProvider>
+        <RouterProvider router={router} />
+      </GuestRemoteProvider>
+    )
   }
 
   if (status === 'authenticated') {

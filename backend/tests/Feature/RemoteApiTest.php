@@ -164,7 +164,10 @@ final class RemoteApiTest extends RemoteTestCase
 
         $read = $this->withHeaders($headers)->get('v1/remote/sessions/' . $session['uuid']);
         $read->assertStatus(200);
-        $this->assertSame($session['uuid'], json_decode($read->getJSON(), true)['data']['uuid']);
+        $detail = json_decode($read->getJSON(), true)['data'];
+        $this->assertSame($session['uuid'], $detail['uuid']);
+        // History joins the owner's name; the single read did not, so every detail page said "Host —".
+        $this->assertSame('Rahul Gupta', $detail['ownerName']);
     }
 
     public function testAnotherUserCannotReadTheSession(): void
@@ -230,6 +233,113 @@ final class RemoteApiTest extends RemoteTestCase
         $stopped->assertStatus(200);
         // Stopping the share must not end the session (§86).
         $this->assertSame('ACTIVE', json_decode($stopped->getJSON(), true)['data']['status']);
+    }
+
+    /**
+     * The host is the sharer. Anyone else who can read the session — an
+     * administrator seeing it through the organisation's history, an admitted
+     * viewer — could mark it as sharing (WAITING jumped to ACTIVE), stop the
+     * share and with it any control a companion carried, or pause it through
+     * context-mismatch, and the timeline recorded them doing it.
+     */
+    public function testOnlyTheHostDrivesASessionsSharing(): void
+    {
+        $host    = $this->makeIdentity('Priya Nair');
+        $admin   = $this->makeIdentity('Rahul Gupta');
+        $viewer  = $this->makeIdentity('Viewer');
+        $company = $this->makeCompany(481, 'ABC');
+        $this->grantCompanyAccess($host, $company);
+        $this->grantCompanyAccess($admin, $company, 'COMPANY_ADMIN', true);
+        $this->grantCompanyAccess($viewer, $company);
+
+        $session = $this->makeSession($host, 'COMPANY', $company, ['sessionType' => 'INTERNAL', 'requestedShareMode' => 'BROWSER_TAB']);
+        $joined  = Services::joinService()->joinAuthenticated($session, $viewer, null, null);
+        Services::participantService()->approve($this->reload($session), (string) $joined['participant']['uuid'], $host);
+        $before = (string) $this->reload($session)['status'];
+
+        $routes = [
+            'share-intent'     => ['shareMode' => 'BROWSER_TAB'],
+            'share-started'    => ['displaySurface' => 'browser'],
+            'share-stopped'    => ['reason' => 'USER_STOPPED'],
+            'context-mismatch' => ['observedCompanyId' => 902],
+        ];
+
+        foreach ([[$admin, 'admin-key'], [$viewer, 'viewer-key']] as [$outsider, $key]) {
+            $headers = $this->asUser($outsider, $key);
+
+            // Both may read the session, which is how they could reach these routes at all.
+            $this->withHeaders($headers)->get("v1/remote/sessions/{$session['uuid']}")->assertStatus(200);
+
+            foreach ($routes as $route => $body) {
+                $result = $this->withHeaders($headers)
+                    ->withBodyFormat('json')
+                    ->post("v1/remote/sessions/{$session['uuid']}/{$route}", $body);
+
+                $result->assertStatus(403);
+                $this->assertSame(
+                    'SESSION_NOT_HOST',
+                    json_decode($result->getJSON(), true)['error']['code'],
+                    "{$outsider->displayName} must not reach {$route}",
+                );
+            }
+        }
+
+        $this->assertSame($before, (string) $this->reload($session)['status'], 'Nobody but the host moved the session.');
+        foreach (['SCREEN_SHARE_REQUESTED', 'SCREEN_SHARE_STARTED', 'SCREEN_SHARE_STOPPED', 'COMPANY_CONTEXT_MISMATCH', 'POLICY_REJECTED'] as $event) {
+            $count = $this->db->table('remote_session_events')
+                ->where('session_id', $session['id'])
+                ->where('event_type', $event)
+                ->countAllResults();
+            $this->assertSame(0, $count, "No {$event} may be written for somebody who did not share.");
+        }
+
+        // The host still can.
+        $hostHeaders = $this->asUser($host, 'host-key');
+        $this->withHeaders($hostHeaders)->withBodyFormat('json')
+            ->post("v1/remote/sessions/{$session['uuid']}/share-intent", ['shareMode' => 'BROWSER_TAB'])->assertStatus(200);
+        $started = $this->withHeaders($hostHeaders)->withBodyFormat('json')
+            ->post("v1/remote/sessions/{$session['uuid']}/share-started", ['displaySurface' => 'browser']);
+        $started->assertStatus(200);
+        $this->assertSame('ACTIVE', json_decode($started->getJSON(), true)['data']['status']);
+        $mismatch = $this->withHeaders($hostHeaders)->withBodyFormat('json')
+            ->post("v1/remote/sessions/{$session['uuid']}/context-mismatch", ['observedCompanyId' => 902]);
+        $mismatch->assertStatus(200);
+        $this->assertSame('PAUSED', json_decode($mismatch->getJSON(), true)['data']['status']);
+    }
+
+    /**
+     * A caller's mistake is a 400 that says what was wrong — not a 500, which
+     * is also logged as critical and reads as an outage.
+     */
+    public function testABodyThatIsNotJsonIsABadRequest(): void
+    {
+        $identity = $this->makeIdentity();
+
+        $result = $this->withHeaders($this->asUser($identity) + ['Content-Type' => 'application/json'])
+            ->withBody('{"scopeType": "PERSONAL"')
+            ->post('v1/remote/sessions');
+
+        $result->assertStatus(400);
+        $this->assertSame('INVALID_JSON', json_decode($result->getJSON(), true)['error']['code']);
+    }
+
+    public function testAHistoryDateThatIsNotADateIsABadRequest(): void
+    {
+        $identity = $this->makeIdentity();
+        $headers  = $this->asUser($identity);
+        $this->makeSession($identity);
+
+        $result = $this->withHeaders($headers)->get('v1/remote/sessions/history?from=garbage');
+
+        $result->assertStatus(400);
+        $error = json_decode($result->getJSON(), true)['error'];
+        $this->assertSame('VALIDATION_FAILED', $error['code']);
+        $this->assertArrayHasKey('from', $error['details']['fields']);
+
+        // A real date still filters.
+        $today = $this->withHeaders($headers)->get('v1/remote/sessions/history?from=' . gmdate('Y-m-d'));
+        $today->assertStatus(200);
+        $this->assertSame(1, json_decode($today->getJSON(), true)['meta']['total']);
     }
 
     public function testAForbiddenSurfaceIsRefusedByTheServerEvenAfterIntent(): void

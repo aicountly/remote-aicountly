@@ -9,7 +9,7 @@ import type { ControlPhase } from './ControlPanel'
 import type { EnginePeer, EngineSnapshot } from '../../services/webrtc/RemoteSessionEngine'
 import type { RelayProbeResult } from '../../ice-kit/index.js'
 import type { ChatMessage, SessionControlState, SessionDetail } from '../../types/remote'
-import { describeShareMode, describeSurface, formatTime } from '../../utils/format'
+import { describeRole, describeShareMode, describeSurface, formatTime } from '../../utils/format'
 
 /**
  * The collapsible right-hand panel (§33): people, chat, files, details, security.
@@ -222,7 +222,7 @@ function ParticipantsPanel({
                 {participant.isHost ? <span className="participant__tag">Host</span> : null}
               </p>
               <p className="participant__role">
-                {roleLabel(participant.role)}
+                {describeRole(participant.role)}
                 {peer?.dataChannelReady ? ' · connected' : ''}
               </p>
             </div>
@@ -519,18 +519,5 @@ function Detail({ label, value, mono = false }: { label: string; value: string; 
       <dt>{label}</dt>
       <dd className={mono ? 'mono' : undefined}>{value}</dd>
     </div>
-  )
-}
-
-function roleLabel(role: string): string {
-  return (
-    {
-      SHARER: 'Sharing',
-      VIEWER: 'Viewer',
-      SUPPORT_TECHNICIAN: 'AICOUNTLY Support',
-      OBSERVER: 'Observer',
-      GUEST: 'External guest',
-      CONTROL_COMPANION: 'Remote app (control only)',
-    }[role] ?? role
   )
 }

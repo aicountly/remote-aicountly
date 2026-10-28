@@ -70,6 +70,14 @@
 
 Options -Indexes
 
+# PHP names its version in X-Powered-By while expose_php is on, and php.ini is the
+# host's, not ours (app/Config/Events.php removes it too). Both tables: "always"
+# for a header PHP sent with an error status, the plain one for a success.
+<IfModule mod_headers.c>
+  Header always unset X-Powered-By
+  Header unset X-Powered-By
+</IfModule>
+
 # The API's .env sits inside the document root, so without this it would be
 # fetchable over HTTP at https://remote.aicountly.com/api/.env.
 RedirectMatch 404 /\.(?!well-known)

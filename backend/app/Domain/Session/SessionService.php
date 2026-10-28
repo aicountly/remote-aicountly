@@ -420,7 +420,7 @@ class SessionService
             ])
             ->update([
                 'status'       => SessionStatus::EXPIRED,
-                'ended_at'     => Clock::now(),
+                'ended_at'     => $endedAt = Clock::now(),
                 'end_reason'   => 'EXPIRED',
                 'session_code' => null,
                 'updated_at'   => Clock::now(),
@@ -432,8 +432,30 @@ class SessionService
         $row['status']       = SessionStatus::EXPIRED;
         $row['session_code'] = null;
         $row['end_reason']   = 'EXPIRED';
+        // What was just written, so the read that expired it shows how long it ran — the summary said "Duration —".
+        $row['ended_at']     = $endedAt;
+
+        // Over exactly as an ended session is. Without this everybody stayed JOINED in an expired session and its
+        // invitations stayed open, so the host's room still counted them as admitted.
+        $this->closeOut($row);
 
         return $row;
+    }
+
+    /**
+     * What ending a session — by End or by expiry — closes with it: everybody still in it or waiting to be, its
+     * control-companion link (recorded as ending), and every invitation that could still be redeemed.
+     *
+     * @param array<string, mixed> $session the session, already in its terminal status
+     */
+    private function closeOut(array $session): void
+    {
+        $this->participants->closeAll((int) $session['id']);
+        \Config\Services::companionLinks()->sweep($session);
+        $this->db->table('remote_invitations')
+            ->where('session_id', $session['id'])
+            ->where('revoked_at', null)
+            ->update(['revoked_at' => Clock::now(), 'updated_at' => Clock::now()]);
     }
 
     /**
@@ -553,13 +575,7 @@ class SessionService
             'session_code'     => null,
         ]);
 
-        $this->participants->closeAll((int) $session['id']);
-        // Its control-companion link ends with it (and is recorded as ending).
-        \Config\Services::companionLinks()->sweep($updated);
-        $this->db->table('remote_invitations')
-            ->where('session_id', $session['id'])
-            ->where('revoked_at', null)
-            ->update(['revoked_at' => Clock::now(), 'updated_at' => Clock::now()]);
+        $this->closeOut($updated);
 
         $this->audit->record($updated, EventType::SESSION_ENDED, $identity->id, 'USER', null, null, [
             'reason'          => $reason,
@@ -588,6 +604,10 @@ class SessionService
         ?int $surfaceWidth = null,
         ?int $surfaceHeight = null,
     ): array {
+        // The host is the sharer. Anyone else who can read the session — an admitted viewer, an administrator with
+        // the organisation's history — could otherwise mark it as sharing and write that into the audit trail.
+        $this->assertHost($session, $identity, 'Only the person who started this session can share a screen in it.');
+
         $surface = in_array($displaySurface, ['browser', 'window', 'monitor'], true) ? $displaySurface : 'unknown';
 
         // track.getSettings() of the shared video track. A size the database would refuse is no size at all,
@@ -671,6 +691,9 @@ class SessionService
      */
     public function recordShareStopped(array $session, RemoteIdentity $identity, string $reason = 'USER_STOPPED'): array
     {
+        // Stopping the share also stops any control a companion carried; that is the sharer's to do.
+        $this->assertHost($session, $identity, 'Only the person sharing in this session can stop the share.');
+
         $this->participants->setSharing((int) $session['id'], $identity->id, false);
 
         $update = ['actual_display_surface' => null, 'actual_surface_width' => null, 'actual_surface_height' => null];
@@ -701,6 +724,10 @@ class SessionService
         ?int $observedCompanyId,
         ?string $observedProduct,
     ): array {
+        // Only the sharer's own browser can observe the tab it shares; from anyone else this pauses a session
+        // that is not theirs to pause, which /pause already refuses.
+        $this->assertHost($session, $identity, 'Only the person sharing in this session can report its organisation.');
+
         $this->participants->setSharing((int) $session['id'], $identity->id, false);
 
         $updated = SessionStatus::isTerminal((string) $session['status'])
@@ -780,10 +807,10 @@ class SessionService
             $builder->where('s.source_product', strtoupper((string) $filters['sourceProduct']));
         }
         if (! empty($filters['from'])) {
-            $builder->where('s.created_at >=', $filters['from']);
+            $builder->where('s.created_at >=', $this->historyMoment((string) $filters['from'], 'from'));
         }
         if (! empty($filters['to'])) {
-            $builder->where('s.created_at <=', $filters['to']);
+            $builder->where('s.created_at <=', $this->historyMoment((string) $filters['to'], 'to'));
         }
 
         $total = (clone $builder)->countAllResults(false);
@@ -791,6 +818,25 @@ class SessionService
         $items = $builder->orderBy('s.created_at', 'DESC')->limit($limit, $offset)->get()->getResultArray();
 
         return ['items' => $items, 'total' => $total];
+    }
+
+    /**
+     * A history date filter as a timestamp PostgreSQL accepts, or a 400 naming the field.
+     *
+     * Passed through as typed, a value PostgreSQL could not read ("garbage") was a 500 and a critical log line,
+     * and one only PostgreSQL could ("yesterday") filtered silently. Read the way the audit trail reads its own.
+     */
+    private function historyMoment(string $value, string $field): string
+    {
+        $value     = trim($value);
+        $timestamp = strtotime($value . (preg_match('/^\d{4}-\d{2}-\d{2}$/', $value) === 1 ? ' 00:00:00 UTC' : ''));
+        if ($timestamp === false) {
+            throw ApiException::badRequest('VALIDATION_FAILED', 'Some of the details sent were not valid.', [
+                'fields' => [$field => 'Use a date such as 2026-10-16.'],
+            ]);
+        }
+
+        return gmdate('Y-m-d H:i:sP', $timestamp);
     }
 
     /** @return list<array<string, mixed>> */
@@ -872,8 +918,12 @@ class SessionService
         return max(0, strtotime((string) $session['ended_at']) - strtotime((string) $session['started_at']));
     }
 
-    /** @param array<string, mixed> $session */
-    private function assertHost(array $session, RemoteIdentity $identity, string $message): void
+    /**
+     * The session's host — its owner, who in a browser session is also the person sharing.
+     *
+     * @param array<string, mixed> $session
+     */
+    public function assertHost(array $session, RemoteIdentity $identity, string $message): void
     {
         if ((int) $session['owner_user_id'] !== $identity->id) {
             throw ApiException::forbidden('SESSION_NOT_HOST', $message);
