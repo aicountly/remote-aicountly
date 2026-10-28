@@ -222,7 +222,7 @@ function ParticipantsPanel({
                 {participant.isHost ? <span className="participant__tag">Host</span> : null}
               </p>
               <p className="participant__role">
-                {roleLabel(participant.role)}
+                {describeRole(participant.role)}
                 {peer?.dataChannelReady ? ' · connected' : ''}
               </p>
             </div>
@@ -520,9 +520,4 @@ function Detail({ label, value, mono = false }: { label: string; value: string; 
       <dd className={mono ? 'mono' : undefined}>{value}</dd>
     </div>
   )
-}
-
-/** In the room the sharer is doing it now, so "Sharing" rather than history's "Sharer". */
-function roleLabel(role: string): string {
-  return role === 'SHARER' ? 'Sharing' : describeRole(role)
 }

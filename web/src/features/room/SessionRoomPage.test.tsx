@@ -161,6 +161,16 @@ describe('the room header', () => {
     expect(await screen.findByText('We could not reach AICOUNTLY Remote. Check your connection.')).toBeInTheDocument()
   })
 
+  // The list said "Sharing" under the host from the moment the room opened, beside a stage saying nothing was.
+  it('names the host\'s role without claiming they are sharing', () => {
+    const host = { ...knocking, uuid: 'p-host', displayName: 'Asha', role: 'SHARER', status: 'JOINED', isHost: true } as Participant
+    room.session = { ...session, isHost: true, participants: [host] }
+    renderRoom()
+
+    expect(screen.getByText('Sharer')).toBeInTheDocument()
+    expect(screen.queryByText('Sharing')).not.toBeInTheDocument()
+  })
+
   it('says so when declining somebody from the participant list failed', async () => {
     room.session = { ...session, isHost: true, participants: [knocking] }
     actions.deny.mockRejectedValue(new Error('socket hang up'))
