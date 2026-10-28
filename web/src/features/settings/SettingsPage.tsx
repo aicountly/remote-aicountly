@@ -1,6 +1,6 @@
 import { Check, Minus } from 'lucide-react'
 
-import { useRemote } from '../../app/RemoteProvider'
+import { useDesktopAgentEnabled, useRemote } from '../../app/RemoteProvider'
 import { APP_ENV, APP_NAME } from '../../config'
 import { describePermission } from '../../utils/format'
 
@@ -17,6 +17,7 @@ import { describePermission } from '../../utils/format'
  */
 export default function SettingsPage() {
   const { bootstrap, policy, capabilities } = useRemote()
+  const desktopAgent = useDesktopAgentEnabled()
 
   const grantedPermissions = Object.entries(policy?.permissions ?? {})
     .filter(([, granted]) => granted)
@@ -102,7 +103,7 @@ export default function SettingsPage() {
               <ul className="permission-chips">
                 {grantedPermissions.map((permission) => (
                   <li key={permission} className="permission-chip">
-                    {describePermission(permission)}
+                    {describePermission(permission, desktopAgent)}
                   </li>
                 ))}
               </ul>

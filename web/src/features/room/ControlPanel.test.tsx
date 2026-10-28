@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
@@ -20,6 +20,15 @@ import type { Participant, SessionControlState } from '../../types/remote'
  *
  * Nothing here branches on `clientType`, and neither does the component.
  */
+
+/** Bootstrap's `features.desktopAgent` (remote.allowDesktopAgent): off unless a test turns it on. */
+const desktop = vi.hoisted(() => ({ agent: false }))
+
+vi.mock('../../app/RemoteProvider', () => ({ useDesktopAgentEnabled: () => desktop.agent }))
+
+beforeEach(() => {
+  desktop.agent = false
+})
 
 function control(overrides: Partial<SessionControlState> = {}): SessionControlState {
   return {
@@ -176,9 +185,30 @@ describe('ControlPanel', () => {
     panel({ phase: 'unavailable', host: null, control: control({ controllableHostUuid: null }) })
 
     expect(screen.getByText(/web browser, which cannot be controlled/i)).toBeInTheDocument()
-    // The Windows app is not released: the web says so rather than sending anyone looking for it.
+    // The desktop agent is switched off: the web says the app is coming soon rather than sending anyone looking for it.
     expect(screen.getByText(/AICOUNTLY Remote for Windows at that end, and it is coming soon/i)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /download AICOUNTLY Remote for Windows/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /request control/i })).not.toBeInTheDocument()
+  })
+
+  it('links the Windows app download for a browser host while the desktop agent is on', () => {
+    desktop.agent = true
+    panel({ phase: 'unavailable', host: null, control: control({ controllableHostUuid: null }) })
+
+    expect(screen.getByText(/web browser, which cannot be controlled/i)).toBeInTheDocument()
+    const download = screen.getByRole('link', { name: /^Download AICOUNTLY Remote for Windows/ })
+    expect(download).toHaveAttribute('href', 'https://aicountly.com/remote')
+    expect(download).toHaveAttribute('target', '_blank')
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /request control/i })).not.toBeInTheDocument()
+  })
+
+  it('offers no download when the reason is the share, not the app', () => {
+    desktop.agent = true
+    panel({ phase: 'unavailable', host: null, control: control({ controllableHostUuid: null, controlBlockedReason: 'NOT_SHARING' }) })
+
+    expect(screen.getByText(/only while the screen is being shared/i)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /download AICOUNTLY Remote for Windows/i })).not.toBeInTheDocument()
   })
 
   it('names the organisation as the reason when policy is what says no', () => {

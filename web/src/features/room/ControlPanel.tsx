@@ -1,7 +1,9 @@
 import { Keyboard, MousePointerClick, ShieldAlert, ShieldCheck } from 'lucide-react'
 
+import { useDesktopAgentEnabled } from '../../app/RemoteProvider'
 import type { EnginePeer } from '../../services/webrtc/RemoteSessionEngine'
 import type { Participant, SessionControlState } from '../../types/remote'
+import { DesktopAppDownloadLink } from '../desktop/DesktopAppDownload'
 import CompanionPanel from './CompanionPanel'
 
 /**
@@ -160,17 +162,33 @@ export default function ControlPanel({
   )
 }
 
-/** Why there is nothing to control right now, when the reason is one a person can act on. */
-function unavailableMessage(control: SessionControlState | null): string {
+/**
+ * Why there is nothing to control right now, when the reason is one a person
+ * can act on — and whether the answer is the Windows app, which is linked when
+ * it is offered (`desktopAgent`, remote.allowDesktopAgent) and said to be
+ * coming soon when it is not.
+ */
+function unavailableMessage(
+  control: SessionControlState | null,
+  desktopAgent: boolean,
+): { text: string; download: boolean } {
   switch (control?.controlBlockedReason) {
     case 'COMPANION_NOT_READY':
-      return 'The computer being shared is not ready for control yet.'
+      return { text: 'The computer being shared is not ready for control yet.', download: false }
     case 'NOT_SHARING':
-      return 'Control works only while the screen is being shared.'
+      return { text: 'Control works only while the screen is being shared.', download: false }
     case 'SURFACE_NOT_MONITOR':
-      return 'Control works only while an entire screen is shared, not a window or tab.'
+      return { text: 'Control works only while an entire screen is shared, not a window or tab.', download: false }
     default:
-      return 'The computer in this session is a web browser, which cannot be controlled. Control needs AICOUNTLY Remote for Windows at that end, and it is coming soon.'
+      return desktopAgent
+        ? {
+            text: 'The computer in this session is a web browser, which cannot be controlled. Control needs AICOUNTLY Remote for Windows at that end.',
+            download: true,
+          }
+        : {
+            text: 'The computer in this session is a web browser, which cannot be controlled. Control needs AICOUNTLY Remote for Windows at that end, and it is coming soon.',
+            download: false,
+          }
   }
 }
 
@@ -193,12 +211,26 @@ function ControlStatus({
   busy: boolean
   paused: string | null
 }) {
+  const desktopAgent = useDesktopAgentEnabled()
+
   switch (phase) {
     // A browser cannot be controlled. Saying so plainly is more useful than a
     // greyed-out button, and it is what §2 asks for: the limitation is never
     // misrepresented in the interface.
-    case 'unavailable':
-      return <p className="control__empty">{unavailableMessage(control)}</p>
+    case 'unavailable': {
+      const { text, download } = unavailableMessage(control, desktopAgent)
+
+      return (
+        <>
+          <p className="control__empty">{text}</p>
+          {download ? (
+            <p className="control__hint">
+              <DesktopAppDownloadLink className="control__link" />
+            </p>
+          ) : null}
+        </>
+      )
+    }
 
     // The organisation, the plan or this person's permission says no. Which
     // one is in `restrictions`, and the wording avoids implying the person can

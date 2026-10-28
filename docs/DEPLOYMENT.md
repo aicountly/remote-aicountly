@@ -131,19 +131,24 @@ remote.contextSecret    = <openssl rand -base64 48>
 remote.appUrl    = https://remote.aicountly.com
 remote.signalUrl = wss://remote.aicountly.com/signal
 
-# Web-only launch: no Computers, no remote control, until the Windows app is released.
-remote.allowDesktopAgent = false
+# AICOUNTLY Remote for Windows is released: Computers and remote control are offered.
+remote.allowDesktopAgent = true
 ```
 
-**Desktop agents stay off until the Windows app is released.** Remote launches on
-the web only, and with `remote.allowDesktopAgent` on, every plan that includes
-desktop devices is offered Computers and remote control for an app nobody can
-install. The default is off, but an `api/.env` made from an older
-`.env.example` says `remote.allowDesktopAgent = true`, which wins: check the
-server's `api/.env` and set it to `false`. With it off, the effective policy
-grants no `remote.device.*` or `remote.control.*` permission, so the web shows
-neither Computers nor the Control panel. Set it to `true` when the Windows app
-is released.
+**Desktop agents are on: AICOUNTLY Remote for Windows is released.** Signed
+builds are offered at https://aicountly.com/remote (read from
+`downloads.aicountly.com/remote/manifest.json` — see
+[desktop/PUBLISHING.md](desktop/PUBLISHING.md)), and wherever the web needs the
+app it says **Download AICOUNTLY Remote for Windows** and links there. The
+default is on, but an `api/.env` made from the `.env.example` of the web-only
+launch says `remote.allowDesktopAgent = false`, which wins: check the server's
+`api/.env` and set it to `true`. Setting it to `false` is still the switch that
+hides every desktop feature: the effective policy then grants no
+`remote.device.*` or `remote.control.*` permission, so the web shows neither
+Computers nor the Control panel, and where it still mentions the Windows app it
+says the app is coming soon. The web learns which from bootstrap's
+`features.desktopAgent`, so the change takes effect on the next page load,
+without a rebuild.
 
 On cPanel the account name prefixes both the database and the user, so a
 database created as `remote` becomes `<cpaneluser>_remote`. Record the full

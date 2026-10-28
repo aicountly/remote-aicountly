@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { Laptop } from 'lucide-react'
 
+import { useDesktopAgentEnabled } from '../../app/RemoteProvider'
 import { fetchCompanionDevices } from '../../services/api/remote'
 import type { CompanionLink, RemoteDevice, SessionControlState } from '../../types/remote'
+import { DesktopAppDownloadLink } from '../desktop/DesktopAppDownload'
 
 /**
  * "Enable control from this computer" — the sharer's side of a control
@@ -66,12 +68,15 @@ function outcomeNote(link: CompanionLink | null): string | null {
   return null
 }
 
-function restrictionMessage(restrictions: string[]): string {
+/** `desktopAgent`: the Windows app is offered (remote.allowDesktopAgent), so the panel links to it rather than saying it is coming soon. */
+function restrictionMessage(restrictions: string[], desktopAgent: boolean): string {
   if (restrictions.includes('CONTROL_ACCEPT_DENIED')) return 'You do not have permission to hand over control.'
   if (restrictions.some((r) => r.startsWith('REMOTE_CONTROL'))) return 'Remote control is not enabled for this organisation.'
   if (restrictions.includes('PERSONAL_SCOPE')) return 'Control is available only in organisation sessions.'
 
-  return 'No AICOUNTLY Remote desktop app is signed in for you. The desktop app is coming soon; if you already have it, open it on this computer, sign in and try again.'
+  return desktopAgent
+    ? 'No AICOUNTLY Remote desktop app is signed in for you. Open it on this computer, sign in and try again.'
+    : 'No AICOUNTLY Remote desktop app is signed in for you. The desktop app is coming soon; if you already have it, open it on this computer, sign in and try again.'
 }
 
 interface Props {
@@ -100,6 +105,7 @@ export default function CompanionPanel({
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
 
+  const desktopAgent = useDesktopAgentEnabled()
   const view = companionView(control)
   const link = liveCompanion(control)
   const deviceName = link?.deviceName ?? 'your computer'
@@ -134,11 +140,23 @@ export default function CompanionPanel({
 
       {view === 'off' ? (
         <>
-          <p className="control__empty">
-            Let someone you allow control this computer while you share your entire screen. This needs the AICOUNTLY
-            Remote desktop app open on it, and the desktop app is coming soon. Until then, the person helping you can
-            point and draw on what you share.
-          </p>
+          {desktopAgent ? (
+            <>
+              <p className="control__empty">
+                Let someone you allow control this computer while you share your entire screen. This needs AICOUNTLY
+                Remote for Windows open on it, signed in with your AICOUNTLY account.
+              </p>
+              <p className="control__hint">
+                <DesktopAppDownloadLink className="control__link" />
+              </p>
+            </>
+          ) : (
+            <p className="control__empty">
+              Let someone you allow control this computer while you share your entire screen. This needs the AICOUNTLY
+              Remote desktop app open on it, and the desktop app is coming soon. Until then, the person helping you can
+              point and draw on what you share.
+            </p>
+          )}
           {outcomeNote(control?.companion ?? null) ? (
             <p className="control__hint">{outcomeNote(control?.companion ?? null)}</p>
           ) : null}
@@ -154,7 +172,7 @@ export default function CompanionPanel({
               Enable control from this computer
             </button>
           ) : devices.length === 0 ? (
-            <p className="control__hint">{restrictionMessage(restrictions)}</p>
+            <p className="control__hint">{restrictionMessage(restrictions, desktopAgent)}</p>
           ) : (
             <ul className="control__devices">
               {devices.map((device) => (

@@ -37,6 +37,7 @@ import { REGISTRY_APP_NAME, getCompanyRegistry } from '../services/companyRegist
 import { CompanyRestrictedBanner } from '../components/CompanyRestrictedBanner'
 import { manageProfilePath, openManagePortal } from '../services/appLauncher'
 import CompanyIdTag from '../components/ui/CompanyIdTag'
+import { AnalyticsPreferencesButton } from '../components/AnalyticsConsent'
 
 /**
  * The application frame: AICOUNTLY header, organisation switcher, navigation.
@@ -347,10 +348,17 @@ function SignedInShell() {
             ))}
           </ul>
 
-          <p className="shell__nav-footnote">
-            <ClipboardList size={13} aria-hidden="true" />
-            Browser assistance. No installation required.
-          </p>
+          <div className="shell__nav-foot">
+            <p className="shell__nav-footnote">
+              <ClipboardList size={13} aria-hidden="true" />
+              Browser assistance. No installation required.
+            </p>
+            {/* Closes the phone's navigation drawer first, which would otherwise cover the banner. */}
+            <AnalyticsPreferencesButton
+              className="btn btn--ghost btn--sm shell__nav-preferences"
+              onOpen={() => setMobileNavOpen(false)}
+            />
+          </div>
         </nav>
 
         {mobileNavOpen ? (

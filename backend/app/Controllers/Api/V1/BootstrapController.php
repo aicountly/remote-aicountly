@@ -95,6 +95,9 @@ class BootstrapController extends BaseApiController
                 'safeShare'    => $config->featureSafeShare,
                 'microphone'   => $config->featureMicrophone,
                 'multiViewer'  => $config->featureMultiViewer,
+                // AICOUNTLY Remote for Windows (remote.allowDesktopAgent): whether the web
+                // offers the download where it needs the app, or says it is coming soon.
+                'desktopAgent' => $config->featureDesktopAgent,
                 'fileTransferMaxBytes' => $config->fileTransferMaxBytes,
             ],
             'realtime' => [

@@ -1209,6 +1209,14 @@
   line-height: 1.5;
 }
 
+/* A link on the dark stage: the brand green, which keeps its contrast there (the
+   default link colour does not), and underlined so it reads as one. */
+.control__link {
+  color: var(--aicountly-green);
+  font-weight: 600;
+  text-decoration: underline;
+}
+
 /*
  * "Control from this computer" — the sharer's control companion
  * (docs/desktop/CONTROL_COMPANION.md). A quiet card: it is a setting, not a request.

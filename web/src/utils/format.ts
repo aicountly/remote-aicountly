@@ -258,8 +258,16 @@ export function describeEvent(eventType: string): string {
   return EVENT_LABELS[eventType] ?? eventType.replace(/_/g, ' ').toLowerCase()
 }
 
-/** Permission names as sentences, for the administration matrix. */
-export function describePermission(permission: string): string {
+/**
+ * Permission names as sentences, for the administration matrix.
+ *
+ * `desktopAgent`: AICOUNTLY Remote for Windows is offered (remote.allowDesktopAgent).
+ * The desktop permissions only mean something with it, so they say they need it —
+ * and, while it is switched off, that it is coming soon rather than offering a
+ * capability nobody can use.
+ */
+export function describePermission(permission: string, desktopAgent = false): string {
+  const windowsApp = desktopAgent ? '(needs the Windows app)' : '(Windows app, coming soon)'
   const labels: Record<string, string> = {
     'remote.access': 'Use AICOUNTLY Remote',
     'remote.session.create': 'Start a session',
@@ -287,13 +295,11 @@ export function describePermission(permission: string): string {
     'remote.audit.view': 'View the audit trail',
     'remote.policy.view': 'View Remote policy',
     'remote.policy.manage': 'Manage Remote policy',
-    // The desktop permissions only mean something with AICOUNTLY Remote for Windows, which is not released yet; the
-    // web says so wherever they are listed rather than offering a capability nobody can use.
-    'remote.control.request': 'Request control of a computer (Windows app, coming soon)',
-    'remote.control.accept': 'Let someone control your computer (Windows app, coming soon)',
-    'remote.device.enrol': 'Register a computer (Windows app, coming soon)',
-    'remote.device.manage': 'Manage registered computers (Windows app, coming soon)',
-    'remote.unattended.access': 'Connect to a computer with nobody at it (Windows app, coming soon)',
+    'remote.control.request': `Request control of a computer ${windowsApp}`,
+    'remote.control.accept': `Let someone control your computer ${windowsApp}`,
+    'remote.device.enrol': `Register a computer ${windowsApp}`,
+    'remote.device.manage': `Manage registered computers ${windowsApp}`,
+    'remote.unattended.access': `Connect to a computer with nobody at it ${windowsApp}`,
   }
 
   return labels[permission] ?? permission
