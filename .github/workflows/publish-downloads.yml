@@ -155,9 +155,32 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: desktop-v${{ inputs.version }}${{ inputs.channel == 'beta' && '-beta' || '' }}
+          CHANNEL: ${{ inputs.channel }}
         run: |
           set -euo pipefail
           mkdir -p staging
+
+          # `gh release download` says "release not found" and stops, which is
+          # true and useless: it does not say what does exist, and the usual
+          # cause is not a typo. So find out first and explain.
+          if ! gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "There is no release tagged ${TAG}."
+            echo
+            echo "Releases that do exist in ${GITHUB_REPOSITORY}:"
+            existing=$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 20 2>/dev/null || true)
+
+            if [ -z "${existing}" ]; then
+              echo "  (none -- this repository has never published one)"
+              echo "::error title=Nothing has been released yet::This workflow publishes a release; it does not build one, and ${GITHUB_REPOSITORY} has no releases at all. Build one first with release-windows.yml (and release-macos.yml for a Mac build), using channel beta or production. Note that channel: sandbox deliberately publishes NO release -- a sandbox build is unsigned, and nothing unsigned may reach the downloads host -- so a green sandbox run leaves nothing here to publish."
+              exit 1
+            fi
+
+            printf '%s\n' "${existing}" | sed 's/^/  /'
+            echo
+            echo "::error title=No release tagged ${TAG}::The channel chosen here decides the tag: beta looks for desktop-v<version>-beta, production for desktop-v<version>. This run asked for '${CHANNEL}', so it looked for ${TAG}. If the build was made on the other channel, re-run this with that channel selected rather than renaming anything."
+            exit 1
+          fi
+
           echo "Downloading ${TAG}"
           gh release download "${TAG}" --dir staging --repo "${GITHUB_REPOSITORY}"
           ls -la staging
