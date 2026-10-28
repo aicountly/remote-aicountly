@@ -225,15 +225,28 @@ jobs:
         working-directory: desktop
         env:
           # '-' is ad-hoc signing: the app is sealed so macOS will run it once
-          # the user allows it, but nothing vouches for who built it. With no
-          # APPLE_ID the bundler does not attempt notarisation at all.
+          # the user allows it, but nothing vouches for who built it.
           APPLE_SIGNING_IDENTITY: ${{ inputs.allow_unsigned && '-' || secrets.MACOS_RELEASE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ inputs.allow_unsigned && '' || secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ inputs.allow_unsigned && '' || secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ inputs.allow_unsigned && '' || secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          INPUT_ALLOW_UNSIGNED: ${{ inputs.allow_unsigned }}
           CARGO_PROFILE_RELEASE_DEBUG: '0'
         run: |
           set -euo pipefail
+
+          # Unset, not blanked. Setting these to '' in the `env:` block above
+          # still *defines* them, and the bundler decides to notarise on the
+          # variables being present rather than on their having a usable
+          # value -- so a blank APPLE_TEAM_ID does not skip notarisation, it
+          # attempts it and fails with "Team ID must be at least 3
+          # characters". Removing them from the environment is what actually
+          # means "do not notarise".
+          if [ "${INPUT_ALLOW_UNSIGNED}" = "true" ]; then
+            unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+            echo "Unsigned build: notarisation credentials removed from the environment."
+          fi
+
           for target in aarch64-apple-darwin x86_64-apple-darwin; do
             echo "::group::$target"
             npx tauri build --target "$target" --bundles app,dmg
