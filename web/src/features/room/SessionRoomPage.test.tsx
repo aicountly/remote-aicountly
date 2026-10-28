@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 import { GuestRemoteProvider } from '../../app/RemoteProvider'
 import { RemoteApiError } from '../../services/api/client'
-import type { SessionDetail } from '../../types/remote'
+import type { Participant, SessionDetail } from '../../types/remote'
 
 /**
  * The room's header actions.
@@ -13,10 +13,20 @@ import type { SessionDetail } from '../../types/remote'
  *   * End used to be an unhandled promise: when the API call failed nothing was
  *     said, so the person was left wondering whether they were still sharing;
  *   * a guest was offered End, which the API always refuses a guest — Leave is
- *     what a guest can do.
+ *     what a guest can do;
+ *   * Pause, Resume, Allow and Decline were unhandled promises too.
  */
 
-const actions = vi.hoisted(() => ({ end: vi.fn(), leave: vi.fn(async () => undefined) }))
+const actions = vi.hoisted(() => ({
+  end: vi.fn(),
+  leave: vi.fn(async () => undefined),
+  pause: vi.fn(),
+  resume: vi.fn(),
+  approve: vi.fn(),
+  deny: vi.fn(),
+}))
+/** The session a test renders, when it is not the default one below. */
+const room = vi.hoisted(() => ({ session: null as SessionDetail | null }))
 
 const session: SessionDetail = {
   uuid: 'sess-1',
@@ -53,7 +63,7 @@ const session: SessionDetail = {
 
 vi.mock('./useRemoteSession', () => ({
   useRemoteSession: () => ({
-    session,
+    session: room.session ?? session,
     loading: false,
     error: null,
     ended: false,
@@ -85,11 +95,24 @@ function renderRoom() {
   )
 }
 
+const unreachable = () =>
+  new RemoteApiError('NETWORK_ERROR', 'We could not reach AICOUNTLY Remote. Check your connection.', 0)
+
+const knocking = {
+  uuid: 'p-guest',
+  displayName: 'Bala',
+  role: 'GUEST',
+  status: 'REQUESTED',
+  isHost: false,
+  isSharing: false,
+  microphoneEnabled: false,
+} as Participant
+
 describe('the room header', () => {
   afterEach(() => {
     sessionStorage.clear()
-    actions.end.mockReset()
-    actions.leave.mockClear()
+    room.session = null
+    for (const action of Object.values(actions)) action.mockReset()
   })
 
   it('says so when ending the session failed', async () => {
@@ -114,5 +137,38 @@ describe('the room header', () => {
     expect(actions.leave).toHaveBeenCalledTimes(1)
     expect(actions.end).not.toHaveBeenCalled()
     expect(await screen.findByText('left the room')).toBeInTheDocument()
+  })
+
+  it('says so when pausing failed', async () => {
+    room.session = { ...session, isHost: true }
+    actions.pause.mockRejectedValue(unreachable())
+    renderRoom()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Pause' }))
+
+    expect(actions.pause).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText('We could not reach AICOUNTLY Remote. Check your connection.')).toBeInTheDocument()
+  })
+
+  it('says so when admitting somebody from the queue failed', async () => {
+    room.session = { ...session, isHost: true, waiting: [knocking] }
+    actions.approve.mockRejectedValue(unreachable())
+    renderRoom()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Allow' }))
+
+    expect(actions.approve).toHaveBeenCalledWith('p-guest')
+    expect(await screen.findByText('We could not reach AICOUNTLY Remote. Check your connection.')).toBeInTheDocument()
+  })
+
+  it('says so when declining somebody from the participant list failed', async () => {
+    room.session = { ...session, isHost: true, participants: [knocking] }
+    actions.deny.mockRejectedValue(new Error('socket hang up'))
+    renderRoom()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Decline' }))
+
+    expect(actions.deny).toHaveBeenCalledWith('p-guest')
+    expect(await screen.findByText('Declining them did not go through. Try again.')).toBeInTheDocument()
   })
 })

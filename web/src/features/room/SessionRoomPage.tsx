@@ -89,7 +89,18 @@ export default function SessionRoomPage() {
   const [annotationTool, setAnnotationTool] = useState<AnnotationTool>('none')
   const [pointerOn, setPointerOn] = useState(false)
   const [elapsed, setElapsed] = useState(0)
-  const [endError, setEndError] = useState<RemoteApiError | null>(null)
+  const [actionError, setActionError] = useState<RemoteApiError | null>(null)
+
+  // End, Pause, Resume, Allow and Decline: a refusal or a failure to reach the API is said, not swallowed — the
+  // person would otherwise believe the session paused, or somebody was admitted, when nothing happened.
+  const attempt = (action: () => Promise<unknown>, fallback: string): Promise<void> => {
+    setActionError(null)
+
+    return action().then(
+      () => undefined,
+      (err: unknown) => setActionError(err instanceof RemoteApiError ? err : new RemoteApiError('UNKNOWN', fallback, 0)),
+    )
+  }
 
   // A visible clock is part of trusting a screen-sharing session: it says how
   // long this has been going on without anyone having to remember.
@@ -271,12 +282,20 @@ export default function SessionRoomPage() {
         <div className="room__header-actions">
           {session.isHost ? (
             session.status === 'PAUSED' ? (
-              <button type="button" className="btn btn--secondary btn--sm" onClick={() => void actions.resume()}>
+              <button
+                type="button"
+                className="btn btn--secondary btn--sm"
+                onClick={() => void attempt(actions.resume, 'The session could not be resumed. Try again.')}
+              >
                 <Play size={15} aria-hidden="true" />
                 Resume
               </button>
             ) : (
-              <button type="button" className="btn btn--ghost btn--sm room__ghost" onClick={() => void actions.pause()}>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm room__ghost"
+                onClick={() => void attempt(actions.pause, 'The session could not be paused. Try again.')}
+              >
                 <Pause size={15} aria-hidden="true" />
                 Pause
               </button>
@@ -300,18 +319,9 @@ export default function SessionRoomPage() {
             <button
               type="button"
               className="btn btn--danger btn--sm"
-              onClick={() => {
-                setEndError(null)
-                // Sharing has already stopped here whatever the answer (useRemoteSession `end`); a refusal or a
-                // network failure is said, not swallowed, so the person knows the session itself is still open.
-                actions.end().catch((err: unknown) =>
-                  setEndError(
-                    err instanceof RemoteApiError
-                      ? err
-                      : new RemoteApiError('UNKNOWN', 'The session could not be ended. Try again.', 0),
-                  ),
-                )
-              }}
+              // Sharing has already stopped here whatever the answer (useRemoteSession `end`); a refusal or a
+              // network failure is said, not swallowed, so the person knows the session itself is still open.
+              onClick={() => void attempt(actions.end, 'The session could not be ended. Try again.')}
             >
               End
             </button>
@@ -414,14 +424,18 @@ export default function SessionRoomPage() {
                 <button
                   type="button"
                   className="btn btn--secondary btn--sm"
-                  onClick={() => void actions.deny(participant.uuid)}
+                  onClick={() =>
+                    void attempt(() => actions.deny(participant.uuid), 'Declining them did not go through. Try again.')
+                  }
                 >
                   Decline
                 </button>
                 <button
                   type="button"
                   className="btn btn--primary btn--sm"
-                  onClick={() => void actions.approve(participant.uuid)}
+                  onClick={() =>
+                    void attempt(() => actions.approve(participant.uuid), 'They could not be admitted. Try again.')
+                  }
                 >
                   Allow
                 </button>
@@ -492,8 +506,8 @@ export default function SessionRoomPage() {
             }}
             onClose={() => setPanel(null)}
             onSendChat={actions.sendChat}
-            onApprove={actions.approve}
-            onDeny={actions.deny}
+            onApprove={(uuid) => attempt(() => actions.approve(uuid), 'They could not be admitted. Try again.')}
+            onDeny={(uuid) => attempt(() => actions.deny(uuid), 'Declining them did not go through. Try again.')}
           />
         ) : null}
       </div>
@@ -646,13 +660,13 @@ export default function SessionRoomPage() {
         onChangeMode={(mode) => actions.beginShare(mode)}
       />
 
-      {endError ? (
+      {actionError ? (
         <div className="room__error-toast" role="alert">
           <RestrictionNotice
             compact
-            error={endError}
+            error={actionError}
             action={
-              <button type="button" className="btn btn--secondary btn--sm" onClick={() => setEndError(null)}>
+              <button type="button" className="btn btn--secondary btn--sm" onClick={() => setActionError(null)}>
                 Dismiss
               </button>
             }
