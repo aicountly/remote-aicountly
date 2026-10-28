@@ -41,8 +41,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: The version to publish, e.g. 1.0.0 (must already have a GitHub release)
-        required: true
+        description: The version to publish, e.g. 1.0.0 (must already have a GitHub release). Ignored by check-access.
+        required: false
+        default: ''
         type: string
       channel:
         description: Which channel's release to publish
@@ -54,11 +55,12 @@ on:
         description: >-
           files-and-manifest publishes a release. manifest-only re-points the
           manifest at a version already on the host, which is how a rollback
-          is done.
+          is done. check-access proves the five secrets reach the right host
+          and uploads nothing.
         required: true
         default: files-and-manifest
         type: choice
-        options: [files-and-manifest, manifest-only]
+        options: [files-and-manifest, manifest-only, check-access]
 
 concurrency:
   # One publish at a time. Two at once could upload one version's files and
@@ -133,7 +135,23 @@ jobs:
       # a channel that signs, which makes "is this signed?" a question already
       # answered rather than one asked here. Both platforms' releases carry
       # the same tag, so this collects whatever built.
+      - name: Check the version was given
+        if: inputs.mode != 'check-access'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VERSION}" ]; then
+            echo "::error title=No version::This mode publishes something, so it needs a version. Only check-access runs without one."
+            exit 1
+          fi
+          if ! printf '%s' "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error title=Not a version::'${VERSION}' does not look like 1.2.3 or 1.2.3-beta.1."
+            exit 1
+          fi
+
       - name: Fetch the signed release
+        if: inputs.mode != 'check-access'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: desktop-v${{ inputs.version }}${{ inputs.channel == 'beta' && '-beta' || '' }}
@@ -148,6 +166,7 @@ jobs:
       # updater would consume; there is no updater, and uploading them would
       # put a second copy of every build on the host.
       - name: Keep only what a person downloads
+        if: inputs.mode != 'check-access'
         run: rm -f staging/*.zip staging/*.blockmap
 
       # Renames each installer to a name that is safe in a URL and the same
@@ -155,6 +174,7 @@ jobs:
       # manifest beside the workspace rather than into staging -- so the
       # upload below cannot carry it up early.
       - name: Describe the release
+        if: inputs.mode != 'check-access'
         env:
           VERSION: ${{ inputs.version }}
           CHANNEL: ${{ inputs.channel }}
@@ -202,7 +222,20 @@ jobs:
             echo "::error title=Not the downloads document root::DOWNLOAD_PROD_SSH_REMOTE_ROOT does not hold the downloads host's landing page, so this is not the root downloads.aicountly.com serves -- uploading here would put hundreds of megabytes where nothing can fetch it. It must be the same value DOWNLOAD_PROD_SSH_REMOTE_ROOT has in aicountly/aicountly-downloads, whose deploy put that page there. If that deploy has never run, run it first."
             exit 1
           fi
-          echo "REMOTE_ROOT holds the downloads host's landing page; uploading there."
+          echo "REMOTE_ROOT holds the downloads host's landing page."
+
+          # What is already up there. The root itself is a secret and is
+          # masked in these logs, but its contents are not secret and are the
+          # whole point: `connect` means Connect has published, `remote`
+          # means this workflow has, and a run that shows neither is pointed
+          # somewhere nothing has ever been uploaded.
+          echo "Top level of the downloads root:"
+          ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=accept-new \
+            "${SSH_USER}@${SSH_HOST}" "ls -la '${REMOTE_ROOT}'" || true
+
+          echo "What is published for ${PRODUCT} so far:"
+          ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=accept-new \
+            "${SSH_USER}@${SSH_HOST}" "ls -la '${REMOTE_ROOT}/${PRODUCT}' 2>/dev/null || echo '  nothing yet'" || true
 
       # Into the version's own directory, so publishing 1.1.0 cannot disturb
       # 1.0.0 and a link that worked yesterday still works. --delete is scoped
@@ -234,6 +267,7 @@ jobs:
       # where they are and the manifest unwritten, so the download page goes
       # on showing nothing rather than showing a broken button.
       - name: Verify every file is really there, over HTTPS
+        if: inputs.mode != 'check-access'
         env:
           VERSION: ${{ inputs.version }}
         run: |
@@ -282,6 +316,7 @@ jobs:
 
       # Last, and only now.
       - name: Publish the manifest
+        if: inputs.mode != 'check-access'
         env:
           SSH_HOST: ${{ secrets.DOWNLOAD_PROD_SSH_HOST }}
           SSH_PORT: ${{ secrets.DOWNLOAD_PROD_SSH_PORT }}
@@ -301,6 +336,7 @@ jobs:
       # different timestamps, so this is the one field that can tell "the
       # manifest I just wrote" from "a manifest that was already there".
       - name: Check the website will see this release
+        if: inputs.mode != 'check-access'
         run: |
           set -euo pipefail
           url="${BASE_URL}/${PRODUCT}/manifest.json"
@@ -328,6 +364,21 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
           MODE: ${{ inputs.mode }}
         run: |
+          if [ "${MODE}" = "check-access" ]; then
+            {
+              echo "## Downloads host access check"
+              echo
+              echo "Nothing was uploaded. If this run is green, all five"
+              echo "\`DOWNLOAD_PROD_SSH_*\` secrets are set in this repository, the key"
+              echo "opens that account, and \`DOWNLOAD_PROD_SSH_REMOTE_ROOT\` is the"
+              echo "document root downloads.aicountly.com actually serves -- checked by"
+              echo "finding the landing page that aicountly/aicountly-downloads deploys."
+              echo
+              echo "The step log above lists what is already on the host."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
           {
             echo "## Remote ${VERSION} (${CHANNEL})"
             echo

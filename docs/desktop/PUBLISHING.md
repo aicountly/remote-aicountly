@@ -112,6 +112,24 @@ their lengths (never their values, because a secret pasted with a stray
 newline is set, wrong and otherwise invisible), and names the ones that are
 missing.
 
+The length is worth reading rather than skimming. The downloads host's
+document root is `/home/downloadsaic/public_html`, which is **30
+characters**; if `DOWNLOAD_PROD_SSH_REMOTE_ROOT` prints as 31 it has a
+trailing newline, and nothing else about the run will tell you.
+
+### Checking the secrets without publishing anything
+
+Run `publish-downloads.yml` with `mode: check-access`. It needs no version
+and no release, uploads nothing, and is green only if all five secrets are
+set here, the key opens that account, and the root is the one
+`downloads.aicountly.com` serves — proved by finding the landing page
+`aicountly/aicountly-downloads` deploys. It also lists what is already on the
+host, so the log shows `connect/` (Connect has published) and, once this
+workflow has run for real, `remote/`.
+
+This is the way to confirm the five secrets today, before the Windows signing
+credentials are sorted out and there is a release to publish.
+
 ### Two guards worth knowing about
 
 Both are Connect's, and both exist because something went wrong without them.
