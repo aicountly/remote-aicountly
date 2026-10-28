@@ -234,6 +234,14 @@ jobs:
         working-directory: desktop
         run: npm test
 
+      # The build scripts, which vitest does not see: it is configured for the
+      # window's sources, and these run under node with no DOM at all. One of
+      # them decides what the website is told about a release, so it is not
+      # somewhere to find out later.
+      - name: Test the build scripts
+        working-directory: desktop
+        run: npm run test:scripts
+
       - name: Build
         working-directory: desktop
         run: npm run build

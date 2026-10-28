@@ -1,0 +1,283 @@
+# Put a signed release on downloads.aicountly.com, where the website can
+# offer it.
+#
+# MANUAL ONLY, and separate from the build on purpose. Building an installer
+# and publishing one are different decisions: `release-windows.yml` produces a
+# signed, verified build and a GitHub release, and this takes that release and
+# makes it something a stranger can download. Nobody should be able to do the
+# second by merging something.
+#
+# The order of the steps below is the whole safety property. The website reads
+# one file -- remote/manifest.json -- and puts a download button on everything
+# it names. It cannot check that those files are really there, because they are
+# on another host. So:
+#
+#   1. the installers go up,
+#   2. every one of them is fetched back over HTTPS and checked against the
+#      size and hash the manifest claims,
+#   3. and only then does the manifest go up.
+#
+# A manifest that names a file is this workflow's word that it already looked.
+# Nothing here may write the manifest first, and nothing may write it at all
+# if step 2 did not pass.
+name: Publish AICOUNTLY Remote to downloads.aicountly.com
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version to publish, e.g. 1.0.0 (must already have a GitHub release)
+        required: true
+        type: string
+      channel:
+        description: Which channel's release to publish
+        required: true
+        default: beta
+        type: choice
+        options: [beta, production]
+      mode:
+        description: >-
+          files-and-manifest publishes a release. manifest-only re-points the
+          manifest at a version already on the host, which is how a rollback
+          is done.
+        required: true
+        default: files-and-manifest
+        type: choice
+        options: [files-and-manifest, manifest-only]
+
+concurrency:
+  # One publish at a time. Two at once could upload one version's files and
+  # another version's manifest.
+  group: downloads-publish-remote
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PRODUCT: remote
+  BASE_URL: https://downloads.aicountly.com
+
+jobs:
+  publish:
+    name: Publish ${{ inputs.version }} (${{ inputs.channel }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      # Before it is trusted with a release. It needs no dependencies, so
+      # there is nothing to install first.
+      - name: Test the manifest writer
+        working-directory: desktop
+        run: npm run test:scripts
+
+      # Named individually so a missing one says which, rather than failing
+      # later inside rsync with a blank host.
+      - name: Check the downloads host is configured
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "${SSH_HOST}" ]    || missing+=(PROD_SSH_HOST)
+          [ -n "${SSH_PORT}" ]    || missing+=(PROD_SSH_PORT)
+          [ -n "${SSH_USER}" ]    || missing+=(PROD_SSH_USER)
+          [ -n "${SSH_KEY}" ]     || missing+=(PROD_SSH_PRIVATE_KEY)
+          [ -n "${REMOTE_ROOT}" ] || missing+=(PROD_SSH_REMOTE_ROOT)
+
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error title=The downloads host is not configured here::Missing repository secrets: ${missing[*]}. These are the same five secrets aicountly/aicountly-downloads uses; PROD_SSH_REMOTE_ROOT is the document root of downloads.aicountly.com. Add them under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+          echo "All five secrets are present."
+
+      # The GitHub release, not the build's workflow artifact: a release only
+      # exists for a channel that signs, which makes "is this signed?" a
+      # question already answered rather than one asked here.
+      - name: Fetch the signed release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: desktop-v${{ inputs.version }}${{ inputs.channel == 'beta' && '-beta' || '' }}
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          echo "Downloading ${TAG}"
+          gh release download "${TAG}" --dir staging --repo "${GITHUB_REPOSITORY}"
+          ls -la staging
+
+      # Renames each installer to a name that is safe in a URL and the same
+      # every release, hashes it, cross-checks SHA256SUMS.txt, and writes the
+      # manifest beside the workspace rather than into staging -- so the
+      # upload below cannot carry it up early.
+      - name: Describe the release
+        env:
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          node desktop/scripts/make-manifest.mjs \
+            --dir staging \
+            --product "${PRODUCT}" \
+            --version "${VERSION}" \
+            --channel "${CHANNEL}" \
+            --out manifest.json
+
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@dc588b651fe13675774614f8e6a936a468676387 # v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+
+      - name: Add host to known_hosts
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keyscan -p "${SSH_PORT}" -H "${SSH_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || \
+            echo "::warning::ssh-keyscan failed; rsync will use StrictHostKeyChecking=accept-new"
+
+      # Into the version's own directory, so publishing 1.1.0 cannot disturb
+      # 1.0.0 and a link that worked yesterday still works. --delete is scoped
+      # to that one directory: it clears a previous attempt at this same
+      # version and can reach nothing else.
+      - name: Upload the installers
+        if: inputs.mode == 'files-and-manifest'
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          DEST="${REMOTE_ROOT%/}/${PRODUCT}/${VERSION}"
+          echo "Uploading to ${DEST}"
+          rsync -avz --delete --chmod=D755,F644 \
+            --rsync-path="mkdir -p '${DEST}' && rsync" \
+            -e "ssh -p ${SSH_PORT} -o StrictHostKeyChecking=accept-new" \
+            staging/ \
+            "${SSH_USER}@${SSH_HOST}:${DEST}/"
+
+      # The check the website cannot do for itself. Every file the manifest
+      # names is fetched back from the public URL a visitor would use, over
+      # verified HTTPS, and must answer with the exact size the manifest
+      # claims. A failure here is a failure of the whole publish: the files
+      # stay where they are and the manifest is not written, so the download
+      # page goes on showing nothing rather than showing a broken button.
+      - name: Verify every file is really there, over HTTPS
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          failed=0
+          count=0
+
+          while IFS=$'\t' read -r file size; do
+            count=$((count + 1))
+            url="${BASE_URL}/${PRODUCT}/${VERSION}/${file}"
+
+            # --proto '=https' refuses anything that is not HTTPS, including a
+            # redirect to it. No -k, ever: an unverified certificate here would
+            # make the whole check meaningless.
+            headers=$(curl -sSI --proto '=https' --max-time 60 --retry 3 --retry-delay 5 "${url}" 2>&1) || {
+              echo "::error title=Not reachable::${url}"
+              echo "${headers}" | head -5
+              failed=1
+              continue
+            }
+
+            code=$(printf '%s' "${headers}" | awk 'tolower($1) ~ /^http/ { print $2 }' | tail -1)
+            length=$(printf '%s' "${headers}" | awk -F': *' 'tolower($1) == "content-length" { print $2 }' | tr -d '\r' | tail -1)
+
+            if [ "${code}" != "200" ]; then
+              echo "::error title=HTTP ${code}::${url}"
+              failed=1
+            elif [ -n "${length}" ] && [ "${length}" != "${size}" ]; then
+              echo "::error title=Wrong size::${url} is ${length} bytes, the manifest says ${size}"
+              failed=1
+            else
+              echo "ok  ${code}  ${size}  ${url}"
+            fi
+          done < <(jq -r '.files[] | [.file, (.size|tostring)] | @tsv' manifest.json)
+
+          if [ "${count}" -eq 0 ]; then
+            echo "::error::The manifest describes no files."
+            exit 1
+          fi
+
+          if [ "${failed}" -ne 0 ]; then
+            echo "::error title=The manifest was not published::Not every file the manifest names could be fetched over HTTPS, so it was not written. If this is a TLS error rather than a 404, the certificate for downloads.aicountly.com is not installed yet -- the files are uploaded and waiting, and re-running this with mode=manifest-only finishes the publish once it is. See the HTTPS section of aicountly/aicountly-downloads."
+            exit 1
+          fi
+
+      # Last, and only now.
+      - name: Publish the manifest
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
+        run: |
+          set -euo pipefail
+          DEST="${REMOTE_ROOT%/}/${PRODUCT}"
+          rsync -avz --chmod=F644 \
+            --rsync-path="mkdir -p '${DEST}' && rsync" \
+            -e "ssh -p ${SSH_PORT} -o StrictHostKeyChecking=accept-new" \
+            manifest.json \
+            "${SSH_USER}@${SSH_HOST}:${DEST}/manifest.json"
+
+      # What the website will read, read the same way: over HTTPS, and it has
+      # to be the version this run published.
+      - name: Check the website will see this release
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          url="${BASE_URL}/${PRODUCT}/manifest.json"
+
+          body=$(curl -sS --proto '=https' --fail --max-time 30 --retry 3 --retry-delay 5 "${url}")
+
+          served=$(printf '%s' "${body}" | jq -r '.version')
+          if [ "${served}" != "${VERSION}" ]; then
+            echo "::error::${url} serves version ${served}, expected ${VERSION}."
+            exit 1
+          fi
+
+          echo "${url} now offers:"
+          printf '%s' "${body}" | jq '{version, channel, generated, files: [.files[] | {platform, arch, file, signed}]}'
+
+      - name: Summary
+        if: always()
+        env:
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          {
+            echo "## Remote ${VERSION} (${CHANNEL})"
+            echo
+            echo "- Mode: \`${MODE}\`"
+            echo "- Files: ${BASE_URL}/${PRODUCT}/${VERSION}/"
+            echo "- Manifest: ${BASE_URL}/${PRODUCT}/manifest.json"
+            echo
+            if [ -f manifest.json ]; then
+              echo '```json'
+              cat manifest.json
+              echo '```'
+            fi
+            echo
+            echo "The download section on <https://aicountly.com/remote> reads that manifest."
+            echo "It caches an answer for five minutes, so allow a moment before checking the page."
+          } >> "${GITHUB_STEP_SUMMARY}"
