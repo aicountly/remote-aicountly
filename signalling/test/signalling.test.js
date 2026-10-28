@@ -294,9 +294,13 @@ describe('signalling server', () => {
    * delivered before a listener attached after `open` would see it. Buffering
    * from creation removes that race from the tests entirely.
    */
-  function connect(token) {
+  function connect(token, { subprotocol = false } = {}) {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/signal?token=${encodeURIComponent(token)}`);
+      // The browser presents its token as the subprotocol; the desktop agent
+      // still sends `?token=`. Both must work.
+      const ws = subprotocol
+        ? new WebSocket(`ws://127.0.0.1:${port}/signal`, [`aicountly-remote.${token}`])
+        : new WebSocket(`ws://127.0.0.1:${port}/signal?token=${encodeURIComponent(token)}`);
 
       ws.received = [];
       ws.waiters = [];
@@ -341,6 +345,27 @@ describe('signalling server', () => {
   it('refuses a connection with a forged token', async () => {
     await assert.rejects(
       () => connect(mintToken({ secret: 'wrong' })),
+      /HTTP 401|Unexpected server response: 401/,
+    );
+  });
+
+  // A browser that offered a subprotocol drops the connection unless the
+  // server agrees to one, so accepting the token is not enough on its own.
+  it('accepts the token as the subprotocol a browser sends, and agrees to it', async () => {
+    const token = mintToken({ room: 'room-subp-1111-2222-3333', sub: 'subprotocol-uuid-01' });
+
+    const ws = await connect(token, { subprotocol: true });
+    const joined = await nextMessage(ws, (m) => m.type === 'joined');
+
+    assert.equal(joined.participantUuid, 'subprotocol-uuid-01');
+    assert.equal(ws.protocol, `aicountly-remote.${token}`);
+
+    ws.close();
+  });
+
+  it('refuses a forged token sent as the subprotocol', async () => {
+    await assert.rejects(
+      () => connect(mintToken({ secret: 'wrong' }), { subprotocol: true }),
       /HTTP 401|Unexpected server response: 401/,
     );
   });

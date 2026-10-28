@@ -197,7 +197,9 @@ connect-aicountly `docs/EMBED_SDK.md` (v1); the code is `web/src/connect/`.
 only for a participant whose status is `APPROVED` or `JOINED`. The room is
 inside the signed payload, so a client cannot ask to join a room it was not
 admitted to — there is no code path in the signalling service that reads a room
-name from a client message.
+name from a client message. The web app presents the token as the WebSocket
+subprotocol `aicountly-remote.<token>`, not in the URL, which proxies log; the
+desktop agent still sends `?token=`, and the service accepts both.
 
 That is what makes host approval mean something. An unapproved viewer gets no
 token, never enters the room, and therefore never receives an SDP offer.

@@ -10,6 +10,8 @@
  * millisecond and knocks it over again.
  */
 
+import { signallingProtocols } from './protocol'
+
 export type SignallingMessageType =
   | 'joined'
   | 'peer-joined'
@@ -95,10 +97,10 @@ export class RemoteSignallingClient {
     this.setStatus(this.attempts === 0 ? 'connecting' : 'reconnecting')
 
     // The browser WebSocket API cannot set an Authorization header, so the
-    // token travels as a query parameter. It is short-lived (two minutes) and
-    // the connection is wss in every deployed environment.
-    const separator = this.url.includes('?') ? '&' : '?'
-    const socket = new WebSocket(`${this.url}${separator}token=${encodeURIComponent(this.token)}`)
+    // token travels as the subprotocol (./protocol.ts), never in the URL. It is
+    // short-lived (two minutes) and the connection is wss in every deployed
+    // environment.
+    const socket = new WebSocket(this.url, signallingProtocols(this.token))
     this.socket = socket
 
     socket.onopen = () => {

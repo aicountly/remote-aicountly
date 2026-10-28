@@ -11,7 +11,10 @@ class FakeSocket {
   onmessage: ((event: { data: string }) => void) | null = null
   onerror: (() => void) | null = null
   onclose: (() => void) | null = null
-  constructor(public url: string) {
+  constructor(
+    public url: string,
+    public protocols?: string | string[],
+  ) {
     FakeSocket.last = this
   }
   send(data: string) {
@@ -33,7 +36,9 @@ describe('nudgeDevice', () => {
     socket.onmessage?.({ data: JSON.stringify({ type: 'joined' }) })
 
     await expect(done).resolves.toBe(true)
-    expect(socket.url).toBe('wss://signal.test/signal?token=tok')
+    // The token goes in the subprotocol, never the URL a proxy would log.
+    expect(socket.url).toBe('wss://signal.test/signal')
+    expect(socket.protocols).toEqual(['aicountly-remote.tok'])
     expect(JSON.parse(socket.sent[0])).toEqual({ type: 'device-invite', payload: { sessionUuid: 's-1', companionUuid: 'l-1' } })
     expect(socket.closed).toBe(true)
   })
