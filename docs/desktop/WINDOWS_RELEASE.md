@@ -317,4 +317,8 @@ Genuinely blocking, and none of it is something code can decide:
 [ ] verify.ps1 passes on the downloaded artifacts, not only on the built ones
 [ ] Run workflow → channel: production
 [ ] the SHA256SUMS in the release match a fresh hash of the downloads
+[ ] Run publish-downloads.yml → the download section on /remote offers it
 ```
+
+A GitHub release is a build somebody can be sent. Making it a build somebody
+can find is a separate, manual step — see [PUBLISHING.md](PUBLISHING.md).
