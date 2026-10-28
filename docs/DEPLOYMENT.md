@@ -130,7 +130,20 @@ remote.signallingSecret = <openssl rand -base64 48>
 remote.contextSecret    = <openssl rand -base64 48>
 remote.appUrl    = https://remote.aicountly.com
 remote.signalUrl = wss://remote.aicountly.com/signal
+
+# Web-only launch: no Computers, no remote control, until the Windows app is released.
+remote.allowDesktopAgent = false
 ```
+
+**Desktop agents stay off until the Windows app is released.** Remote launches on
+the web only, and with `remote.allowDesktopAgent` on, every plan that includes
+desktop devices is offered Computers and remote control for an app nobody can
+install. The default is off, but an `api/.env` made from an older
+`.env.example` says `remote.allowDesktopAgent = true`, which wins: check the
+server's `api/.env` and set it to `false`. With it off, the effective policy
+grants no `remote.device.*` or `remote.control.*` permission, so the web shows
+neither Computers nor the Control panel. Set it to `true` when the Windows app
+is released.
 
 On cPanel the account name prefixes both the database and the user, so a
 database created as `remote` becomes `<cpaneluser>_remote`. Record the full
