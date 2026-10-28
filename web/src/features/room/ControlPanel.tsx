@@ -170,7 +170,7 @@ function unavailableMessage(control: SessionControlState | null): string {
     case 'SURFACE_NOT_MONITOR':
       return 'Control works only while an entire screen is shared, not a window or tab.'
     default:
-      return 'The computer in this session is a web browser, which cannot be controlled. AICOUNTLY Remote for Windows is needed at that end.'
+      return 'The computer in this session is a web browser, which cannot be controlled. Control needs AICOUNTLY Remote for Windows at that end, and it is coming soon.'
   }
 }
 

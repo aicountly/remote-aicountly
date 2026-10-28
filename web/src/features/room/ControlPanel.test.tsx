@@ -176,6 +176,8 @@ describe('ControlPanel', () => {
     panel({ phase: 'unavailable', host: null, control: control({ controllableHostUuid: null }) })
 
     expect(screen.getByText(/web browser, which cannot be controlled/i)).toBeInTheDocument()
+    // The Windows app is not released: the web says so rather than sending anyone looking for it.
+    expect(screen.getByText(/AICOUNTLY Remote for Windows at that end, and it is coming soon/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /request control/i })).not.toBeInTheDocument()
   })
 

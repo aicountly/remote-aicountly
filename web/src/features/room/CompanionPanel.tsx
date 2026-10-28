@@ -71,7 +71,7 @@ function restrictionMessage(restrictions: string[]): string {
   if (restrictions.some((r) => r.startsWith('REMOTE_CONTROL'))) return 'Remote control is not enabled for this organisation.'
   if (restrictions.includes('PERSONAL_SCOPE')) return 'Control is available only in organisation sessions.'
 
-  return 'No AICOUNTLY Remote app found for you. Open it on this computer, sign in, and try again.'
+  return 'No AICOUNTLY Remote desktop app is signed in for you. The desktop app is coming soon; if you already have it, open it on this computer, sign in and try again.'
 }
 
 interface Props {
@@ -135,8 +135,9 @@ export default function CompanionPanel({
       {view === 'off' ? (
         <>
           <p className="control__empty">
-            Let someone you allow control this computer while you share your entire screen. The AICOUNTLY Remote app
-            must be open on it.
+            Let someone you allow control this computer while you share your entire screen. This needs the AICOUNTLY
+            Remote desktop app open on it, and the desktop app is coming soon. Until then, the person helping you can
+            point and draw on what you share.
           </p>
           {outcomeNote(control?.companion ?? null) ? (
             <p className="control__hint">{outcomeNote(control?.companion ?? null)}</p>

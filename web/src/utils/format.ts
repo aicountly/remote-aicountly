@@ -236,6 +236,13 @@ export function describePermission(permission: string): string {
     'remote.audit.view': 'View the audit trail',
     'remote.policy.view': 'View Remote policy',
     'remote.policy.manage': 'Manage Remote policy',
+    // The desktop permissions only mean something with AICOUNTLY Remote for Windows, which is not released yet; the
+    // web says so wherever they are listed rather than offering a capability nobody can use.
+    'remote.control.request': 'Request control of a computer (Windows app, coming soon)',
+    'remote.control.accept': 'Let someone control your computer (Windows app, coming soon)',
+    'remote.device.enrol': 'Register a computer (Windows app, coming soon)',
+    'remote.device.manage': 'Manage registered computers (Windows app, coming soon)',
+    'remote.unattended.access': 'Connect to a computer with nobody at it (Windows app, coming soon)',
   }
 
   return labels[permission] ?? permission
