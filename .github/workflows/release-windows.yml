@@ -60,6 +60,14 @@ on:
           - sandbox
           - beta
           - production
+      allow_unsigned:
+        description: >-
+          Publish a release WITHOUT code signing. Windows shows "Windows
+          protected your PC" and the download page says so beside the button.
+          Only while a certificate is being obtained.
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: release-windows-${{ inputs.channel }}
@@ -146,7 +154,7 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
 
       - name: Check that a signing method is configured
-        if: inputs.channel != 'sandbox'
+        if: inputs.channel != 'sandbox' && !inputs.allow_unsigned
         shell: pwsh
         env:
           AICOUNTLY_SIGN_METHOD: ${{ vars.AICOUNTLY_SIGN_METHOD }}
@@ -181,7 +189,7 @@ jobs:
       # workspace — so a sandbox run, or a fork, simply has nothing to sign
       # with and says so.
       - name: Install the Trusted Signing client
-        if: inputs.channel != 'sandbox' && vars.AICOUNTLY_SIGN_METHOD == 'trusted-signing'
+        if: inputs.channel != 'sandbox' && !inputs.allow_unsigned && vars.AICOUNTLY_SIGN_METHOD == 'trusted-signing'
         shell: pwsh
         # The script, not forty lines of PowerShell in a YAML string: the
         # signing smoke test runs the same code, and a script can be read and
@@ -208,6 +216,7 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_ALLOW_UNSIGNED: ${{ inputs.allow_unsigned }}
         run: |
           $arguments = @(
             '-File', 'scripts/windows/build.ps1',
@@ -215,12 +224,13 @@ jobs:
             '-Target', 'x86_64-pc-windows-msvc'
           )
 
-          if ($env:INPUT_CHANNEL -ne 'sandbox') { $arguments += '-Sign' }
+          $unsigned = $env:INPUT_CHANNEL -eq 'sandbox' -or $env:INPUT_ALLOW_UNSIGNED -eq 'true'
+          if (-not $unsigned) { $arguments += '-Sign' }
 
           pwsh @arguments
           if ($LASTEXITCODE -ne 0) { throw 'The build failed.' }
 
-          $signed = if ($env:INPUT_CHANNEL -eq 'sandbox') { 'false' } else { 'true' }
+          $signed = if ($unsigned) { 'false' } else { 'true' }
           "signed=$signed" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       # Verified on exactly the files that are about to be uploaded, and on the
@@ -232,9 +242,10 @@ jobs:
         working-directory: desktop
         env:
           INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_ALLOW_UNSIGNED: ${{ inputs.allow_unsigned }}
         run: |
           $target = 'target/x86_64-pc-windows-msvc/release'
-          $allowUnsigned = $env:INPUT_CHANNEL -eq 'sandbox'
+          $allowUnsigned = $env:INPUT_CHANNEL -eq 'sandbox' -or $env:INPUT_ALLOW_UNSIGNED -eq 'true'
 
           # '&' runs the script in THIS PowerShell session rather than
           # spawning a nested pwsh.exe. That distinction matters here: an
@@ -255,6 +266,7 @@ jobs:
         working-directory: desktop
         env:
           INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_ALLOW_UNSIGNED: ${{ inputs.allow_unsigned }}
         run: |
           $target = 'target/x86_64-pc-windows-msvc/release'
           New-Item -ItemType Directory -Force -Path release | Out-Null
@@ -270,9 +282,10 @@ jobs:
 
           Get-Content release/SHA256SUMS.txt
 
+          # Travels with the artifact, so an unsigned build cannot be handed to
+          # somebody as though it were a signed one. Two different situations
+          # and two different notices, because only one of them is publishable.
           if ($env:INPUT_CHANNEL -eq 'sandbox') {
-            # Travels with the artifact, so an unsigned build cannot be handed
-            # to somebody as though it were a release.
             $unsignedNotice = @(
               'UNSIGNED DEVELOPMENT BUILD',
               '==========================',
@@ -285,7 +298,27 @@ jobs:
               'Do not distribute them to customers, and do not describe them as a release.',
               'Signed builds come from the beta and production channels.'
             ) -join "`n"
-            $unsignedNotice | Set-Content -Path release/UNSIGNED-DEVELOPMENT-BUILD.txt -Encoding utf8
+            $unsignedNotice | Set-Content -Path release/UNSIGNED.txt -Encoding utf8
+          }
+          elseif ($env:INPUT_ALLOW_UNSIGNED -eq 'true') {
+            $unsignedNotice = @(
+              'UNSIGNED RELEASE BUILD',
+              '======================',
+              '',
+              "Built from ${{ github.sha }} on the ${{ inputs.channel }} channel, deliberately",
+              'without code signing, while a certificate is being obtained.',
+              '',
+              'Windows will show "Windows protected your PC" the first time this runs. That',
+              'warning is correct: nothing in this installer vouches for who produced it, and',
+              'nothing stops somebody else shipping an installer that claims the same name.',
+              '',
+              'AICOUNTLY Remote installs a service that runs as the machine and can be used to',
+              'control it remotely, so check the SHA-256 in SHA256SUMS.txt against the one',
+              'published beside the download before running this.',
+              '',
+              'Replace it with a signed build as soon as one exists.'
+            ) -join "`n"
+            $unsignedNotice | Set-Content -Path release/UNSIGNED.txt -Encoding utf8
           }
 
       - name: Upload
@@ -312,7 +345,7 @@ jobs:
           body: |
             AICOUNTLY Remote for Windows ${{ inputs.version }} (${{ inputs.channel }}).
 
-            Signed and timestamped. Verify a download against `SHA256SUMS.txt`,
+            ${{ inputs.allow_unsigned && '**This build is NOT code-signed.** Windows will show "Windows protected your PC" on first run, and that warning is correct. See UNSIGNED.txt in the assets. Replace it with a signed build as soon as one exists.' || 'Signed and timestamped.' }} Verify a download against `SHA256SUMS.txt`,
             and check the signature with:
 
                 Get-AuthenticodeSignature .\AICOUNTLY-Remote-x64-Setup.exe

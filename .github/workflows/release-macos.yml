@@ -43,6 +43,14 @@ on:
         options:
           - beta
           - production
+      allow_unsigned:
+        description: >-
+          Publish WITHOUT a Developer ID certificate or notarisation. macOS
+          blocks the first launch and the download page explains how to allow
+          it. Only while a certificate is being obtained.
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: release-macos-${{ inputs.channel }}
@@ -66,6 +74,14 @@ jobs:
 
     # Every credential comes from the protected environment. None has a
     # default and none is a workflow input, so a fork has nothing to sign with.
+    #
+    # Declared unconditionally, including for an unsigned build that needs none
+    # of them. The obvious `inputs.allow_unsigned && '' || 'macos-release'`
+    # does not do what it reads like: an empty string is falsy in a GitHub
+    # expression, so that yields 'macos-release' either way. Rather than write
+    # something that only looks conditional, this says what it means -- and a
+    # publishable unsigned build is worth gating behind the same approval as a
+    # signed one anyway.
     environment: macos-release
 
     permissions:
@@ -114,6 +130,7 @@ jobs:
       # Named individually, and before the build, because a 40-minute build
       # that fails at the notarisation step helps nobody.
       - name: Check the signing and notarisation credentials are present
+        if: ${{ !inputs.allow_unsigned }}
         env:
           CERTIFICATE: ${{ secrets.MACOS_RELEASE_CERTIFICATE }}
           CERTIFICATE_PASSWORD: ${{ secrets.MACOS_RELEASE_CERTIFICATE_PASSWORD }}
@@ -177,6 +194,7 @@ jobs:
       # the end whatever happened. The p12 is removed as soon as it is
       # imported, so the only copy on disk is inside the keychain.
       - name: Import the Developer ID certificate
+        if: ${{ !inputs.allow_unsigned }}
         env:
           CERTIFICATE: ${{ secrets.MACOS_RELEASE_CERTIFICATE }}
           CERTIFICATE_PASSWORD: ${{ secrets.MACOS_RELEASE_CERTIFICATE_PASSWORD }}
@@ -206,10 +224,13 @@ jobs:
       - name: Build, sign and notarise
         working-directory: desktop
         env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.MACOS_RELEASE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # '-' is ad-hoc signing: the app is sealed so macOS will run it once
+          # the user allows it, but nothing vouches for who built it. With no
+          # APPLE_ID the bundler does not attempt notarisation at all.
+          APPLE_SIGNING_IDENTITY: ${{ inputs.allow_unsigned && '-' || secrets.MACOS_RELEASE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ inputs.allow_unsigned && '' || secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ inputs.allow_unsigned && '' || secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ inputs.allow_unsigned && '' || secrets.APPLE_TEAM_ID }}
           CARGO_PROFILE_RELEASE_DEBUG: '0'
         run: |
           set -euo pipefail
@@ -231,6 +252,7 @@ jobs:
       # stapled: it opens on this runner, which has just talked to Apple, and
       # refuses on a customer's laptop.
       - name: Verify the signature, Gatekeeper and the notarisation ticket
+        if: ${{ !inputs.allow_unsigned }}
         working-directory: desktop
         run: |
           set -euo pipefail
@@ -271,12 +293,52 @@ jobs:
             exit 1
           fi
 
+      # An unsigned build cannot pass spctl or stapler -- that is what unsigned
+      # means -- so the checks that remain are that the app is sealed and that
+      # a disk image was actually produced.
+      - name: Check the unsigned build is at least intact
+        if: ${{ inputs.allow_unsigned }}
+        working-directory: desktop
+        run: |
+          set -euo pipefail
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            app="target/${target}/release/bundle/macos/AICOUNTLY Remote.app"
+            codesign --verify --deep --strict --verbose=2 "${app}"
+            ls -la "target/${target}/release/bundle/dmg/"*.dmg
+          done
+          echo "::warning title=Unsigned macOS build::This build has no Developer ID certificate and is not notarised. macOS will block the first launch; the download page explains how to allow it. Replace it with a notarised build as soon as one exists."
+
       - name: Collect artifacts
         working-directory: desktop
+        env:
+          INPUT_ALLOW_UNSIGNED: ${{ inputs.allow_unsigned }}
         run: |
           set -euo pipefail
           mkdir -p release
           cp target/*/release/bundle/dmg/*.dmg release/
+
+          # Travels with the artifact, so an unsigned build cannot be handed to
+          # somebody as though it were notarised.
+          if [ "${INPUT_ALLOW_UNSIGNED}" = "true" ]; then
+            cat > release/UNSIGNED.txt <<'TXT'
+          UNSIGNED, UN-NOTARISED macOS BUILD
+          ==================================
+
+          Built deliberately without a Developer ID certificate while one is being
+          obtained, and not submitted to Apple for notarisation.
+
+          macOS will block the first launch. To allow it: System Settings > Privacy &
+          Security, scroll to Security, and choose "Open Anyway".
+
+          That dialog is correct: nothing in this disk image vouches for who built it,
+          and nothing stops somebody else shipping one that claims the same name.
+          AICOUNTLY Remote asks for Accessibility permission because that is how it
+          controls the machine, so check the SHA-256 in SHA256SUMS-macos.txt against
+          the file you downloaded before you grant it.
+
+          Replace this with a notarised build as soon as one exists.
+          TXT
+          fi
 
           # Its own name, because the Windows release attaches SHA256SUMS.txt
           # to this same tag. One file, two uploads, and the second silently
@@ -308,12 +370,7 @@ jobs:
           body: |
             AICOUNTLY Remote ${{ inputs.version }} (${{ inputs.channel }}).
 
-            macOS: signed with a Developer ID certificate and notarised by
-            Apple, so it opens from a download without a security warning.
-            Verify a download against `SHA256SUMS-macos.txt`, and check the
-            notarisation with:
-
-                xcrun stapler validate Aicountly-Remote-*.dmg
+            ${{ inputs.allow_unsigned && 'macOS: **NOT signed with a Developer ID certificate and NOT notarised.** macOS blocks the first launch; allow it from System Settings > Privacy & Security. See UNSIGNED.txt in the assets. Verify a download against `SHA256SUMS-macos.txt`.' || 'macOS: signed with a Developer ID certificate and notarised by Apple, so it opens from a download without a security warning. Verify a download against `SHA256SUMS-macos.txt`, and check the notarisation with `xcrun stapler validate Aicountly-Remote-*.dmg`.' }}
 
             Built from ${{ github.sha }}.
 
