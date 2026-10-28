@@ -287,6 +287,17 @@
   font-size: var(--text-xs);
 }
 
+.shell__nav-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.shell__nav-preferences {
+  font-size: var(--text-xs);
+}
+
 .shell__nav-scrim {
   display: none;
 }
@@ -1411,6 +1422,50 @@
   50% {
     opacity: 0.35;
   }
+}
+
+/* --- Analytics consent ---------------------------------------------------- */
+
+/* Bottom left, clear of the AICOUNTLY Connect launcher at the bottom right: on a
+   phone at least 88px of the right edge stays free. Above the page, below every
+   menu, drawer, Connect and dialog (20 — under the navigation drawer's 25). */
+.consent {
+  position: fixed;
+  left: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 20;
+  width: min(360px, calc(100vw - var(--space-4) - 88px));
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+/* In a session room it sits above the toolbar, not over the controls. */
+.consent--room {
+  bottom: 92px;
+}
+
+.consent__text {
+  margin: 0;
+}
+
+.consent__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.consent__link {
+  margin-left: var(--space-1);
+  font-weight: 550;
+  text-decoration: underline;
 }
 
 /* --- Responsive ----------------------------------------------------------- */

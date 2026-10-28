@@ -227,6 +227,25 @@ holding `remote.audit.view`. They never appear in an ordinary session list.
 An invitation's secret exists in exactly one HTTP response. Only its SHA-256 is
 stored, so a database dump cannot be replayed into a live session.
 
+### Analytics
+
+Google Analytics 4 runs only in a build with a measurement id (production), and
+follows the one choice every AICOUNTLY app shares: the `aic_consent` cookie
+(`analytics-granted` or `analytics-denied`, `Domain=.aicountly.com`, 180 days),
+asked by a small banner at the bottom left with a way back from **Analytics
+preferences** in the navigation (`web/src/utils/consent.ts`,
+`web/src/components/AnalyticsConsent.tsx`). Consent Mode v2 defaults are set
+before any config call and ads consent is never granted. Before a choice the tag
+runs cookieless (`ANALYTICS_BEFORE_CHOICE` in `web/src/utils/analytics.ts`;
+`'none'` loads nothing until the person allows it); after "No thanks" it is not
+loaded at all and `ga-disable-<ID>` is set. Whatever the choice, GA receives the
+origin and a masked path only — no query, no fragment, every identifier-like
+segment (digits, UUIDs, long tokens, anything with an `@`) replaced with `:id`,
+the invitation token with `:token` — and the product name as the page title;
+never a user id, a name, an e-mail address or free text. Nothing is loaded while
+the address bar holds the sign-in hand-off, an invitation link or another
+credential, and no banner is shown there.
+
 ---
 
 ## Injection and identifiers
