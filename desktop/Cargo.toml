@@ -35,7 +35,7 @@ members = [
 # the Tauri bundle, the installer metadata, the update manifest, the value the
 # agent reports into `remote_devices.agent_version`, and the string in the
 # About panel. Bumping it here is the only edit a release needs.
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 rust-version = "1.82"
 license = "UNLICENSED"

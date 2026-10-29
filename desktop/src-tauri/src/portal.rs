@@ -136,6 +136,16 @@ pub fn opens_in_browser(url: &Url) -> bool {
 
 /// Show the portal at `bounds`, creating it the first time, and open `path`
 /// if one is given.
+///
+/// **Only ever from an `async` command or another thread** — never a
+/// synchronous command or an event handler. Creating a webview waits on the
+/// main thread, and a synchronous command *is* the main thread, so on Windows
+/// it waits for itself forever (Tauri documents this on every webview
+/// builder; it is a WebView2 limitation). That is what 1.0.2 shipped: the
+/// first `portal_show` hung, and with the main thread stuck every command
+/// after it — Open in browser, Back, Reload, Sign in again — went unanswered.
+/// `commands::tests::every_command_that_touches_a_webview_is_async` holds the
+/// line.
 pub fn show(
     app: &tauri::AppHandle,
     origin: &Url,
@@ -176,19 +186,26 @@ pub fn show(
                 }
 
                 if opens_in_browser(url) {
-                    let _ = open::that(url.as_str());
+                    let _ = open::that_detached(url.as_str());
                 }
                 false
             })
             .on_new_window(move |url, _features| {
                 // The portal's own pages open in place; everything else in the
                 // browser. Either way no second window appears.
+                //
+                // This runs inside WebView2's own callback, on the main
+                // thread, so nothing here may wait on that thread: the
+                // navigation is handed to the async runtime instead.
                 if url.origin() == window_origin.origin() {
-                    if let Some(portal) = handle.get_webview(PORTAL_LABEL) {
-                        let _ = portal.navigate(url);
-                    }
+                    let handle = handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Some(portal) = handle.get_webview(PORTAL_LABEL) {
+                            let _ = portal.navigate(url);
+                        }
+                    });
                 } else if opens_in_browser(&url) {
-                    let _ = open::that(url.as_str());
+                    let _ = open::that_detached(url.as_str());
                 }
 
                 tauri::webview::NewWindowResponse::Deny
@@ -237,7 +254,7 @@ pub fn act(app: &tauri::AppHandle, action: &str) -> Result<(), String> {
             if !opens_in_browser(&url) {
                 return Err("This page cannot be opened in a browser.".into());
             }
-            open::that(url.as_str()).map_err(|error| error.to_string())
+            open::that_detached(url.as_str()).map_err(|error| error.to_string())
         }
         _ => Err("Unknown action.".into()),
     }
