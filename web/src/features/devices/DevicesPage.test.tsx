@@ -46,6 +46,7 @@ vi.mock('../../services/api/remote', () => ({
 }))
 
 const { default: DevicesPage } = await import('./DevicesPage')
+const { fetchDevices } = await import('../../services/api/remote')
 
 function renderPage({ scopeType = 'COMPANY', desktopAgent = false }: { scopeType?: 'COMPANY' | 'PERSONAL'; desktopAgent?: boolean } = {}) {
   remote.scopeType = scopeType
@@ -74,10 +75,10 @@ describe('the Computers page with the desktop agent switched off', () => {
     expect(screen.queryByText(/change that in Remote policy/)).not.toBeInTheDocument()
   })
 
-  it('says so in a personal scope too', () => {
+  it('says so in a personal scope too', async () => {
     renderPage({ scopeType: 'PERSONAL' })
 
-    expect(screen.getByText('AICOUNTLY Remote for Windows is coming soon')).toBeInTheDocument()
+    expect(await screen.findByText('AICOUNTLY Remote for Windows is coming soon')).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: DOWNLOAD })).not.toBeInTheDocument()
   })
 })
@@ -95,11 +96,24 @@ describe('the Computers page with the desktop agent on', () => {
     expect(screen.queryByText(/not available to download/i)).not.toBeInTheDocument()
   })
 
-  it('says so in a personal scope too', () => {
+  it('says so in a personal scope too', async () => {
     renderPage({ scopeType: 'PERSONAL', desktopAgent: true })
 
-    expect(screen.getByRole('link', { name: DOWNLOAD })).toHaveAttribute('href', 'https://aicountly.com/remote')
+    expect(await screen.findByRole('link', { name: DOWNLOAD })).toHaveAttribute('href', 'https://aicountly.com/remote')
     expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
+  })
+})
+
+describe('the Computers page in a personal scope', () => {
+  it("lists the person's own computers without asking for an organisation", async () => {
+    vi.mocked(fetchDevices).mockClear()
+    renderPage({ scopeType: 'PERSONAL', desktopAgent: true })
+
+    expect(await screen.findByText('Registered computers')).toBeInTheDocument()
+    expect(fetchDevices).toHaveBeenCalledWith(null)
+    expect(screen.getByText('Your computers running AICOUNTLY Remote for Windows.')).toBeInTheDocument()
+    expect(screen.queryByText(/belong to an organisation/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Switch to an organisation/i)).not.toBeInTheDocument()
   })
 })
 

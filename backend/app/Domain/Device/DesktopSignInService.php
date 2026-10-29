@@ -220,7 +220,7 @@ class DesktopSignInService
 
         $row = $this->liveRowByUserCode($userCode, ['PENDING']);
 
-        $this->db->table('remote_desktop_signin_codes')
+        $updated = $this->db->table('remote_desktop_signin_codes')
             ->where('id', $row['id'])
             ->where('status', 'PENDING')
             ->update([
@@ -231,6 +231,16 @@ class DesktopSignInService
                 'confirmed_at' => Clock::now(),
                 'confirmed_ip' => $ip !== null && filter_var($ip, FILTER_VALIDATE_IP) !== false ? $ip : null,
             ]);
+
+        // With `DBDebug` off a failed statement returns false rather than
+        // throwing, and leaves zero affected rows — which must not read as
+        // "somebody else got there first". That is how a CHECK rejecting every
+        // personal confirmation once reached people as "already used".
+        if ($updated === false) {
+            log_message('error', 'Desktop sign-in confirm failed: {error}', ['error' => json_encode($this->db->error())]);
+
+            throw ApiException::unavailable('SIGNIN_CONFIRM_FAILED', 'That could not be confirmed. Please try again.');
+        }
 
         if ($this->db->affectedRows() !== 1) {
             throw ApiException::conflict('SIGNIN_CODE_ALREADY_HANDLED', 'That code has already been used or denied.');

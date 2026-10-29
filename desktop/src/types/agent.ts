@@ -207,7 +207,8 @@ export interface EnrolmentMaterial {
  */
 export interface EnrolmentConfirmation {
   deviceUuid: string
-  companyId: number
+  /** Null for a personal device — the person's own computer, the ordinary case. */
+  companyId: number | null
   companyName: string | null
   deviceName: string
 }

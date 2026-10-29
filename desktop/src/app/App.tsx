@@ -279,11 +279,8 @@ export default function App() {
         if (cancelled) return
 
         if (outcome.status === 'confirmed') {
-          if (outcome.device.companyId === null) {
-            setError('AICOUNTLY Remote did not say which organisation this device belongs to.')
-            return
-          }
-
+          // A device with no organisation is a personal one — the person's
+          // own computer — and is registered exactly like any other.
           try {
             // The server call already created and enrolled the device;
             // without this the window would keep showing "Not registered"

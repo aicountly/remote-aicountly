@@ -15,6 +15,7 @@ use App\Domain\Support\ApiException;
 use App\Domain\Support\Clock;
 use App\Domain\Support\Ids;
 use App\Domain\Support\Presenter;
+use CodeIgniter\Database\BaseBuilder;
 use CodeIgniter\Database\BaseConnection;
 use Config\Remote as RemoteConfig;
 
@@ -325,6 +326,37 @@ class DeviceService
             $builder->where('d.user_id', $identity->id);
         }
 
+        return $this->page($builder, $limit, $offset);
+    }
+
+    /**
+     * A person's own computers — the ones registered with no organisation.
+     *
+     * The ordinary case: somebody installs the agent and registers the
+     * computer in front of them. Nobody else can see these, so there is no
+     * permission to consult; whoever owns the row is whoever may list it.
+     *
+     * @return array{items: list<array<string, mixed>>, total: int}
+     */
+    public function forPerson(RemoteIdentity $identity, int $limit = 50, int $offset = 0): array
+    {
+        $builder = $this->db->table('remote_devices d')
+            ->select('d.*, i.display_name AS owner_name, e.display_name AS enrolled_by_name')
+            ->join('remote_identities i', 'i.id = d.user_id', 'left')
+            ->join('remote_identities e', 'e.id = d.enrolled_by_user_id', 'left')
+            ->where('d.company_id', null)
+            ->where('d.user_id', $identity->id);
+
+        return $this->page($builder, $limit, $offset);
+    }
+
+    /**
+     * One page of a device listing, in the order every listing uses.
+     *
+     * @return array{items: list<array<string, mixed>>, total: int}
+     */
+    private function page(BaseBuilder $builder, int $limit, int $offset): array
+    {
         $total = (clone $builder)->countAllResults(false);
 
         $rows = $builder

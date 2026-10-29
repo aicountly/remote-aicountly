@@ -194,11 +194,13 @@ pub struct EnrolmentMaterial {
 pub struct EnrolmentConfirmation {
     /// The uuid the API issued.
     pub device_uuid: String,
-    /// Which organisation.
-    pub company_id: i64,
+    /// Which organisation, if any. `None` is a personal device — the
+    /// person's own computer, which needs no organisation.
+    #[serde(default)]
+    pub company_id: Option<i64>,
     /// Its name, for the "Organisation" row. The API's device resource
-    /// carries only the id, so the window supplies the name it already
-    /// showed in the registration form.
+    /// carries only the id, so the window supplies the name the sign-in
+    /// poll reported alongside it.
     pub company_name: Option<String>,
     /// What the person named this machine.
     pub device_name: String,

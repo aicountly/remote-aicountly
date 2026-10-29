@@ -154,6 +154,30 @@ final class DesktopSignInTest extends RemoteTestCase
         $this->assertSame($outcome['device']['uuid'], $again['device']['uuid']);
     }
 
+    /**
+     * The ordinary case: a brand-new account, in no organisation, registering
+     * the computer in front of it. This used to fail with "That code has
+     * already been used or denied" — the confirm `UPDATE` broke a CHECK that
+     * still demanded a `company_id`, and with `DBDebug` off in production the
+     * failure surfaced only as zero affected rows.
+     */
+    public function testAFreshAccountConfirmsItsOwnComputerWithNoOrganisation(): void
+    {
+        $started = $this->start(['deviceName' => 'Rahul\'s PC']);
+        $user    = $this->makeIdentity('Rahul');
+
+        $confirmed = Services::desktopSignInService()->confirmByUserCode($user, $started['userCode'], null, null);
+        $this->assertSame('confirmed', $confirmed['status']);
+
+        $outcome = Services::desktopSignInService()->poll($started['deviceCode']);
+
+        $this->assertSame('confirmed', $outcome['status']);
+        $this->assertNull($outcome['device']['company_id']);
+        $this->assertNull($outcome['companyName']);
+        $this->assertSame($user->id, (int) $outcome['device']['user_id']);
+        $this->assertSame(DeviceService::STATUS_ACTIVE, $outcome['device']['status']);
+    }
+
     public function testDenyingBeforeConfirmationMakesTheCodeUnusable(): void
     {
         $started = $this->start();

@@ -65,27 +65,29 @@ class DeviceController extends BaseApiController
     }
 
     /**
-     * `GET /devices?companyId=`
+     * `GET /devices[?companyId=]`
      *
-     * With `remote.device.manage`, the organisation's devices; without it, only
-     * the ones this person registered themselves.
+     * Without `companyId`, the person's own computers — the ones registered
+     * with no organisation, which is the ordinary case and needs none chosen.
+     * With it, and `remote.device.manage`, the organisation's devices;
+     * without that permission, only the ones this person registered there.
      */
     public function index(): ResponseInterface
     {
         $companyId = $this->request->getGet('companyId');
-        if (! is_numeric($companyId)) {
-            throw ApiException::badRequest('COMPANY_REQUIRED', 'Choose an organisation to list devices for.');
+        if ($companyId !== null && $companyId !== '' && ! is_numeric($companyId)) {
+            throw ApiException::badRequest('COMPANY_INVALID', 'That is not an organisation.');
         }
+        $companyId = is_numeric($companyId) ? (int) $companyId : null;
 
         $devices = Services::deviceService();
-        $policy  = $this->policyFor('COMPANY', (int) $companyId);
+        $policy  = $this->policyFor($companyId === null ? 'PERSONAL' : 'COMPANY', $companyId);
+        $limit   = (int) ($this->request->getGet('limit') ?? 50);
+        $offset  = (int) ($this->request->getGet('offset') ?? 0);
 
-        $page = $devices->forCompany(
-            $this->identity(),
-            (int) $companyId,
-            (int) ($this->request->getGet('limit') ?? 50),
-            (int) ($this->request->getGet('offset') ?? 0),
-        );
+        $page = $companyId === null
+            ? $devices->forPerson($this->identity(), $limit, $offset)
+            : $devices->forCompany($this->identity(), $companyId, $limit, $offset);
 
         $includeAudit = $policy->can(PermissionCatalog::AUDIT_VIEW);
 
