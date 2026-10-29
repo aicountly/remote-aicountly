@@ -1,7 +1,7 @@
 {
   "name": "@aicountly/remote-desktop",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.0.3",
   "type": "module",
   "description": "AICOUNTLY Remote for Windows — the desktop agent's interface.",
   "engines": {
