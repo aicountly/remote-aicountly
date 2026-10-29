@@ -4,6 +4,8 @@ import { Laptop, ShieldCheck } from 'lucide-react'
 
 import { confirmDesktopSignIn, denyDesktopSignIn } from '../../services/api/remote'
 import { RemoteApiError } from '../../services/api/client'
+import { getAuthToken } from '../../auth/tokens'
+import { isDesktopApp } from './embedding'
 
 /**
  * Confirming a desktop agent's sign-in code (docs/desktop/DEVICE_ENROLMENT.md).
@@ -57,7 +59,11 @@ export default function DesktopSignInPage() {
     setError(null)
 
     try {
-      const result = await confirmDesktopSignIn(userCode)
+      // This page's own AICOUNTLY sign-in goes along, so the application's
+      // embedded portal is signed in as the same person without asking again
+      // (docs/desktop/PORTAL.md). The server hands it only to the agent that
+      // started this code, through a one-time code.
+      const result = await confirmDesktopSignIn(userCode, { portalToken: getAuthToken() })
       setDeviceLabel(result.deviceLabel)
       setPhase('confirmed')
     } catch (err) {
@@ -90,7 +96,9 @@ export default function DesktopSignInPage() {
               <p className="muted">
                 {deviceLabel ? <>Go back to <strong>{deviceLabel}</strong> — it will finish on its own.</> : 'Go back to your computer — it will finish on its own.'}
               </p>
-              <p className="tiny muted">You can close this tab.</p>
+              <p className="tiny muted">
+                {isDesktopApp() ? 'AICOUNTLY Remote continues on its own.' : 'You can close this tab.'}
+              </p>
             </div>
           </section>
         </div>

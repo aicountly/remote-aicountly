@@ -257,4 +257,138 @@ final class DesktopSignInTest extends RemoteTestCase
 
         $this->assertSame('confirmed', $result['status']);
     }
+
+    // ------------------------------------------------- portal sign-in hand-off
+
+    private const PORTAL_TOKEN = 'aic.portal-auth-token.0123456789abcdef';
+
+    /**
+     * The confirming page's AICOUNTLY sign-in reaches the desktop's embedded
+     * portal through a one-time code, so a person who confirmed in their
+     * browser is not asked to sign in again inside the application.
+     */
+    public function testTheConfirmingSignInIsHandedToTheAgentOnceThroughAOneTimeCode(): void
+    {
+        $started = $this->start();
+        $user    = $this->makeIdentity('Rahul');
+
+        Services::desktopSignInService()->confirmByUserCode($user, $started['userCode'], null, null, self::PORTAL_TOKEN);
+
+        $outcome = Services::desktopSignInService()->poll($started['deviceCode']);
+
+        $this->assertSame('confirmed', $outcome['status']);
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{64}$/', $outcome['portalHandoff']);
+
+        // Nothing readable is left behind: the token is gone, only a sealed
+        // copy remains, and the code that opens it is not stored at all.
+        $row = $this->db->table('remote_desktop_signin_codes')->where('device_code', $started['deviceCode'])->get()->getRowArray();
+        $this->assertNull($row['portal_token']);
+        $this->assertStringNotContainsString(self::PORTAL_TOKEN, (string) $row['handoff_ciphertext']);
+        $this->assertSame(hash('sha256', $outcome['portalHandoff']), $row['handoff_hash']);
+        $this->assertStringNotContainsString($outcome['portalHandoff'], json_encode($row, JSON_THROW_ON_ERROR));
+
+        $this->assertSame(self::PORTAL_TOKEN, Services::desktopSignInService()->redeemHandoff($outcome['portalHandoff']));
+
+        // Once.
+        $row = $this->db->table('remote_desktop_signin_codes')->where('device_code', $started['deviceCode'])->get()->getRowArray();
+        $this->assertNull($row['handoff_ciphertext']);
+        $this->assertNull($row['handoff_hash']);
+
+        $this->expectException(ApiException::class);
+        Services::desktopSignInService()->redeemHandoff($outcome['portalHandoff']);
+    }
+
+    /** A retried poll gets the device again, never a second hand-off. */
+    public function testARetriedPollGetsTheDeviceButNoSecondHandoff(): void
+    {
+        $started = $this->start();
+        $user    = $this->makeIdentity('Rahul');
+        Services::desktopSignInService()->confirmByUserCode($user, $started['userCode'], null, null, self::PORTAL_TOKEN);
+
+        $first = Services::desktopSignInService()->poll($started['deviceCode']);
+        $again = Services::desktopSignInService()->poll($started['deviceCode']);
+
+        $this->assertArrayHasKey('portalHandoff', $first);
+        $this->assertSame('confirmed', $again['status']);
+        $this->assertArrayNotHasKey('portalHandoff', $again);
+    }
+
+    /** No sign-in sent, nothing handed off — the computer is still registered. */
+    public function testWithoutASignInThereIsNoHandoffAndTheComputerIsStillRegistered(): void
+    {
+        $started = $this->start();
+        Services::desktopSignInService()->confirmByUserCode($this->makeIdentity('Rahul'), $started['userCode'], null, null);
+
+        $outcome = Services::desktopSignInService()->poll($started['deviceCode']);
+
+        $this->assertSame('confirmed', $outcome['status']);
+        $this->assertArrayNotHasKey('portalHandoff', $outcome);
+    }
+
+    /** Something that is not a token is not stored to be handed on. */
+    public function testAnImplausibleTokenIsNotHandedOff(): void
+    {
+        foreach (['', '   ', "has spaces in it", str_repeat('a', 5000), "line\nbreak"] as $token) {
+            $started = $this->start();
+            Services::desktopSignInService()->confirmByUserCode($this->makeIdentity('Rahul'), $started['userCode'], null, null, $token);
+
+            $this->assertArrayNotHasKey('portalHandoff', Services::desktopSignInService()->poll($started['deviceCode']));
+        }
+    }
+
+    /** Declining forgets the sign-in at once. */
+    public function testDecliningAfterConfirmingForgetsTheSignIn(): void
+    {
+        $started = $this->start();
+        $user    = $this->makeIdentity('Rahul');
+        Services::desktopSignInService()->confirmByUserCode($user, $started['userCode'], null, null, self::PORTAL_TOKEN);
+
+        Services::desktopSignInService()->denyByUserCode($user, $started['userCode']);
+
+        $row = $this->db->table('remote_desktop_signin_codes')->where('device_code', $started['deviceCode'])->get()->getRowArray();
+        $this->assertNull($row['portal_token']);
+        $this->assertSame(['status' => 'denied'], Services::desktopSignInService()->poll($started['deviceCode']));
+    }
+
+    /** A code nobody claimed does not keep the sign-in for the hour the row lingers. */
+    public function testTheSweepForgetsAnUnclaimedSignInOnceTheCodeHasExpired(): void
+    {
+        $started = $this->start();
+        Services::desktopSignInService()->confirmByUserCode($this->makeIdentity('Rahul'), $started['userCode'], null, null, self::PORTAL_TOKEN);
+
+        $this->db->table('remote_desktop_signin_codes')
+            ->where('device_code', $started['deviceCode'])
+            ->update(['expires_at' => \App\Domain\Support\Clock::in(-1)]);
+
+        Services::desktopSignInService()->sweepExpired();
+
+        $row = $this->db->table('remote_desktop_signin_codes')->where('device_code', $started['deviceCode'])->get()->getRowArray();
+        $this->assertNull($row['portal_token']);
+    }
+
+    public function testAnExpiredHandoffCannotBeRedeemed(): void
+    {
+        $started = $this->start();
+        Services::desktopSignInService()->confirmByUserCode($this->makeIdentity('Rahul'), $started['userCode'], null, null, self::PORTAL_TOKEN);
+        $code = Services::desktopSignInService()->poll($started['deviceCode'])['portalHandoff'];
+
+        $this->db->table('remote_desktop_signin_codes')
+            ->where('device_code', $started['deviceCode'])
+            ->update(['handoff_expires_at' => \App\Domain\Support\Clock::in(-1)]);
+
+        $this->expectException(ApiException::class);
+        Services::desktopSignInService()->redeemHandoff($code);
+    }
+
+    public function testAMalformedOrUnknownHandoffCodeIsNotFound(): void
+    {
+        foreach (['', 'nope', str_repeat('z', 64), str_repeat('a', 64)] as $code) {
+            try {
+                Services::desktopSignInService()->redeemHandoff($code);
+                $this->fail("{$code} should not have been redeemed");
+            } catch (ApiException $error) {
+                $this->assertSame(404, $error->status());
+            }
+        }
+    }
 }

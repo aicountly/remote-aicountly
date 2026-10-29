@@ -76,12 +76,34 @@ class DesktopSignInController extends BaseApiController
             throw ApiException::badRequest('COMPANY_INVALID', 'That is not an organisation this device can be registered in.');
         }
 
+        // The page's own AICOUNTLY sign-in, so the desktop application's
+        // embedded portal is signed in too (docs/desktop/PORTAL.md). Optional:
+        // without it the computer is still registered.
+        $portalToken = is_string($body['portalToken'] ?? null) ? $body['portalToken'] : null;
+
         return $this->ok(Services::desktopSignInService()->confirmByUserCode(
             $this->identity(),
             $this->requiredString($body, 'userCode', 16),
             $companyId,
             $this->clientIp(),
+            $portalToken,
         ));
+    }
+
+    /**
+     * `POST /desktop-signin/handoff`
+     *
+     * The desktop application's embedded portal redeeming the one-time code
+     * its agent was given, for the sign-in the confirming page handed over.
+     * Unauthenticated by design — the 64-hex code is the proof — and answered
+     * with `Cache-Control: no-store`, since the answer is a credential.
+     */
+    public function handoff(): ResponseInterface
+    {
+        $code = $this->requiredString($this->body(), 'code', 64);
+
+        return $this->ok(['authToken' => Services::desktopSignInService()->redeemHandoff($code)])
+            ->setHeader('Cache-Control', 'no-store');
     }
 
     /** `POST /desktop-signin/deny` */

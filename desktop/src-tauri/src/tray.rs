@@ -279,8 +279,17 @@ mod imp {
     }
 
     /// Bring the window back.
+    /// Bring the window back: a second launch, the tray's Open, a request
+    /// that needs the person.
+    ///
+    /// `get_window`, not `get_webview_window`. The main window also holds the
+    /// web portal as a second webview (`portal.rs`), and Tauri only answers
+    /// `get_webview_window` for a window whose webviews all share its label —
+    /// so from the first time the portal was shown, that lookup found nothing
+    /// and this silently did nothing: close the window, double-click the
+    /// icon, and the running application could not bring its window back.
     pub fn show_window(app: &tauri::AppHandle) {
-        if let Some(window) = app.get_webview_window("main") {
+        if let Some(window) = app.get_window("main") {
             let _ = window.show();
             let _ = window.unminimize();
             let _ = window.set_focus();
@@ -332,7 +341,7 @@ mod imp {
             }
 
             ids::CLOSE_WINDOW => {
-                if let Some(window) = app.get_webview_window("main") {
+                if let Some(window) = app.get_window("main") {
                     let _ = window.hide();
                 }
             }
@@ -453,6 +462,22 @@ mod tests {
             .expect("has a quit item");
 
         assert!(quit.label.contains("stays reachable"));
+    }
+
+    /// The main window also holds the web portal as a second webview, and
+    /// Tauri's `get_webview_window` finds nothing for such a window — which is
+    /// how closing the window and double-clicking the icon stopped bringing it
+    /// back. The tray must find the window itself.
+    #[test]
+    fn the_window_is_found_as_a_window_not_as_a_single_webview() {
+        let source = include_str!("tray.rs");
+        let lookup = ["get_webview_window", "(\"main\")"].concat();
+
+        assert!(
+            !source.contains(&lookup),
+            "the main window holds two webviews; look it up with get_window"
+        );
+        assert!(source.contains(&["get_window", "(\"main\")"].concat()));
     }
 
     #[test]

@@ -7,7 +7,7 @@ import { CompanionConfirm } from '../features/companion/CompanionConfirm'
 import { MonitorPicker } from '../features/companion/MonitorPicker'
 import { DeviceCard } from '../features/device/DeviceCard'
 import { DesktopSignInPending } from '../features/device/DesktopSignInPending'
-import { PortalView } from '../features/portal/PortalView'
+import { PortalView, forgetPortalPage } from '../features/portal/PortalView'
 import { RecentSessions } from '../features/home/RecentSessions'
 import { PermissionsCard } from '../features/permissions/PermissionsCard'
 import { ControlRequest } from '../features/session/ControlRequest'
@@ -348,6 +348,11 @@ export default function App() {
         }
 
         await bridge.unregisterDevice()
+
+        // Signing the computer out signs its portal out too. Best effort: a
+        // portal that was never opened has nothing to forget.
+        await bridge.portalAction('sign_out').catch(() => undefined)
+        forgetPortalPage()
       }),
     [run, state, config],
   )

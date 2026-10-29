@@ -26,8 +26,8 @@ a change to the web application reaches the desktop the moment it is deployed.
   LinkedIn, Apple), so signing in works as it does in a browser. Any other link,
   and any link that asks for a new window, opens in the person's own browser;
   a new-window link to the portal itself opens in place.
-* **Sign-in:** the portal's own, kept in the webview's storage like a browser
-  profile, so a person signs in once.
+* **Sign-in:** handed over when the computer is confirmed (below), and kept in
+  the webview's storage like a browser profile.
 
 ## Registering a computer
 
@@ -37,6 +37,36 @@ computer **and** leaves the portal signed in, so the Remote tab is ready
 straight after. **Open in browser instead** opens the same page in the
 person's browser, exactly as before — for anyone whose identity provider
 refuses to sign in inside an embedded web view, which some do.
+
+## Signing the portal in
+
+Whichever way the computer is confirmed — inside the window, or with **Open
+in browser instead** — the portal inside the application is signed in as the
+person who confirmed it, and stays signed in until they log out of the portal,
+the sign-in expires, or the computer is signed out.
+
+1. The confirmation page sends its own AICOUNTLY `auth_token` with the
+   confirmation (`POST /desktop-signin/confirm`, `portalToken`).
+2. The agent's next poll claims the sign-in. In the same statement the server
+   seals the token with a key derived from a fresh 32-byte code, keeps only that
+   code's hash, and returns the code to the agent (`portalHandoff`) — once.
+   The plain token is in the database only between confirm and that poll.
+3. The Rust side keeps the code (the window never sees it) and opens the portal
+   at `/auth/desktop#desktop_handoff=<code>&n=<nonce>`. The fragment is never
+   sent to a server.
+4. The web application takes the code out of the address before anything else
+   reads it, redeems it once (`POST /desktop-signin/handoff`), and stages,
+   checks and stores the token exactly like any other sign-in.
+
+`n` is a random value created each time the application starts and given to
+the portal page — on the portal's own origin only — as
+`__AICOUNTLY_REMOTE_DESKTOP__`. A hand-off is accepted only when the two match,
+so a link cannot sign the portal in as somebody else. The same marker hides the
+web portal's "AICOUNTLY apps" launcher and its download prompts inside the
+application.
+
+**Sign this computer out** clears the portal's cookies and storage too, so the
+next person to use the computer is not signed in as the last one.
 
 ## Things to check on real machines
 

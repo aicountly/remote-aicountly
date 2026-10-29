@@ -25,6 +25,8 @@
 //!     link that asks for a new window does too, unless it is the portal
 //!     itself, which then opens in place.
 
+use std::sync::{Mutex, OnceLock};
+
 use tauri::{Manager, Url};
 
 /// The child webview's label.
@@ -126,6 +128,79 @@ pub fn may_navigate(url: &Url, origin: &Url) -> bool {
         || IDENTITY_PROVIDERS.contains(&host)
 }
 
+// ------------------------------------------------------ signing the portal in
+
+/// The confirming person's sign-in, as a one-time code the agent's poll
+/// received (`commands::poll_desktop_sign_in`), waiting for the portal to
+/// redeem it. Held here rather than in the window, which never sees it.
+static HANDOFF: Mutex<Option<String>> = Mutex::new(None);
+
+/// Keep a hand-off code for the next time the portal is shown.
+pub fn stash_handoff(code: String) {
+    if is_handoff_code(&code) {
+        if let Ok(mut held) = HANDOFF.lock() {
+            *held = Some(code);
+        }
+    }
+}
+
+fn take_handoff() -> Option<String> {
+    HANDOFF.lock().ok()?.take()
+}
+
+/// 64 lowercase hex, as the server issues it — and therefore safe to put in
+/// a URL fragment unescaped.
+fn is_handoff_code(code: &str) -> bool {
+    code.len() == 64
+        && code
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Random, new every time the application starts. The portal page reads it
+/// from `__AICOUNTLY_REMOTE_DESKTOP__` (set by [`marker_script`]) and accepts a
+/// hand-off only when the address carries the same value — which a link
+/// cannot know, so no link can sign the portal in as somebody else.
+#[must_use]
+pub fn launch_nonce() -> &'static str {
+    static NONCE: OnceLock<String> = OnceLock::new();
+
+    NONCE.get_or_init(|| {
+        format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        )
+    })
+}
+
+/// The page that redeems a hand-off, with the code and this launch's nonce in
+/// the fragment — never sent to a server.
+///
+/// A path of its own, not `/`: if the portal were already on `/`, an address
+/// that differed only in its fragment would not load the page again, and the
+/// web application would never see the code. The web application turns
+/// `/auth/desktop` back into `/` before anything renders.
+#[must_use]
+pub fn handoff_path(code: &str, nonce: &str) -> String {
+    format!("/auth/desktop#desktop_handoff={code}&n={nonce}")
+}
+
+/// Tells the portal page it is inside the desktop application, and this
+/// launch's nonce — on the portal's own origin only, never on a sign-in page
+/// it passes through.
+#[must_use]
+pub fn marker_script(origin: &Url, nonce: &str) -> String {
+    let origin = origin.origin().ascii_serialization();
+
+    format!(
+        "if (window.location.origin === {origin:?}) {{ \
+           Object.defineProperty(window, '__AICOUNTLY_REMOTE_DESKTOP__', \
+             {{ value: Object.freeze({{ nonce: {nonce:?} }}), configurable: false, enumerable: false, writable: false }}); \
+         }}"
+    )
+}
+
 /// Whether a link the portal would leave for belongs in the person's own
 /// browser. Only `https`: nothing in the portal has reason to open anything
 /// else, and `file:` or a custom scheme must never be handed to the system.
@@ -152,7 +227,12 @@ pub fn show(
     path: Option<&str>,
     bounds: PortalBounds,
 ) -> Result<(), String> {
-    let target = path.map(|path| portal_url(origin, path)).transpose()?;
+    // A sign-in waiting to be handed over goes first: the portal opens on the
+    // page that redeems it, and lands on its dashboard signed in.
+    let target = match take_handoff() {
+        Some(code) => Some(portal_url(origin, &handoff_path(&code, launch_nonce()))?),
+        None => path.map(|path| portal_url(origin, path)).transpose()?,
+    };
 
     if let Some(portal) = app.get_webview(PORTAL_LABEL) {
         portal
@@ -180,6 +260,7 @@ pub fn show(
 
     let builder =
         tauri::webview::WebviewBuilder::new(PORTAL_LABEL, tauri::WebviewUrl::External(start))
+            .initialization_script(marker_script(origin, launch_nonce()))
             .on_navigation(move |url| {
                 if may_navigate(url, &navigation_origin) {
                     return true;
@@ -255,6 +336,14 @@ pub fn act(app: &tauri::AppHandle, action: &str) -> Result<(), String> {
                 return Err("This page cannot be opened in a browser.".into());
             }
             open::that_detached(url.as_str()).map_err(|error| error.to_string())
+        }
+        // "Sign this computer out": the portal's sign-in goes with it, so the
+        // next person to use this computer is not signed in as the last one.
+        "sign_out" => {
+            portal
+                .clear_all_browsing_data()
+                .map_err(|error| error.to_string())?;
+            portal.hide().map_err(|error| error.to_string())
         }
         _ => Err("Unknown action.".into()),
     }
@@ -360,6 +449,64 @@ mod tests {
         )));
         assert!(!opens_in_browser(&url("ms-settings:privacy")));
         assert!(!opens_in_browser(&url("http://example.com/")));
+    }
+
+    #[test]
+    fn a_handoff_opens_the_portal_start_page_with_the_code_and_nonce_in_the_fragment() {
+        let code = "c".repeat(64);
+        let url = portal_url(&origin(), &handoff_path(&code, "n0nce")).unwrap();
+
+        assert_eq!(url.path(), "/auth/desktop");
+        assert_eq!(url.query(), None, "the code must never be sent to a server");
+        assert_eq!(
+            url.fragment(),
+            Some(format!("desktop_handoff={code}&n=n0nce").as_str())
+        );
+    }
+
+    #[test]
+    fn only_a_well_formed_code_is_kept_for_the_portal() {
+        assert!(is_handoff_code(&"0a".repeat(32)));
+
+        for code in [
+            "",
+            "short",
+            &"Z".repeat(64),
+            &"A".repeat(64),
+            &format!("{}&n=x", "a".repeat(60)),
+        ] {
+            assert!(!is_handoff_code(code), "{code:?} must not be kept");
+        }
+    }
+
+    #[test]
+    fn a_stashed_code_is_given_up_once() {
+        let code = "d".repeat(64);
+        stash_handoff(code.clone());
+
+        assert_eq!(take_handoff(), Some(code));
+        assert_eq!(take_handoff(), None);
+
+        stash_handoff("not a code".into());
+        assert_eq!(take_handoff(), None);
+    }
+
+    #[test]
+    fn the_nonce_is_random_hex_and_the_same_for_the_whole_launch() {
+        let nonce = launch_nonce();
+
+        assert_eq!(nonce.len(), 64);
+        assert!(nonce.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(launch_nonce(), nonce);
+    }
+
+    #[test]
+    fn the_marker_is_set_on_the_portal_origin_only() {
+        let script = marker_script(&origin(), "abc123");
+
+        assert!(script.contains(r#"window.location.origin === "https://remote.aicountly.com""#));
+        assert!(script.contains("__AICOUNTLY_REMOTE_DESKTOP__"));
+        assert!(script.contains(r#"nonce: "abc123""#));
     }
 
     #[test]

@@ -736,12 +736,21 @@ export function exportAuditTrail(
  */
 export function confirmDesktopSignIn(
   userCode: string,
-  companyId?: number,
+  options: {
+    companyId?: number
+    /**
+     * This page's AICOUNTLY `auth_token`, handed to the desktop application's
+     * embedded portal through a one-time code so it is signed in too
+     * (docs/desktop/PORTAL.md). Omitted when there is none.
+     */
+    portalToken?: string | null
+  } = {},
 ): Promise<{ status: 'confirmed'; deviceLabel: string | null }> {
-  return apiFetch('/desktop-signin/confirm', {
-    method: 'POST',
-    body: companyId === undefined ? { userCode } : { userCode, companyId },
-  })
+  const body: Record<string, unknown> = { userCode }
+  if (options.companyId !== undefined) body.companyId = options.companyId
+  if (options.portalToken) body.portalToken = options.portalToken
+
+  return apiFetch('/desktop-signin/confirm', { method: 'POST', body })
 }
 
 export function denyDesktopSignIn(userCode: string): Promise<{ status: 'denied' }> {

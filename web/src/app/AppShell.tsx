@@ -29,6 +29,7 @@ import { useRemote } from './RemoteProvider'
 import { PERMISSIONS } from '../types/remote'
 import AicountlyLogo, { RemoteMark } from '../components/brand/AicountlyLogo'
 import { AppLauncher } from '../components/AppLauncher'
+import { isDesktopApp } from '../features/desktop/embedding'
 import { consumeDesktopSignInReturnPath } from '../features/desktop/returnPath'
 import { ConnectMount } from '../connect/ConnectMount'
 import Modal from '../components/ui/Modal'
@@ -188,7 +189,11 @@ function SignedInShell() {
           {mobileNavOpen ? <Menu size={18} aria-hidden="true" /> : <Menu size={18} aria-hidden="true" />}
         </button>
 
-        <AppLauncher />
+        {/*
+         * Switching AICOUNTLY apps opens another product in a browser tab —
+         * not something the Remote desktop application's portal offers.
+         */}
+        {isDesktopApp() ? null : <AppLauncher />}
 
         <div className="shell__brand">
           <AicountlyLogo />

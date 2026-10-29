@@ -32,6 +32,8 @@ tokio.workspace = true
 time.workspace = true
 
 remote-core.workspace = true
+# The embedded portal's per-launch nonce (`portal::launch_nonce`).
+uuid.workspace = true
 remote-protocol.workspace = true
 remote-security.workspace = true
 remote-device.workspace = true

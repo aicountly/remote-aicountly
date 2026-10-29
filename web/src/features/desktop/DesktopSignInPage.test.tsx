@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom'
 
 import DesktopSignInPage from './DesktopSignInPage'
 import { RemoteApiError } from '../../services/api/client'
+import { setAuthToken } from '../../auth/tokens'
 import type { Bootstrap } from '../../types/remote'
 
 const { useRemoteMock, confirmMock, denyMock } = vi.hoisted(() => ({
@@ -94,16 +95,43 @@ describe('DesktopSignInPage', () => {
     expect(screen.queryByText(/allows registering a desktop device/i)).not.toBeInTheDocument()
   })
 
-  it('confirms with the code alone, then says to go back to the computer', async () => {
+  it('confirms with the code and no organisation, then says to go back to the computer', async () => {
     confirmMock.mockResolvedValue({ status: 'confirmed', deviceLabel: "Priya's laptop" })
     renderPage()
 
     await userEvent.click(screen.getByRole('button', { name: /confirm and sign in/i }))
 
-    expect(confirmMock).toHaveBeenCalledWith('ABCD-1234')
+    expect(confirmMock).toHaveBeenCalledWith('ABCD-1234', { portalToken: null })
     await waitFor(() => expect(screen.getByText(/you're signed in/i)).toBeInTheDocument())
     expect(screen.getByText(/priya's laptop/i)).toBeInTheDocument()
     expect(screen.getByText(/you can close this tab/i)).toBeInTheDocument()
+  })
+
+  /**
+   * The page's own sign-in goes along, so the desktop application's
+   * embedded portal is signed in as the same person (docs/desktop/PORTAL.md).
+   */
+  it('hands this page’s AICOUNTLY sign-in to the computer being confirmed', async () => {
+    setAuthToken('aic.page-auth-token')
+    confirmMock.mockResolvedValue({ status: 'confirmed', deviceLabel: 'PC-22' })
+    renderPage()
+
+    await userEvent.click(screen.getByRole('button', { name: /confirm and sign in/i }))
+
+    expect(confirmMock).toHaveBeenCalledWith('ABCD-1234', { portalToken: 'aic.page-auth-token' })
+    setAuthToken(null)
+  })
+
+  it('does not tell somebody inside the desktop application to close a tab', async () => {
+    window.__AICOUNTLY_REMOTE_DESKTOP__ = { nonce: 'a'.repeat(32) }
+    confirmMock.mockResolvedValue({ status: 'confirmed', deviceLabel: 'PC-22' })
+    renderPage()
+
+    await userEvent.click(screen.getByRole('button', { name: /confirm and sign in/i }))
+
+    expect(await screen.findByText(/continues on its own/i)).toBeInTheDocument()
+    expect(screen.queryByText(/close this tab/i)).not.toBeInTheDocument()
+    delete window.__AICOUNTLY_REMOTE_DESKTOP__
   })
 
   it('shows the server’s message and stays on the form when confirming fails', async () => {
