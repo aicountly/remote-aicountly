@@ -26,10 +26,15 @@ on:
 permissions:
   contents: read
 
-# event_name keeps a run called from the release workflow out of the group a push to
-# the same branch uses, so neither cancels the other.
+# One group per caller. In a called workflow `github.workflow` is the *caller's*
+# name, so release-windows.yml and release-macos.yml each verify in a group of
+# their own and can run side by side. Keyed on event and ref alone, both
+# releases of a version (workflow_dispatch on main) shared one group, and
+# whichever started second cancelled the other's checks (1.0.1 beta, Windows).
+# A run started here directly is grouped as "Desktop CI" and still replaces an
+# earlier direct run on the same ref.
 concurrency:
-  group: desktop-ci-${{ github.event_name }}-${{ github.ref }}
+  group: desktop-ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
