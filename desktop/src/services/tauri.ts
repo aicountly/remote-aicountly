@@ -193,6 +193,36 @@ export function installUpdate(): Promise<UpdateStarted> {
   return invoke<UpdateStarted>('install_update')
 }
 
+/** Where the portal is drawn, in the window's CSS pixels. */
+export interface PortalBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/**
+ * Show the web portal over `bounds`, at `path` when given (a path on this
+ * deployment's Remote — never a URL; the Rust side refuses anything else).
+ */
+export function portalShow(path: string | null, bounds: PortalBounds): Promise<void> {
+  return invoke<void>('portal_show', { path, bounds })
+}
+
+/** The space left for the portal moved or changed size. */
+export function portalSetBounds(bounds: PortalBounds): Promise<void> {
+  return invoke<void>('portal_set_bounds', { bounds })
+}
+
+/** Take the portal off the screen. It keeps its page and its sign-in. */
+export function portalHide(): Promise<void> {
+  return invoke<void>('portal_hide')
+}
+
+export function portalAction(action: 'back' | 'reload' | 'open_in_browser'): Promise<void> {
+  return invoke<void>('portal_action', { action })
+}
+
 export function about(): Promise<About> {
   return invoke<About>('about')
 }

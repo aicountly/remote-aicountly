@@ -5,21 +5,29 @@ import type { DesktopSignInStart } from '../../types/agent'
  *
  * This screen is deliberately passive: the code is shown so a person can
  * match it against the confirmation page, and everything else — signing in
- * and confirming — happens over there, in a browser that already knows how
- * to do both. There is no organisation to choose: the computer belongs to
- * the person who confirms it. This window only polls.
+ * and confirming — happens on that page. It opens inside this window, below
+ * this card (`PortalView`), and the same sign-in then gives the portal's
+ * menus in this window too. Some identity providers refuse to sign anybody in
+ * from an embedded web view, so the page can also be opened in the person's
+ * own browser instead, where the flow is exactly what it always was.
+ *
+ * There is no organisation to choose: the computer belongs to the person who
+ * confirms it. This window only polls.
  */
 export function DesktopSignInPending({
   start,
   outcome,
   onCancel,
   onRetry,
+  onOpenInBrowser,
   busy,
 }: {
   start: DesktopSignInStart
   outcome: 'pending' | 'denied' | 'expired'
   onCancel: () => void
   onRetry: () => void
+  /** Confirm in the person's own browser rather than in this window. */
+  onOpenInBrowser?: () => void
   busy?: boolean
 }) {
   return (
@@ -27,16 +35,11 @@ export function DesktopSignInPending({
       <h2 className="card__title">Sign in to register this device</h2>
 
       {outcome === 'pending' ? (
-        <>
-          <p className="card__subtitle">
-            AICOUNTLY Remote opened a browser tab. Check that it shows the same code as below, then
-            confirm there.
-          </p>
-
-          <div className="field" style={{ alignItems: 'center', textAlign: 'center' }}>
+        <div className="signin-pending">
+          <div className="signin-pending__code">
             <span
               className="mono"
-              style={{ fontSize: '1.75rem', letterSpacing: '0.18em', fontWeight: 600 }}
+              style={{ fontSize: '1.5rem', letterSpacing: '0.18em', fontWeight: 600 }}
               aria-live="polite"
             >
               {start.userCode}
@@ -44,20 +47,22 @@ export function DesktopSignInPending({
             <span className="field__hint">Waiting for confirmation…</span>
           </div>
 
-          <div className="notice notice--info" style={{ marginTop: 'var(--space-4)' }}>
-            <p className="notice__title">What happens next</p>
-            <p>
-              A browser tab opened to AICOUNTLY Remote. Sign in there if you are not already and
-              confirm the code matches. This window picks it up automatically — nothing to do here.
-            </p>
-          </div>
+          <p className="signin-pending__text">
+            Sign in below if you are asked to, check that the page shows this code, then confirm.
+            This window picks it up automatically.
+          </p>
 
-          <div style={{ marginTop: 'var(--space-4)' }}>
+          <div className="signin-pending__actions">
+            {onOpenInBrowser ? (
+              <button type="button" className="btn btn--secondary" onClick={onOpenInBrowser} disabled={busy}>
+                Open in browser instead
+              </button>
+            ) : null}
             <button type="button" className="btn btn--secondary" onClick={onCancel} disabled={busy}>
               Cancel
             </button>
           </div>
-        </>
+        </div>
       ) : outcome === 'denied' ? (
         <>
           <div className="notice notice--danger">

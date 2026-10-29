@@ -387,6 +387,103 @@ body {
   margin-bottom: 0;
 }
 
+/* --- The web portal ---------------------------------------------------------- */
+
+/* The portal is a native web view drawn over .portal__frame, so the window
+   must not scroll in this mode: the frame's position is where the portal is. */
+.app--portal {
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app--portal .app__main {
+  max-width: none;
+  min-height: 0;
+  padding: var(--space-3) 0 0;
+  gap: var(--space-3);
+}
+
+.app--portal .app__main > :not(.portal) {
+  margin-left: var(--space-5);
+  margin-right: var(--space-5);
+}
+
+.portal {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.portal__toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-4) var(--space-2);
+}
+
+.portal__spacer {
+  flex: 1;
+}
+
+.portal__tool {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.portal__tool:hover {
+  background: var(--bg-muted);
+  color: var(--text-primary);
+}
+
+.portal__tool:focus-visible {
+  outline: 2px solid var(--aicountly-green-dark);
+  outline-offset: 1px;
+}
+
+.portal__error {
+  margin: 0 var(--space-5) var(--space-2);
+}
+
+.portal__frame {
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+}
+
+/* The confirmation step, compact enough to leave the page below it room. */
+.signin-pending {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-5);
+}
+
+.signin-pending__code {
+  display: flex;
+  flex-direction: column;
+}
+
+.signin-pending__text {
+  flex: 1 1 16rem;
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.signin-pending__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
 /* --- Updates --------------------------------------------------------------- */
 
 /* The launch prompt: over the window, never over a running session (the

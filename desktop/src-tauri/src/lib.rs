@@ -25,6 +25,7 @@ pub mod commands;
 pub mod companion;
 pub mod ipc;
 pub mod platform;
+pub mod portal;
 pub mod runtime;
 pub mod session;
 pub mod tray;
@@ -197,6 +198,10 @@ pub fn run() {
             commands::open_url,
             commands::check_for_update,
             commands::install_update,
+            commands::portal_show,
+            commands::portal_set_bounds,
+            commands::portal_hide,
+            commands::portal_action,
             commands::about,
         ])
         .setup(|app| {

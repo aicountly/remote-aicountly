@@ -1,14 +1,16 @@
 /**
  * What an unauthenticated machine shows instead of the application.
  *
- * # Signing in happens in a browser, and that is the point
+ * # Signing in happens on the AICOUNTLY sign-in page
  *
- * The password is never typed into this window. Signing in opens the ordinary
- * AICOUNTLY sign-in page in the person's own browser, where their password
- * manager, their second factor and Google, LinkedIn or Outlook all work
- * exactly as they do everywhere else — and where identity providers will
- * actually render a login form, which they routinely refuse to do for anything
- * that looks like an embedded web view.
+ * This application never sees a password. Signing in opens the ordinary
+ * AICOUNTLY sign-in page in a web view inside this window (the portal, see
+ * `src-tauri/src/portal.rs`) — the same page, on the same site, as in a
+ * browser, and the same sign-in then gives the portal's menus here. Some
+ * identity providers refuse to render a login form in anything that looks
+ * like an embedded web view, so the confirmation step also offers to open in
+ * the person's own browser, where their password manager, second factor and
+ * Google, LinkedIn or Outlook all work exactly as they do everywhere else.
  *
  * What comes back is not a browser session. It is an enrolment: this computer
  * generates a keypair, keeps the private half in the platform's key store, and
@@ -56,13 +58,14 @@ export function SignInScreen({
         <li className="row">
           <span className="row__label">1</span>
           <span className="row__value">
-            Your browser opens the AICOUNTLY sign-in page, where you sign in as you always do.
+            The AICOUNTLY sign-in page opens in this window, where you sign in as you always do — or
+            in your browser, if you prefer.
           </span>
         </li>
         <li className="row">
           <span className="row__label">2</span>
           <span className="row__value">
-            Check that the code in the browser matches the one shown here, and confirm.
+            Check that the code on that page matches the one shown here, and confirm.
           </span>
         </li>
         <li className="row">
@@ -80,8 +83,8 @@ export function SignInScreen({
       </div>
 
       <p className="card__footnote" style={{ marginTop: 'var(--space-3)' }}>
-        Nobody can connect to this computer until you sign in. Your password is never typed into
-        this window.
+        Nobody can connect to this computer until you sign in. Your password goes only to the
+        AICOUNTLY sign-in page; this application never sees it.
       </p>
     </section>
   )

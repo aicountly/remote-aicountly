@@ -6,17 +6,17 @@ import { SignInScreen } from './SignInScreen'
 
 /**
  * The screen a signed-out machine lands on, and the promise it makes: the
- * password is not typed here, and this is asked once.
+ * application never sees the password, and this is asked once.
  */
 describe('SignInScreen', () => {
-  it('offers to sign in, and says the password is not typed here', async () => {
+  it('offers to sign in, and says this application never sees the password', async () => {
     const onSignIn = vi.fn()
     render(<SignInScreen revoked={false} deviceId="A1B2 C3D4 E5F6 A7B8" onSignIn={onSignIn} />)
 
     await userEvent.click(screen.getByRole('button', { name: /sign in to aicountly/i }))
 
     expect(onSignIn).toHaveBeenCalledTimes(1)
-    expect(screen.getByText(/password is never typed into this window/i)).toBeTruthy()
+    expect(screen.getByText(/this application never sees it/i)).toBeTruthy()
     expect(screen.getByText(/will not be asked again/i)).toBeTruthy()
   })
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { Brand } from '../components/Brand'
 import { AccessibilityNotice } from '../features/companion/AccessibilityNotice'
@@ -7,6 +7,7 @@ import { CompanionConfirm } from '../features/companion/CompanionConfirm'
 import { MonitorPicker } from '../features/companion/MonitorPicker'
 import { DeviceCard } from '../features/device/DeviceCard'
 import { DesktopSignInPending } from '../features/device/DesktopSignInPending'
+import { PortalView } from '../features/portal/PortalView'
 import { RecentSessions } from '../features/home/RecentSessions'
 import { PermissionsCard } from '../features/permissions/PermissionsCard'
 import { ControlRequest } from '../features/session/ControlRequest'
@@ -27,7 +28,7 @@ import type {
 import { activeCompanion, activeSession, isEnrolled, isUsable } from '../types/agent'
 import { SignInScreen } from '../features/device/SignInScreen'
 
-type Screen = 'home' | 'unattended' | 'settings' | 'register'
+type Screen = 'portal' | 'home' | 'unattended' | 'settings' | 'register'
 
 /**
  * The window.
@@ -52,6 +53,13 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [shareClipboard, setShareClipboard] = useState(false)
+  // Bumped to send the portal back to its dashboard (choosing "Remote" again).
+  const [portalHome, setPortalHome] = useState(0)
+  // The update prompt is this window's own; the portal steps aside for it.
+  const [updatePrompt, setUpdatePrompt] = useState(false)
+  // A signed-in computer opens on the portal, once, when the window first
+  // learns that it is signed in.
+  const landed = useRef(false)
 
   const refresh = useCallback(async () => {
     const [next, perms] = await Promise.all([bridge.getState(), bridge.getPermissions()])
@@ -235,10 +243,12 @@ export default function App() {
   )
 
   // Device-code sign-in (docs/desktop/DEVICE_ENROLMENT.md): this window
-  // creates the keypair and starts the code, a browser tab — already capable
-  // of the AICOUNTLY portal's ordinary, working sign-in — confirms it, and
-  // the server enrols the device the moment it does. This window never holds
-  // a portal credential of any kind; it only shows the code and polls.
+  // creates the keypair and starts the code, the confirmation page — opened
+  // in the portal inside this window, or in the person's browser if they
+  // prefer — confirms it, and the server enrols the device the moment it
+  // does. The Rust side never holds a portal credential of any kind; the
+  // sign-in lives in the portal's web view, exactly as it would in a browser,
+  // and is what the portal's menus use afterwards.
   const beginRegistration = useCallback(
     () =>
       run(async () => {
@@ -246,8 +256,6 @@ export default function App() {
 
         const material = await bridge.createDeviceKey()
         const start = await bridge.startDesktopSignIn(material)
-
-        await bridge.openUrl(start.verificationUriComplete)
 
         setSignIn({ start, outcome: 'pending' })
         setScreen('register')
@@ -300,7 +308,9 @@ export default function App() {
 
             setState(next)
             setSignIn(null)
-            setScreen('home')
+            // Signed in: straight to everything the portal offers.
+            landed.current = true
+            setScreen('portal')
           } catch (caught) {
             if (!cancelled) {
               setError(caught instanceof Error ? caught.message : 'Registration succeeded but could not be recorded here.')
@@ -370,6 +380,32 @@ export default function App() {
   const revoked = state?.status.status === 'revoked'
   const signedOut = !state || !isEnrolled(state) || revoked
 
+  useEffect(() => {
+    if (landed.current || !state) return
+
+    landed.current = true
+    if (!signedOut) setScreen((current) => (current === 'home' ? 'portal' : current))
+  }, [state, signedOut])
+
+  // The portal is only for a signed-in computer; signing out leaves it.
+  useEffect(() => {
+    if (signedOut && screen === 'portal') setScreen('home')
+  }, [signedOut, screen])
+
+  const selectScreen = useCallback(
+    (next: Screen) => {
+      // "Remote" again, while already on it: back to the dashboard.
+      if (next === 'portal' && screen === 'portal') setPortalHome((count) => count + 1)
+      setScreen(next)
+    },
+    [screen],
+  )
+
+  // The confirmation page, as a path on this deployment's portal.
+  const confirmPath = signIn ? pathOf(signIn.start.verificationUriComplete) : null
+  const portalMode =
+    (screen === 'portal' && !signedOut) || (screen === 'register' && signIn?.outcome === 'pending')
+
   if (!state || !permissions) {
     return (
       <div className="app">
@@ -381,21 +417,32 @@ export default function App() {
   }
 
   return (
-    <div className="app">
+    <div className={portalMode ? 'app app--portal' : 'app'}>
       <header className="app__header">
         <Brand version={state.agentVersion} />
 
         <nav className="app__nav">
-          <NavItem screen="home" current={screen} onSelect={setScreen}>
-            {signedOut ? 'Sign in' : 'Home'}
+          {/*
+           * "Remote" is the web portal itself, with its own menus — Dashboard,
+           * Start session, Join session, Support requests, Sessions,
+           * Computers, Settings — so it matches the browser exactly. The rest
+           * are about this computer, and exist only here.
+           */}
+          {!signedOut ? (
+            <NavItem screen="portal" current={screen} onSelect={selectScreen}>
+              Remote
+            </NavItem>
+          ) : null}
+          <NavItem screen="home" current={screen} onSelect={selectScreen}>
+            {signedOut ? 'Sign in' : 'This computer'}
           </NavItem>
           {!signedOut && about?.supportsHosting !== false ? (
-            <NavItem screen="unattended" current={screen} onSelect={setScreen}>
+            <NavItem screen="unattended" current={screen} onSelect={selectScreen}>
               Unattended access
             </NavItem>
           ) : null}
-          <NavItem screen="settings" current={screen} onSelect={setScreen}>
-            Settings
+          <NavItem screen="settings" current={screen} onSelect={selectScreen}>
+            App settings
           </NavItem>
         </nav>
       </header>
@@ -467,7 +514,7 @@ export default function App() {
          * Whether a newer version is published: a prompt when the window
          * opens, then a banner for as long as this one is out of date.
          */}
-        <Updates sessionActive={session !== null || companion !== null} />
+        <Updates sessionActive={session !== null || companion !== null} onPromptChange={setUpdatePrompt} />
 
         {about && !about.supported ? (
           <div className="notice notice--warning">
@@ -494,13 +541,23 @@ export default function App() {
         {error ? <div className="notice notice--danger">{error}</div> : null}
 
         {screen === 'register' && signIn ? (
-          <DesktopSignInPending
-            start={signIn.start}
-            outcome={signIn.outcome}
-            onCancel={cancelSignIn}
-            onRetry={() => void beginRegistration()}
-            busy={busy}
-          />
+          <>
+            <DesktopSignInPending
+              start={signIn.start}
+              outcome={signIn.outcome}
+              onCancel={cancelSignIn}
+              onRetry={() => void beginRegistration()}
+              onOpenInBrowser={() =>
+                void bridge.openUrl(signIn.start.verificationUriComplete).catch(() => undefined)
+              }
+              busy={busy}
+            />
+            {signIn.outcome === 'pending' && confirmPath ? (
+              <PortalView path={confirmPath} hidden={updatePrompt} />
+            ) : null}
+          </>
+        ) : screen === 'portal' && !signedOut ? (
+          <PortalView path="/" navigateKey={portalHome} hidden={updatePrompt} />
         ) : signedOut && screen !== 'settings' ? (
           <SignInScreen
             revoked={revoked}
@@ -540,6 +597,17 @@ export default function App() {
       </main>
     </div>
   )
+}
+
+/** `https://remote.aicountly.com/desktop-signin?code=X` → `/desktop-signin?code=X`. */
+function pathOf(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+
+    return `${parsed.pathname}${parsed.search}`
+  } catch {
+    return null
+  }
 }
 
 function NavItem({
