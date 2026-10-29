@@ -603,8 +603,12 @@ pub fn is_permitted_url(url: &str, config: &AgentConfig) -> bool {
 ///
 /// The portal is this deployment's web application (`portal::portal_origin`);
 /// the window chooses only the page and where it is drawn.
+///
+/// `async`, like every command here that creates or drives a webview: a
+/// synchronous command runs on the main thread, and creating a webview there
+/// deadlocks on Windows (see `portal::show`).
 #[tauri::command]
-pub fn portal_show(
+pub async fn portal_show(
     app: tauri::AppHandle,
     agent: tauri::State<'_, Arc<Agent>>,
     path: Option<String>,
@@ -618,7 +622,7 @@ pub fn portal_show(
 
 /// The window's layout changed: move the portal with it.
 #[tauri::command]
-pub fn portal_set_bounds(
+pub async fn portal_set_bounds(
     app: tauri::AppHandle,
     bounds: crate::portal::PortalBounds,
 ) -> Result<(), String> {
@@ -627,13 +631,13 @@ pub fn portal_set_bounds(
 
 /// Take the portal off the screen, keeping its page and sign-in.
 #[tauri::command]
-pub fn portal_hide(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn portal_hide(app: tauri::AppHandle) -> Result<(), String> {
     crate::portal::hide(&app)
 }
 
 /// Back, reload, or open the current portal page in the browser.
 #[tauri::command]
-pub fn portal_action(app: tauri::AppHandle, action: String) -> Result<(), String> {
+pub async fn portal_action(app: tauri::AppHandle, action: String) -> Result<(), String> {
     crate::portal::act(&app, &action)
 }
 
@@ -819,6 +823,35 @@ mod tests {
             assert!(
                 !is_permitted_url(candidate, &config()),
                 "{candidate:?} must not be opened"
+            );
+        }
+    }
+
+    /// On Windows a synchronous command runs on the main thread, and creating
+    /// or driving a webview from there waits on that same thread forever —
+    /// which is how 1.0.2's portal hung the whole application on its first
+    /// use. Every command that creates or drives a webview must be `async`.
+    /// Read from this file's own source because the deadlock cannot be
+    /// reproduced off Windows, so no runtime test here would catch it.
+    #[test]
+    fn every_command_that_touches_a_webview_is_async() {
+        let source = include_str!("mod.rs");
+
+        for command in [
+            "portal_show",
+            "portal_set_bounds",
+            "portal_hide",
+            "portal_action",
+            "identify_monitors",
+            "install_update",
+        ] {
+            assert!(
+                source.contains(&format!("pub async fn {command}(")),
+                "`{command}` must be an async command — a synchronous one deadlocks on Windows"
+            );
+            assert!(
+                !source.contains(&format!("pub fn {command}(")),
+                "`{command}` must not be a synchronous command"
             );
         }
     }
