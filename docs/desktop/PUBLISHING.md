@@ -28,6 +28,33 @@ page and its `.htaccess` and deliberately cannot delete the installers. The
 download section on `aicountly.com/remote` reads `remote/manifest.json` and
 offers whatever it names.
 
+## The application reads the same manifest
+
+AICOUNTLY Remote checks `remote/manifest.json` itself each time its window
+opens (`desktop/crates/remote-core/src/update.rs`). If the manifest's version
+is newer than the installed one *and* names a build for that computer's
+operating system, the window offers **Install update** or **Skip**, and keeps
+an **Update now** banner up until it is updated. Install update downloads the
+installer for that OS and architecture from
+`downloads.aicountly.com/remote/<version>/`, checks its size and SHA-256
+against the manifest, opens it (the NSIS installer on Windows, the disk image
+on macOS) and closes the application so it can be replaced.
+
+So publishing the manifest is also what tells every installed copy to update,
+and:
+
+* **publish once every platform of the version is built.** A release with no
+  build for an OS is not an update for it, so a manifest naming only the
+  Windows build prompts Windows and leaves Macs on the old version until the
+  manifest is published again with the Mac build in it.
+* **a rollback stops the prompt** but does not downgrade anybody: only a
+  *newer* version is ever offered.
+* **a `sandbox` manifest is never offered.** Nor is a manifest for another
+  product, or one whose version does not parse.
+
+A check that cannot reach the host, or cannot read the manifest, is treated
+as "up to date": the application opens and works exactly as it would have.
+
 ## The published file names
 
 Tauri calls the bundle `AICOUNTLY Remote_1.0.0_x64-setup.exe`, with a space in

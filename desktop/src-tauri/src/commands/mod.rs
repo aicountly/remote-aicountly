@@ -571,10 +571,22 @@ pub fn is_permitted_url(url: &str, config: &AgentConfig) -> bool {
     // Compared as origins with an explicit boundary, so
     // `https://my.aicountly.com.attacker.example` does not match
     // `https://my.aicountly.com`.
+    //
+    // The download page and this product's directory on the downloads host
+    // are fixed, not configured: they are where an update is offered, and
+    // the update banner opens them for anyone who would rather install by
+    // hand.
+    let download_page = remote_core::update::DOWNLOAD_PAGE_URL
+        .split('#')
+        .next()
+        .map(str::to_owned);
+
     let permitted = [
         Some(config.portal_url.clone()),
         Some(config.api_base_url.clone()),
         app_origin,
+        download_page,
+        Some(remote_core::update::DOWNLOADS_BASE_URL.to_owned()),
     ];
 
     permitted.iter().flatten().any(|origin| {
@@ -583,6 +595,116 @@ pub fn is_permitted_url(url: &str, config: &AgentConfig) -> bool {
         url == origin
             || url.starts_with(&format!("{origin}/"))
             || url.starts_with(&format!("{origin}?"))
+            || url.starts_with(&format!("{origin}#"))
+    })
+}
+
+/// Whether a newer version is published for this computer.
+///
+/// Never an error: a check that cannot reach the downloads host, or reads a
+/// manifest it does not understand, is "no update" and the application goes
+/// on exactly as before. Only logged, for a support engineer.
+#[tauri::command]
+pub async fn check_for_update() -> Option<remote_core::UpdateInfo> {
+    let (platform, arch) = remote_core::update::current_platform()?;
+
+    let checker = match remote_core::UpdateChecker::new() {
+        Ok(checker) => checker,
+        Err(error) => {
+            tracing::info!(%error, "the update check could not start; carrying on");
+            return None;
+        }
+    };
+
+    match checker.check(crate::VERSION, platform, arch).await {
+        Ok(update) => {
+            if let Some(update) = &update {
+                tracing::info!(latest = %update.latest_version, "a newer version is published");
+            }
+            update
+        }
+        Err(error) => {
+            tracing::info!(%error, "the update check failed; carrying on");
+            None
+        }
+    }
+}
+
+/// What the window says once an installer has been opened.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateStarted {
+    /// The version being installed.
+    pub version: String,
+    /// `windows` or `macos`: what the person is about to see differs.
+    pub platform: String,
+    /// How long until this application closes, so the installer can replace it.
+    pub closes_in_seconds: u64,
+}
+
+/// How long the window stays up after the installer opens: long enough to
+/// read what happens next, short enough to be out of the installer's way.
+const UPDATE_CLOSE_DELAY_SECONDS: u64 = 4;
+
+/// Download this computer's installer, verify it, open it, and close.
+///
+/// Nothing about what to fetch comes from the window: the manifest is read
+/// again here, and only the installer it names for this platform and
+/// architecture is fetched — from the downloads host, checked against the
+/// manifest's size and SHA-256 (`remote_core::update`). The operating system
+/// then does what it does with the file: on Windows the installer runs (and
+/// asks for elevation itself); on macOS the disk image opens in Finder.
+///
+/// Refused while a session is running: closing this application ends it, and
+/// somebody is on the other end.
+#[tauri::command]
+pub async fn install_update(
+    app: tauri::AppHandle,
+    agent: tauri::State<'_, Arc<Agent>>,
+) -> Result<UpdateStarted, String> {
+    if agent.state().active_session().is_some() {
+        return Err(
+            "Finish the current session first — installing the update closes AICOUNTLY Remote."
+                .into(),
+        );
+    }
+
+    let (platform, arch) = remote_core::update::current_platform()
+        .ok_or("Updates are not published for this computer.")?;
+
+    let checker = remote_core::UpdateChecker::new().map_err(|error| error.to_string())?;
+
+    let update = checker
+        .check(crate::VERSION, platform, arch)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or("This is already the latest version of AICOUNTLY Remote.")?;
+
+    let installer = update
+        .installer
+        .ok_or("There is no installer for this computer to download automatically. Use the download page instead.")?;
+
+    let path = checker
+        .download(
+            &installer,
+            &std::env::temp_dir().join("AicountlyRemoteUpdate"),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+
+    open::that(&path).map_err(|error| format!("The installer could not be opened: {error}"))?;
+
+    tracing::info!(version = %update.latest_version, "opened the update installer; closing");
+
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(UPDATE_CLOSE_DELAY_SECONDS)).await;
+        app.exit(0);
+    });
+
+    Ok(UpdateStarted {
+        version: update.latest_version,
+        platform: platform.to_owned(),
+        closes_in_seconds: UPDATE_CLOSE_DELAY_SECONDS,
     })
 }
 
@@ -655,6 +777,35 @@ mod tests {
             "ms-settings:",
             "http://my.aicountly.com",
             "",
+        ] {
+            assert!(
+                !is_permitted_url(candidate, &config()),
+                "{candidate:?} must not be opened"
+            );
+        }
+    }
+
+    /// The update banner's two links: the download page, and an installer on
+    /// the downloads host — and nothing else on either host.
+    #[test]
+    fn the_download_page_and_published_installers_are_opened() {
+        for candidate in [
+            "https://aicountly.com/remote",
+            "https://aicountly.com/remote#download",
+            "https://downloads.aicountly.com/remote/1.1.0/Aicountly-Remote-1.1.0-x64-Setup.exe",
+        ] {
+            assert!(
+                is_permitted_url(candidate, &config()),
+                "{candidate:?} should be opened"
+            );
+        }
+
+        for candidate in [
+            "https://aicountly.com/",
+            "https://aicountly.com/remoteevil",
+            "https://downloads.aicountly.com/connect/x.exe",
+            "https://downloads.aicountly.com.attacker.example/remote/x.exe",
+            "http://downloads.aicountly.com/remote/x.exe",
         ] {
             assert!(
                 !is_permitted_url(candidate, &config()),

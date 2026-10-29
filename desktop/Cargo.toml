@@ -54,6 +54,8 @@ tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "sync", "ti
 ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
 rand = "0.10.2"
 sha2 = "0.11.0"
+# Comparing the installed version with the published one (remote-core `update`).
+semver = "1.0.28"
 base64 = "0.23.1"
 hex = "0.4.3"
 uuid = { version = "1.19", features = ["v4", "serde"] }

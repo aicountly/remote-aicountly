@@ -13,6 +13,7 @@ import { ControlRequest } from '../features/session/ControlRequest'
 import { SessionBanner } from '../features/session/SessionBanner'
 import { SettingsPage } from '../features/settings/SettingsPage'
 import { UnattendedCard } from '../features/unattended/UnattendedCard'
+import { Updates } from '../features/update/Updates'
 import * as api from '../services/api'
 import * as bridge from '../services/tauri'
 import type {
@@ -461,6 +462,12 @@ export default function App() {
             busy={busy}
           />
         ) : null}
+
+        {/*
+         * Whether a newer version is published: a prompt when the window
+         * opens, then a banner for as long as this one is out of date.
+         */}
+        <Updates sessionActive={session !== null || companion !== null} />
 
         {about && !about.supported ? (
           <div className="notice notice--warning">

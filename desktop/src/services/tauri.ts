@@ -21,6 +21,8 @@ import type {
   EnrolmentConfirmation,
   EnrolmentMaterial,
   PermissionSummary,
+  UpdateInfo,
+  UpdateStarted,
 } from '../types/agent'
 
 export function getState(): Promise<AgentState> {
@@ -166,6 +168,29 @@ export function endSession(): Promise<AgentState> {
 /** Open a URL in the person's own browser. Allowlisted on the Rust side. */
 export function openUrl(url: string): Promise<void> {
   return invoke<void>('open_url', { url })
+}
+
+/**
+ * Whether a newer version is published for this computer. Never rejects for
+ * a check that failed — the Rust side answers null, and so does this if the
+ * call itself fails: an update check must never stand between a person and
+ * the application.
+ */
+export async function checkForUpdate(): Promise<UpdateInfo | null> {
+  try {
+    return await invoke<UpdateInfo | null>('check_for_update')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Download, verify and open this computer's installer, after which the
+ * application closes. What to fetch is decided on the Rust side from the
+ * published manifest; nothing is passed from here.
+ */
+export function installUpdate(): Promise<UpdateStarted> {
+  return invoke<UpdateStarted>('install_update')
 }
 
 export function about(): Promise<About> {
