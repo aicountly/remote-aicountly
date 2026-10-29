@@ -4,9 +4,10 @@ import type { DesktopSignInStart } from '../../types/agent'
  * Waiting for a device-code sign-in to be confirmed (docs/desktop/DEVICE_ENROLMENT.md).
  *
  * This screen is deliberately passive: the code is shown so a person can
- * match it against the confirmation page, and everything else — choosing the
- * organisation, signing in, confirming — happens over there, in a browser
- * that already knows how to do all three. This window only polls.
+ * match it against the confirmation page, and everything else — signing in
+ * and confirming — happens over there, in a browser that already knows how
+ * to do both. There is no organisation to choose: the computer belongs to
+ * the person who confirms it. This window only polls.
  */
 export function DesktopSignInPending({
   start,
@@ -46,9 +47,8 @@ export function DesktopSignInPending({
           <div className="notice notice--info" style={{ marginTop: 'var(--space-4)' }}>
             <p className="notice__title">What happens next</p>
             <p>
-              A browser tab opened to AICOUNTLY Remote. Sign in there if you are not already, choose
-              which organisation this computer belongs to, and confirm the code matches. This window
-              picks it up automatically — nothing to do here.
+              A browser tab opened to AICOUNTLY Remote. Sign in there if you are not already and
+              confirm the code matches. This window picks it up automatically — nothing to do here.
             </p>
           </div>
 

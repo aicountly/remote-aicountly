@@ -387,6 +387,68 @@ body {
   margin-bottom: 0;
 }
 
+/* --- Updates --------------------------------------------------------------- */
+
+/* The launch prompt: over the window, never over a running session (the
+   component does not show it then). */
+.update-dialog__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  background: rgba(16, 24, 16, 0.38);
+}
+
+.update-dialog {
+  width: 100%;
+  max-width: 460px;
+  box-shadow: var(--shadow-lg);
+}
+
+.update-dialog__actions,
+.update-banner__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.update-dialog__actions {
+  margin-top: var(--space-4);
+}
+
+/* The banner that stays for as long as this version is out of date. */
+.update-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.update-banner__text {
+  flex: 1 1 18rem;
+}
+
+.update-progress {
+  margin-top: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.link-button {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* --- Forms ---------------------------------------------------------------- */
 
 .field {

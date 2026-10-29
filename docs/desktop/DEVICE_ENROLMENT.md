@@ -69,7 +69,8 @@ loopback one.
   agent opens verificationUriComplete in the system browser
 
   the person, already able to sign in to the web app the ordinary way,
-  confirms the code and chooses which organisation this machine belongs to
+  confirms the code — there is no organisation to choose: the machine
+  belongs to the person who confirms it
 
   POST /v1/remote/desktop-signin/poll     { deviceCode }                 agent, unauthenticated
        → { status: pending | denied | expired | confirmed, device? }
@@ -89,13 +90,15 @@ Two codes, two audiences, and the split is the whole security model:
 its public key, its name, its declared capabilities — captured once, so
 neither the browser confirmation nor the later poll needs to ask the agent for
 anything further. The confirming browser supplies the other half: who is
-confirming, and which company. The **server** joins the two the moment `poll`
+confirming. The **server** joins the two the moment `poll`
 observes the code confirmed, spending it exactly once (a guarded
 `UPDATE … WHERE status = 'CONFIRMED'`, the same pattern a device-auth nonce is
 spent with) and enrolling the device in the same call — `DeviceService::enrol`,
 unchanged, so every check below still applies:
 
-1. the confirming person is a member of that company;
+1. for a device registered into a company (an API caller may still pass
+   `companyId`; the web page never does), the confirming person is a member
+   of it — a personal device, the ordinary case, has no company to check;
 2. the plan includes `desktop_devices`;
 3. the confirming person holds `remote.device.enrol`;
 4. the public key is well formed, 32 bytes, and not all-zero;

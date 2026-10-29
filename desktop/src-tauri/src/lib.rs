@@ -195,6 +195,8 @@ pub fn run() {
             commands::request_permission,
             commands::identify_monitors,
             commands::open_url,
+            commands::check_for_update,
+            commands::install_update,
             commands::about,
         ])
         .setup(|app| {

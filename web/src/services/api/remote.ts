@@ -439,8 +439,9 @@ export function setClipboardSharing(
 
 // --- Devices (§52) ----------------------------------------------------------
 
-export function fetchDevices(companyId: number): Promise<DeviceListing> {
-  return apiFetch<DeviceListing>(`/devices?companyId=${companyId}`)
+/** A company's computers, or — with no company — the person's own. */
+export function fetchDevices(companyId: number | null): Promise<DeviceListing> {
+  return apiFetch<DeviceListing>(companyId === null ? '/devices' : `/devices?companyId=${companyId}`)
 }
 
 export function fetchDevice(uuid: string): Promise<{

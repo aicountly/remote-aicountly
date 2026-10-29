@@ -242,8 +242,11 @@ fn decode_exact<const N: usize>(value: &str) -> Option<[u8; N]> {
 pub struct EnrolmentRecord {
     /// The device's uuid, as issued by the API.
     pub device_uuid: String,
-    /// The company it was enrolled into.
-    pub company_id: i64,
+    /// The organisation it was enrolled into, if any. `None` is a personal
+    /// device — the ordinary case. `default` so a record written by a build
+    /// that always had one still reads.
+    #[serde(default)]
+    pub company_id: Option<i64>,
     /// Its name, for the "Organisation" row. The API's device resource
     /// carries only the id, so this is the name shown at enrolment time —
     /// not re-fetched afterwards, because nothing currently reads it back.
@@ -593,13 +596,29 @@ mod tests {
     fn enrolment_record() -> EnrolmentRecord {
         EnrolmentRecord {
             device_uuid: UUID.into(),
-            company_id: 481,
+            company_id: Some(481),
             company_name: Some("Northwind".into()),
             device_name: "WS-01".into(),
             key_fingerprint: "AAAA BBBB CCCC DDDD".into(),
             api_base_url: "https://remote.aicountly.com/api".into(),
             enrolled_at: "2026-02-10T09:00:00Z".into(),
         }
+    }
+
+    /// A personal device — the person's own computer — has no organisation,
+    /// and its record round-trips with none.
+    #[test]
+    fn a_personal_enrolment_record_has_no_organisation() {
+        let record = EnrolmentRecord {
+            company_id: None,
+            company_name: None,
+            ..enrolment_record()
+        };
+
+        let parsed = EnrolmentRecord::from_json(&record.to_json()).unwrap();
+
+        assert_eq!(parsed, record);
+        assert_eq!(parsed.company_id, None);
     }
 
     /// The record the agent writes to disk beside the key must contain no

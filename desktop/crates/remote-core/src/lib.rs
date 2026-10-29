@@ -17,6 +17,7 @@ pub mod config;
 pub mod logging;
 pub mod signalling;
 pub mod state;
+pub mod update;
 
 pub use api::{
     companion_monitor_body, ApiClient, ApiError, CompanionView, ControlDecision,
@@ -32,6 +33,7 @@ pub use state::{
     AgentEvent, AgentState, AgentStatus, CompanionPhase, CompanionSummary, ControlStateView,
     ControlSummary, MonitorOption, SessionSummary, UnattendedState,
 };
+pub use update::{UpdateChecker, UpdateError, UpdateInfo, UpdateInstaller};
 
 /// The single authoritative agent version.
 ///

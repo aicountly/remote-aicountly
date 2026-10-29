@@ -15,7 +15,7 @@ worth catching.
 |---|---|
 | A clean Windows 11 (or 10 22H2) virtual machine | one that has never had the agent installed |
 | A second machine, or another browser profile | to be the person connecting |
-| An AICOUNTLY account with `remote.device.enrol` | in a company whose plan includes `desktop_devices` |
+| An AICOUNTLY account | a brand-new one is enough — no organisation is needed to register a computer |
 | A second account **without** `remote.control.request` | for the refusal tests |
 | A deployment | sandbox is fine; note which one, results differ by policy |
 
@@ -64,7 +64,7 @@ product.
 |---|---|---|
 | 2.1 | Open the agent | "This computer is not registered", and a button to do it |
 | 2.2 | Register | A browser tab opens to AICOUNTLY Remote's sign-in page; the agent shows a short code and waits |
-| 2.3 | In the browser: sign in if needed, check the code matches, pick a company, confirm | The agent picks it up on its own within a few seconds — no code to type, nothing else to do at the machine |
+| 2.3 | In the browser: sign in if needed, check the code matches, confirm. No organisation is asked for | The agent picks it up on its own within a few seconds — no code to type, nothing else to do at the machine |
 | 2.4 | Compare the fingerprint the agent now shows with the Computers page | **Identical**, character for character |
 | 2.5 | `dir C:\ProgramData\AICOUNTLY\Remote` | `device-signing-key.key` exists |
 | 2.6 | `type` that file | Binary, and DPAPI-protected. Not a readable key |

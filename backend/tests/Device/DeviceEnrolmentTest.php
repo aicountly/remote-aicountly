@@ -91,6 +91,29 @@ final class DeviceEnrolmentTest extends RemoteTestCase
         $this->assertSame($first['uuid'], $second['uuid']);
     }
 
+    /**
+     * A person's own computers are listed without choosing an organisation —
+     * and only their own: neither somebody else's personal computer nor one
+     * of theirs registered into a company.
+     */
+    public function testAPersonListsTheirOwnComputersWithNoOrganisation(): void
+    {
+        $user     = $this->makeIdentity('Rahul');
+        $stranger = $this->makeIdentity('Stranger');
+        $company  = $this->makeDesktopCompany(930);
+        $this->grantCompanyAccess($user, $company, 'MEMBER', true);
+        $this->setUserPermission($user, $company, PermissionCatalog::DEVICE_ENROL, 'ALLOW');
+
+        $mine = $this->enrolDevice($user, null)['device'];
+        $this->enrolDevice($stranger, null);
+        $this->enrolDevice($user, $company);
+
+        $page = Services::deviceService()->forPerson($user);
+
+        $this->assertSame(1, $page['total']);
+        $this->assertSame([$mine['uuid']], array_column($page['items'], 'uuid'));
+    }
+
     /** Somebody else's key is still somebody else's, company or not. */
     public function testAPersonalKeyBelongingToSomebodyElseIsRefused(): void
     {

@@ -3958,12 +3958,15 @@ name = "remote-core"
 version = "1.0.0"
 dependencies = [
  "futures-util",
+ "hex",
  "remote-device",
  "remote-protocol",
  "remote-security",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "thiserror 2.0.20",
  "time",
  "tokio",

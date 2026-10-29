@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Laptop, MonitorSmartphone, ShieldAlert } from 'lucide-react'
+import { Laptop, ShieldAlert } from 'lucide-react'
 
 import {
   connectToDevice,
@@ -38,9 +38,9 @@ import { PERMISSIONS } from '../../types/remote'
  *     `canConnectUnattended` and the organisation's switches, and the buttons
  *     follow them.
  *
- * Devices belong to an organisation, so this is a company-scope screen. In a
- * personal scope there is nothing to list, and it says so rather than showing
- * an empty table.
+ * In a personal scope this lists the person's own computers — the ones
+ * registered with no organisation, which is the ordinary case. In a company
+ * scope it lists that organisation's. Neither needs an organisation chosen.
  */
 
 /**
@@ -94,19 +94,14 @@ export default function DevicesPage() {
     null,
   )
 
+  const personal = scopeType !== 'COMPANY' || companyId === null
+
   const load = useCallback(async () => {
-    if (scopeType !== 'COMPANY' || companyId === null) {
-      setListing(null)
-      setLoading(false)
-
-      return
-    }
-
     setLoading(true)
     setError(null)
 
     try {
-      setListing(await fetchDevices(companyId))
+      setListing(await fetchDevices(personal ? null : companyId))
     } catch (err) {
       setError(
         err instanceof RemoteApiError
@@ -116,7 +111,7 @@ export default function DevicesPage() {
     } finally {
       setLoading(false)
     }
-  }, [scopeType, companyId])
+  }, [personal, companyId])
 
   useEffect(() => {
     void load()
@@ -169,27 +164,6 @@ export default function DevicesPage() {
     }
   }
 
-  if (scopeType !== 'COMPANY' || companyId === null) {
-    return (
-      <div className="page">
-        <div className="stack stack--lg">
-          <header className="stack stack--sm">
-            <h1>Computers</h1>
-            <p className="muted">Machines running AICOUNTLY Remote for Windows.</p>
-          </header>
-
-          <DesktopAppNotice />
-
-          <EmptyState
-            icon={<MonitorSmartphone size={26} />}
-            title="Computers belong to an organisation"
-            description="Switch to an organisation at the top of the page to see the computers registered to it."
-          />
-        </div>
-      </div>
-    )
-  }
-
   const devices = listing?.devices ?? []
   const policy = listing?.policy
   const canManage = listing?.canManage ?? false
@@ -201,7 +175,9 @@ export default function DevicesPage() {
         <header className="stack stack--sm">
           <h1>Computers</h1>
           <p className="muted">
-            Machines running AICOUNTLY Remote for Windows that are registered to this organisation.
+            {personal
+              ? 'Your computers running AICOUNTLY Remote for Windows.'
+              : 'Machines running AICOUNTLY Remote for Windows that are registered to this organisation.'}
           </p>
         </header>
 
@@ -213,8 +189,8 @@ export default function DevicesPage() {
           <div className="notice notice--info notice--row">
             <ShieldAlert size={16} aria-hidden="true" />
             <span>
-              Remote control is turned off for this organisation, so these computers can be seen here
-              but not controlled.
+              Remote control is turned off for {personal ? 'your account' : 'this organisation'}, so these
+              computers can be seen here but not controlled.
             </span>
           </div>
         ) : null}

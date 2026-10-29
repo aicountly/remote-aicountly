@@ -114,8 +114,10 @@ pub struct Challenge {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnrolmentRequest {
-    /// Which organisation.
-    pub company_id: i64,
+    /// Which organisation, if any. `None` is the ordinary case — the
+    /// person's own computer — and is left out of the request entirely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company_id: Option<i64>,
     /// What to call this machine.
     pub device_name: String,
     /// The **public** half. The private one never leaves the machine.
@@ -1934,7 +1936,7 @@ mod tests {
         let keys = DeviceKeypair::generate();
 
         let request = EnrolmentRequest {
-            company_id: 481,
+            company_id: Some(481),
             device_name: "WS-01".into(),
             public_key: keys.public_key_base64(),
             device_type: "DESKTOP".into(),

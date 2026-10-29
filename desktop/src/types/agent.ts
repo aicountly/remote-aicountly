@@ -207,9 +207,32 @@ export interface EnrolmentMaterial {
  */
 export interface EnrolmentConfirmation {
   deviceUuid: string
-  companyId: number
+  /** Null for a personal device — the person's own computer, the ordinary case. */
+  companyId: number | null
   companyName: string | null
   deviceName: string
+}
+
+/**
+ * A newer AICOUNTLY Remote, published for this computer
+ * (`remote_core::update`). Absent when this is the latest version, and when
+ * the check could not be made at all.
+ */
+export interface UpdateInfo {
+  currentVersion: string
+  latestVersion: string
+  /** The installer for this OS and architecture; null when there is none to fetch automatically. */
+  installer: { file: string; url: string; size: number; sha256: string } | null
+  /** The download page, for installing by hand. */
+  downloadPageUrl: string
+}
+
+/** What happens once the installer has been opened. */
+export interface UpdateStarted {
+  version: string
+  platform: 'windows' | 'macos'
+  /** This application closes after this long, so the installer can replace it. */
+  closesInSeconds: number
 }
 
 /** A registered device, as the API renders it. */
