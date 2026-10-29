@@ -12,6 +12,7 @@ import {
 import { RemoteApiError } from '../../services/api/client'
 import { useDesktopAgentEnabled, useRemote } from '../../app/RemoteProvider'
 import { DesktopAppDownloadLink } from '../desktop/DesktopAppDownload'
+import { isDesktopApp } from '../desktop/embedding'
 import EmptyState from '../../components/ui/EmptyState'
 import Modal from '../../components/ui/Modal'
 import RestrictionNotice from '../../components/ui/RestrictionNotice'
@@ -79,7 +80,12 @@ export function DesktopAppDownloadNotice() {
 }
 
 function DesktopAppNotice() {
-  return useDesktopAgentEnabled() ? <DesktopAppDownloadNotice /> : <DesktopAppComingSoon />
+  const enabled = useDesktopAgentEnabled()
+
+  // Inside the desktop application, the app is already here.
+  if (isDesktopApp()) return null
+
+  return enabled ? <DesktopAppDownloadNotice /> : <DesktopAppComingSoon />
 }
 
 export default function DevicesPage() {

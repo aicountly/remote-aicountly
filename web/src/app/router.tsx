@@ -69,6 +69,9 @@ export const router = createBrowserRouter([
   // The portal returns here after sign-in; AuthProvider has already consumed
   // the token by the time this renders.
   { path: '/auth/callback', element: <CallbackLanding /> },
+  // The desktop application's sign-in hand-off (auth/desktopHandoff.ts), which
+  // has already left the address — and been turned into "/" — by now.
+  { path: '/auth/desktop', element: <CallbackLanding /> },
 ])
 
 /**

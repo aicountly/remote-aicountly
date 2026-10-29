@@ -20,7 +20,8 @@ import {
   SSO_RETRY_DELAY_MS,
 } from './portal'
 import { callbackAction, verifyCallback } from './callbackState'
-import { clearAllTokens, commitAuthToken, discardStagedAuthToken, getAuthToken, stageAuthToken } from './tokens'
+import { clearAllTokens, clearSession, commitAuthToken, discardStagedAuthToken, getAuthToken, stageAuthToken } from './tokens'
+import { redeemDesktopHandoff, takeDesktopHandoff } from './desktopHandoff'
 
 /**
  * `loading` covers both "starting up" and "leaving for the portal" — in the
@@ -112,6 +113,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const settle = setState
 
     async function boot() {
+      // The desktop application handing its embedded portal the sign-in that
+      // confirmed the computer (auth/desktopHandoff.ts). Redeemed first; what
+      // comes back is staged below and checked with the portal like any other
+      // sign-in, so a refused one is never stored.
+      const handoff = takeDesktopHandoff()
+      const handedOff = handoff ? await redeemDesktopHandoff(handoff) : null
+
       const callback = readAuthCallback()
 
       // Credentials never stay in the address bar (history, analytics, screenshots).
@@ -150,6 +158,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // The one-time code is redeemed for the token, which is held in memory and
       // reaches localStorage only once the portal accepts it.
       let staged = false
+      if (handedOff && action.kind === 'none') {
+        // Whoever was signed in here before, this is who confirmed the
+        // computer: their key, not a cached one, is minted below.
+        clearSession()
+        stageAuthToken(handedOff)
+        staged = true
+      }
       if (action.kind === 'exchange-sso' || action.kind === 'exchange-code' || action.kind === 'token') {
         try {
           const token =

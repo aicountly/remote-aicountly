@@ -248,6 +248,11 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
     $routes->post('desktop-signin/deny', 'DesktopSignInController::deny', [
         'filter' => ['api-auth', 'rate-limit:desktop-signin-confirm,20,60'],
     ]);
+    // The desktop's embedded portal redeeming its one-time sign-in hand-off.
+    // Unauthenticated: the 64-hex code is the proof, like a poll's deviceCode.
+    $routes->post('desktop-signin/handoff', 'DesktopSignInController::handoff', [
+        'filter' => 'rate-limit:desktop-signin-handoff,20,60',
+    ]);
 
     $routes->get('devices/(:segment)', 'DeviceController::show/$1', ['filter' => 'api-auth']);
     $routes->patch('devices/(:segment)', 'DeviceController::update/$1', ['filter' => 'api-auth']);

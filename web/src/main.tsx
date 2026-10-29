@@ -7,11 +7,16 @@ import { purgeLegacySharedAuthToken } from './auth/sharedAuthCookie'
 import { router } from './app/router'
 import { initAnalytics, trackRouterPageViews } from './utils/analytics'
 import { stashDesktopSignInReturnPath } from './features/desktop/returnPath'
+import { captureDesktopHandoff } from './auth/desktopHandoff'
 
 import './styles/tokens.css'
 import './styles/base.css'
 import './styles/app.css'
 import './styles/room.css'
+
+// The desktop application's sign-in hand-off leaves the address before
+// analytics or the router can see it — see auth/desktopHandoff.ts.
+captureDesktopHandoff(window.location)
 
 // Before AuthProvider's redirect effect can ever run — see returnPath.ts.
 stashDesktopSignInReturnPath(window.location)

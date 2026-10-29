@@ -136,4 +136,44 @@ final class DesktopSignInApiTest extends RemoteTestCase
         $this->assertSame('ACTIVE', $device['status']);
         $this->assertNotNull($device['keyFingerprint']);
     }
+
+    /**
+     * Confirming in a browser hands that browser's AICOUNTLY sign-in to the
+     * desktop's embedded portal: the agent's poll gets a one-time code, and the
+     * portal redeems it — unauthenticated, once, and never cached.
+     */
+    public function testTheConfirmingSignInReachesTheEmbeddedPortalThroughAOneTimeCode(): void
+    {
+        $keys = $this->makeDeviceKeypair();
+        $user = $this->makeIdentity('Rahul');
+
+        $start = $this->data($this->withBodyFormat('json')->post('v1/remote/desktop-signin/start', [
+            'deviceName' => 'PC-22',
+            'publicKey'  => $keys['publicKey'],
+        ]));
+
+        $this->withHeaders($this->asUser($user))
+            ->withBodyFormat('json')
+            ->post('v1/remote/desktop-signin/confirm', [
+                'userCode'    => $start['userCode'],
+                'portalToken' => 'aic.portal-auth-token.feature',
+            ])
+            ->assertStatus(200);
+
+        $poll = $this->data($this->withBodyFormat('json')
+            ->post('v1/remote/desktop-signin/poll', ['deviceCode' => $start['deviceCode']]));
+        $this->assertSame('confirmed', $poll['status']);
+        $this->assertNull($poll['device']['companyId']);
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{64}$/', $poll['portalHandoff']);
+
+        $redeem = $this->withBodyFormat('json')
+            ->post('v1/remote/desktop-signin/handoff', ['code' => $poll['portalHandoff']]);
+        $redeem->assertStatus(200);
+        $this->assertSame('aic.portal-auth-token.feature', $this->data($redeem)['authToken']);
+        $this->assertStringContainsString('no-store', $redeem->response()->getHeaderLine('Cache-Control'));
+
+        $this->withBodyFormat('json')
+            ->post('v1/remote/desktop-signin/handoff', ['code' => $poll['portalHandoff']])
+            ->assertStatus(404);
+    }
 }

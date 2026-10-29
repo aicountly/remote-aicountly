@@ -219,7 +219,11 @@ export function portalHide(): Promise<void> {
   return invoke<void>('portal_hide')
 }
 
-export function portalAction(action: 'back' | 'reload' | 'open_in_browser'): Promise<void> {
+/**
+ * `sign_out` forgets the portal's sign-in — cookies and storage — so the next
+ * person to use this computer is not signed in as the last one.
+ */
+export function portalAction(action: 'back' | 'reload' | 'open_in_browser' | 'sign_out'): Promise<void> {
   return invoke<void>('portal_action', { action })
 }
 

@@ -46,6 +46,12 @@ class DesktopSignInService
 {
     private const USER_CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 
+    /** How long the agent has to hand the portal its sign-in, once claimed. */
+    private const HANDOFF_TTL_SECONDS = 600;
+
+    /** An `auth_token` is opaque, but not unbounded. */
+    private const PORTAL_TOKEN_MAX_LENGTH = 4096;
+
     public function __construct(
         private readonly BaseConnection $db,
         private readonly DeviceService $devices,
@@ -156,10 +162,23 @@ class DesktopSignInService
         // statement's worth of exclusivity — the same shape as spending a
         // device auth nonce, so two polls racing this moment cannot both
         // enrol.
+        //
+        // The confirming page's sign-in, if it sent one, leaves this row in
+        // the same statement: sealed with a one-time code that is returned to
+        // this caller and never stored (see sealHandoff()).
+        $handoff = $this->sealHandoff($row['portal_token'] ?? null);
+
         $this->db->table('remote_desktop_signin_codes')
             ->where('id', $row['id'])
             ->where('status', 'CONFIRMED')
-            ->update(['status' => 'CLAIMED', 'claimed_at' => Clock::now()]);
+            ->update([
+                'status'             => 'CLAIMED',
+                'claimed_at'         => Clock::now(),
+                'portal_token'       => null,
+                'handoff_hash'       => $handoff['hash'] ?? null,
+                'handoff_ciphertext' => $handoff['ciphertext'] ?? null,
+                'handoff_expires_at' => $handoff !== null ? Clock::in(self::HANDOFF_TTL_SECONDS) : null,
+            ]);
 
         if ($this->db->affectedRows() !== 1) {
             // Lost the race to another poll. Its response already carries the
@@ -176,16 +195,77 @@ class DesktopSignInService
             $payload,
         );
 
-        return ['status' => 'confirmed', 'device' => $device, 'companyName' => $row['company_name']];
+        $outcome = ['status' => 'confirmed', 'device' => $device, 'companyName' => $row['company_name']];
+
+        // Once, to the poll that claimed the row. A retried poll gets the
+        // device but no hand-off: the code exists nowhere else to give again,
+        // and the portal then simply asks the person to sign in.
+        if ($handoff !== null) {
+            $outcome['portalHandoff'] = $handoff['code'];
+        }
+
+        return $outcome;
+    }
+
+    /**
+     * Redeem a hand-off code for the AICOUNTLY sign-in it seals — once.
+     *
+     * Called by the web application inside the desktop's embedded portal
+     * (docs/desktop/PORTAL.md), unauthenticated: the 32-byte code is the proof,
+     * and only the agent that claimed the sign-in ever had it. The row's copy is
+     * gone after this, whether or not the caller uses what it got.
+     */
+    public function redeemHandoff(string $code): string
+    {
+        $code = strtolower(trim($code));
+        if (preg_match('/^[0-9a-f]{64}$/', $code) !== 1) {
+            throw ApiException::notFound('That sign-in hand-off could not be found.');
+        }
+
+        $hash = hash('sha256', $code);
+
+        $row = $this->db->table('remote_desktop_signin_codes')
+            ->where('handoff_hash', $hash)
+            ->where('status', 'CLAIMED')
+            ->where('handoff_expires_at >', Clock::now())
+            ->get()
+            ->getRowArray();
+
+        if ($row === null || ! is_string($row['handoff_ciphertext'] ?? null)) {
+            throw ApiException::notFound('That sign-in hand-off has expired or was already used.');
+        }
+
+        // Spend it first: two redemptions racing must not both succeed.
+        $this->db->table('remote_desktop_signin_codes')
+            ->where('id', $row['id'])
+            ->where('handoff_hash', $hash)
+            ->update(['handoff_hash' => null, 'handoff_ciphertext' => null, 'handoff_expires_at' => null]);
+
+        if ($this->db->affectedRows() !== 1) {
+            throw ApiException::notFound('That sign-in hand-off has expired or was already used.');
+        }
+
+        $token = $this->openHandoff($code, $row['handoff_ciphertext']);
+        if ($token === null) {
+            throw ApiException::notFound('That sign-in hand-off has expired or was already used.');
+        }
+
+        return $token;
     }
 
     /**
      * A person, signed in through the browser's own working portal session,
      * confirming that the code on their screen matches the one on the machine.
      */
-    public function confirmByUserCode(RemoteIdentity $identity, string $userCode, ?int $companyId, ?string $ip): array
-    {
-        $userCode = $this->normaliseUserCode($userCode);
+    public function confirmByUserCode(
+        RemoteIdentity $identity,
+        string $userCode,
+        ?int $companyId,
+        ?string $ip,
+        ?string $portalToken = null,
+    ): array {
+        $userCode    = $this->normaliseUserCode($userCode);
+        $portalToken = $this->portalToken($portalToken);
 
         // The same checks `DeviceService::enrol()` makes, run here too so a
         // refusal is seen on the screen the person is looking at rather than
@@ -230,6 +310,9 @@ class DesktopSignInService
                 'company_name' => $policy->companyName,
                 'confirmed_at' => Clock::now(),
                 'confirmed_ip' => $ip !== null && filter_var($ip, FILTER_VALIDATE_IP) !== false ? $ip : null,
+                // The confirming page's own sign-in, for the desktop's portal.
+                // Held only until the agent's next poll claims the row.
+                'portal_token' => $portalToken,
             ]);
 
         // With `DBDebug` off a failed statement returns false rather than
@@ -276,7 +359,7 @@ class DesktopSignInService
         $this->db->table('remote_desktop_signin_codes')
             ->where('id', $row['id'])
             ->whereIn('status', ['PENDING', 'CONFIRMED'])
-            ->update(['status' => 'DENIED']);
+            ->update(['status' => 'DENIED', 'portal_token' => null]);
 
         if ($this->db->affectedRows() !== 1) {
             throw ApiException::conflict('SIGNIN_CODE_ALREADY_HANDLED', 'That code has already been used or denied.');
@@ -299,12 +382,78 @@ class DesktopSignInService
     /** Delete rows nobody can act on any more. Opportunistic, like the device-challenge sweep. */
     public function sweepExpired(): void
     {
+        // A sign-in nobody claimed in time is not kept for the hour the row
+        // itself lingers.
+        $this->db->table('remote_desktop_signin_codes')
+            ->where('expires_at <', Clock::now())
+            ->where('portal_token IS NOT NULL', null, false)
+            ->update(['portal_token' => null]);
+
         $this->db->table('remote_desktop_signin_codes')
             ->where('expires_at <', Clock::in(-3600))
             ->delete();
     }
 
     // ------------------------------------------------------------- internals
+
+    /** A plausible `auth_token`, or null: an unusable one is simply not handed off. */
+    private function portalToken(?string $token): ?string
+    {
+        if ($token === null) {
+            return null;
+        }
+
+        $token = trim($token);
+        if ($token === '' || strlen($token) > self::PORTAL_TOKEN_MAX_LENGTH || preg_match('/^[\x21-\x7E]+$/', $token) !== 1) {
+            return null;
+        }
+
+        return $token;
+    }
+
+    /**
+     * Seal a sign-in for the agent: a fresh 32-byte code, a key derived from
+     * it, and only the code's hash kept. Null when there is nothing to hand off.
+     *
+     * @return array{code: string, hash: string, ciphertext: string}|null
+     */
+    private function sealHandoff(mixed $token): ?array
+    {
+        if (! is_string($token) || $token === '') {
+            return null;
+        }
+
+        $code  = bin2hex(random_bytes(32));
+        $nonce = random_bytes(SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+
+        return [
+            'code'       => $code,
+            'hash'       => hash('sha256', $code),
+            'ciphertext' => base64_encode($nonce . sodium_crypto_secretbox($token, $nonce, $this->handoffKey($code))),
+        ];
+    }
+
+    private function openHandoff(string $code, string $ciphertext): ?string
+    {
+        $raw = base64_decode($ciphertext, true);
+        if ($raw === false || strlen($raw) <= SODIUM_CRYPTO_SECRETBOX_NONCEBYTES) {
+            return null;
+        }
+
+        $token = sodium_crypto_secretbox_open(
+            substr($raw, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES),
+            substr($raw, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES),
+            $this->handoffKey($code),
+        );
+
+        return is_string($token) && $token !== '' ? $token : null;
+    }
+
+    /** Domain-separated from the code's stored hash, so the hash reveals nothing of the key. */
+    private function handoffKey(string $code): string
+    {
+        return hash_hmac('sha256', 'aicountly-remote/desktop-signin/portal-handoff', $code, true);
+    }
 
     /** @param list<string> $liveStatuses */
     private function liveRowByUserCode(string $userCode, array $liveStatuses): array

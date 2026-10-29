@@ -160,10 +160,18 @@ pub async fn poll_desktop_sign_in(
 ) -> Result<remote_core::DesktopSignInOutcome, String> {
     let client = remote_core::ApiClient::new(agent.config()).map_err(|error| error.to_string())?;
 
-    client
+    let mut outcome = client
         .poll_desktop_sign_in(&device_code)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+
+    // The portal's sign-in hand-off stays here: the window never holds it,
+    // and the next time the portal is shown it redeems it (`portal::show`).
+    if let Some(code) = outcome.portal_handoff.take() {
+        crate::portal::stash_handoff(code);
+    }
+
+    Ok(outcome)
 }
 
 /// Everything the enrolment call needs, and nothing else.

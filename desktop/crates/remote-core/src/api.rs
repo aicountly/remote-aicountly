@@ -214,6 +214,13 @@ pub struct DesktopSignInOutcome {
     /// Which organisation it was enrolled into.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub company_name: Option<String>,
+    /// A one-time code for the confirming person's AICOUNTLY sign-in, which
+    /// the embedded portal redeems so it is signed in too
+    /// (docs/desktop/PORTAL.md). Only on the poll that claimed the sign-in,
+    /// and only when the confirming page sent one. Kept on the Rust side —
+    /// `poll_desktop_sign_in` removes it before the window sees the outcome.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portal_handoff: Option<String>,
 }
 
 /// The device resource, as the API renders it.
