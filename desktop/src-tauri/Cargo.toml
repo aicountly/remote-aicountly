@@ -38,7 +38,9 @@ remote-device.workspace = true
 remote-webrtc.workspace = true
 aicountly-remote-service = { path = "../agents/windows-service" }
 
-tauri = { version = "2", features = ["tray-icon"] }
+# `unstable` is Tauri's name for multiple webviews in one window, which is how
+# the web portal is shown inside the application window (`src/portal.rs`).
+tauri = { version = "2", features = ["tray-icon", "unstable"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 # No `tauri-plugin-updater`. It was here, switched off (`active: false`, no

@@ -599,6 +599,44 @@ pub fn is_permitted_url(url: &str, config: &AgentConfig) -> bool {
     })
 }
 
+/// Show the web portal in the window's content area, at `path` if given.
+///
+/// The portal is this deployment's web application (`portal::portal_origin`);
+/// the window chooses only the page and where it is drawn.
+#[tauri::command]
+pub fn portal_show(
+    app: tauri::AppHandle,
+    agent: tauri::State<'_, Arc<Agent>>,
+    path: Option<String>,
+    bounds: crate::portal::PortalBounds,
+) -> Result<(), String> {
+    let origin = crate::portal::portal_origin(&agent.config().api_base_url)
+        .ok_or("AICOUNTLY Remote's address is not set up for this computer.")?;
+
+    crate::portal::show(&app, &origin, path.as_deref(), bounds)
+}
+
+/// The window's layout changed: move the portal with it.
+#[tauri::command]
+pub fn portal_set_bounds(
+    app: tauri::AppHandle,
+    bounds: crate::portal::PortalBounds,
+) -> Result<(), String> {
+    crate::portal::set_bounds(&app, bounds)
+}
+
+/// Take the portal off the screen, keeping its page and sign-in.
+#[tauri::command]
+pub fn portal_hide(app: tauri::AppHandle) -> Result<(), String> {
+    crate::portal::hide(&app)
+}
+
+/// Back, reload, or open the current portal page in the browser.
+#[tauri::command]
+pub fn portal_action(app: tauri::AppHandle, action: String) -> Result<(), String> {
+    crate::portal::act(&app, &action)
+}
+
 /// Whether a newer version is published for this computer.
 ///
 /// Never an error: a check that cannot reach the downloads host, or reads a

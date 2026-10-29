@@ -26,7 +26,17 @@ import type { UpdateInfo, UpdateStarted } from '../../types/agent'
  * hidden; the banner says the same thing without being in the way, and
  * installing is refused until the session ends anyway.
  */
-export function Updates({ sessionActive }: { sessionActive: boolean }) {
+export function Updates({
+  sessionActive,
+  onPromptChange,
+}: {
+  sessionActive: boolean
+  /**
+   * Whether the prompt is on screen. The web portal is drawn over this
+   * window's page, so it has to step aside while the prompt is showing.
+   */
+  onPromptChange?: (showing: boolean) => void
+}) {
   const [update, setUpdate] = useState<UpdateInfo | null>(null)
   const [prompting, setPrompting] = useState(false)
   const [installing, setInstalling] = useState(false)
@@ -89,9 +99,15 @@ export function Updates({ sessionActive }: { sessionActive: boolean }) {
     setError(null)
   }, [])
 
+  const showingPrompt = update !== null && prompting && !sessionActive
+
+  useEffect(() => {
+    onPromptChange?.(showingPrompt)
+  }, [showingPrompt, onPromptChange])
+
   if (!update) return null
 
-  if (prompting && !sessionActive) {
+  if (showingPrompt) {
     return (
       <div className="update-dialog__backdrop">
         <section

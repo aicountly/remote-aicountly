@@ -68,6 +68,25 @@ describe('DesktopSignInPending', () => {
     expect(onRetry).toHaveBeenCalledOnce()
   })
 
+  it('offers to confirm in the browser instead, for a sign-in that refuses an embedded page', async () => {
+    const onOpenInBrowser = vi.fn()
+    render(
+      <DesktopSignInPending
+        start={start()}
+        outcome="pending"
+        onCancel={vi.fn()}
+        onRetry={vi.fn()}
+        onOpenInBrowser={onOpenInBrowser}
+      />,
+    )
+
+    expect(screen.getByText(/sign in below/i)).toBeInTheDocument()
+    expect(screen.queryByText(/organisation/i)).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /open in browser instead/i }))
+    expect(onOpenInBrowser).toHaveBeenCalledOnce()
+  })
+
   it('disables its buttons while busy', () => {
     render(
       <DesktopSignInPending start={start()} outcome="pending" onCancel={vi.fn()} onRetry={vi.fn()} busy />,
