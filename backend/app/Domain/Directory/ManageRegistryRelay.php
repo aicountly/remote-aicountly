@@ -42,6 +42,8 @@ class ManageRegistryRelay
             '#^v1/workspaces/\d+/(members|member-suggestions)$#',
             // company-access 1.2.0 (CONTRACTS §1, §2): role catalogue, creation targets, pending counts.
             '#^v1/(app-roles|company-creation-targets|me/pending)$#',
+            // company-access 1.3.0: the owner's Company users.
+            '#^v1/workspaces/\d+/company-users$#',
             // Plans (CONTRACTS §3.5): the company's plan and the person's own.
             '#^v1/companies/\d+/plan$#',
             '#^v1/me/plan$#',
@@ -52,6 +54,8 @@ class ManageRegistryRelay
             '#^v1/companies/\d+/creator-access/retry$#',
             '#^v1/access-requests/\d+/(approve|reject|cancel)$#',
             '#^v1/workspaces/\d+/(members|accept|decline|exit)$#',
+            // company-access 1.3.0: move one person between the Workspace team and Company users.
+            '#^v1/workspaces/\d+/members/' . self::REF . '/move$#',
         ],
         'PUT' => [
             '#^v1/companies/\d+/visibility$#',
@@ -65,6 +69,8 @@ class ManageRegistryRelay
         'DELETE' => [
             '#^v1/companies/\d+/permissions/' . self::REF . '$#',
             '#^v1/workspaces/\d+/members/' . self::REF . '$#',
+            // company-access 1.3.0: end one person's share of one company.
+            '#^v1/companies/\d+/members/' . self::REF . '$#',
         ],
     ];
 
