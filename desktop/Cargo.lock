@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "aicountly-remote-desktop"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "aicountly-remote-service",
  "core-foundation",
@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "aicountly-remote-service"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "remote-core",
  "remote-protocol",
@@ -3955,7 +3955,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "remote-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "futures-util",
  "hex",
@@ -3977,7 +3977,7 @@ dependencies = [
 
 [[package]]
 name = "remote-device"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "remote-protocol",
  "serde",
@@ -3987,7 +3987,7 @@ dependencies = [
 
 [[package]]
 name = "remote-protocol"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3996,7 +3996,7 @@ dependencies = [
 
 [[package]]
 name = "remote-security"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "base64 0.23.1",
  "ed25519-dalek",
@@ -4011,7 +4011,7 @@ dependencies = [
 
 [[package]]
 name = "remote-webrtc"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "bytes",
