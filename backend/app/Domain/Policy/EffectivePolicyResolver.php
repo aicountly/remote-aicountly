@@ -51,6 +51,27 @@ class EffectivePolicyResolver
     }
 
     /**
+     * The policy that governs a device, for a person acting on or through it.
+     *
+     * A device belongs to its organisation, or to nobody but its owner: a
+     * personal device — a person's own computer — has no organisation, and is
+     * governed by personal scope. This is the one place that decides that.
+     * Resolving `'COMPANY', (int) $device['company_id']` instead turns a
+     * personal device into "company 0", which nobody has access to, and every
+     * call the agent made for a person's own computer was refused with
+     * COMPANY_ACCESS_DENIED.
+     *
+     * @param  array<string, mixed> $device a `remote_devices` row
+     * @throws ApiException when the user has no relationship with the device's company
+     */
+    public function resolveForDevice(RemoteIdentity $identity, array $device): EffectivePolicy
+    {
+        $companyId = isset($device['company_id']) ? (int) $device['company_id'] : null;
+
+        return $this->resolve($identity, $companyId === null ? 'PERSONAL' : 'COMPANY', $companyId);
+    }
+
+    /**
      * @param  'PERSONAL'|'COMPANY'|'AICOUNTLY_SUPPORT' $scopeType
      * @throws ApiException when the user has no relationship with the company
      */

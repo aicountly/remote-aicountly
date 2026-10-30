@@ -1189,10 +1189,31 @@ pub enum ApiError {
 }
 
 impl ApiError {
+    /// Whether the short-lived device credential was not accepted (401
+    /// `DEVICE_UNAUTHENTICATED`): expired, minted against a stale row, or
+    /// refused for some other reason that authenticating again answers.
+    ///
+    /// Not revocation. Whether the device is still registered is decided
+    /// when it authenticates, where the server says `DEVICE_NOT_ACTIVE` for a
+    /// removed one.
+    #[must_use]
+    pub fn is_credential_refused(&self) -> bool {
+        matches!(
+            self,
+            Self::Refused { status: 401, code, .. } if code == "DEVICE_UNAUTHENTICATED"
+        )
+    }
+
     /// Whether this device has been revoked or has stopped being accepted.
     ///
     /// The agent stops rather than retrying, and says so — a revoked device
     /// retrying forever is a machine that looks broken instead of removed.
+    ///
+    /// Includes a refused credential (`DEVICE_UNAUTHENTICATED`) for the
+    /// callers that only need to stop what they are doing; the connection
+    /// loop checks [`ApiError::is_credential_refused`] first, because a
+    /// refused credential is answered by authenticating again, not by
+    /// treating the computer as removed.
     #[must_use]
     pub fn is_device_rejected(&self) -> bool {
         matches!(
@@ -1328,6 +1349,37 @@ mod tests {
             assert!(error.is_device_rejected(), "{code}");
             assert!(!error.is_retryable(), "{code} must not be retried");
         }
+    }
+
+    /// A refused credential is answered by authenticating again; only what
+    /// authenticating says decides that the computer was removed. Before the
+    /// connection loop told the two apart, every personal device was signed
+    /// out on its first call after registering.
+    #[test]
+    fn a_refused_credential_is_not_a_removed_device() {
+        let refused = ApiError::Refused {
+            status: 401,
+            code: "DEVICE_UNAUTHENTICATED".into(),
+            message: "This device credential is no longer valid.".into(),
+        };
+        assert!(refused.is_credential_refused());
+
+        for (status, code) in [
+            (403, "DEVICE_NOT_ACTIVE"),
+            (403, "DEVICE_AUTH_FAILED"),
+            (403, "DEVICE_REVOKED"),
+            (403, "COMPANY_ACCESS_DENIED"),
+            (500, "INTERNAL"),
+        ] {
+            let other = ApiError::Refused {
+                status,
+                code: code.into(),
+                message: "no".into(),
+            };
+            assert!(!other.is_credential_refused(), "{code}");
+        }
+
+        assert!(!ApiError::Transport("down".into()).is_credential_refused());
     }
 
     /// A read-only organisation (AICOUNTLY company lifecycle) is the server's to explain, and renewing

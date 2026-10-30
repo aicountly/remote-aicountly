@@ -291,7 +291,7 @@ class DeviceService
             EventType::DEVICE_UPDATED,
             $identity->id,
             'USER',
-            (int) $device['company_id'],
+            $device['company_id'] !== null ? (int) $device['company_id'] : null,
             null,
             null,
             null,
@@ -458,7 +458,7 @@ class DeviceService
             EventType::DEVICE_UPDATED,
             $identity->id,
             'USER',
-            (int) $device['company_id'],
+            $device['company_id'] !== null ? (int) $device['company_id'] : null,
             null,
             null,
             null,
@@ -509,7 +509,7 @@ class DeviceService
             EventType::DEVICE_REVOKED,
             $identity->id,
             'USER',
-            (int) $device['company_id'],
+            $device['company_id'] !== null ? (int) $device['company_id'] : null,
             null,
             null,
             null,
@@ -547,7 +547,7 @@ class DeviceService
     public function enableUnattended(RemoteIdentity $identity, string $uuid, bool $confirmed): array
     {
         $device = $this->findForUser($identity, $uuid);
-        $policy = $this->policies->resolve($identity, 'COMPANY', (int) $device['company_id']);
+        $policy = $this->policies->resolveForDevice($identity, $device);
 
         if (! $policy->allowUnattendedAccess) {
             throw ApiException::forbidden(
@@ -596,7 +596,7 @@ class DeviceService
             EventType::UNATTENDED_ACCESS_ENABLED,
             $identity->id,
             'USER',
-            (int) $device['company_id'],
+            $device['company_id'] !== null ? (int) $device['company_id'] : null,
             null,
             null,
             null,
@@ -645,7 +645,7 @@ class DeviceService
             EventType::UNATTENDED_ACCESS_DISABLED,
             $identity->id,
             'USER',
-            (int) $device['company_id'],
+            $device['company_id'] !== null ? (int) $device['company_id'] : null,
             null,
             null,
             null,
@@ -682,7 +682,7 @@ class DeviceService
                 EventType::UNATTENDED_ACCESS_DISABLED,
                 null,
                 'SYSTEM',
-                (int) $device['company_id'],
+                $device['company_id'] !== null ? (int) $device['company_id'] : null,
                 null,
                 null,
                 null,
@@ -856,13 +856,7 @@ class DeviceService
      */
     private function policyForDevice(RemoteIdentity $identity, array $device): EffectivePolicy
     {
-        $companyId = $device['company_id'] !== null ? (int) $device['company_id'] : null;
-
-        return $this->policies->resolve(
-            $identity,
-            $companyId === null ? 'PERSONAL' : 'COMPANY',
-            $companyId,
-        );
+        return $this->policies->resolveForDevice($identity, $device);
     }
 
     /** @param array<string, mixed> $device */

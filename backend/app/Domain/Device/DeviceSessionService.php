@@ -135,10 +135,12 @@ class DeviceSessionService
 
         // The ordinary session-creation path: quota, policy snapshot, display
         // id, join code, audit. Nothing here is bypassed.
+        // A personal device's session is the owner's personal session; a
+        // company device's belongs to that company.
         $session = $this->sessions->create($identity, [
-            'scopeType'          => 'COMPANY',
+            'scopeType'          => $companyId === null ? 'PERSONAL' : 'COMPANY',
             'companyId'          => $companyId,
-            'sessionType'        => 'INTERNAL',
+            'sessionType'        => $companyId === null ? 'ASSISTANCE' : 'INTERNAL',
             'requestedShareMode' => $this->shareModeFor($policy->allowedShareModes()),
             'issueSummary'       => $issueSummary,
         ], $policy);
@@ -264,7 +266,7 @@ class DeviceSessionService
             throw ApiException::notFound('That Remote session could not be found.');
         }
 
-        $policy = $this->policies->resolve($owner, 'COMPANY', (int) $device['company_id']);
+        $policy = $this->policies->resolveForDevice($owner, $device);
 
         $existing = $this->findDeviceParticipant((int) $session['id'], (int) $device['id']);
 
@@ -427,7 +429,7 @@ class DeviceSessionService
         $owner = $this->ownerIdentity($device);
 
         $policy = $owner !== null
-            ? $this->policies->resolve($owner, 'COMPANY', (int) $device['company_id'])
+            ? $this->policies->resolveForDevice($owner, $device)
             : null;
 
         $state = $this->control->stateFor($session);
@@ -507,7 +509,7 @@ class DeviceSessionService
             $participant,
             $requesterUuid,
             $decision,
-            $this->policies->resolve($owner, 'COMPANY', (int) $device['company_id']),
+            $this->policies->resolveForDevice($owner, $device),
             $allowClipboard,
         );
 

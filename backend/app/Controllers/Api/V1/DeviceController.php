@@ -115,7 +115,8 @@ class DeviceController extends BaseApiController
     {
         $devices = Services::deviceService();
         $device  = $devices->findForUser($this->identity(), $uuid);
-        $policy  = $this->policyFor('COMPANY', (int) $device['company_id']);
+        // Personal scope for a personal device, never "company 0".
+        $policy  = Services::policyResolver()->resolveForDevice($this->identity(), $device);
 
         return $this->ok([
             'device' => Presenter::device(
