@@ -3,6 +3,32 @@ import { isRouteErrorResponse, useRouteError } from 'react-router-dom'
 
 import EmptyState from './EmptyState'
 
+const RELOADED_KEY = 'remote:reloaded-for-new-build'
+
+/** Whether a failure is a screen whose code is from a build that has since been replaced. */
+export function isStaleBuild(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+
+  // Chromium and WebView2, Safari and WKWebView, Firefox.
+  return /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i.test(
+    message,
+  )
+}
+
+/** True the first time in this tab, within a minute; false after that. */
+function reloadOnce(): boolean {
+  try {
+    const last = Number(sessionStorage.getItem(RELOADED_KEY) ?? 0)
+    if (Date.now() - last < 60_000) return false
+
+    sessionStorage.setItem(RELOADED_KEY, String(Date.now()))
+    return true
+  } catch {
+    // No storage, no way to tell a second attempt from the first: offer the button instead.
+    return false
+  }
+}
+
 /**
  * What a screen that failed shows instead of itself.
  *
@@ -17,10 +43,18 @@ import EmptyState from './EmptyState'
  */
 export default function RouteError() {
   const error = useRouteError()
+  const stale = isStaleBuild(error)
 
   useEffect(() => {
     console.error('A screen in AICOUNTLY Remote failed', error)
-  }, [error])
+
+    // A deploy replaces every screen's code, and a page that was open across
+    // it — the portal inside the desktop application stays open for days —
+    // asks for files that are no longer there. Loading the new build is the
+    // whole fix, so it is done rather than offered: once, so a deploy that is
+    // itself broken shows this screen instead of reloading for ever.
+    if (stale && reloadOnce()) window.location.reload()
+  }, [error, stale])
 
   // A 404 is a page that does not exist; anything else is a screen that
   // broke — most often one whose code changed in a deploy while this tab was

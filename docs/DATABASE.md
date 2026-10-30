@@ -219,8 +219,10 @@ enforces that before the write.
 
 ### `remote_messages`
 
-Chat, with its own retention. Kept out of the audit trail on purpose: enabling
-advanced audit must not enable transcript retention.
+Chat. Kept out of the audit trail on purpose: enabling advanced audit must not
+enable transcript retention. Nothing deletes chat on a schedule yet — it goes
+with its session, and with the account's personal sessions when the account
+closes (docs/audit/PUBLIC_READINESS_AUDIT.md, P0-3).
 
 ```sql
 CHECK (char_length(body) BETWEEN 1 AND 4000)

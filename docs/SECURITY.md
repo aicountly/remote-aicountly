@@ -55,7 +55,9 @@ not let it do, is [desktop/SECURITY.md](desktop/SECURITY.md).
   service and the TURN server.
 * **A browser cannot be controlled.** The browser client shares and views;
   annotations are overlays and change nothing on the sharer's machine. Control
-  requires AICOUNTLY Remote for Windows at the other end, and the interface
+  requires the AICOUNTLY Remote application on the computer being controlled
+  — on Windows or a Mac, as the *control companion* of the screen its owner
+  shares from the browser (desktop/CONTROL_COMPANION.md) — and the interface
   says so rather than offering a button that would be refused.
 * **A UAC prompt cannot be answered remotely**, and no setting is changed to
   make it possible. The Windows Secure Desktop is a boundary the agent detects
