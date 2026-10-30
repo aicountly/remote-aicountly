@@ -24,6 +24,9 @@ fn main() {
         remote_core::logging::init("service");
     }
 
+    // Before any TLS connection — see `remote_core::tls`.
+    remote_core::tls::install_default_crypto_provider();
+
     if argument == "--version" {
         println!(
             "{} {}",

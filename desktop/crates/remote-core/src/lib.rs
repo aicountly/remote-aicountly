@@ -17,6 +17,7 @@ pub mod config;
 pub mod logging;
 pub mod signalling;
 pub mod state;
+pub mod tls;
 pub mod update;
 
 pub use api::{

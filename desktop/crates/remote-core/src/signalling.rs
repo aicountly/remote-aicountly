@@ -311,11 +311,24 @@ impl SignallingSocket {
 
         let target = connect_url(url, token);
 
-        let (stream, _) =
-            tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(target))
-                .await
-                .map_err(|_| SignallingError::Transport("the relay did not answer".into()))?
-                .map_err(|error| SignallingError::Transport(error.to_string()))?;
+        // A TLS configuration that names its crypto provider. The default one
+        // `connect_async` would ask rustls for does not exist in this binary,
+        // and asking panicked (see `crate::tls`).
+        let tls = crate::tls::client_config()
+            .map_err(|error| SignallingError::Transport(error.to_string()))?;
+
+        let (stream, _) = tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            tokio_tungstenite::connect_async_tls_with_config(
+                target,
+                None,
+                false,
+                Some(tokio_tungstenite::Connector::Rustls(tls)),
+            ),
+        )
+        .await
+        .map_err(|_| SignallingError::Transport("the relay did not answer".into()))?
+        .map_err(|error| SignallingError::Transport(error.to_string()))?;
 
         Ok(Self { stream })
     }
@@ -392,6 +405,34 @@ pub fn parse(text: &str) -> Result<Signal, SignallingError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Opening a `wss://` socket must fail with an error, never a panic.
+    ///
+    /// rustls panics when it has to pick a process-wide crypto provider and
+    /// more than one is compiled in — and the application compiles in two
+    /// (aws-lc-rs through reqwest, ring through the WebRTC stack). The API
+    /// calls name their provider, so signing in worked; this socket used the
+    /// default, so the agent's first presence connection after a successful
+    /// sign-in panicked, and a release build (`panic = "abort"`) vanished a
+    /// few seconds after opening.
+    #[tokio::test]
+    async fn a_wss_connection_fails_cleanly_rather_than_panicking() {
+        // Accepts TCP and then says nothing, so the TLS handshake fails —
+        // after the TLS configuration has been built, which is the part that
+        // panicked.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                drop(socket);
+            }
+        });
+
+        let result =
+            SignallingSocket::connect(&format!("wss://127.0.0.1:{port}/signal"), "t").await;
+
+        assert!(matches!(result, Err(SignallingError::Transport(_))));
+    }
 
     /// A signalling socket carries the SDP that sets up the encrypted media
     /// path. Over `ws://` an observer can rewrite the fingerprint in it.

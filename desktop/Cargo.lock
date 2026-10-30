@@ -3964,6 +3964,7 @@ dependencies = [
  "remote-protocol",
  "remote-security",
  "reqwest",
+ "rustls",
  "semver",
  "serde",
  "serde_json",
@@ -3974,6 +3975,7 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]

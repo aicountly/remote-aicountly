@@ -111,7 +111,25 @@ pub fn init(component: &str) -> Option<PathBuf> {
         tracing::info!(log = %path.display(), version = crate::AGENT_VERSION, "AICOUNTLY Remote starting");
     }
 
+    record_panics();
+
     written_to
+}
+
+/// Write a panic to the log before the process goes.
+///
+/// A release build aborts on a panic (`panic = "abort"`), and the Windows
+/// build has no console, so a panic used to leave no trace at all: the window
+/// simply vanished and the log ended mid-sentence. The writer above is
+/// synchronous, so this line reaches the file before the abort. The default
+/// hook still runs afterwards.
+fn record_panics() {
+    let previous = std::panic::take_hook();
+
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!(panic = %info, "AICOUNTLY Remote stopped because of an unexpected error");
+        previous(info);
+    }));
 }
 
 /// A log file that rolls itself once at [`MAX_LOG_BYTES`].

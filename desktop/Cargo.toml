@@ -64,6 +64,13 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # The signalling socket. WSS only — the same relay the browser uses, with the
 # same two-minute token, and no second protocol of its own.
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+# Named explicitly for the signalling socket's TLS configuration
+# (`remote_core::tls`). Two rustls crypto providers end up in the binary —
+# aws-lc-rs through reqwest, ring through the WebRTC stack — and with two,
+# rustls cannot pick a default and panics. The same versions the graph already
+# resolves, so nothing new is compiled.
+rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12", "aws_lc_rs"] }
+webpki-roots = "0.26.11"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 remote-protocol = { path = "crates/remote-protocol" }
