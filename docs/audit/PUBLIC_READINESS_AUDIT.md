@@ -4,7 +4,7 @@
 |---|---|
 | Date | 30 October 2026 |
 | Written for | The owner |
-| Code audited | Release branch `claude/clever-dirac-x9bs7d` at `7274918`. This release is `8cefb42` + `7274918` on top of `main` (`3abaa9e`). Line numbers refer to `7274918`. The parallel changes listed in §2 may move a few of them. |
+| Code audited | Release branch `claude/clever-dirac-x9bs7d`, first at `7274918` (line numbers refer to it), then brought up to date for everything the same release fixed afterwards: those items are marked **Fixed in this release** and listed in §2. |
 | Scope | Personal AICOUNTLY accounts only. By the owner's decision, Remote has no link to companies or organisations for now. Windows code signing is left out, except where something depends on it (the OV certificate from SSL.com is in validation). |
 | Effort | **S** = up to 2 days · **M** = up to 2 weeks · **L** = up to 6 weeks · **XL** = longer, or a dependency decision is needed first |
 | Competitors | The AnyDesk, TeamViewer and UltraViewer columns come from general knowledge, **as commonly advertised. Verify before quoting publicly.** |
@@ -40,21 +40,23 @@ person being helped shares their entire screen from Chrome or Edge, or from the 
 computer, which then carries the input. They approve every request. The helper needs only a browser. The flow is built end
 to end, on the server and on both desktop platforms. This release removed the bug that stopped personal accounts using it.
 
-Start the pilot when these three things are true:
+Start the pilot when these two things are true:
 
 1. **Production runs this release's backend and web.** The fixes for personal accounts are on the server
    (`CompanionService.php:958-974`, `EffectivePolicyResolver.php:335-338`, `DeviceSessionService.php:470-476`). Merging
    is not deploying. Until the deploy, "Enable control from this computer" will still be refused in a personal session.
 2. **Every pilot computer runs a numbered build from this release.** App settings → About shows a 12-digit Build, not
    "Local build" (desktop `SettingsPage.tsx:118-122`).
-3. **The parallel fixes have landed, or the group has been told they have not.** These are: signing a computer out
-   revokes it on the server, uninstall cleans up, and the web is personal-only (see §2).
+
+The parallel fixes this list used to wait on — signing a computer out revokes it on the server, uninstall cleans up,
+the whole web is personal-only — are all in this release (§2).
 
 Tell the pilot group these limits before they start (details in §5.2):
 
 * The helper cannot click on UAC prompts or administrator windows, and the app does not tell them why.
-* Control works only while the whole screen is shared and the app is open on that computer. The room's Share button
-  proposes a browser tab, so change it to Entire screen (an S-sized fix, P1-13).
+* Control works only while the whole screen is shared and the app is open on that computer. Inside the app, Start
+  session and the room's Share button both propose Entire screen; in a plain browser, choose **Entire screen** on Start
+  session.
 * The clipboard does not work during control.
 * A session stops at 60 minutes, with no warning.
 * Files can be at most 25 MB.
@@ -123,14 +125,21 @@ Done in `8cefb42` / `7274918`:
 | Inside the app, the web portal is always personal. Its Start page starts on "Entire screen" (the room's Share button does not follow it yet: P1-13). It hides the organisation switcher and the session-context card. | `RemoteProvider.tsx:123-134`; `AppShell.tsx:204`; `StartSessionPage.tsx:36`, `:130` |
 | New tests for the personal-account fixes and for build numbering. | `backend/tests/Device/ControlCompanionTest.php` (3 new), `backend/tests/Policy/EffectivePolicyResolverTest.php` (2 new); build comparison in `update.rs:689-1007`; `desktop/scripts/make-manifest.test.mjs` |
 
-**Being done in parallel**. These are not in `7274918`, so check that they have landed before the pilot:
+**Fixed in this release, after the first draft of this audit:**
 
-* Session-room upgrades: full screen, and connection details.
-* **Sign this computer out** revokes the device on the server. Today it only forgets the key locally
-  (`commands/mod.rs:276-284`).
-* Uninstall removes the logs folder. Today `hooks.nsh:238-257` deletes the key, the configuration and the enrolment file,
-  but leaves `logs\` behind, so the folder stays.
-* The whole web becomes personal-only. Today the switcher is hidden only inside the app (`AppShell.tsx:204`).
+| Change | Where |
+|---|---|
+| **The whole web is personal-only.** One switch, `ORGANISATIONS_ENABLED = false`, hides the organisation switcher, the session-context choice, the administration pages and Users & Access (their routes go to the dashboard), and the organisation filters and columns. A launch context from another product is taken out of the address but no longer sent. The API's company scope is left dormant (P2-12). | `web/src/app/organisations.ts`; `RemoteProvider.tsx`; `AppShell.tsx`; `router.tsx` |
+| **Sign this computer out revokes it on the server**, with the machine's own credential (`POST /v1/remote/devices/me/revoke`), through the same revocation as the console's. Best effort, bounded at 20 seconds. | `DeviceAgentController.php`; `DeviceService.php`; `commands/mod.rs` (`unregister_device`) |
+| **A removed computer that is signed in again reconnects without a restart.** The connection loop used to end at the first sight of a revoked device. | `runtime.rs` (`run`) |
+| **Uninstall removes the logs folder**, by name and without a recursive delete, which would follow a planted junction as an administrator. | `hooks.nsh` |
+| **The room's Share button proposes what Start session chose** (P1-13). | `proposedShareMode.ts`; `SessionRoomPage.tsx` |
+| **Full screen for the viewer, and the round trip and frame rate** beside the connection state. Fit-versus-actual-size was not built: it would break the click mapping. | `SessionStage.tsx`; `useFullscreen.ts`; `ConnectionIndicator.tsx`; `RemotePeerConnection.ts` |
+| **A screen that fails says so, and a page that outlived a deploy reloads itself once** (P1-8). | `components/ui/RouteError.tsx`; `router.tsx` |
+| **"This computer's ID" is now "Key fingerprint"**, as the Computers page calls it (P1-4, the rename). | `SignInScreen.tsx` |
+| **The clipboard sentence says which way it goes** (P2-10). | `ControlPanel.tsx` |
+| **The desktop About card links the privacy policy.** | desktop `SettingsPage.tsx`; `commands/mod.rs` |
+| **The documents in the appendix are corrected** (P1-12). | `README.md`, `docs/SECURITY.md`, `docs/desktop/ARCHITECTURE.md`, `docs/desktop/CONTROL_COMPANION.md`, `docs/DATABASE.md`, `Remote.php` |
 
 ---
 
@@ -177,7 +186,7 @@ advertised. Verify before quoting publicly.**
 
 | Capability | AICOUNTLY Remote | AnyDesk | TeamViewer | UltraViewer |
 |---|---|---|---|---|
-| Connect by ID or code | A 9-digit session code, and the host admits each person (`Remote.php:217`, `JoinService.php:29`). There is no connecting to a computer by its ID. "This computer's ID" is a key fingerprint that nothing accepts (`SignInScreen.tsx:52`, `agent.rs:313-328`). | Yes. A permanent ID or alias. | Yes. ID and password. | Yes. ID and password. |
+| Connect by ID or code | A 9-digit session code, and the host admits each person (`Remote.php:217`, `JoinService.php:29`). There is no connecting to a computer by its ID: what the app shows is its key fingerprint, now labelled as one (`SignInScreen.tsx`, `agent.rs:313-328`). | Yes. A permanent ID or alias. | Yes. ID and password. | Yes. ID and password. |
 | Attended control | Yes, on Windows and Mac. The browser shares the whole screen and the person's own app carries the input. Two consents. | Yes | Yes | Yes |
 | Unattended access | No. It is off for personal accounts (`CompanyPolicyDefaults.php:197`), and the app sends no picture anyway (`session.rs:34-39`). | Yes | Yes | Yes |
 | UAC and elevated windows | No. The app runs `asInvoker` (`windows-app-manifest.xml:18`), and refused input is dropped without a word (`agent.rs:1017`, `companion.rs:867`). | Yes, when installed | Yes, when installed | Usually yes when installed (verify) |
@@ -207,7 +216,7 @@ advertised. Verify before quoting publicly.**
 |---|---|---|---|---|
 | PB-1 | Deploy this release's backend and web to production, with your go-ahead. | Without it, linking a personal computer is refused (`COMPANION_SCOPE`), and personal devices are "not found" in personal sessions. | `CompanionService.php:139-144`, `:958-974`; `DeviceSessionService.php:470-476` | S |
 | PB-2 | Publish numbered Windows and macOS builds. Testers install only those. | Without a number, nobody can tell which build was tested. That was the old 1.0.0 cache problem. | `release-windows.yml:156-185`; desktop `SettingsPage.tsx:118-122` | S |
-| PB-3 | The parallel fixes have landed, or are explicitly put off. | If they have not, "Sign this computer out" leaves the device active on the server, and uninstall leaves a folder behind. | `commands/mod.rs:276-284`; `hooks.nsh:238-257` | S–M (in flight) |
+| PB-3 | ~~The parallel fixes have landed.~~ **Fixed in this release** (§2). | — | — | Done |
 | PB-4 | Each tester has a personal AICOUNTLY account and has signed in. | Joining with a code needs a signed-in account (`Routes.php:278-279`). | — | S |
 | PB-5 | Check which guest-link entitlement production uses. | The built-in Basic plan says external guests are off (`EffectivePolicyResolver.php:529`). The platform-defaults seeder that `docs/DEPLOYMENT.md:278-282` tells you to run says they are on, with a 120-minute cap (`RemotePlatformDefaultsSeeder.php:29`). Whether guest links work depends on which row exists. | `remote_entitlements` row with `company_id IS NULL` | S |
 | PB-6 | A Mac build that Gatekeeper will open, and Accessibility granted on that Mac. | Without Accessibility, macOS drops every injected event (`macos/permissions.rs:3-9`). An ad-hoc-signed build has to be allowed in Privacy & Security (`docs/desktop/PUBLISHING.md:236-238`). | — | S |
@@ -217,7 +226,7 @@ advertised. Verify before quoting publicly.**
 | # | Caveat | What testers will see | Where |
 |---|---|---|---|
 | C-1 | **No UAC and no administrator windows.** The app runs at the user's own level, so Windows refuses input sent to higher-privileged windows (Task Manager, installers, admin consoles). The UAC prompt runs on the Secure Desktop. | The helper's clicks do nothing in those windows, and nothing says why. During a UAC prompt the picture freezes or goes black. The person at the computer has to answer it. | `windows-app-manifest.xml:18`; `windows/input.rs:424-431`; `agent.rs:1014-1018`; `companion.rs:865-868`; `secure_desktop_state()` is defined at `windows/capture.rs:77-89` and never called |
-| C-2 | **Control needs the entire screen.** In the app, the Start page chooses "Entire screen" for you. In Chrome or Edge it chooses Safe Share (a browser tab). Either way, the room's **Share** button then proposes Safe Share again, so check the share dialog and use **Change what to share** to pick **Entire screen** (P1-13). | "Control works only when you share your entire screen". | `StartSessionPage.tsx:35-37`; `SessionRoomPage.tsx:530`; `CompanionPanel.tsx:49-57` |
+| C-2 | **Control needs the entire screen.** In the app, Start session chooses "Entire screen" for you, and the room's **Share** button proposes what Start session chose. In Chrome or Edge, Start session begins on Safe Share (a browser tab): choose **Entire screen** there, or in the share dialog. | "Control works only when you share your entire screen". | `StartSessionPage.tsx:35-37`; `proposedShareMode.ts`; `CompanionPanel.tsx:49-57` |
 | C-3 | **No clipboard during control** (owner decision 3). | To pass text across, put it in the chat. The person at the computer can copy it from there. | `CompanionService.php:771`, `:805-820`; `docs/desktop/CONTROL_COMPANION.md:27-28` |
 | C-4 | **Sessions end 60 minutes after they start, with no warning and no way to extend.** | The room just ends. Start a new session. | `CompanyPolicyDefaults.php:200`; `SessionService.php:391-434` |
 | C-5 | **Files are 25 MB at most**, sent between the two browsers or portals. | Bigger files are refused before sending. | `Remote.php:248` |
@@ -226,7 +235,7 @@ advertised. Verify before quoting publicly.**
 | C-8 | **Use computers with one Windows user each.** The device identity belongs to the whole machine: its key is protected with machine-scope DPAPI, and every local user can modify the folder it is in. | On a shared PC, every Windows account is the person who registered it. | `service/storage.rs:14-33`; `hooks.nsh:119-125` |
 | C-9 | **If you have registered more than one computer, pick the one you are sitting at.** The list shows all your online computers, and nothing checks that the one you pick is the one sharing. | The confirm prompt appears on the wrong computer, or the link expires after 5 minutes. | `CompanionService.php:100-118` |
 | C-10 | **On a Mac, sharing from the app's Remote tab has not been tested.** Whether WKWebView can share the screen depends on the macOS version. If the Remote tab says this browser cannot share, use **Open in browser** and share from Chrome. On ad-hoc-signed builds, expect macOS to forget the Accessibility permission after an update. Turn it off and on again. | "Sharing unavailable", or an update after which input does nothing. | `docs/desktop/PORTAL.md:76-77`; `macos/permissions.rs:3-9` |
-| C-11 | **Ignore "This computer's ID"** on the sign-in screen. A helper cannot use it. | — | `SignInScreen.tsx:43-54` |
+| C-11 | ~~Ignore "This computer's ID".~~ **Fixed in this release**: it is labelled "Key fingerprint", which is what it is. A helper still cannot connect by it (P1-4). | — | `SignInScreen.tsx` |
 | C-12 | **The office counts as one IP address for rate limits.** For example, 10 code attempts per minute are shared by the whole office. | Only matters if many people join at the same moment. | `Routes.php:278-279`; `RateLimitFilter.php:17-24` |
 | C-13 | **The installers are unsigned.** You will see "Windows protected your PC" and a Gatekeeper warning. Antivirus or IT policy may block them. | Note every warning you see. | `docs/desktop/PUBLISHING.md:232-238` |
 | C-14 | **The TURN relays are in India only** (Mumbai and Greater Noida). | A helper outside India is slower whenever the connection goes through a relay. | `docs/production/turn-production.remote.env:14`, `:20`, `:37` |
@@ -357,16 +366,16 @@ Developer ID certificate and notarisation (`docs/desktop/PUBLISHING.md:183-196`)
 | P1-1 | **A video encoder in the Windows app** (Media Foundation H.264, or libvpx). | Without it the app cannot host. Everything users of other products expect depends on it: unattended access, one app instead of a browser plus an app, and later the Secure Desktop. | `session.rs:34-39`; `docs/desktop/ARCHITECTURE.md:228-233` | XL |
 | P1-2 | **UAC, elevated windows and the Secure Desktop.** First, *tell* the helper when the computer is on the Secure Desktop or when input to a window was refused (send `control_paused` with a reason). Then support it properly, through the service on the Secure Desktop or with `uiAccess`. Both need signing. | IT support often means installing software, and installing software means UAC. | `secure_desktop_state()` is never called (`windows/capture.rs:77-89`); `Handled::Failed` is ignored (`companion.rs:865-868`) | S to tell the helper; XL for real support |
 | P1-3 | **Unattended access to your own computers**: off by default, switched on deliberately, with 2FA. | People expect AnyDesk-style "reach my own PC". Today it is off for personal accounts and has no picture. | `CompanyPolicyDefaults.php:197`; `EffectivePolicyResolver.php:534` | L (after P1-1) |
-| P1-4 | **Connect by computer ID, and an address book.** Make "This computer's ID" a real ID that a helper can type to *ask* for a session, with the consent still at the computer. Or rename it "Key fingerprint" now. | Today the screen invites people to read out an ID that leads nowhere. | `SignInScreen.tsx:43-54`; `agent.rs:313-328` | S to rename; L to build |
+| P1-4 | **Connect by computer ID, and an address book.** A real ID that a helper can type to *ask* for a session, with the consent still at the computer. The rename to "Key fingerprint" is **fixed in this release**. | People used to other tools expect to read out an ID. | `SignInScreen.tsx`; `agent.rs:313-328` | Rename done; L to build |
 | P1-5 | **Clipboard during companion control**: text, both ways, only when ticked. | Pasting a command or a URL is everyday support work. | `CompanionService.php:771`; `docs/desktop/CONTROL_COMPANION.md:27-28` | M |
 | P1-6 | **Session continuity.** Warn before the time limit and allow extending it. Bring a session back after the helped computer restarts. Add an idle timeout. | Today a session simply ends at 60 minutes, and nothing brings it back after a restart. | `CompanyPolicyDefaults.php:200`; `SessionService.php:391-434`; the app's own reconnect window is 30 seconds (`session.rs:85-86`) | M |
 | P1-7 | **Crash reporting, and "Send logs to support".** | The logs exist only on the computer, at most 2 × 2 MB. A crash only writes a line to the log. The web reports no errors at all. | `logging.rs:19-22`, `:38-47`, `:131-138` | M |
-| P1-8 | **The web after a deploy.** Each deploy deletes the old hashed files (`rsync --delete`), and a request for a missing file is answered with `index.html`. Every page is loaded lazily, and the router has no error screen of its own. So a portal left open across a deploy, including the one inside the app, shows React Router's default error page the next time someone moves to another page. | Anyone with the portal open meets that error page after every deploy. | `deploy-production.yml:345`; `web/public/.htaccess:28-36`; `router.tsx:19-35`, `:41-75` | S |
+| P1-8 | ~~The web after a deploy.~~ **Fixed in this release**: the router has an error screen, and a screen whose code a deploy replaced reloads the new build once, by itself. Keeping the previous deploy's files for a day (`rsync --delete`, `deploy-production.yml:345`) would still be kinder to a request in flight. | — | `components/ui/RouteError.tsx`; `router.tsx` | Done (S to keep old files) |
 | P1-9 | **Two-factor sign-in.** Confirm that the AICOUNTLY sign-in offers it, and require it for helpers and before unattended access. | Taking over a helper's account means reaching other people's screens. | Not in this repository | S–M (needs the portal team) |
 | P1-10 | **A security contact.** SECURITY.md points to a contact that is never named. Add `/.well-known/security.txt`, a mailbox and a response time. | Researchers will look for remote-access tools. | `docs/SECURITY.md:305-308` | S |
 | P1-11 | **Rate limiting.** It is counted per IP address, in a file cache. `proxyIPs` is empty. | Offices behind one IP share a budget, and the limit is not shared between servers. Key signed-in calls on the account instead, and use a shared store. | `RateLimitFilter.php:17-24`, `:73-79`; `Cache.php:25`; `App.php:195` | M |
-| P1-12 | **Documents that now say the wrong thing** (see the appendix). | Support answers and legal wording will be taken from them. | Appendix | S |
-| P1-13 | **The room's Share button ignores the Start page.** It always proposes the first mode the policy allows, which for a personal account is Safe Share. So "starts on Entire screen" inside the app stops at the Start page. Use the session's `requestedShareMode` instead. Fix this before the pilot if you can. | The most common reason control will "not work" in the pilot. | `SessionRoomPage.tsx:530`; `EffectivePolicy.php:126-131` | S |
+| P1-12 | ~~Documents that now say the wrong thing.~~ **Fixed in this release** (see the appendix). | — | Appendix | Done |
+| P1-13 | ~~The room's Share button ignores the Start page.~~ **Fixed in this release**: it proposes the session's `requestedShareMode` while the policy allows it. | — | `proposedShareMode.ts`; `SessionRoomPage.tsx` | Done |
 
 ### 6.3 P2: later
 
@@ -381,7 +390,7 @@ Developer ID certificate and notarisation (`docs/desktop/PUBLISHING.md:183-196`)
 | P2-7 | Installer: a per-user option that needs no administrator rights, and more languages. It is per-machine and English-only today. | `tauri.conf.json:61-62` | M |
 | P2-8 | Narrow the web CSP. `connect-src` allows any `https:` and `wss:` address. | `web/public/.htaccess:107` | S |
 | P2-9 | Choose the right computer for the companion. Inside the app, pre-select the computer the portal is running on, and warn when there are several. | `CompanionService.php:100-118` | S–M |
-| P2-10 | Fix the false message "The clipboard is shared in both directions". It only ever goes from the controller to the computer. | `ControlPanel.tsx:276-278`; `docs/desktop/ARCHITECTURE.md:237-239` | S |
+| P2-10 | ~~The false message "The clipboard is shared in both directions".~~ **Fixed in this release.** | `ControlPanel.tsx` | Done |
 | P2-11 | Shared PCs. Every Windows account on a PC acts as the person who registered it. Document this, or register per user for personal accounts. | `service/storage.rs:14-33`; `hooks.nsh:119-125` | M |
 | P2-12 | Make "personal only" true on the server too. The API still accepts company scope, the Manage relay and the lifecycle receivers. Put them behind a switch, or refuse them. | `Routes.php:57`, `:66`, `:298-306` | S–M |
 | P2-13 | A special-keys menu (Ctrl+Alt+Del, the Windows key, Alt+Tab) and keyboard lock in full screen. | `web/src` | S–M |
@@ -453,7 +462,7 @@ Retention and deletion: P0-3. Consent for analytics: P0-9.
   * Each computer keeps its own logs (`%ProgramData%\AICOUNTLY\Remote\logs\agent.log`, `service.log`), and the path is
     shown in About.
   * There is no way to send the logs, and no crash reporting (P1-7).
-  * The web has no error boundary (P1-8).
+  * The web now has an error screen, and reloads a page that outlived a deploy (P1-8, fixed).
 * **Unknown from this repository:** database backups, uptime alerting, who is on call, and where the API host and its logs
   physically are. The TURN documents mention an "OVH application server". Settle all four before launch (P0-5, and §10
   for CERT-In).
@@ -465,15 +474,15 @@ Retention and deletion: P0-3. Consent for analytics: P0-9.
 * **There are two places to act, and the app now explains them.** People share in the browser and confirm in the app. The
   "Getting help on this computer" card lists the three steps and the stop shortcut (`App.tsx:630`). In the pilot, watch
   whether people find **Enable control from this computer** (`CompanionPanel.tsx:172`) without help.
-* **Defaults.** The app's Start page starts on "Entire screen", but a plain browser starts on Safe Share
-  (`StartSessionPage.tsx:35-37`). In both, the room's Share button proposes Safe Share again (P1-13). When the web becomes
-  personal-only, start on "Entire screen" whenever the person has the app.
+* **Defaults.** The app's Start page starts on "Entire screen", and the room's Share button now follows the Start page
+  (P1-13, fixed). A plain browser still starts on Safe Share (`StartSessionPage.tsx:35-37`): start on "Entire screen"
+  whenever the person has the app signed in (S).
 * **Failures that say nothing.** Input refused by an elevated window, and the Secure Desktop (C-1, P1-2). This is the
   likeliest "it's broken" report in the pilot.
-* **The things a helper misses most:** the clipboard (P1-5), special keys (P2-13), switching screens (P2-2), full screen
-  (in parallel), and a session that stops at 60 minutes (P1-6).
-* **Misleading wording:** "This computer's ID" (P1-4), "The clipboard is shared in both directions" (P2-10), and the
-  analytics banner's "nothing that identifies you" (P0-9).
+* **The things a helper misses most:** the clipboard (P1-5), special keys (P2-13), switching screens (P2-2), and a
+  session that stops at 60 minutes (P1-6). Full screen is in this release.
+* **Misleading wording:** the analytics banner's "nothing that identifies you" (P0-9). "This computer's ID" (P1-4) and
+  "The clipboard is shared in both directions" (P2-10) are fixed in this release.
 * **Trust signals.** The helper appears only by their display name (P0-4). Competitors show who is connecting and warn
   about scams.
 * **Reach.** English only (P2-6). Phones can watch and chat only. Linux can be watched but not controlled.
@@ -552,9 +561,9 @@ Use this to brief counsel. It is not legal advice.
 11. **PC-1: admit B.** Where the room says someone wants to join, click **Allow**.
     *Pass:* B is in the room and is labelled "AICOUNTLY user".
 12. **PC-1: share.** Click **Share** in the room's toolbar. The dialog "You're about to share your screen" opens. If it
-    does not say Entire screen, click **Change what to share** and choose **Entire screen** (it proposes Safe Share today:
-    P1-13). Click **Continue to choose screen**, then pick the whole screen in the picker (in Chrome: the **Entire
-    screen** tab, the screen, then **Share**).
+    does not say Entire screen, click **Change what to share** and choose **Entire screen** (it proposes what Start
+    session chose). Click **Continue to choose screen**, then pick the whole screen in the picker (in Chrome: the
+    **Entire screen** tab, the screen, then **Share**).
     *Pass:* a "You're sharing · Entire screen" banner appears. Within about 5 seconds PC-2 shows PC-1's screen, and the
     text is readable.
 
@@ -636,12 +645,13 @@ Use this to brief counsel. It is not legal advice.
     connection.
 30. **Optional: leave a session running past 60 minutes.**
     *Expected today:* it ends at 60 minutes, with no warning. Write down when it ended.
-31. **After the parallel fixes land: sign out and uninstall.**
+31. **Sign out and uninstall.**
     * Click **Sign this computer out**.
     * Then uninstall the app.
 
     *Pass:*
-    * The web's Computers page no longer shows the computer as usable.
+    * The web's Computers page shows the computer as revoked.
+    * Signing in again on the same computer (before uninstalling) brings it back online without restarting the app.
     * After the uninstall, the folder `C:\ProgramData\AICOUNTLY\Remote` is gone.
 32. **When a newer build is published, open the app.**
     *Pass:*
@@ -661,9 +671,9 @@ Use this to brief counsel. It is not legal advice.
 
 | When | What |
 |---|---|
-| Days 1–2 | Fix the room's Share button so it keeps the Start page's choice (P1-13). Get your go-ahead and deploy this release's backend and web (PB-1). Publish numbered Windows and Mac builds (PB-2). Check the guest-link entitlement row (PB-5). Land the parallel fixes or put them off explicitly (PB-3). |
+| Days 1–2 | Get your go-ahead and deploy this release's backend and web (PB-1). Publish numbered Windows and Mac builds (PB-2). Check the guest-link entitlement row (PB-5). (The Share button, P1-13, and the parallel fixes, PB-3, are done.) |
 | Days 2–5 | Run the pilot script (§11) with 2 PCs and a Mac. Then run it with 5–10 people doing real help sessions for a week. Fix what they find. |
-| Week 1 (S items) | Turn CI back on for pull requests and make the deploy gate default to on (P0-5). Load no analytics before consent (P0-9). Add an error screen, and keep the previous deploy's files for a day (P1-8). Rename "This computer's ID" (P1-4). Tell the helper when input was refused or the Secure Desktop is showing (P1-2, first step). Correct the clipboard message (P2-10). Publish a security contact (P1-10). Correct the documents in the appendix (P1-12). |
+| Week 1 (S items) | Turn CI back on for pull requests and make the deploy gate default to on (P0-5). Load no analytics before consent (P0-9). Keep the previous deploy's files for a day (the rest of P1-8). Tell the helper when input was refused or the Secure Desktop is showing (P1-2, first step). Publish a security contact (P1-10). (The error screen, the rename, the clipboard message and the documents are done.) |
 | Week 2 | Start the Terms, privacy notice and EULA with counsel (P0-2). Write the retention schedule and the purge job (P0-3). Design the scam warning and reporting (P0-4). Set up uptime monitoring, alerts and a backup restore test (P0-5). Decide pricing and the free tier (P0-7). Write the update signature check, ready to switch on when the certificate arrives (P0-1). |
 
 ### The next quarter
@@ -679,9 +689,9 @@ Use this to brief counsel. It is not legal advice.
 
 ## Appendix: documents that now say the wrong thing
 
-Fix these with P1-12. People will quote them.
+All corrected in this release (P1-12). Kept here as the record of what each used to say.
 
-| Document | What it says | What is true now |
+| Document | What it said | What is true now |
 |---|---|---|
 | `README.md` ("Tests") | `ci.yml` runs on every pull request and push to `main`. | It runs only on demand, or when a deploy calls it (`ci.yml:16`). |
 | `README.md` ("What it deliberately does not do") | "macOS and Linux agents are not built." | macOS is a control companion (`docs/desktop/ARCHITECTURE.md:106-113`). |
