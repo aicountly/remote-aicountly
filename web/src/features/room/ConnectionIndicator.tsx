@@ -14,6 +14,12 @@ import type { SessionStatus } from '../../types/remote'
  * The state is also announced to screen readers, because a silent transition
  * from connected to interrupted is exactly the sort of change that must not be
  * visual-only (§63).
+ *
+ * While connected, the word has two figures beside it — the round trip and the
+ * frame rate arriving — because "the picture is slow" has two different causes,
+ * the network and the computer at the other end, and they are what tell them
+ * apart. They are shown, never announced: a screen reader reading out a new
+ * round trip every two seconds would drown the changes that matter.
  */
 
 interface Props {
@@ -72,8 +78,26 @@ function quality(live: EngineSnapshot): Presentation {
   }
 }
 
+/**
+ * `45 ms · 15 fps`, or as much of it as the browser measured — only while connected and not paused,
+ * because a figure from a connection that is not carrying the session describes nothing. The sharer
+ * receives no picture, so for them it is the round trip alone.
+ */
+function describeStats(live: EngineSnapshot | null, sessionStatus: SessionStatus): string | null {
+  if (sessionStatus === 'PAUSED' || live?.connection !== 'connected' || !live.stats) return null
+
+  const { roundTripMs, framesPerSecond } = live.stats
+  const figures = [
+    roundTripMs !== null ? `${roundTripMs} ms` : null,
+    framesPerSecond !== null ? `${framesPerSecond} fps` : null,
+  ].filter((figure): figure is string => figure !== null)
+
+  return figures.length > 0 ? figures.join(' · ') : null
+}
+
 export default function ConnectionIndicator({ live, sessionStatus, onReconnect }: Props) {
   const { label, tone, announcement } = present(live, sessionStatus)
+  const figures = describeStats(live, sessionStatus)
   const [announced, setAnnounced] = useState('')
   const previous = useRef('')
 
@@ -89,6 +113,15 @@ export default function ConnectionIndicator({ live, sessionStatus, onReconnect }
       <span className={`connection connection--${tone}`}>
         <span className="connection__dot" aria-hidden="true" />
         <span className="connection__label">{label}</span>
+        {figures ? (
+          <span
+            className="connection__figures"
+            title="The round trip to the other side, and the frames a second of the shared screen arriving here. A still screen sends few frames; that is normal."
+          >
+            <span aria-hidden="true">· </span>
+            {figures}
+          </span>
+        ) : null}
       </span>
 
       <span className="sr-only" role="status" aria-live="polite">

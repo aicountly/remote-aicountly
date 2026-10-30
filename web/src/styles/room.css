@@ -201,6 +201,14 @@
   flex: none;
 }
 
+/* The round trip and the frame rate: quieter than the word they explain, and in
+   figures of a fixed width so the header does not shuffle every two seconds. */
+.connection__figures {
+  color: var(--text-stage-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* --- Banners -------------------------------------------------------------- */
 
 .room__sharing-banner {
@@ -372,6 +380,71 @@
   color: var(--text-stage);
   font-size: var(--text-xs);
   backdrop-filter: blur(6px);
+}
+
+/* --- Full screen ---------------------------------------------------------- */
+/*
+ * The stage on its own, at the size of the screen (SessionStage). Only the stage
+ * goes full screen, so the room's status line and banners come with it — in a
+ * strip above the picture, not over it. None of the remote screen is covered,
+ * and the picture keeps `object-fit: contain`, which the control mapping
+ * measures against (remoteControl.ts, normalisePointer).
+ *
+ * Two classes rather than one, so the small-screen padding further down cannot
+ * win against them.
+ */
+
+.stage.stage--fullscreen {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 0;
+  background: #000;
+}
+
+.stage.stage--fullscreen .stage__surface {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  border-radius: 0;
+}
+
+.stage__chrome {
+  flex: none;
+}
+
+.stage__status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  background: var(--bg-stage-panel);
+  border-bottom: 1px solid var(--border-stage);
+}
+
+/* Bottom right, opposite the attribution: the corner of a remote desktop least
+   often aimed at — window controls sit top right. Small for the same reason. */
+.stage__fullscreen {
+  position: absolute;
+  right: var(--space-5);
+  bottom: var(--space-5);
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border-stage);
+  border-radius: var(--radius-pill);
+  background: rgba(16, 20, 16, 0.82);
+  color: var(--text-stage);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: background-color var(--duration) var(--ease);
+}
+
+.stage__fullscreen:hover {
+  background: var(--bg-stage-raised);
 }
 
 /* --- Side panel ----------------------------------------------------------- */

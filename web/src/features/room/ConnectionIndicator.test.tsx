@@ -65,3 +65,54 @@ describe('ConnectionIndicator', () => {
     expect(screen.getByText('Reconnecting…')).toBeInTheDocument()
   })
 })
+
+/**
+ * The figures beside the word (§49): the round trip and the frame rate
+ * arriving, which tell a slow network from a slow computer. Shown while
+ * connected and never otherwise, and never read out by a screen reader.
+ */
+describe('ConnectionIndicator figures', () => {
+  it('shows the round trip and the frame rate beside the word while connected', () => {
+    render(<ConnectionIndicator live={live({ stats: { roundTripMs: 45, framesPerSecond: 15 } })} sessionStatus="ACTIVE" />)
+
+    expect(screen.getByText('Connected')).toBeInTheDocument()
+    expect(screen.getByText('45 ms · 15 fps')).toBeInTheDocument()
+  })
+
+  it('shows the round trip alone to the sharer, who receives no picture', () => {
+    render(
+      <ConnectionIndicator
+        live={live({ quality: 'fair', stats: { roundTripMs: 310, framesPerSecond: null } })}
+        sessionStatus="ACTIVE"
+      />,
+    )
+
+    expect(screen.getByText('Connection fair')).toBeInTheDocument()
+    expect(screen.getByText('310 ms')).toBeInTheDocument()
+    expect(screen.queryByText(/fps/)).not.toBeInTheDocument()
+  })
+
+  it('shows no figures while the connection is not up, or the session is paused', () => {
+    const stale = { roundTripMs: 45, framesPerSecond: 15 }
+    const { rerender } = render(
+      <ConnectionIndicator live={live({ connection: 'reconnecting', stats: stale })} sessionStatus="ACTIVE" />,
+    )
+    expect(screen.queryByText(/ms/)).not.toBeInTheDocument()
+
+    rerender(<ConnectionIndicator live={live({ stats: stale })} sessionStatus="PAUSED" />)
+    expect(screen.queryByText(/ms/)).not.toBeInTheDocument()
+
+    rerender(<ConnectionIndicator live={live({ stats: null })} sessionStatus="ACTIVE" />)
+    expect(screen.getByText('Connected')).toBeInTheDocument()
+    expect(screen.queryByText(/ms/)).not.toBeInTheDocument()
+  })
+
+  it('announces the state, never the figures', () => {
+    const { rerender } = render(
+      <ConnectionIndicator live={live({ stats: { roundTripMs: 45, framesPerSecond: 15 } })} sessionStatus="ACTIVE" />,
+    )
+    rerender(<ConnectionIndicator live={live({ stats: { roundTripMs: 52, framesPerSecond: 14 } })} sessionStatus="ACTIVE" />)
+
+    expect(screen.getByRole('status')).toHaveTextContent(/^Connected\.$/)
+  })
+})
