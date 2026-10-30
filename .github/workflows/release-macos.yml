@@ -382,9 +382,11 @@ jobs:
           done
 
           # Travels with the artifact, so an unsigned build cannot be handed to
-          # somebody as though it were notarised.
+          # somebody as though it were notarised. Its own name, like the sums
+          # file below: the Windows release attaches an UNSIGNED.txt to this
+          # same tag, and the second upload replaced the first.
           if [ "${INPUT_ALLOW_UNSIGNED}" = "true" ]; then
-            cat > release/UNSIGNED.txt <<'TXT'
+            cat > release/UNSIGNED-macos.txt <<'TXT'
           UNSIGNED, UN-NOTARISED macOS BUILD
           ==================================
 
@@ -402,6 +404,22 @@ jobs:
 
           Replace this with a notarised build as soon as one exists.
           TXT
+          else
+            # The positive word, and the only one: a disk image cannot say
+            # whether it is signed -- only Apple's tools can, on a Mac -- so
+            # make-manifest.mjs calls one signed only when its release carries
+            # this, and this is written only once codesign, Gatekeeper and the
+            # stapled notarisation ticket have all passed above. Without it the
+            # download page is told the build is unsigned, and says so.
+            {
+              echo "SIGNED AND NOTARISED macOS BUILD"
+              echo "================================"
+              echo
+              echo "Build ${AICOUNTLY_REMOTE_BUILD} of ${INPUT_VERSION}, from ${GITHUB_SHA}."
+              echo "Signed with a Developer ID certificate, notarised by Apple and stapled;"
+              echo "codesign --verify, spctl --assess and stapler validate passed for:"
+              for dmg in release/*.dmg; do echo "  $(basename "${dmg}")"; done
+            } > release/NOTARISED-macos.txt
           fi
 
           # Its own name, because the Windows release attaches SHA256SUMS.txt
@@ -436,7 +454,7 @@ jobs:
           body: |
             AICOUNTLY Remote ${{ inputs.version }}, build ${{ steps.stamp.outputs.build }} (${{ inputs.channel }}).
 
-            ${{ inputs.allow_unsigned && 'macOS: **NOT signed with a Developer ID certificate and NOT notarised.** macOS blocks the first launch; allow it from System Settings > Privacy & Security. See UNSIGNED.txt in the assets. Verify a download against `SHA256SUMS-macos.txt`.' || 'macOS: signed with a Developer ID certificate and notarised by Apple, so it opens from a download without a security warning. Verify a download against `SHA256SUMS-macos.txt`, and check the notarisation with `xcrun stapler validate Aicountly-Remote-*.dmg`.' }}
+            ${{ inputs.allow_unsigned && 'macOS: **NOT signed with a Developer ID certificate and NOT notarised.** macOS blocks the first launch; allow it from System Settings > Privacy & Security. See UNSIGNED-macos.txt in the assets. Verify a download against `SHA256SUMS-macos.txt`.' || 'macOS: signed with a Developer ID certificate and notarised by Apple, so it opens from a download without a security warning. Verify a download against `SHA256SUMS-macos.txt`, and check the notarisation with `xcrun stapler validate Aicountly-Remote-*.dmg`.' }}
 
             Built from ${{ github.sha }}.
 

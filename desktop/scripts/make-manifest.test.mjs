@@ -410,19 +410,67 @@ describe('makeManifest', () => {
     assert.equal(manifest.files[0].signed, true)
   })
 
-  /** A .dmg cannot answer for itself, so the caller's word stands. */
-  it('takes the caller at their word for a disk image', async () => {
-    const dir = await release({ 'Remote_1.0.0_aarch64.dmg': 'disk image bytes' })
-
-    const manifest = await makeManifest({
-      dir,
-      product: 'remote',
-      version: '1.0.0',
-      channel: 'production',
-      signed: true,
+  /**
+   * A .dmg cannot answer for itself, so the caller's word is not enough: it
+   * was "signed" for every beta, and every unsigned Mac build was published as
+   * signed, with no warning beside it on the download page.
+   */
+  it('never calls a disk image signed on the caller’s word alone', async () => {
+    const dir = await release({
+      'Aicountly-Remote-1.0.0-b202610300826-arm64.dmg': 'disk image bytes',
+      'UNSIGNED-macos.txt': 'UNSIGNED, UN-NOTARISED macOS BUILD',
     })
 
-    assert.equal(manifest.files[0].signed, true)
+    const manifest = await makeManifest({ dir, product: 'remote', version: '1.0.0', channel: 'beta', signed: true })
+
+    assert.equal(manifest.files[0].signed, false)
+  })
+
+  /** Nor when the release says nothing either way — every macOS release before the marker existed. */
+  it('calls a disk image with no notarisation marker unsigned', async () => {
+    const dir = await release({ 'Remote_1.0.0_aarch64.dmg': 'disk image bytes' })
+
+    const manifest = await makeManifest({ dir, product: 'remote', version: '1.0.0', channel: 'production', signed: true })
+
+    assert.equal(manifest.files[0].signed, false)
+  })
+
+  /** The positive word release-macos.yml writes once codesign, Gatekeeper and stapler all passed. */
+  it('calls a disk image signed when its release says it was notarised', async () => {
+    const dir = await release({
+      'Aicountly-Remote-1.0.0-b202610300826-arm64.dmg': 'disk image bytes',
+      'Aicountly-Remote-1.0.0-b202610300826-x64.dmg': 'other disk image bytes',
+      'NOTARISED-macos.txt': 'SIGNED AND NOTARISED macOS BUILD',
+    })
+
+    const manifest = await makeManifest({ dir, product: 'remote', version: '1.0.0', channel: 'production', signed: true })
+
+    assert.deepEqual(
+      manifest.files.map((file) => file.signed),
+      [true, true],
+    )
+  })
+
+  /** A channel that does not sign can take a signature away, never vouch for one. */
+  it('lets no sandbox build claim a notarisation', async () => {
+    const dir = await release({
+      'Remote_1.0.0_aarch64.dmg': 'disk image bytes',
+      'NOTARISED-macos.txt': 'SIGNED AND NOTARISED macOS BUILD',
+    })
+
+    const manifest = await makeManifest({ dir, product: 'remote', version: '1.0.0', channel: 'sandbox', signed: false })
+
+    assert.equal(manifest.files[0].signed, false)
+  })
+
+  /** The marker is about macOS; a Windows installer still answers from its own certificate table. */
+  it('reads a Windows installer’s signature off the file even beside a macOS marker', async () => {
+    const dir = await release({ 'NOTARISED-macos.txt': 'SIGNED AND NOTARISED macOS BUILD' })
+    await writeFile(join(dir, 'Remote_1.0.0_x64-setup.exe'), fakePe({ certSize: 0 }))
+
+    const manifest = await makeManifest({ dir, product: 'remote', version: '1.0.0', channel: 'production', signed: true })
+
+    assert.equal(manifest.files[0].signed, false)
   })
 
   /**

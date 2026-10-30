@@ -221,19 +221,29 @@ jobs:
           printf '  %s\n' "${candidates[@]}"
 
           # The newest release that has each platform's installers, with its
-          # own checksums. Their sums files are named apart
-          # (SHA256SUMS.txt, SHA256SUMS-macos.txt), so the two can share a
-          # directory; the notices cannot, and are named apart here.
+          # own checksums and notices -- and only its own. The sums files are
+          # named apart (SHA256SUMS.txt, SHA256SUMS-macos.txt), and so are the
+          # macOS notices (UNSIGNED-macos.txt, NOTARISED-macos.txt), so they
+          # can share a directory. Windows' UNSIGNED.txt is renamed to match.
+          #
+          # NOTARISED-macos.txt is what make-manifest.mjs needs before it calls
+          # a disk image signed; a release without one -- every macOS release
+          # so far -- publishes its disk images as unsigned. The old shared
+          # UNSIGNED.txt is never fetched for macOS: in a release both
+          # platforms attached to, it is whichever was uploaded second.
           found=0
           take() {
-            local platform="$1" extension="$2" sums="$3" tag names
+            local platform="$1" extension="$2" tag names pattern
+            shift 2
+            local patterns=(--pattern "*.${extension}")
+            for pattern in "$@"; do patterns+=(--pattern "${pattern}"); done
+
             for tag in "${candidates[@]}"; do
               names=$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')
               if printf '%s\n' "${names}" | grep -q "\.${extension}\$"; then
                 echo "${platform}: ${tag}"
                 mkdir -p "work/${platform}"
-                gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" --dir "work/${platform}" \
-                  --pattern "*.${extension}" --pattern "${sums}" --pattern 'UNSIGNED.txt'
+                gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" --dir "work/${platform}" "${patterns[@]}"
                 [ -f "work/${platform}/UNSIGNED.txt" ] && mv "work/${platform}/UNSIGNED.txt" "work/${platform}/UNSIGNED-${platform}.txt"
                 mv "work/${platform}"/* staging/
                 found=$((found + 1))
@@ -243,8 +253,8 @@ jobs:
             echo "${platform}: no build of ${VERSION} has one"
           }
 
-          take windows exe 'SHA256SUMS.txt'
-          take macos dmg 'SHA256SUMS-macos.txt'
+          take windows exe 'SHA256SUMS.txt' 'UNSIGNED.txt'
+          take macos dmg 'SHA256SUMS-macos.txt' 'UNSIGNED-macos.txt' 'NOTARISED-macos.txt'
 
           if [ "${found}" -eq 0 ]; then
             echo "::error title=Nothing to publish::None of the releases above carries an installer or a disk image."
