@@ -17,6 +17,8 @@ tracing-subscriber.workspace = true
 tokio = { workspace = true, features = ["fs"] }
 reqwest.workspace = true
 tokio-tungstenite.workspace = true
+rustls.workspace = true
+webpki-roots.workspace = true
 futures-util.workspace = true
 time.workspace = true
 sha2.workspace = true

@@ -121,6 +121,11 @@ pub fn run() {
     // every line Windows discarded — see `remote_core::logging`.
     remote_core::logging::init("agent");
 
+    // Before anything opens a TLS connection: with two rustls providers in
+    // this binary there is no default, and asking for one panics — which a
+    // release build turns into the window vanishing (`remote_core::tls`).
+    remote_core::tls::install_default_crypto_provider();
+
     let agent = std::sync::Arc::new(agent::Agent::load());
 
     let builder = tauri::Builder::default();
