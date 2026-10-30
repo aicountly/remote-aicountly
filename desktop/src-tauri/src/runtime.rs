@@ -28,9 +28,11 @@
 //!
 //! * **A network failure** — bounded exponential backoff with jitter, and it
 //!   never gives up. The status line says offline and why.
-//! * **A revoked device** — it stops. Terminal, and the only state the agent
-//!   deliberately does not retry from: a machine an administrator removed
-//!   should stop knocking, and should say plainly that it was removed.
+//! * **A revoked device** — it stops asking. The only state the agent
+//!   deliberately does not retry from: a machine that was removed should stop
+//!   knocking, and should say plainly that it was removed. The loop itself
+//!   waits rather than ending, so signing the computer in again — a new
+//!   enrolment — is picked up without restarting the application.
 //! * **A credential about to expire** — renewed a minute early rather than
 //!   after the first refusal, so an unattended connection does not arrive to
 //!   find the agent re-authenticating.
@@ -175,11 +177,17 @@ where
     while !stopping.load(Ordering::SeqCst) {
         let state = agent.state();
 
-        // Terminal. An administrator removed this machine; retrying for ever
-        // would look like a bug to them and like a broken product to whoever
-        // is sitting at it.
+        // This machine was removed — from the Computers page, or by signing
+        // it out. Retrying the same enrolment for ever would look like a bug
+        // to its owner and like a broken product to whoever is sitting at it,
+        // so nothing is asked of the server. But the loop waits rather than
+        // ending: signing in again enrols the computer afresh (`Revoked` then
+        // `Enrolled` is `Authenticating`), and a loop that had returned left
+        // it there, offline, until somebody restarted the application.
         if matches!(state.status, remote_core::AgentStatus::Revoked) {
-            return;
+            sleep_interruptibly(&stopping, IDLE_POLL).await;
+
+            continue;
         }
 
         let Some(device_uuid) = state.device_uuid.clone() else {
@@ -217,7 +225,8 @@ where
                 agent.set_credential(None);
                 emit(&sink, agent.apply(AgentEvent::Revoked));
 
-                return;
+                // Waits at the top of the loop for a new enrolment.
+                continue;
             }
             Outcome::Retry(reason) => {
                 emit(
@@ -262,7 +271,8 @@ enum Ended {
 enum Outcome {
     /// Carry on.
     Continue,
-    /// Stop. Terminal.
+    /// Stop asking: the device was removed. The loop waits for a new
+    /// enrolment.
     Revoked,
     /// Try again after a backoff.
     Retry(String),
@@ -747,6 +757,48 @@ async fn sleep_interruptibly(stopping: &Arc<AtomicBool>, total: Duration) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A removed computer that is signed in again must reconnect without a
+    /// restart. The loop used to return the moment it saw `Revoked`, so the new
+    /// enrolment sat in `Authenticating` with nothing left to authenticate it.
+    /// It now waits — asking the server nothing — until it is stopped or the
+    /// computer is enrolled again.
+    #[tokio::test]
+    async fn a_revoked_computer_waits_for_a_new_enrolment_rather_than_ending_the_loop() {
+        let agent = Arc::new(Agent::new());
+        agent.apply(AgentEvent::Enrolled {
+            device_uuid: "00000000-0000-4000-8000-000000000001".into(),
+            device_name: "Removed laptop".into(),
+            company_name: None,
+            key_fingerprint: "AAAA BBBB".into(),
+        });
+        agent.apply(AgentEvent::Revoked);
+        assert!(matches!(
+            agent.state().status,
+            remote_core::AgentStatus::Revoked
+        ));
+
+        let stopping = Arc::new(AtomicBool::new(false));
+        let sink: StateSink = Arc::new(|_| {});
+        let task = tokio::spawn(run(
+            agent.clone(),
+            sink,
+            remote_webrtc::webrtc_rs::WebRtcFactory,
+            stopping.clone(),
+        ));
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            !task.is_finished(),
+            "the loop must still be there for the next sign-in"
+        );
+
+        stopping.store(true, Ordering::SeqCst);
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("stops promptly when the application does")
+            .expect("ends cleanly");
+    }
 
     /// Renewal is one reading, shared with the service's presence loop:
     /// `DeviceCredential::is_expiring`, tested over the parsing cases in
