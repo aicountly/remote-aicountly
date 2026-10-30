@@ -55,6 +55,21 @@ class SessionController extends BaseApiController
             'userAgent'          => $this->userAgent(),
         ], $policy, $context);
 
+        // Estate analytics: Remote's activation and recurring outcome.
+        //
+        // Remote is a SUPPORT tool, which makes the staff rule load-bearing here rather than
+        // theoretical: an AICOUNTLY support agent screen-sharing into a customer's workspace is
+        // AICOUNTLY working, not that customer adopting Remote. Marked 'staff' so every report
+        // excludes it — otherwise Remote's adoption figures would be our own support desk.
+        $isStaff = $identity->isSupportAgent || $identity->isPlatformAdmin
+            || $scopeType === 'AICOUNTLY_SUPPORT';
+        \App\Services\EstateAnalytics::track('remote_session.started', [
+            'company_id' => $companyId,
+            'user_uuid'  => $identity->uuid,
+            'user_kind'  => $isStaff ? 'staff' : 'customer',
+            'properties' => ['scope_type' => $scopeType],
+        ]);
+
         return $this->created($this->detail($session));
     }
 
