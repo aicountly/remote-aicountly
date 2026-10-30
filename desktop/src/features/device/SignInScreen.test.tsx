@@ -23,13 +23,16 @@ describe('SignInScreen', () => {
   /// A revoked machine is signed out, and saying so is the difference between
   /// "sign in" and "somebody took this computer away from you".
   /**
-   * The ID is readable before anybody signs in — somebody reads it out to a
-   * colleague — and the screen says plainly that it reaches nothing yet.
+   * The fingerprint is readable before anybody signs in, named as what it is —
+   * the same "Key fingerprint" the Computers page shows — and never as an ID
+   * somebody could connect with. The screen says plainly that nothing can.
    */
-  it('shows the computer ID while still signed out, and says nothing can connect', () => {
+  it('shows the key fingerprint while still signed out, and says nothing can connect', () => {
     render(<SignInScreen revoked={false} deviceId="A1B2 C3D4 E5F6 A7B8" onSignIn={vi.fn()} />)
 
     expect(screen.getByText('A1B2 C3D4 E5F6 A7B8')).toBeTruthy()
+    expect(screen.getByText('Key fingerprint')).toBeTruthy()
+    expect(screen.queryByText(/computer's ID/i)).toBeNull()
     expect(screen.getByText(/nobody can connect to this computer until you sign in/i)).toBeTruthy()
   })
 

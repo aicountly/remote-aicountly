@@ -26,7 +26,7 @@ export function SignInScreen({
 }: {
   /** The device was enrolled and an administrator removed it. */
   revoked: boolean
-  /** This computer's ID, or null while it is still being read. */
+  /** This computer's key fingerprint, or null while it is still being read. */
   deviceId: string | null
   onSignIn: () => void
   busy?: boolean
@@ -41,15 +41,17 @@ export function SignInScreen({
       </p>
 
       {/*
-        The ID is shown before anybody signs in, because somebody reading it
-        out to a colleague is the first thing that happens with a tool like
-        this. It is a hash of a public key and reaches nothing on its own:
-        nobody can connect to this computer, and this computer will accept no
-        incoming request, until the sign-in below has finished.
+        A hash of this computer's public key, shown so somebody can check that
+        the computer on their Computers page is this one — the same
+        "Key fingerprint" is shown there. It is not an address: nothing
+        connects to a computer by it, and calling it "this computer's ID"
+        invited people used to other remote-desktop tools to read it out to
+        somebody who could do nothing with it. Help starts from a session code
+        instead.
       */}
       <div className="card__rows" style={{ marginTop: 'var(--space-4)' }}>
         <div className="row">
-          <span className="row__label">This computer's ID</span>
+          <span className="row__label">Key fingerprint</span>
           <span className="row__value row__value--mono">{deviceId ?? '—'}</span>
         </div>
       </div>

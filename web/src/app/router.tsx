@@ -4,6 +4,7 @@ import { createBrowserRouter, Navigate } from 'react-router-dom'
 import AppShell from './AppShell'
 import { ORGANISATIONS_ENABLED } from './organisations'
 import RouteFallback from '../components/ui/RouteFallback'
+import RouteError from '../components/ui/RouteError'
 
 /**
  * Routes.
@@ -43,6 +44,7 @@ export const router = createBrowserRouter([
   {
     path: '/',
     element: <AppShell />,
+    errorElement: <RouteError />,
     children: [
       { index: true, element: page(<Dashboard />) },
       { path: 'start', element: page(<StartSession />) },
@@ -73,10 +75,10 @@ export const router = createBrowserRouter([
   },
   // The live session workspace: no shell, no navigation, nothing competing
   // with the shared screen (§33).
-  { path: '/room/:uuid', element: page(<SessionRoom />) },
+  { path: '/room/:uuid', element: page(<SessionRoom />), errorElement: <RouteError /> },
   // A one-time invitation link. Deliberately outside the shell — a guest gets
   // the session and nothing else (§23).
-  { path: '/join/:token', element: page(<GuestJoin />) },
+  { path: '/join/:token', element: page(<GuestJoin />), errorElement: <RouteError /> },
   // The portal returns here after sign-in; AuthProvider has already consumed
   // the token by the time this renders.
   { path: '/auth/callback', element: <CallbackLanding /> },
