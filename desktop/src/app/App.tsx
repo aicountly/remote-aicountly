@@ -652,7 +652,8 @@ function HowItWorks({
         </li>
       </ol>
       <p className="card__subtitle">
-        Stop control at any time with <kbd>{stopShortcut}</kbd>, from the banner, or from the tray icon.
+        Stop control at any time with <kbd>{stopShortcut}</kbd>, from the banner, or from the{' '}
+        {computerName === 'Mac' ? 'menu bar' : 'tray'} icon.
       </p>
       <div className="how-it-works__actions">
         <button type="button" className="btn btn--primary" onClick={onOpenRemote}>
