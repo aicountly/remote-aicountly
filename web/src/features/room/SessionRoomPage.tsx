@@ -31,6 +31,7 @@ import ConsentDialog from './ConsentDialog'
 import { controlPhase } from './ControlPanel'
 import SessionEnded from './SessionEnded'
 import ConnectionIndicator from './ConnectionIndicator'
+import { proposedShareMode } from './proposedShareMode'
 import SessionCodeBadge from './SessionCodeBadge'
 import RestrictionNotice from '../../components/ui/RestrictionNotice'
 import { RemoteApiError } from '../../services/api/client'
@@ -563,7 +564,7 @@ export default function SessionRoomPage() {
                 icon={<MonitorUp size={18} />}
                 label="Share"
                 tone="primary"
-                onClick={() => actions.beginShare(policy?.allowedShareModes[0] ?? 'SAFE_SHARE')}
+                onClick={() => actions.beginShare(proposedShareMode(session.requestedShareMode, policy?.allowedShareModes))}
               />
             )
           ) : null}
