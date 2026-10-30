@@ -196,7 +196,7 @@ class DevicePresenceService
     public function requestReboot(RemoteIdentity $identity, string $deviceUuid, ?string $sessionUuid): array
     {
         $device = $this->devices->findForUser($identity, $deviceUuid);
-        $policy = $this->policies->resolve($identity, 'COMPANY', (int) $device['company_id']);
+        $policy = $this->policies->resolveForDevice($identity, $device);
 
         if (! $policy->allowDeviceReboot) {
             throw ApiException::forbidden(
@@ -296,15 +296,11 @@ class DevicePresenceService
             );
         }
 
-        return $this->policies->resolve(
-            new RemoteIdentity(
+        return $this->policies->resolveForDevice(new RemoteIdentity(
                 (int) $row['id'],
                 (string) $row['platform_uuid'],
                 (string) $row['display_name'],
                 $row['email'] !== null ? (string) $row['email'] : null,
-            ),
-            'COMPANY',
-            (int) $device['company_id'],
-        );
+            ), $device);
     }
 }

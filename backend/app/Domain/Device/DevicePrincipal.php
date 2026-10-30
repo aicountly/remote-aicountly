@@ -36,11 +36,14 @@ final class DevicePrincipal
     private const KEY_LABEL = 'aicountly-remote-device-v1';
 
     /**
-     * @param list<string> $scopes what this credential is allowed to be used for
+     * @param ?int         $companyId the device's organisation, or null for a
+     *                                personal device — a person's own computer,
+     *                                which belongs to no organisation
+     * @param list<string> $scopes    what this credential is allowed to be used for
      */
     public function __construct(
         public readonly string $deviceUuid,
-        public readonly int $companyId,
+        public readonly ?int $companyId,
         public readonly array $scopes,
         public readonly int $expiresAt,
     ) {
@@ -60,7 +63,7 @@ final class DevicePrincipal
     public static function issue(
         RemoteConfig $config,
         string $deviceUuid,
-        int $companyId,
+        ?int $companyId,
         array $scopes,
         int $expiresAt,
     ): string {
@@ -111,8 +114,22 @@ final class DevicePrincipal
         }
 
         $deviceUuid = (string) ($claims['d'] ?? '');
-        $companyId  = (int) ($claims['c'] ?? 0);
-        if ($deviceUuid === '' || $companyId <= 0) {
+        if ($deviceUuid === '') {
+            return null;
+        }
+
+        // A personal device has no organisation: `null`. This used to insist
+        // on a positive id, so every credential a personal device was issued —
+        // minted as 0 — was refused on its first use: the agent authenticated,
+        // was told 401 by /devices/me, took that for revocation and signed the
+        // computer out, on every launch. A 0 minted before this fix is the same
+        // personal device (the token is signed; nothing else could have made
+        // it) and is read as null.
+        $companyId = $claims['c'] ?? null;
+        if ($companyId === 0) {
+            $companyId = null;
+        }
+        if ($companyId !== null && (! is_int($companyId) || $companyId < 0)) {
             return null;
         }
 

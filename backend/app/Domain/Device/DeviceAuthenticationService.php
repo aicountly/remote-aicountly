@@ -162,10 +162,13 @@ class DeviceAuthenticationService
         $expiresAt = time() + $this->config->deviceTokenTtlSeconds;
         $scopes    = DevicePrincipal::agentScopes();
 
+        // Null for a personal device: it belongs to no organisation.
+        $companyId = $device['company_id'] !== null ? (int) $device['company_id'] : null;
+
         $token = DevicePrincipal::issue(
             $this->config,
             $deviceUuid,
-            (int) $device['company_id'],
+            $companyId,
             $scopes,
             $expiresAt,
         );
@@ -182,7 +185,7 @@ class DeviceAuthenticationService
             EventType::DEVICE_AUTHENTICATED,
             null,
             'SYSTEM',
-            (int) $device['company_id'],
+            $companyId,
             null,
             null,
             null,
@@ -215,9 +218,11 @@ class DeviceAuthenticationService
             throw ApiException::unauthenticated('This device is no longer registered for AICOUNTLY Remote.');
         }
 
-        // The token names a company. If the device has since moved — or the
-        // token was minted against a stale row — the two must agree.
-        if ((int) $device['company_id'] !== $principal->companyId) {
+        // The token names a company, or none for a personal device. If the
+        // device has since moved — or the token was minted against a stale
+        // row — the two must agree.
+        $companyId = $device['company_id'] !== null ? (int) $device['company_id'] : null;
+        if ($companyId !== $principal->companyId) {
             throw ApiException::unauthenticated('This device credential is no longer valid.');
         }
 

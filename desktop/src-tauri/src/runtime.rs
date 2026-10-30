@@ -168,6 +168,9 @@ where
     F: PeerSessionFactory + Clone,
 {
     let mut backoff = Backoff::authentication();
+    // Separate from `backoff`, which a successful authentication resets: the
+    // refusals this counts come *after* authenticating succeeded.
+    let mut refused = Backoff::authentication();
 
     while !stopping.load(Ordering::SeqCst) {
         let state = agent.state();
@@ -233,8 +236,26 @@ where
 
         // Authenticated. Stay in the presence loop until the credential is
         // near expiry, the device is rejected, or the runtime is stopped.
-        connected(&agent, &sink, &client, &config, &factory, &stopping).await;
+        match connected(&agent, &sink, &client, &config, &factory, &stopping).await {
+            Ended::Renew => refused.reset(),
+            // Authenticating succeeded and the next call was refused anyway.
+            // Waiting longer each time is what keeps a server that keeps
+            // refusing from being asked again in a tight loop.
+            Ended::Retry => sleep_interruptibly(&stopping, refused.next_delay()).await,
+        }
     }
+}
+
+/// How a connected stretch ended, for the outer loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ended {
+    /// Re-authenticate now: the credential is near expiry, a session ended,
+    /// the runtime is stopping, or the device was revoked (which the loop
+    /// sees for itself).
+    Renew,
+    /// Re-authenticate after a wait: something the API said needs a fresh
+    /// credential, or cannot be fixed by asking again at once.
+    Retry,
 }
 
 /// What an API attempt means for the loop.
@@ -282,7 +303,8 @@ async fn connected<F>(
     config: &AgentConfig,
     factory: &F,
     stopping: &Arc<AtomicBool>,
-) where
+) -> Ended
+where
     F: PeerSessionFactory + Clone,
 {
     // The server's figure, adopted rather than argued with. The configured
@@ -300,7 +322,7 @@ async fn connected<F>(
         // Renewed a minute early. Re-authenticating is the outer loop's job,
         // so returning is how this asks for it.
         if credential_expiring(client) {
-            return;
+            return Ended::Renew;
         }
 
         // The companion link on screen, waiting for an answer, if there is one.
@@ -314,7 +336,7 @@ async fn connected<F>(
                 if description.device.is_revoked() {
                     emit(sink, agent.apply(AgentEvent::Revoked));
 
-                    return;
+                    return Ended::Renew;
                 }
 
                 // Unattended access as the *server* currently has it, including
@@ -390,7 +412,7 @@ async fn connected<F>(
                         // The credential may well have expired while it ran, so
                         // the outer loop re-authenticates rather than this one
                         // carrying on with a stale one.
-                        return;
+                        return Ended::Renew;
                     }
 
                     // Refused here, at the machine, rather than discovered by
@@ -431,16 +453,29 @@ async fn connected<F>(
                     }
                 }
             }
+            // The short-lived credential was not accepted. That is not the
+            // device being removed — authenticating again answers that, and
+            // only that answer is final. Treating this as revocation signed a
+            // person's computer out whenever a credential was refused for any
+            // other reason: every personal device, every launch, before the
+            // server accepted credentials naming no organisation.
+            Err(error) if error.is_credential_refused() => {
+                offline(agent, sink, &describe(&error), true);
+
+                return Ended::Retry;
+            }
             Err(error) if error.is_device_rejected() => {
                 emit(sink, agent.apply(AgentEvent::Revoked));
 
-                return;
+                return Ended::Renew;
             }
             Err(error) => {
                 offline(agent, sink, &describe(&error), error.is_retryable());
 
                 if !error.is_retryable() {
-                    return;
+                    // Authenticating again might change the answer; doing it
+                    // at once, every time, would not. The outer loop waits.
+                    return Ended::Retry;
                 }
 
                 sleep_interruptibly(stopping, backoff.next_delay()).await;
@@ -454,10 +489,21 @@ async fn connected<F>(
                 backoff.reset();
                 emit(sink, agent.apply(AgentEvent::Connected));
             }
+            // The short-lived credential was not accepted. That is not the
+            // device being removed — authenticating again answers that, and
+            // only that answer is final. Treating this as revocation signed a
+            // person's computer out whenever a credential was refused for any
+            // other reason: every personal device, every launch, before the
+            // server accepted credentials naming no organisation.
+            Err(error) if error.is_credential_refused() => {
+                offline(agent, sink, &describe(&error), true);
+
+                return Ended::Retry;
+            }
             Err(error) if error.is_device_rejected() => {
                 emit(sink, agent.apply(AgentEvent::Revoked));
 
-                return;
+                return Ended::Renew;
             }
             Err(error) => {
                 offline(agent, sink, &describe(&error), error.is_retryable());
@@ -506,7 +552,7 @@ async fn connected<F>(
 
                 // As after a hosted session: re-authenticate rather than carry
                 // on with a credential that may have expired meanwhile.
-                return;
+                return Ended::Renew;
             }
             Some(false) => {
                 if let Err(error) = client.decline_companion(&pending.companion_uuid).await {
@@ -520,6 +566,8 @@ async fn connected<F>(
             None => {}
         }
     }
+
+    Ended::Renew
 }
 
 /// The device's presence-room socket, and when to replace its token.

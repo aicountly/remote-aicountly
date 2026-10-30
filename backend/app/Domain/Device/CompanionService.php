@@ -165,7 +165,7 @@ class CompanionService
         $device = $this->devices->findByUuid($deviceUuid);
 
         if ($device === null
-            || (int) $device['company_id'] !== (int) $session['company_id']
+            || self::companyOf($device) !== self::companyOf($session)
             || $device['user_id'] === null
             || (int) $device['user_id'] !== $identity->id) {
             throw ApiException::notFound('That device could not be found.');
@@ -347,7 +347,9 @@ class CompanionService
             ->join('remote_identities i', 'i.id = l.requested_by_user_id', 'left')
             ->where('l.device_id', $device['id'])
             ->where('l.status', CompanionLinks::STATUS_PENDING)
-            ->where('s.company_id', (int) $device['company_id'])
+            // The device's own company's sessions — or, for a personal device,
+            // personal ones (`company_id IS NULL`), never "company 0".
+            ->where('s.company_id', self::companyOf($device))
             ->orderBy('l.created_at', 'DESC')
             ->limit(5)
             ->get()
@@ -404,7 +406,7 @@ class CompanionService
             throw ApiException::notFound('That control request could not be found.');
         }
 
-        $policy = $this->policies->resolve($owner, 'COMPANY', (int) $device['company_id']);
+        $policy = $this->policies->resolveForDevice($owner, $device);
 
         if (! $policy->allowRemoteControl) {
             throw ApiException::forbidden(
@@ -713,9 +715,7 @@ class CompanionService
 
         $session = $this->sessions->findById((int) $link['session_id']);
 
-        if ($session === null
-            || $session['company_id'] === null
-            || (int) $session['company_id'] !== (int) $device['company_id']) {
+        if ($session === null || self::companyOf($session) !== self::companyOf($device)) {
             throw ApiException::notFound('That control request could not be found.');
         }
 
@@ -932,5 +932,17 @@ class CompanionService
             (string) $row['display_name'],
             $row['email'] !== null ? (string) $row['email'] : null,
         );
+    }
+
+    /**
+     * A row's company, or null for a personal one. Never `(int) null`, which
+     * is 0 — a company nobody has — and made every personal device and
+     * personal session look like it belonged to it.
+     *
+     * @param array<string, mixed> $row
+     */
+    private static function companyOf(array $row): ?int
+    {
+        return $row['company_id'] !== null ? (int) $row['company_id'] : null;
     }
 }
