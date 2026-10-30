@@ -83,10 +83,12 @@ export default function ConsentDialog({ state, session, policy, onConfirm, onCan
             <dt>Sharing</dt>
             <dd>{shareModeLabel(shareMode)}</dd>
           </div>
-          <div>
-            <dt>Organisation</dt>
-            <dd>{session.companyName ?? 'Personal (no organisation)'}</dd>
-          </div>
+          {session.companyName ? (
+            <div>
+              <dt>Organisation</dt>
+              <dd>{session.companyName}</dd>
+            </div>
+          ) : null}
           <div>
             <dt>Session</dt>
             <dd className="mono">{session.displayId}</dd>

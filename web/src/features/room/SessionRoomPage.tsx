@@ -31,6 +31,7 @@ import ConsentDialog from './ConsentDialog'
 import { controlPhase } from './ControlPanel'
 import SessionEnded from './SessionEnded'
 import ConnectionIndicator from './ConnectionIndicator'
+import { proposedShareMode } from './proposedShareMode'
 import SessionCodeBadge from './SessionCodeBadge'
 import RestrictionNotice from '../../components/ui/RestrictionNotice'
 import { RemoteApiError } from '../../services/api/client'
@@ -90,6 +91,9 @@ export default function SessionRoomPage() {
   const [pointerOn, setPointerOn] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [actionError, setActionError] = useState<RemoteApiError | null>(null)
+  // While the stage is full screen it shows the status line and the banners itself (SessionStage), because the
+  // browser shows nothing else then — so they are not drawn up here as well.
+  const [stageFullscreen, setStageFullscreen] = useState(false)
 
   // End, Pause, Resume, Allow and Decline: a refusal or a failure to reach the API is said, not swallowed — the
   // person would otherwise believe the session paused, or somebody was admitted, when nothing happened.
@@ -238,97 +242,21 @@ export default function SessionRoomPage() {
 
   const waiting = session.waiting ?? []
 
-  return (
-    <div className="room">
-      <header className="room__header">
-        <div className="room__identity">
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm room__back"
-            onClick={() => {
-              void actions.leave()
-              navigate(isGuest ? '/' : '/sessions')
-            }}
-            aria-label="Leave session"
-          >
-            <ArrowLeft size={16} aria-hidden="true" />
-          </button>
+  // The status line and the banners are drawn in one of two places: up here, or on the stage while it is full screen
+  // (SessionStage). Never both, and never neither.
+  const status = (
+    <>
+      <ConnectionIndicator live={live} sessionStatus={session.status} onReconnect={actions.reconnect} />
+      {session.startedAt ? (
+        <span className="room__clock mono" aria-label="Session duration">
+          {formatClock(elapsed)}
+        </span>
+      ) : null}
+    </>
+  )
 
-          <div className="room__identity-text">
-            <div className="room__title-row">
-              <span className="room__display-id mono">{session.displayId}</span>
-              <span className="room__secure">
-                <Shield size={12} aria-hidden="true" />
-                Secure
-              </span>
-              {session.sessionCode ? <SessionCodeBadge code={session.sessionCode} /> : null}
-            </div>
-            <p className="room__context truncate">
-              {describeScope(session.scopeType, session.companyName)}
-              {session.sourceProductLabel ? ` · ${session.sourceProductLabel}` : ''}
-            </p>
-          </div>
-        </div>
-
-        <div className="room__status">
-          <ConnectionIndicator live={live} sessionStatus={session.status} onReconnect={actions.reconnect} />
-          {session.startedAt ? (
-            <span className="room__clock mono" aria-label="Session duration">
-              {formatClock(elapsed)}
-            </span>
-          ) : null}
-        </div>
-
-        <div className="room__header-actions">
-          {session.isHost ? (
-            session.status === 'PAUSED' ? (
-              <button
-                type="button"
-                className="btn btn--secondary btn--sm"
-                onClick={() => void attempt(actions.resume, 'The session could not be resumed. Try again.')}
-              >
-                <Play size={15} aria-hidden="true" />
-                Resume
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="btn btn--ghost btn--sm room__ghost"
-                onClick={() => void attempt(actions.pause, 'The session could not be paused. Try again.')}
-              >
-                <Pause size={15} aria-hidden="true" />
-                Pause
-              </button>
-            )
-          ) : null}
-
-          {isGuest ? (
-            // A guest cannot end somebody else's session — the API refuses a guest token there — so the
-            // button that always failed for them is the one that works: leaving.
-            <button
-              type="button"
-              className="btn btn--danger btn--sm"
-              onClick={() => {
-                void actions.leave()
-                navigate('/')
-              }}
-            >
-              Leave
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn btn--danger btn--sm"
-              // Sharing has already stopped here whatever the answer (useRemoteSession `end`); a refusal or a
-              // network failure is said, not swallowed, so the person knows the session itself is still open.
-              onClick={() => void attempt(actions.end, 'The session could not be ended. Try again.')}
-            >
-              End
-            </button>
-          )}
-        </div>
-      </header>
-
+  const banners = (
+    <>
       {/* The persistent sharing indicator (§30). It is deliberately impossible
           to miss and always carries the stop control. */}
       {isSharing ? (
@@ -389,6 +317,111 @@ export default function SessionRoomPage() {
           ) : null}
         </div>
       ) : null}
+    </>
+  )
+
+  // Everything here that needs this person to look or to answer, one key each. Full screen hides the room around
+  // the stage, so a key that was not there before takes the stage out of it (SessionStage): it never hides somebody
+  // waiting to be admitted, a request for control, the answer to one's own request, the share consent, or a notice
+  // saying why something stopped.
+  const attention = [
+    ...(session.isHost ? waiting.map((participant) => `waiting:${participant.uuid}`) : []),
+    ...(canAnswerControl
+      ? (control?.pendingRequests ?? []).map((request) => `control-request:${request.participantUuid}`)
+      : []),
+    ...(me?.controlState === 'DENIED' ? ['control-declined'] : []),
+    ...(shareIntent.phase !== 'idle' ? [`share:${shareIntent.phase}`] : []),
+    ...(session.status === 'PAUSED' ? ['paused'] : []),
+    ...(controlNotice ? [`notice:${controlNotice}`] : []),
+    ...(actionError ? [`error:${actionError.message}`] : []),
+  ]
+
+  return (
+    <div className="room">
+      <header className="room__header">
+        <div className="room__identity">
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm room__back"
+            onClick={() => {
+              void actions.leave()
+              navigate(isGuest ? '/' : '/sessions')
+            }}
+            aria-label="Leave session"
+          >
+            <ArrowLeft size={16} aria-hidden="true" />
+          </button>
+
+          <div className="room__identity-text">
+            <div className="room__title-row">
+              <span className="room__display-id mono">{session.displayId}</span>
+              <span className="room__secure">
+                <Shield size={12} aria-hidden="true" />
+                Secure
+              </span>
+              {session.sessionCode ? <SessionCodeBadge code={session.sessionCode} /> : null}
+            </div>
+            <p className="room__context truncate">
+              {describeScope(session.scopeType, session.companyName)}
+              {session.sourceProductLabel ? ` · ${session.sourceProductLabel}` : ''}
+            </p>
+          </div>
+        </div>
+
+        <div className="room__status">{stageFullscreen ? null : status}</div>
+
+        <div className="room__header-actions">
+          {session.isHost ? (
+            session.status === 'PAUSED' ? (
+              <button
+                type="button"
+                className="btn btn--secondary btn--sm"
+                onClick={() => void attempt(actions.resume, 'The session could not be resumed. Try again.')}
+              >
+                <Play size={15} aria-hidden="true" />
+                Resume
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm room__ghost"
+                onClick={() => void attempt(actions.pause, 'The session could not be paused. Try again.')}
+              >
+                <Pause size={15} aria-hidden="true" />
+                Pause
+              </button>
+            )
+          ) : null}
+
+          {isGuest ? (
+            // A guest cannot end somebody else's session — the API refuses a guest token there — so the
+            // button that always failed for them is the one that works: leaving.
+            <button
+              type="button"
+              className="btn btn--danger btn--sm"
+              onClick={() => {
+                void actions.leave()
+                navigate('/')
+              }}
+            >
+              Leave
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn--danger btn--sm"
+              // Sharing has already stopped here whatever the answer (useRemoteSession `end`); a refusal or a
+              // network failure is said, not swallowed, so the person knows the session itself is still open.
+              onClick={() => void attempt(actions.end, 'The session could not be ended. Try again.')}
+            >
+              End
+            </button>
+          )}
+        </div>
+      </header>
+
+      {/* On the stage instead while it is full screen — the only place anything is shown then — and never both. */}
+      {stageFullscreen ? null : banners}
 
       {session.status === 'PAUSED' ? (
         <div className="room__notice" role="status">
@@ -462,6 +495,10 @@ export default function SessionRoomPage() {
           onControlKey={actions.sendControlKey}
           onControlClipboard={actions.sendControlClipboard}
           clipboardShared={control?.clipboardEnabled === true}
+          fullscreenStatus={status}
+          fullscreenBanners={banners}
+          onFullscreenChange={setStageFullscreen}
+          attention={attention}
         />
 
         {panel ? (
@@ -527,7 +564,7 @@ export default function SessionRoomPage() {
                 icon={<MonitorUp size={18} />}
                 label="Share"
                 tone="primary"
-                onClick={() => actions.beginShare(policy?.allowedShareModes[0] ?? 'SAFE_SHARE')}
+                onClick={() => actions.beginShare(proposedShareMode(session.requestedShareMode, policy?.allowedShareModes))}
               />
             )
           ) : null}

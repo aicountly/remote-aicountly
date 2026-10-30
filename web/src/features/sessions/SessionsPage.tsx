@@ -11,6 +11,7 @@ import RestrictionNotice from '../../components/ui/RestrictionNotice'
 import type { RemoteSession } from '../../types/remote'
 import type { SessionHistoryFilters as Filters } from '../../services/api/remote'
 import { describeScope, formatDateTime, formatDuration } from '../../utils/format'
+import { ORGANISATIONS_ENABLED } from '../../app/organisations'
 
 /**
  * Session history (§42).
@@ -69,7 +70,7 @@ export default function SessionsPage() {
       <div className="stack stack--lg">
         <header className="stack stack--sm">
           <h1>Sessions</h1>
-          <p className="muted">Remote sessions you took part in, and those your organisation permits you to see.</p>
+          <p className="muted">Remote sessions you took part in.</p>
         </header>
 
         {error ? <RestrictionNotice error={error} /> : null}
@@ -132,6 +133,9 @@ export default function SessionsPage() {
               </select>
             </div>
 
+            {/* Every session is Personal for now (organisations.ts): nothing to filter by. */}
+            {ORGANISATIONS_ENABLED ? (
+            <>
             <div className="field">
               <label className="field__label" htmlFor="filter-scope">
                 Scope
@@ -167,6 +171,8 @@ export default function SessionsPage() {
                 ))}
               </select>
             </div>
+            </>
+            ) : null}
 
             <div className="field">
               <label className="field__label" htmlFor="filter-product">
@@ -226,7 +232,7 @@ export default function SessionsPage() {
                 <thead>
                   <tr>
                     <th scope="col">Session</th>
-                    <th scope="col">Organisation</th>
+                    {ORGANISATIONS_ENABLED ? <th scope="col">Organisation</th> : null}
                     <th scope="col">Product</th>
                     <th scope="col">Started</th>
                     <th scope="col">Duration</th>
@@ -241,7 +247,7 @@ export default function SessionsPage() {
                           {session.displayId}
                         </Link>
                       </td>
-                      <td>{describeScope(session.scopeType, session.companyName)}</td>
+                      {ORGANISATIONS_ENABLED ? <td>{describeScope(session.scopeType, session.companyName)}</td> : null}
                       <td>{session.sourceProductLabel ?? '—'}</td>
                       <td>{formatDateTime(session.startedAt ?? session.createdAt)}</td>
                       <td>{formatDuration(session.durationSeconds)}</td>

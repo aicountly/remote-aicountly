@@ -274,7 +274,7 @@ function ControlStatus({
               <strong>You are controlling this computer.</strong>
               <span className="control__hint">
                 Click and type on the shared screen. {control?.clipboardEnabled
-                  ? 'The clipboard is shared in both directions.'
+                  ? 'Text you copy here can be pasted on that computer.'
                   : 'The clipboard is not shared.'}
               </span>
             </span>

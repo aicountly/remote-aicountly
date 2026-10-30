@@ -201,6 +201,32 @@ pub fn marker_script(origin: &Url, nonce: &str) -> String {
     )
 }
 
+/// Where the portal is, as the window is told after every page it loads.
+///
+/// The window shows Back, Reload and Open in browser only while the portal is
+/// off its own pages — on the AICOUNTLY sign-in page or an identity
+/// provider's, which is where somebody can get stuck and need a way back. On
+/// its own pages the portal is signed in and has its own menus, and a second
+/// row of browser buttons above them only made the window look like a browser
+/// with a website in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortalPage {
+    /// The page is one of the portal's own — its origin — not a sign-in page.
+    pub on_portal: bool,
+}
+
+/// The event that carries a [`PortalPage`] to the window.
+pub const PORTAL_PAGE_EVENT: &str = "aicountly-remote://portal-page";
+
+/// What a page the portal loaded means for the window.
+#[must_use]
+pub fn page_of(url: &Url, origin: &Url) -> PortalPage {
+    PortalPage {
+        on_portal: url.scheme() == "https" && url.origin() == origin.origin(),
+    }
+}
+
 /// Whether a link the portal would leave for belongs in the person's own
 /// browser. Only `https`: nothing in the portal has reason to open anything
 /// else, and `file:` or a custom scheme must never be handed to the system.
@@ -256,7 +282,9 @@ pub fn show(
 
     let navigation_origin = origin.clone();
     let window_origin = origin.clone();
+    let page_origin = origin.clone();
     let handle = app.clone();
+    let page_handle = app.clone();
 
     let builder =
         tauri::webview::WebviewBuilder::new(PORTAL_LABEL, tauri::WebviewUrl::External(start))
@@ -290,6 +318,18 @@ pub fn show(
                 }
 
                 tauri::webview::NewWindowResponse::Deny
+            })
+            .on_page_load(move |_portal, payload| {
+                // Told on every load, started and finished: a redirect to the
+                // sign-in page shows the buttons as it starts, and the return
+                // to the portal hides them once it has arrived. Emitted from
+                // the async runtime, like the navigation above, because this
+                // also runs inside WebView2's own callback.
+                let page = page_of(payload.url(), &page_origin);
+                let handle = page_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = tauri::Emitter::emit(&handle, PORTAL_PAGE_EVENT, page);
+                });
             });
 
     let rect = bounds.rect();
@@ -359,6 +399,29 @@ mod tests {
 
     fn url(value: &str) -> Url {
         Url::parse(value).unwrap()
+    }
+
+    #[test]
+    fn the_window_knows_a_sign_in_page_from_the_portals_own() {
+        for own in [
+            "https://remote.aicountly.com/",
+            "https://remote.aicountly.com/sessions/42?tab=events",
+            "https://remote.aicountly.com/desktop-signin?code=ABCD-1234",
+        ] {
+            assert!(page_of(&url(own), &origin()).on_portal, "{own}");
+        }
+
+        for elsewhere in [
+            "https://my.aicountly.com/login/authentication_jump/remote",
+            "https://accounts.google.com/o/oauth2/v2/auth",
+            "http://remote.aicountly.com/",
+            "about:blank",
+        ] {
+            assert!(
+                !page_of(&url(elsewhere), &origin()).on_portal,
+                "{elsewhere}"
+            );
+        }
     }
 
     #[test]

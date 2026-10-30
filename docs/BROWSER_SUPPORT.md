@@ -77,3 +77,8 @@ a phone.
 * Some corporate networks block UDP entirely; without TURN over TLS on 443/5349
   those users cannot connect at all, and Remote says so rather than retrying
   forever.
+* **Full screen** (the button on somebody else's shared screen) needs the
+  Fullscreen API on elements. Safari on an iPhone has none, and a page embedded
+  without `allowfullscreen` is refused it, so neither shows the button. Esc is
+  the browser's way out of full screen and is kept for that: to send Esc to a
+  computer being controlled, leave full screen first.

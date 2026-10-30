@@ -34,6 +34,17 @@
   --text-muted: #8b948c;
   --text-inverse: #ffffff;
 
+  /* --- The application's own chrome --------------------------------------
+   * Dark, so the window reads as an application and the web portal inside
+   * it as the web portal: the same pages a browser shows, framed by the app
+   * that hosts them.                                                        */
+  --chrome-bg: #142117;
+  --chrome-text: #f3f7f3;
+  --chrome-muted: #a8b4a9;
+  --chrome-hover: rgba(255, 255, 255, 0.08);
+  --chrome-active: rgba(255, 255, 255, 0.14);
+  --chrome-border: #0b130d;
+
   /* --- Lines ------------------------------------------------------------ */
   --border: #e2e8e2;
   --border-strong: #cfd8cf;

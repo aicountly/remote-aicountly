@@ -199,6 +199,65 @@ fn the_uninstaller_removes_every_file_the_agent_writes() {
     );
 }
 
+/// The log directory goes as well. It was the one thing the uninstaller left
+/// in the data directory, so the `RMDir` of the directory itself — which only
+/// removes an empty one — failed, and `%ProgramData%\AICOUNTLY\Remote`
+/// outlived the uninstall.
+///
+/// And not with `RMDir /r`, the obvious line: the uninstaller runs elevated in
+/// a directory every account on the machine can write in, and NSIS's recursive
+/// delete walks into a junction as though it were a folder.
+#[test]
+fn the_uninstaller_removes_the_log_directory_without_walking_into_links() {
+    let hooks = read("installers/windows/hooks.nsh");
+
+    // `remote_core::logging`: one file per component, rolled once to `.1`.
+    for component in ["agent", "service"] {
+        if let Some(path) = remote_core::log_path(component) {
+            assert!(
+                path.ends_with(Path::new("logs").join(format!("{component}.log"))),
+                "{component} logs to {}, which the uninstaller does not name",
+                path.display()
+            );
+        }
+
+        for file in [format!("{component}.log"), format!("{component}.log.1")] {
+            assert!(
+                hooks.contains(&format!("Delete \"${{AICOUNTLY_DATA_DIR}}\\logs\\{file}\"")),
+                "the uninstaller must remove logs\\{file}"
+            );
+        }
+    }
+
+    let logs = hooks
+        .find("RMDir \"${AICOUNTLY_DATA_DIR}\\logs\"")
+        .expect("the uninstaller removes the log directory");
+    let data = hooks
+        .find("RMDir \"${AICOUNTLY_DATA_DIR}\"")
+        .expect("the uninstaller removes the data directory");
+    assert!(
+        logs < data,
+        "the log directory has to go before the directory it is in"
+    );
+
+    for line in hooks.lines().map(str::trim) {
+        if line.starts_with(';') {
+            continue;
+        }
+
+        let mut words = line.split_whitespace();
+        let recursive = words
+            .next()
+            .is_some_and(|word| word.eq_ignore_ascii_case("RMDir"))
+            && words.any(|word| word.eq_ignore_ascii_case("/r"));
+
+        assert!(
+            !recursive,
+            "no recursive delete in an elevated uninstaller: {line}"
+        );
+    }
+}
+
 /// One version, in `desktop/Cargo.toml`'s `workspace.package`. The release
 /// workflow checks this too, but a mismatch found by a test is a mismatch
 /// found before somebody starts a release.

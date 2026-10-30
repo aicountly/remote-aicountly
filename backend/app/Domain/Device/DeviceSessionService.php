@@ -238,7 +238,7 @@ class DeviceSessionService
     {
         $device = $this->devices->findByUuidOrFail($principal->deviceUuid);
 
-        if ((int) $device['company_id'] !== ($session['company_id'] !== null ? (int) $session['company_id'] : -1)) {
+        if (! self::sameScope($device, $session)) {
             throw ApiException::notFound('That Remote session could not be found.');
         }
 
@@ -415,7 +415,7 @@ class DeviceSessionService
     {
         $device = $this->devices->findByUuidOrFail($principal->deviceUuid);
 
-        if ((int) $device['company_id'] !== ($session['company_id'] !== null ? (int) $session['company_id'] : -1)) {
+        if (! self::sameScope($device, $session)) {
             throw ApiException::notFound('That Remote session could not be found.');
         }
 
@@ -457,6 +457,25 @@ class DeviceSessionService
     }
 
     /**
+     * Whether a device belongs where a session does: a personal device to a
+     * personal session, a company's device to that company's sessions.
+     *
+     * Compared as nullable ids. These used to compare `(int) company_id`
+     * against -1 for a personal session — and `(int) null` is 0, so every
+     * personal device was "not found" in every personal session.
+     *
+     * @param array<string, mixed> $device
+     * @param array<string, mixed> $session
+     */
+    private static function sameScope(array $device, array $session): bool
+    {
+        $deviceCompany  = $device['company_id'] !== null ? (int) $device['company_id'] : null;
+        $sessionCompany = $session['company_id'] !== null ? (int) $session['company_id'] : null;
+
+        return $deviceCompany === $sessionCompany;
+    }
+
+    /**
      * The machine answering a control request from the desktop agent.
      *
      * The agent's gate has already taken effect locally — pressing Stop
@@ -482,7 +501,7 @@ class DeviceSessionService
     ): array {
         $device = $this->devices->findByUuidOrFail($principal->deviceUuid);
 
-        if ((int) $device['company_id'] !== ($session['company_id'] !== null ? (int) $session['company_id'] : -1)) {
+        if (! self::sameScope($device, $session)) {
             throw ApiException::notFound('That Remote session could not be found.');
         }
 

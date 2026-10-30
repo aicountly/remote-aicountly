@@ -22,10 +22,11 @@
 # aicountly/aicountly-com includes both platforms) and this workflow refuses
 # to pretend otherwise.
 #
-# The release tag is the same one release-windows.yml uses, deliberately, so
-# one tag carries every platform of a version and `publish-downloads.yml` can
-# collect them in a single fetch. Whichever workflow runs second adds its
-# artefacts to the release the first one created.
+# The release tag is the one release-windows.yml computes, deliberately: the
+# version and the build number, which is the commit's own time. Both platforms
+# built from one commit land in one release -- whichever workflow runs second
+# adds its artefacts to the release the first one created -- and
+# `publish-downloads.yml` takes the newest build of each platform.
 name: Release AICOUNTLY Remote for macOS
 
 on:
@@ -126,6 +127,39 @@ jobs:
           [ "${requested}" = "${workspace}" ] || { echo "::error::The version input disagrees with desktop/Cargo.toml."; exit 1; }
           [ "${conf}" = "${workspace}" ]      || { echo "::error::tauri.conf.json disagrees with the workspace version."; exit 1; }
           [ "${pkg}" = "${workspace}" ]       || { echo "::error::package.json disagrees with the workspace version."; exit 1; }
+
+      # The same number release-windows.yml stamps, computed the same way --
+      # the commit's own time, UTC, to the minute -- so a Windows and a macOS
+      # build of one commit share it and share a release. Why there is a
+      # number at all is explained there: several builds go out as one
+      # version, and the downloads host caches an installer for a year under
+      # its name.
+      - name: Stamp the build
+        id: stamp
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          seconds="$(git show -s --format=%ct HEAD)"
+          build="$(date -u -r "${seconds}" +%Y%m%d%H%M 2>/dev/null || date -u -d "@${seconds}" +%Y%m%d%H%M)"
+          suffix=""
+          [ "${INPUT_CHANNEL}" = "beta" ] && suffix="-beta"
+          tag="desktop-v${REQUESTED_VERSION}${suffix}-b${build}"
+
+          # Two commits made within the same minute would share a number; only
+          # the first one released may have it.
+          if existing="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq '.sha' 2>/dev/null)" \
+             && [ -n "${existing}" ] && [ "${existing}" != "${GITHUB_SHA}" ]; then
+            echo "::error title=Build number taken::Build ${build} is already released as ${tag}, from ${existing}. Two commits made in the same minute share a build number: release a newer commit instead."
+            exit 1
+          fi
+
+          echo "AICOUNTLY_REMOTE_BUILD=${build}" >> "${GITHUB_ENV}"
+          echo "build=${build}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "Build ${build} of ${REQUESTED_VERSION}, from ${GITHUB_SHA}; release tag ${tag}"
 
       # Named individually, and before the build, because a 40-minute build
       # that fails at the notarisation step helps nobody.
@@ -325,10 +359,27 @@ jobs:
         working-directory: desktop
         env:
           INPUT_ALLOW_UNSIGNED: ${{ inputs.allow_unsigned }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           mkdir -p release
-          cp target/*/release/bundle/dmg/*.dmg release/
+
+          # Each disk image this run built, under the name it is published as:
+          # the build number in it, so it can never be mistaken for -- or
+          # cached as -- another build of the same version. make-manifest.mjs
+          # reads the number back out of the name.
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            case "${target}" in
+              aarch64-*) arch=arm64 ;;
+              x86_64-*)  arch=x64 ;;
+            esac
+            set -- target/"${target}"/release/bundle/dmg/*_"${INPUT_VERSION}"_*.dmg
+            if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+              echo "::error::Expected one disk image for ${INPUT_VERSION} on ${target}, found: $*"
+              exit 1
+            fi
+            cp "$1" "release/Aicountly-Remote-${INPUT_VERSION}-b${AICOUNTLY_REMOTE_BUILD}-${arch}.dmg"
+          done
 
           # Travels with the artifact, so an unsigned build cannot be handed to
           # somebody as though it were notarised.
@@ -364,24 +415,26 @@ jobs:
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: aicountly-remote-macos-${{ inputs.version }}-${{ inputs.channel }}
+          name: aicountly-remote-macos-${{ inputs.version }}-b${{ steps.stamp.outputs.build }}-${{ inputs.channel }}
           path: desktop/release/*
           retention-days: 90
           if-no-files-found: error
 
-      # The same tag the Windows release uses, so one tag carries every
-      # platform of a version. Whichever runs second adds to the release the
-      # first created.
+      # The tag the Windows release computes for the same commit, so one
+      # release carries every platform of a build. Whichever runs second adds
+      # to the release the first created. Tagged on the commit that was built,
+      # not on wherever main has got to by the time this finishes.
       - name: Publish to the GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          tag_name: desktop-v${{ inputs.version }}${{ inputs.channel == 'beta' && '-beta' || '' }}
-          name: AICOUNTLY Remote ${{ inputs.version }}
+          tag_name: ${{ steps.stamp.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: AICOUNTLY Remote ${{ inputs.version }} (build ${{ steps.stamp.outputs.build }})
           prerelease: ${{ inputs.channel == 'beta' }}
           draft: false
           files: desktop/release/*
           body: |
-            AICOUNTLY Remote ${{ inputs.version }} (${{ inputs.channel }}).
+            AICOUNTLY Remote ${{ inputs.version }}, build ${{ steps.stamp.outputs.build }} (${{ inputs.channel }}).
 
             ${{ inputs.allow_unsigned && 'macOS: **NOT signed with a Developer ID certificate and NOT notarised.** macOS blocks the first launch; allow it from System Settings > Privacy & Security. See UNSIGNED.txt in the assets. Verify a download against `SHA256SUMS-macos.txt`.' || 'macOS: signed with a Developer ID certificate and notarised by Apple, so it opens from a download without a security warning. Verify a download against `SHA256SUMS-macos.txt`, and check the notarisation with `xcrun stapler validate Aicountly-Remote-*.dmg`.' }}
 

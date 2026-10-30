@@ -237,8 +237,10 @@ gap at the wrong moment.
 * **The clipboard in the other direction.** A controller's clipboard reaches
   the machine — the message goes through the gate to the clipboard provider —
   but the machine's clipboard is not sent back to the controller.
-* **Automatic updates.** Deliberately inactive — see
-  [WINDOWS_RELEASE.md](WINDOWS_RELEASE.md).
+* **Tauri's own updater.** Not in the build — see
+  [WINDOWS_RELEASE.md](WINDOWS_RELEASE.md). The application checks for a newer
+  version, or a later build of this one, itself when its window opens, from
+  the manifest the download page reads (`remote_core::update`).
 * **macOS as a host.** A Mac is a control companion only: no capture, no
   encoder, no clipboard, no restart, never unattended.
 

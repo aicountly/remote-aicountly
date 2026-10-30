@@ -356,7 +356,7 @@ function DetailsPanel({ session }: { session: SessionDetail }) {
     <dl className="detail-list">
       <Detail label="Session" value={session.displayId} mono />
       {session.sessionCode ? <Detail label="Session code" value={session.sessionCode} mono /> : null}
-      <Detail label="Organisation" value={session.companyName ?? 'Personal (no organisation)'} />
+      {session.companyName ? <Detail label="Organisation" value={session.companyName} /> : null}
       {session.sourceProductLabel ? <Detail label="Started from" value={session.sourceProductLabel} /> : null}
       {session.sourceRoute ? <Detail label="Area" value={session.sourceRoute} /> : null}
       {session.supportTicketId ? <Detail label="Ticket" value={session.supportTicketId} /> : null}
@@ -403,7 +403,7 @@ function SecurityPanel({
         body={
           session.companyId !== null
             ? `${session.companyName ?? 'Your organisation'} controls which sharing options are available in this session.`
-            : 'This is a personal session, so no organisation policy applies to it.'
+            : 'The sharing options here are the ones your AICOUNTLY account allows.'
         }
       />
       <SecurityItem

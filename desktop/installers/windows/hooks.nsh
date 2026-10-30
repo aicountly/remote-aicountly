@@ -253,6 +253,26 @@
   ; machine lost power mid-write.
   Delete "${AICOUNTLY_DATA_DIR}\enrolment.json"
   Delete "${AICOUNTLY_DATA_DIR}\enrolment.json.new"
+  ; The log directory, `logs` beside config.json (`remote_core::logging`).
+  ; Left behind, it stopped the RMDir below from removing the data directory,
+  ; so uninstalling left %ProgramData%\AICOUNTLY\Remote on the machine. The
+  ; application and the service each write `<name>.log` and roll it once to
+  ; `<name>.log.1`, and those four files are all that is ever written there.
+  ;
+  ; Named files and an RMDir without /r, deliberately not `RMDir /r`. This
+  ; runs elevated, every account on the machine can write in here (the ACL in
+  ; NSIS_HOOK_POSTINSTALL), and NSIS's recursive delete walks into a junction
+  ; exactly as it walks into a folder — so anybody could point `logs`, or a
+  ; folder inside it, at a directory they cannot touch themselves and have the
+  ; uninstaller empty it as an administrator. A named Delete never recurses —
+  ; through a link, the most it can reach is a file with one of these four
+  ; names — and RMDir without /r removes an empty folder or the link itself,
+  ; never what a link points at.
+  Delete "${AICOUNTLY_DATA_DIR}\logs\agent.log"
+  Delete "${AICOUNTLY_DATA_DIR}\logs\agent.log.1"
+  Delete "${AICOUNTLY_DATA_DIR}\logs\service.log"
+  Delete "${AICOUNTLY_DATA_DIR}\logs\service.log.1"
+  RMDir "${AICOUNTLY_DATA_DIR}\logs"
   RMDir "${AICOUNTLY_DATA_DIR}"
   RMDir "$COMMONPROGRAMDATA\AICOUNTLY"
 !macroend

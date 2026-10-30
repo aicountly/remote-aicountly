@@ -23,8 +23,12 @@ use crate::{ipc, platform, Agent};
 pub struct About {
     /// The product name.
     pub product: String,
-    /// This build.
+    /// This build's version.
     pub version: String,
+    /// Which build of that version (`yyyyMMddHHmm`, the commit's time), or
+    /// `None` for a local build. The same number is in the installer's name,
+    /// so somebody can tell which one they are running.
+    pub build: Option<String>,
     /// `Windows`, `macOS`, or `unsupported`.
     pub platform: String,
     /// Whether this build has a real platform implementation — either role.
@@ -48,6 +52,8 @@ pub struct About {
     pub log_file: Option<String>,
     /// The background service, as this process sees it.
     pub service: ipc::ServiceStatus,
+    /// AICOUNTLY's privacy policy, which the About panel links to.
+    pub privacy_policy_url: String,
 }
 
 /// The state the window renders from.
@@ -263,20 +269,97 @@ pub fn confirm_enrolment(
     Ok(state)
 }
 
-/// Remove this machine's device key.
+/// Sign this computer out: revoke it on the server, then remove its key.
 ///
-/// The local half of unregistering. The web layer calls the API's revoke
-/// endpoint as well, and both happen — a key left on a machine whose device
-/// row was revoked authenticates nothing but is still there.
+/// The server first, with the machine's own device credential against
+/// `POST /devices/me/revoke`, because once the key is gone nothing is left to
+/// prove which machine is asking. This used to be the window's job, with a
+/// portal credential the window has no way to obtain — so the call was always
+/// refused, and every computer signed out this way stayed ACTIVE on its
+/// owner's Computers page for good.
+///
+/// Best effort, and never a reason to stay signed in: if the computer is
+/// offline, or the API refuses or does not answer in time, that is logged and
+/// the local half goes ahead regardless. What it leaves is a row an
+/// administrator can still revoke in the console — no worse than before.
 #[tauri::command]
-pub fn unregister_device(
+pub async fn unregister_device(
     agent: tauri::State<'_, Arc<Agent>>,
 ) -> Result<remote_core::AgentState, String> {
+    if let Some(device_uuid) = agent.state().device_uuid {
+        let wait = std::time::Duration::from_secs(SIGN_OUT_SERVER_SECONDS);
+
+        match tokio::time::timeout(wait, revoke_on_server(&agent, &device_uuid)).await {
+            Ok(Ok(())) => {
+                tracing::info!(device = %device_uuid, "this computer revoked itself on the server");
+            }
+            Ok(Err(error)) => tracing::warn!(
+                device = %device_uuid,
+                %error,
+                "this computer could not be revoked on the server; signing it out here regardless"
+            ),
+            Err(_) => tracing::warn!(
+                device = %device_uuid,
+                "the server did not answer in time; signing this computer out here regardless"
+            ),
+        }
+    }
+
     agent
         .forget_device_key()
         .map_err(|error| error.to_string())?;
 
     Ok(agent.apply(remote_core::AgentEvent::EnrolmentRemoved))
+}
+
+/// How long signing out waits for the server before going ahead without it.
+///
+/// Longer than one request's own timeout, so a slow API still gets its
+/// answer in, and short enough that somebody who pressed the button is not
+/// left watching it for the better part of a minute.
+const SIGN_OUT_SERVER_SECONDS: u64 = 20;
+
+/// How much life the connection loop's credential needs left to be used for
+/// signing out, rather than proving possession again — the margin the loop
+/// itself renews at.
+const SIGN_OUT_CREDENTIAL_MARGIN_SECONDS: u64 = 60;
+
+/// The server half of [`unregister_device`]: this machine revoking its own row.
+///
+/// With the credential the connection loop holds, when it has one with time
+/// left. Otherwise with a fresh one, proved with the key that is about to be
+/// deleted: the loop may be between credentials, or may never have got one on
+/// this run because the network was down until a moment ago.
+async fn revoke_on_server(agent: &Agent, device_uuid: &str) -> Result<(), String> {
+    let margin = std::time::Duration::from_secs(SIGN_OUT_CREDENTIAL_MARGIN_SECONDS);
+
+    let held = agent.device_client().filter(|client| {
+        client
+            .credential()
+            .is_some_and(|credential| !credential.is_expiring(margin))
+    });
+
+    let client = match held {
+        Some(client) => client,
+        None => {
+            let keypair = agent.device_key().map_err(|error| error.to_string())?;
+            let mut client =
+                remote_core::ApiClient::new(agent.config()).map_err(|error| error.to_string())?;
+
+            client
+                .authenticate(device_uuid, &keypair)
+                .await
+                .map_err(|error| error.to_string())?;
+
+            client
+        }
+    };
+
+    client
+        .revoke_self()
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 /// Record that unattended access was switched on.
@@ -595,6 +678,7 @@ pub fn is_permitted_url(url: &str, config: &AgentConfig) -> bool {
         app_origin,
         download_page,
         Some(remote_core::update::DOWNLOADS_BASE_URL.to_owned()),
+        Some(crate::PRIVACY_POLICY_URL.to_owned()),
     ];
 
     permitted.iter().flatten().any(|origin| {
@@ -666,10 +750,17 @@ pub async fn check_for_update() -> Option<remote_core::UpdateInfo> {
         }
     };
 
-    match checker.check(crate::VERSION, platform, arch).await {
+    match checker
+        .check(crate::VERSION, remote_core::AGENT_BUILD, platform, arch)
+        .await
+    {
         Ok(update) => {
             if let Some(update) = &update {
-                tracing::info!(latest = %update.latest_version, "a newer version is published");
+                tracing::info!(
+                    latest = %update.latest_version,
+                    build = update.latest_build.as_deref().unwrap_or("-"),
+                    "a newer build is published"
+                );
             }
             update
         }
@@ -725,7 +816,7 @@ pub async fn install_update(
     let checker = remote_core::UpdateChecker::new().map_err(|error| error.to_string())?;
 
     let update = checker
-        .check(crate::VERSION, platform, arch)
+        .check(crate::VERSION, remote_core::AGENT_BUILD, platform, arch)
         .await
         .map_err(|error| error.to_string())?
         .ok_or("This is already the latest version of AICOUNTLY Remote.")?;
@@ -766,6 +857,7 @@ pub fn about(agent: tauri::State<'_, Arc<Agent>>) -> About {
     About {
         product: crate::PRODUCT_NAME.to_owned(),
         version: crate::VERSION.to_owned(),
+        build: remote_core::AGENT_BUILD.map(str::to_owned),
         platform: platform::platform_name().to_owned(),
         supported: platform::is_supported(),
         supports_hosting: platform::supports_hosting(),
@@ -774,6 +866,7 @@ pub fn about(agent: tauri::State<'_, Arc<Agent>>) -> About {
         key_storage: platform::secure_storage().describe().to_owned(),
         log_file: remote_core::log_path("agent").map(|path| path.display().to_string()),
         service: ipc::service_status(),
+        privacy_policy_url: crate::PRIVACY_POLICY_URL.to_owned(),
     }
 }
 
@@ -804,6 +897,17 @@ mod tests {
             "https://remote.aicountly.com/api/v1/remote/devices",
             &config()
         ));
+    }
+
+    /// The About panel's link, and nothing that merely starts like it.
+    #[test]
+    fn the_privacy_policy_is_opened_and_its_lookalikes_are_not() {
+        assert!(is_permitted_url(crate::PRIVACY_POLICY_URL, &config()));
+        assert!(!is_permitted_url(
+            "https://aicountly.com/privacy-policy.attacker.example",
+            &config()
+        ));
+        assert!(!is_permitted_url("https://aicountly.com/", &config()));
     }
 
     /// The page a device-code sign-in opens to be confirmed

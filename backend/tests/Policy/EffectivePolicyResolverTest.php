@@ -209,21 +209,38 @@ final class EffectivePolicyResolverTest extends RemoteTestCase
         $this->assertTrue($policy->remoteEnabled);
     }
 
-    public function testMonitorSharingIsOffByDefaultInPersonalScope(): void
+    public function testAPersonalAccountMayShareAnEntireScreenAndAskForControl(): void
     {
-        // Personal policy permits the surface, but the baseline permission set
-        // does not include remote.monitor.share — so it is off until granted.
+        // A personal account is its own administrator: sharing the whole of
+        // your own screen with somebody you admitted, and asking to control
+        // the screen somebody shares with you, are not grants anybody else can
+        // make. The entire screen is also the only share a control companion
+        // can serve. An explicit DENY still takes either away.
         $identity = $this->makeIdentity();
 
         $policy = Services::policyResolver()->resolve($identity, 'PERSONAL', null);
 
         $this->assertTrue($policy->allowEntireMonitor);
-        $this->assertFalse($policy->can(PermissionCatalog::MONITOR_SHARE));
-        $this->assertFalse($policy->allowsShareMode('ENTIRE_MONITOR'));
+        $this->assertTrue($policy->can(PermissionCatalog::MONITOR_SHARE));
+        $this->assertTrue($policy->allowsShareMode('ENTIRE_MONITOR'));
+        $this->assertTrue($policy->can(PermissionCatalog::CONTROL_REQUEST));
+        $this->assertTrue($policy->can(PermissionCatalog::CONTROL_ACCEPT));
 
-        $this->setUserPermission($identity, null, PermissionCatalog::MONITOR_SHARE, 'ALLOW');
-        $granted = Services::policyResolver()->resolve($identity, 'PERSONAL', null);
-        $this->assertTrue($granted->allowsShareMode('ENTIRE_MONITOR'));
+        $this->setUserPermission($identity, null, PermissionCatalog::MONITOR_SHARE, 'DENY');
+        $denied = Services::policyResolver()->resolve($identity, 'PERSONAL', null);
+        $this->assertFalse($denied->allowsShareMode('ENTIRE_MONITOR'));
+    }
+
+    public function testAnOrganisationStillGrantsMonitorSharingAndControlRequests(): void
+    {
+        $identity = $this->makeIdentity();
+        $this->makeCompany(482);
+        $this->grantCompanyAccess($identity, 482);
+
+        $policy = Services::policyResolver()->resolve($identity, 'COMPANY', 482);
+
+        $this->assertFalse($policy->can(PermissionCatalog::MONITOR_SHARE), 'a member is not an administrator');
+        $this->assertFalse($policy->can(PermissionCatalog::CONTROL_REQUEST));
     }
 
     public function testCompanyScopeWithoutMembershipIsRefused(): void

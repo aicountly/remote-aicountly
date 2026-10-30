@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ReactElement } from 'react'
-import { MonitorOff, MousePointer2, ShieldCheck } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { ReactElement, ReactNode } from 'react'
+import { Maximize, Minimize, MonitorOff, MousePointer2, ShieldCheck } from 'lucide-react'
 
 import type { AnnotationShape, EngineSnapshot } from '../../services/webrtc/RemoteSessionEngine'
 import { normalisePointer } from '../../services/webrtc/remoteControl'
 import type { PointerPosition as ControlPoint } from '../../services/webrtc/remoteControl'
 import type { SessionDetail } from '../../types/remote'
+import { useFullscreen } from './useFullscreen'
 
 /**
  * The shared screen, with the pointer and annotation overlays on top (§34).
@@ -17,9 +18,15 @@ import type { SessionDetail } from '../../types/remote'
  *
  * Coordinates travel normalised (0..1) so a pointer lands in the same place on
  * a 4K sharer and a laptop viewer.
+ *
+ * A viewer can take the stage full screen, and it brings the room's status and
+ * stop controls with it (the Full screen section below).
  */
 
 export type AnnotationTool = 'none' | 'pen' | 'arrow' | 'rectangle' | 'highlight'
+
+/** Nothing needs the person: one shared empty list, so an absent prop is not a new one every render. */
+const NOTHING: readonly string[] = []
 
 interface Props {
   session: SessionDetail
@@ -47,6 +54,26 @@ interface Props {
   onControlClipboard?: (text: string) => boolean
   /** Set when the host granted the clipboard as well. Separate from control. */
   clipboardShared?: boolean
+  /**
+   * The room's status line (connection, session clock) and its sharing and
+   * control banners — the stop buttons among them.
+   *
+   * Full screen shows nothing outside the stage, so while the stage is full
+   * screen it shows these itself, in a strip above the picture rather than over
+   * it: §18's indicator stays on screen for as long as input is flowing, full
+   * screen or not, and none of the remote screen is covered.
+   */
+  fullscreenStatus?: ReactNode
+  fullscreenBanners?: ReactNode
+  /** Told when the stage enters or leaves full screen, so the room does not show those twice. */
+  onFullscreenChange?: (fullscreen: boolean) => void
+  /**
+   * What in the room needs this person, one key each — somebody waiting to be
+   * admitted, a request for control, the share consent, a notice. A key that
+   * was not there before takes the stage out of full screen, so full screen
+   * never hides a consent or a stop control.
+   */
+  attention?: readonly string[]
 }
 
 export default function SessionStage({
@@ -65,13 +92,21 @@ export default function SessionStage({
   onControlKey,
   onControlClipboard,
   clipboardShared = false,
+  fullscreenStatus = null,
+  fullscreenBanners = null,
+  onFullscreenChange,
+  attention = NOTHING,
 }: Props) {
+  const stageRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const surfaceRef = useRef<HTMLDivElement>(null)
   const [drawing, setDrawing] = useState<AnnotationShape | null>(null)
 
   const stream = live?.remoteStream ?? live?.localStream ?? null
   const isViewingRemote = Boolean(live?.remoteStream)
+
+  const fullscreen = useFullscreen(stageRef)
+  const exitFullscreen = fullscreen.exit
 
   useEffect(() => {
     const video = videoRef.current
@@ -258,6 +293,59 @@ export default function SessionStage({
     return () => window.removeEventListener('paste', onPaste)
   }, [controlling, clipboardShared, onControlClipboard])
 
+  // --- Full screen -----------------------------------------------------------
+  //
+  // Only the stage goes full screen: the picture with its overlays, and the
+  // control surface with its handlers — which work there exactly as they do
+  // here, because the mapping above measures the video wherever it is. The
+  // browser hides everything else meanwhile, so the stage leaves full screen
+  // whenever something outside it needs the person: control ending, the picture
+  // going, or anything new in `attention`. Esc leaves it too, as browsers always
+  // allow.
+
+  const toggleFullscreen = useCallback(async () => {
+    await (fullscreen.active ? fullscreen.exit() : fullscreen.enter())
+
+    // Keys reach the remote computer only while the surface has focus, and
+    // pressing this button took it. Handing it back means typing carries on
+    // where it was — and a Space typed next is not this button pressed again.
+    if (controlling) surfaceRef.current?.focus()
+  }, [fullscreen, controlling])
+
+  // Control ending — stopped here, revoked by the host, ended at the machine —
+  // is explained in the room (`controlNotice`), and asking again happens there.
+  const wasControlling = useRef(controlling)
+  useEffect(() => {
+    if (wasControlling.current && !controlling) void exitFullscreen()
+
+    wasControlling.current = controlling
+  }, [controlling, exitFullscreen])
+
+  // No picture, nothing to watch: the room says what happened to it.
+  useEffect(() => {
+    if (!isViewingRemote) void exitFullscreen()
+  }, [isViewingRemote, exitFullscreen])
+
+  // Only what is new. Something already on screen when full screen was chosen
+  // has been seen; somebody knocking since has not.
+  const seenAttention = useRef<ReadonlySet<string>>(new Set(attention))
+  useEffect(() => {
+    const fresh = attention.some((item) => !seenAttention.current.has(item))
+    seenAttention.current = new Set(attention)
+
+    if (fresh) void exitFullscreen()
+  }, [attention, exitFullscreen])
+
+  // A layout effect, so the room drops its own copies before the frame in which
+  // the stage shows them is painted — never a frame with both, or with neither.
+  useLayoutEffect(() => {
+    if (!fullscreen.active) return
+
+    onFullscreenChange?.(true)
+
+    return () => onFullscreenChange?.(false)
+  }, [fullscreen.active, onFullscreenChange])
+
   const shapes = useMemo(
     () => (drawing ? [...(live?.annotations ?? []), drawing] : (live?.annotations ?? [])),
     [live?.annotations, drawing],
@@ -270,8 +358,19 @@ export default function SessionStage({
     (participant) => participant.isSharing && participant.uuid !== session.me?.uuid,
   )
 
+  // Somebody else's picture only: full screen around your own preview — a
+  // screen showing itself — helps nobody.
+  const offerFullscreen = fullscreen.supported && isViewingRemote
+
   return (
-    <div className="stage">
+    <div ref={stageRef} className={['stage', fullscreen.active ? 'stage--fullscreen' : ''].filter(Boolean).join(' ')}>
+      {fullscreen.active ? (
+        <div className="stage__chrome">
+          {fullscreenStatus ? <div className="stage__status">{fullscreenStatus}</div> : null}
+          {fullscreenBanners}
+        </div>
+      ) : null}
+
       {stream ? (
         <div
           ref={surfaceRef}
@@ -359,6 +458,20 @@ export default function SessionStage({
             {session.companyName ? ` · ${session.companyName}` : ''}
           </span>
         </div>
+      ) : null}
+
+      {/* A sibling of the surface, never inside it: a click here must not
+          reach the control handlers and become a click on the remote screen. */}
+      {offerFullscreen ? (
+        <button
+          type="button"
+          className="stage__fullscreen"
+          onClick={() => void toggleFullscreen()}
+          aria-label={fullscreen.active ? 'Exit full screen' : 'Full screen'}
+          title={fullscreen.active ? 'Exit full screen (Esc)' : 'Full screen'}
+        >
+          {fullscreen.active ? <Minimize size={16} aria-hidden="true" /> : <Maximize size={16} aria-hidden="true" />}
+        </button>
       ) : null}
     </div>
   )

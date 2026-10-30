@@ -2,7 +2,9 @@ import { lazy, Suspense } from 'react'
 import { createBrowserRouter, Navigate } from 'react-router-dom'
 
 import AppShell from './AppShell'
+import { ORGANISATIONS_ENABLED } from './organisations'
 import RouteFallback from '../components/ui/RouteFallback'
+import RouteError from '../components/ui/RouteError'
 
 /**
  * Routes.
@@ -42,6 +44,7 @@ export const router = createBrowserRouter([
   {
     path: '/',
     element: <AppShell />,
+    errorElement: <RouteError />,
     children: [
       { index: true, element: page(<Dashboard />) },
       { path: 'start', element: page(<StartSession />) },
@@ -50,22 +53,32 @@ export const router = createBrowserRouter([
       { path: 'sessions/:uuid', element: page(<SessionDetail />) },
       { path: 'support', element: page(<SupportRequests />) },
       { path: 'devices', element: page(<Devices />) },
-      { path: 'admin/policy', element: page(<AdminPolicy />) },
-      { path: 'admin/permissions', element: page(<AdminPermissions />) },
-      { path: 'admin/roles', element: page(<AdminRolePermissions />) },
-      { path: 'admin/audit', element: page(<AdminAudit />) },
+      // An organisation's administration, and its users and access. While
+      // Remote has no organisations (organisations.ts) an old bookmark to one
+      // of these goes to the dashboard rather than to a page about nothing.
+      ...(ORGANISATIONS_ENABLED
+        ? [
+            { path: 'admin/policy', element: page(<AdminPolicy />) },
+            { path: 'admin/permissions', element: page(<AdminPermissions />) },
+            { path: 'admin/roles', element: page(<AdminRolePermissions />) },
+            { path: 'admin/audit', element: page(<AdminAudit />) },
+            { path: 'settings/users-access', element: page(<UsersAccessPage />) },
+          ]
+        : [
+            { path: 'admin/*', element: <Navigate to="/" replace /> },
+            { path: 'settings/users-access', element: <Navigate to="/" replace /> },
+          ]),
       { path: 'settings', element: page(<SettingsPage />) },
-      { path: 'settings/users-access', element: page(<UsersAccessPage />) },
       { path: 'desktop-signin', element: page(<DesktopSignIn />) },
       { path: '*', element: page(<NotFound />) },
     ],
   },
   // The live session workspace: no shell, no navigation, nothing competing
   // with the shared screen (§33).
-  { path: '/room/:uuid', element: page(<SessionRoom />) },
+  { path: '/room/:uuid', element: page(<SessionRoom />), errorElement: <RouteError /> },
   // A one-time invitation link. Deliberately outside the shell — a guest gets
   // the session and nothing else (§23).
-  { path: '/join/:token', element: page(<GuestJoin />) },
+  { path: '/join/:token', element: page(<GuestJoin />), errorElement: <RouteError /> },
   // The portal returns here after sign-in; AuthProvider has already consumed
   // the token by the time this renders.
   { path: '/auth/callback', element: <CallbackLanding /> },

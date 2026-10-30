@@ -18,6 +18,7 @@ import ShareModePicker from '../sessions/ShareModePicker'
 import { PERMISSIONS } from '../../types/remote'
 import type { ShareMode, SupportRequest } from '../../types/remote'
 import { formatWaiting } from '../../utils/format'
+import { ORGANISATIONS_ENABLED } from '../../app/organisations'
 
 /**
  * AICOUNTLY Support: asking for help, and answering it (§24).
@@ -177,10 +178,12 @@ export default function SupportPage() {
                   <dt>Product</dt>
                   <dd>{bootstrap?.launchContext?.product ?? 'AICOUNTLY Remote'}</dd>
                 </div>
-                <div>
-                  <dt>Organisation</dt>
-                  <dd>{policy.companyName ?? 'Personal (no organisation)'}</dd>
-                </div>
+                {ORGANISATIONS_ENABLED ? (
+                  <div>
+                    <dt>Organisation</dt>
+                    <dd>{policy.companyName ?? 'Personal (no organisation)'}</dd>
+                  </div>
+                ) : null}
                 {bootstrap?.launchContext?.route ? (
                   <div>
                     <dt>Current area</dt>
@@ -328,7 +331,7 @@ export default function SupportPage() {
               <table className="table">
                 <thead>
                   <tr>
-                    <th scope="col">Organisation</th>
+                    {ORGANISATIONS_ENABLED ? <th scope="col">Organisation</th> : null}
                     <th scope="col">Requested by</th>
                     <th scope="col">Product</th>
                     <th scope="col">Session</th>
@@ -338,7 +341,7 @@ export default function SupportPage() {
                 <tbody>
                   {rest.map((request) => (
                     <tr key={request.uuid}>
-                      <td>{request.companyName ?? 'Personal'}</td>
+                      {ORGANISATIONS_ENABLED ? <td>{request.companyName ?? 'Personal'}</td> : null}
                       <td>{request.requesterName}</td>
                       <td>{request.sourceProductLabel ?? '—'}</td>
                       <td className="mono">{request.sessionDisplayId ?? '—'}</td>

@@ -315,6 +315,28 @@ class EffectivePolicyResolver
             $baseline = array_values(array_unique(array_merge($baseline, PermissionCatalog::baselineSupportAgent())));
         }
 
+        // A personal account is its own administrator. Two things an
+        // organisation decides for its people are, in a personal session, the
+        // person's own to decide — and without them a personal account could
+        // not be helped at all:
+        //
+        //   * asking to control the computer being shared. In an organisation
+        //     that is a grant, because who may reach a colleague's machine is
+        //     the organisation's call. Here the only say that matters is the
+        //     person at the machine: they admitted this participant, and they
+        //     still decide every request themselves, after their own computer
+        //     confirmed it would serve as the companion;
+        //   * sharing an entire screen, which is the only share a companion
+        //     can control (docs/desktop/CONTROL_COMPANION.md). The browser
+        //     still asks which screen, every time, and it is their own.
+        //
+        // The capability mask below still removes either wherever the
+        // platform's personal policy switches it off.
+        if ($scopeType === 'PERSONAL') {
+            $baseline[] = PermissionCatalog::CONTROL_REQUEST;
+            $baseline[] = PermissionCatalog::MONITOR_SHARE;
+        }
+
         // A platform administrator can read policy and audit anywhere, but
         // gets no additional *sharing* rights: those still come from policy.
         if ($identity->isPlatformAdmin && $scopeType !== 'PERSONAL') {

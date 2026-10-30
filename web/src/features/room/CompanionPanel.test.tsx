@@ -147,7 +147,7 @@ describe('CompanionPanel', () => {
     expect(download).toHaveAttribute('href', 'https://aicountly.com/remote')
     // A link that replaced the page would leave the live session.
     expect(download).toHaveAttribute('target', '_blank')
-    expect(screen.getByText(/needs AICOUNTLY Remote for Windows open on it/i)).toBeInTheDocument()
+    expect(screen.getByText(/needs the AICOUNTLY Remote app for Windows or Mac open on it/i)).toBeInTheDocument()
     expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /enable control from this computer/i })).toBeEnabled()
   })

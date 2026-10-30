@@ -14,9 +14,15 @@ import type { PortalBounds } from '../../services/tauri'
  * unmounts or when something of this window's own must be seen (`hidden`).
  *
  * Its menus are the web portal's own — Dashboard, Start session, Join
- * session, Support requests, Sessions, Computers, Settings and, for an
- * administrator, the administration pages — so what a person can do here is
- * exactly what they can do in a browser, with the same permissions.
+ * session, Support requests, Sessions, Computers, Settings — so what a person
+ * can do here is exactly what they can do in a browser, with the same
+ * permissions.
+ *
+ * Back, Reload and Open in browser are shown only while the portal is on a
+ * sign-in page (`signInPage`): the AICOUNTLY sign-in, or an identity
+ * provider's, which is where somebody can get stuck. On the portal's own
+ * pages they are signed in, the portal has its own menus, and the window's
+ * header carries Reload and Open in browser as two small buttons instead.
  */
 /**
  * The last page this window asked the portal to open. Kept outside the
@@ -24,6 +30,39 @@ import type { PortalBounds } from '../../services/tauri'
  * back must find the person where they were, not on the dashboard again.
  */
 let lastOpened: string | null = null
+
+/** Reload, and Open in browser, for the window's header while the portal is on its own pages. */
+export function PortalTools() {
+  return (
+    <div className="app__tools" role="group" aria-label="This page">
+      <button
+        type="button"
+        className="app__tool"
+        title="Reload this page"
+        aria-label="Reload this page"
+        onClick={() => void bridge.portalAction('reload').catch(() => undefined)}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+          <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+          <path d="M20 4v5h-5" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        className="app__tool"
+        title="Open this page in your browser"
+        aria-label="Open this page in your browser"
+        onClick={() => void bridge.portalAction('open_in_browser').catch(() => undefined)}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+          <path d="M14 4h6v6" />
+          <path d="M20 4l-9 9" />
+          <path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+        </svg>
+      </button>
+    </div>
+  )
+}
 
 /** For tests: forget what the portal was last asked to open. */
 export function forgetPortalPage(): void {
@@ -34,6 +73,7 @@ export function PortalView({
   path,
   navigateKey = 0,
   hidden = false,
+  signInPage = false,
 }: {
   /** The page to open, e.g. `/` or `/desktop-signin?code=ABCD-1234`. */
   path: string
@@ -41,6 +81,8 @@ export function PortalView({
   navigateKey?: number
   /** Something of this window's own is in front: take the portal away. */
   hidden?: boolean
+  /** The portal is on a sign-in page, not one of its own. */
+  signInPage?: boolean
 }) {
   const frame = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
@@ -107,22 +149,24 @@ export function PortalView({
 
   return (
     <section className="portal" aria-label="AICOUNTLY Remote">
-      <div className="portal__toolbar">
-        <button type="button" className="portal__tool" onClick={() => void bridge.portalAction('back').catch(() => undefined)}>
-          ← Back
-        </button>
-        <button type="button" className="portal__tool" onClick={() => void bridge.portalAction('reload').catch(() => undefined)}>
-          Reload
-        </button>
-        <span className="portal__spacer" />
-        <button
-          type="button"
-          className="portal__tool"
-          onClick={() => void bridge.portalAction('open_in_browser').catch(() => undefined)}
-        >
-          Open in browser
-        </button>
-      </div>
+      {signInPage ? (
+        <div className="portal__toolbar">
+          <button type="button" className="portal__tool" onClick={() => void bridge.portalAction('back').catch(() => undefined)}>
+            ← Back
+          </button>
+          <button type="button" className="portal__tool" onClick={() => void bridge.portalAction('reload').catch(() => undefined)}>
+            Reload
+          </button>
+          <span className="portal__spacer" />
+          <button
+            type="button"
+            className="portal__tool"
+            onClick={() => void bridge.portalAction('open_in_browser').catch(() => undefined)}
+          >
+            Open in browser
+          </button>
+        </div>
+      ) : null}
 
       {error ? (
         <div className="notice notice--danger portal__error" role="alert">

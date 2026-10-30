@@ -21,6 +21,40 @@ import { CONTROL_CHANNEL_LABEL } from './remoteControl'
 
 export type PeerConnectionQuality = 'good' | 'fair' | 'poor' | 'unknown'
 
+/**
+ * One reading of a connection's statistics (§49): the word for its quality, and the two figures behind
+ * it that a person can make sense of.
+ */
+export interface PeerConnectionReading {
+  quality: PeerConnectionQuality
+  /** The selected candidate pair's current round trip, in whole milliseconds. Null until it has one. */
+  roundTripMs: number | null
+  /**
+   * Frames a second of the video arriving on this connection, as the browser decoded them. Null when
+   * no video arrives — the side that is sharing — or the browser does not say.
+   */
+  framesPerSecond: number | null
+}
+
+const UNREAD: PeerConnectionReading = { quality: 'unknown', roundTripMs: null, framesPerSecond: null }
+
+/** The fields of an `RTCStats` report a reading uses. Loosely typed: browsers differ in which they send. */
+interface StatsReport {
+  id: string
+  type: string
+  kind?: string
+  mediaType?: string
+  isRemote?: boolean
+  packetsLost?: number
+  packetsReceived?: number
+  framesPerSecond?: number
+  state?: string
+  selected?: boolean
+  nominated?: boolean
+  currentRoundTripTime?: number
+  selectedCandidatePairId?: string
+}
+
 export interface PeerEvents {
   onIceCandidate: (candidate: RTCIceCandidateInit) => void
   onTrack: (stream: MediaStream) => void
@@ -354,43 +388,23 @@ export class RemotePeerConnection {
   }
 
   /**
-   * A coarse connection-quality reading for the indicator (§49).
+   * A coarse connection-quality reading for the indicator (§49), from one `getStats()`.
    *
    * Deliberately crude — packet loss and round-trip time, bucketed into three
-   * words a person understands. The raw statistics are for diagnostics, not for
-   * the interface.
+   * words a person understands, with the round trip and the frame rate as plain
+   * figures beside them. The raw statistics are for diagnostics, not for the
+   * interface.
    */
-  async readQuality(): Promise<PeerConnectionQuality> {
-    if (this.disposed || typeof this.pc.getStats !== 'function') return 'unknown'
+  async readStats(): Promise<PeerConnectionReading> {
+    if (this.disposed || typeof this.pc.getStats !== 'function') return UNREAD
 
     try {
-      const stats = await this.pc.getStats()
-      let packetsLost = 0
-      let packetsReceived = 0
-      let roundTripMs = 0
+      const reports: StatsReport[] = []
+      ;(await this.pc.getStats()).forEach((report) => reports.push(report as StatsReport))
 
-      stats.forEach((report) => {
-        if (report.type === 'inbound-rtp' && !(report as { isRemote?: boolean }).isRemote) {
-          packetsLost += Number((report as { packetsLost?: number }).packetsLost ?? 0)
-          packetsReceived += Number((report as { packetsReceived?: number }).packetsReceived ?? 0)
-        }
-
-        if (report.type === 'candidate-pair' && (report as { state?: string }).state === 'succeeded') {
-          const rtt = Number((report as { currentRoundTripTime?: number }).currentRoundTripTime ?? 0)
-          if (rtt > 0) roundTripMs = rtt * 1000
-        }
-      })
-
-      const total = packetsLost + packetsReceived
-      const lossRatio = total > 0 ? packetsLost / total : 0
-
-      if (lossRatio > 0.08 || roundTripMs > 500) return 'poor'
-      if (lossRatio > 0.02 || roundTripMs > 250) return 'fair'
-      if (total === 0 && roundTripMs === 0) return 'unknown'
-
-      return 'good'
+      return readingOf(reports)
     } catch {
-      return 'unknown'
+      return UNREAD
     }
   }
 
@@ -536,4 +550,68 @@ export class RemotePeerConnection {
       }
     }
   }
+}
+
+/** One `getStats()` result as a reading: the loss and the round trip bucketed, the figures as they are. */
+function readingOf(reports: StatsReport[]): PeerConnectionReading {
+  let packetsLost = 0
+  let packetsReceived = 0
+  let framesPerSecond: number | null = null
+
+  for (const report of reports) {
+    if (report.type !== 'inbound-rtp' || report.isRemote) continue
+
+    packetsLost += Number(report.packetsLost ?? 0)
+    packetsReceived += Number(report.packetsReceived ?? 0)
+
+    // `mediaType` is what older Chromium called `kind`. A still screen is sent as few frames, and the
+    // browser then reports a low rate or none: that is the truth, and it is passed on as it is.
+    const video = (report.kind ?? report.mediaType) === 'video'
+    if (video && typeof report.framesPerSecond === 'number' && Number.isFinite(report.framesPerSecond)) {
+      framesPerSecond = Math.max(framesPerSecond ?? 0, report.framesPerSecond)
+    }
+  }
+
+  const rtt = Number(selectedPair(reports)?.currentRoundTripTime ?? 0)
+  const roundTripMs = rtt > 0 ? rtt * 1000 : 0
+
+  const total = packetsLost + packetsReceived
+  const lossRatio = total > 0 ? packetsLost / total : 0
+
+  const quality: PeerConnectionQuality =
+    lossRatio > 0.08 || roundTripMs > 500
+      ? 'poor'
+      : lossRatio > 0.02 || roundTripMs > 250
+        ? 'fair'
+        : total === 0 && roundTripMs === 0
+          ? 'unknown'
+          : 'good'
+
+  return {
+    quality,
+    roundTripMs: roundTripMs > 0 ? Math.round(roundTripMs) : null,
+    framesPerSecond: framesPerSecond === null ? null : Math.round(framesPerSecond),
+  }
+}
+
+/**
+ * The candidate pair carrying the media, whose round trip is the one that means anything.
+ *
+ * Several pairs can have succeeded — the one an ICE restart replaced, a relay pair checked alongside a
+ * direct one — and only the selected pair's figure is kept current. The same order as the ICE kit's
+ * `selectedPath()`: the pair the transport names (Chromium), one flagged selected (Firefox), a nominated
+ * pair that succeeded; and, last, any pair that succeeded with a round trip, as this always read.
+ */
+function selectedPair(reports: StatsReport[]): StatsReport | null {
+  const pairs = reports.filter((report) => report.type === 'candidate-pair')
+  const named = reports.find((report) => report.type === 'transport' && report.selectedCandidatePairId)
+    ?.selectedCandidatePairId
+
+  return (
+    pairs.find((pair) => named !== undefined && pair.id === named) ??
+    pairs.find((pair) => pair.selected === true) ??
+    pairs.find((pair) => pair.nominated === true && pair.state === 'succeeded') ??
+    [...pairs].reverse().find((pair) => pair.state === 'succeeded' && Number(pair.currentRoundTripTime ?? 0) > 0) ??
+    null
+  )
 }

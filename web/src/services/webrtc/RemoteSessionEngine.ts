@@ -66,7 +66,7 @@ import { readSurfaceSize } from './screenCapture'
 import type { SurfaceSize } from './screenCapture'
 import type { SignallingMessage, SignallingPeer, SignallingStatus } from '../signalling/RemoteSignallingClient'
 import { RemotePeerConnection } from './RemotePeerConnection'
-import type { PeerConnectionQuality } from './RemotePeerConnection'
+import type { PeerConnectionQuality, PeerConnectionReading } from './RemotePeerConnection'
 import { FileReceiver, FileSender, chunkCount, decodeChunk, safeFileName } from './fileTransfer'
 import type { TransferView } from './fileTransfer'
 import {
@@ -148,10 +148,26 @@ export interface NetworkStatus {
   credentialsExpireAt: number | null
 }
 
+/**
+ * The figures beside the connection's word (§49): how long a round trip takes, and how many frames a
+ * second of the shared screen are arriving — enough to tell a slow network from a slow computer.
+ */
+export interface ConnectionStats {
+  /** The slowest connected peer's round trip, in milliseconds: like the quality word, the worst one counts. */
+  roundTripMs: number | null
+  /** The frame rate of the picture on screen, as received. Null while no picture is arriving here. */
+  framesPerSecond: number | null
+}
+
 export interface EngineSnapshot {
   connection: LiveConnectionState
   signalling: SignallingStatus
   quality: PeerConnectionQuality
+  /**
+   * From the same reading as `quality`. Null while nothing is connected, so a figure from before a
+   * drop never comes back as current.
+   */
+  stats: ConnectionStats | null
   peers: EnginePeer[]
   remoteStream: MediaStream | null
   localStream: MediaStream | null
@@ -213,7 +229,15 @@ const POINTER_THROTTLE_MS = 50
 /** How often the API is told this participant is still here. */
 const PRESENCE_INTERVAL_MS = 20_000
 
-const QUALITY_INTERVAL_MS = 5_000
+/**
+ * How often the connections' statistics are read (§49, §65).
+ *
+ * The indicator shows the round trip and the frame rate from this reading, and a figure five seconds
+ * old reads as wrong to somebody watching the picture stutter. Two seconds is current enough, and
+ * reading the statistics that often costs nothing beside the media itself. React hears of it in the
+ * snapshot, once a reading — never once a frame.
+ */
+const STATS_INTERVAL_MS = 2_000
 
 /**
  * A request to restart ICE that arrives this soon after one already started is
@@ -299,7 +323,7 @@ export class RemoteSessionEngine {
   private disposed = false
 
   private presenceTimer: ReturnType<typeof setInterval> | null = null
-  private qualityTimer: ReturnType<typeof setInterval> | null = null
+  private statsTimer: ReturnType<typeof setInterval> | null = null
   private lastPointerSentAt = 0
   private lastReportedConnectionState: string | null = null
 
@@ -326,6 +350,7 @@ export class RemoteSessionEngine {
     connection: 'idle',
     signalling: 'idle',
     quality: 'unknown',
+    stats: null,
     peers: [],
     remoteStream: null,
     localStream: null,
@@ -414,7 +439,7 @@ export class RemoteSessionEngine {
     this.signalling.connect()
 
     this.presenceTimer = setInterval(() => void this.reportPresenceNow(), PRESENCE_INTERVAL_MS)
-    this.qualityTimer = setInterval(() => void this.pollQuality(), QUALITY_INTERVAL_MS)
+    this.statsTimer = setInterval(() => void this.pollStats(), STATS_INTERVAL_MS)
   }
 
   // ------------------------------------------------------------- sharing
@@ -937,9 +962,9 @@ export class RemoteSessionEngine {
     this.disposed = true
 
     if (this.presenceTimer) clearInterval(this.presenceTimer)
-    if (this.qualityTimer) clearInterval(this.qualityTimer)
+    if (this.statsTimer) clearInterval(this.statsTimer)
     this.presenceTimer = null
-    this.qualityTimer = null
+    this.statsTimer = null
 
     // Before anything else: stop sending input and release whatever is held.
     // A leaked modifier on somebody else's keyboard outlives this tab.
@@ -2063,11 +2088,25 @@ export class RemoteSessionEngine {
     }
   }
 
-  private async pollQuality(): Promise<void> {
+  /**
+   * Read every connection's statistics: the quality word, the path, the round trip and the frame rate.
+   *
+   * This is the one loop that reads them — the indicator's figures come from the same `getStats()` as
+   * its word — and it reads only while a connection is up. A reading of a connection that is not
+   * describes nothing that is happening, so none is taken, and the last figures are dropped so they
+   * cannot come back as current when the connection does.
+   */
+  private async pollStats(): Promise<void> {
     const media = this.mediaEntries()
     if (this.disposed || media.length === 0) return
 
-    const readings = await Promise.all(media.map(({ connection }) => connection.readQuality()))
+    if (!media.some((entry) => entry.info.connectionState === 'connected')) {
+      if (this.snapshot.stats !== null) this.patch({ stats: null })
+
+      return
+    }
+
+    const readings = await Promise.all(media.map(({ connection }) => connection.readStats()))
 
     // A path changes under a live connection — an ICE restart, a relay
     // replacing a direct path that broke — so it is re-read with the quality.
@@ -2076,15 +2115,42 @@ export class RemoteSessionEngine {
     }
     this.publishNetwork()
 
-    const worst: PeerConnectionQuality = readings.includes('poor')
+    const qualities = readings.map((reading) => reading.quality)
+    const worst: PeerConnectionQuality = qualities.includes('poor')
       ? 'poor'
-      : readings.includes('fair')
+      : qualities.includes('fair')
         ? 'fair'
-        : readings.includes('good')
+        : qualities.includes('good')
           ? 'good'
           : 'unknown'
 
-    this.patch({ quality: worst })
+    // Asked again: the connection can drop while the reading is on its way back.
+    const connected = media.some((entry) => entry.info.connectionState === 'connected')
+
+    this.patch({ quality: worst, stats: connected ? this.statsFrom(media, readings) : null })
+  }
+
+  /** The indicator's figures, from one reading of every connection that carries the session. */
+  private statsFrom(media: PeerEntry[], readings: PeerConnectionReading[]): ConnectionStats {
+    let roundTripMs: number | null = null
+    let framesPerSecond: number | null = null
+
+    for (const [index, entry] of media.entries()) {
+      const reading = readings[index]
+
+      // The slowest connection that is up, as the quality word is the worst: with two viewers, the one
+      // on a poor link is the one worth knowing about.
+      if (entry.info.connectionState === 'connected' && reading.roundTripMs !== null) {
+        roundTripMs = Math.max(roundTripMs ?? 0, reading.roundTripMs)
+      }
+
+      // The frame rate of the picture on screen — the only one anybody here can see.
+      if (this.remoteStream !== null && this.peerStreams.get(entry.connection.peerId) === this.remoteStream) {
+        framesPerSecond = reading.framesPerSecond
+      }
+    }
+
+    return { roundTripMs, framesPerSecond }
   }
 
   private publishPeers(): void {

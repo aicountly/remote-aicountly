@@ -120,7 +120,8 @@ export function Updates({
             Update available
           </h2>
           <p className="card__subtitle">
-            AICOUNTLY Remote {update.latestVersion} is available. You have {update.currentVersion}.
+            AICOUNTLY Remote {versionLabel(update.latestVersion, update.latestBuild)} is available. You have{' '}
+            {versionLabel(update.currentVersion, update.currentBuild)}.
           </p>
 
           <UpdateProgress
@@ -151,7 +152,8 @@ export function Updates({
       <div className="update-banner__text">
         <p className="notice__title">A new version of AICOUNTLY Remote is available</p>
         <p>
-          Version {update.latestVersion} is ready to install. You have {update.currentVersion}.
+          Version {versionLabel(update.latestVersion, update.latestBuild)} is ready to install. You have{' '}
+          {versionLabel(update.currentVersion, update.currentBuild)}.
         </p>
         <UpdateProgress
           update={update}
@@ -174,6 +176,14 @@ export function Updates({
       )}
     </div>
   )
+}
+
+/**
+ * `1.0.0 (build 202610301030)`. Several builds go out as one version, so the
+ * version alone would read "1.0.0 is available. You have 1.0.0."
+ */
+export function versionLabel(version: string, build: string | null | undefined): string {
+  return build ? `${version} (build ${build})` : version
 }
 
 /** What is happening with an install the person asked for, if anything. */
@@ -203,7 +213,7 @@ function UpdateProgress({
   if (installing) {
     return (
       <p className="update-progress" role="status">
-        Downloading AICOUNTLY Remote {update.latestVersion}. This can take a minute.
+        Downloading AICOUNTLY Remote {versionLabel(update.latestVersion, update.latestBuild)}. This can take a minute.
       </p>
     )
   }

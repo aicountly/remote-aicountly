@@ -20,8 +20,14 @@ The desktop half lives in `desktop/` and follows the same contract.
 
 ## Owner decisions
 
-1. **Entitlement**: the existing `desktop_devices` entitlement, `featureDesktopAgent` and the company's
-   `allow_remote_control`. REMOTE_PROFESSIONAL's platform default stays off.
+1. **Entitlement**: the existing `desktop_devices` entitlement, `featureDesktopAgent` and the scope's
+   `allow_remote_control` — the company's policy in a company session, the platform's personal policy
+   (`CompanyPolicyDefaults::personal()`, on) in a personal one. REMOTE_PROFESSIONAL's platform default stays off.
+5. **Personal sessions** take companions. Remote is used with a personal account, so this is the ordinary
+   case: a personal session links its owner's own *personal* computer (both `company_id IS NULL`), and a
+   personal account may share an entire screen and request control without anybody granting it those —
+   in a personal session the person at the machine is the only one whose say matters, and they still confirm
+   the link there and grant each request. A support session takes none (`COMPANION_SCOPE`).
 2. **Consent, twice**: a one-time confirmation at the machine per link, *and* the owner grants each control
    request in the browser (the existing control queue). The companion can stop control; it can never grant it.
 3. **Clipboard**: off in v1. A companion participant never carries `clipboard_sync`, a grant through one is
@@ -53,19 +59,19 @@ its link is `ACTIVE`, the linked browser participant is `JOINED` and sharing, an
 
 ## Endpoints
 
-Browser (`api-auth`; a guest token is refused, a personal session has no companions):
+Browser (`api-auth`; a guest token is refused, and so is a support session):
 
 | Method and path | What it does |
 |---|---|
-| `GET /v1/remote/sessions/{uuid}/companion/devices` | `{devices: Device[], restrictions: string[]}` — the caller's own devices in the session's company that are ACTIVE, online and declare `remote_control`. Restrictions: `PERSONAL_SCOPE`, `REMOTE_CONTROL_NOT_ALLOWED` (+ the policy's `REMOTE_CONTROL_*`), `CONTROL_ACCEPT_DENIED`, `NO_ELIGIBLE_DEVICE`. |
+| `GET /v1/remote/sessions/{uuid}/companion/devices` | `{devices: Device[], restrictions: string[]}` — the caller's own devices in the session's scope (personal ones for a personal session, the session's company's otherwise) that are ACTIVE, online and declare `remote_control`. Restrictions: `COMPANION_SCOPE` (a support session), `REMOTE_CONTROL_NOT_ALLOWED` (+ the policy's `REMOTE_CONTROL_*`), `CONTROL_ACCEPT_DENIED`, `NO_ELIGIBLE_DEVICE`. |
 | `POST /v1/remote/sessions/{uuid}/companion` `{deviceUuid}` | rate limit `companion-link,10,60`. `201 {companion, control, deviceInvite}`. `deviceInvite` is `{token, url, room, expiresAt, sessionUuid, companionUuid}` — a 2-minute token for the device's presence room; the browser sends `device-invite` `{sessionUuid, companionUuid}` there so the app re-reads `GET /devices/me` at once. |
 | `DELETE /v1/remote/sessions/{uuid}/companion` | Ends the live link (`ENDED_BY_USER`) and revokes any control through it. Host, owner or the linked sharer. Idempotent. `{companion, control}`. |
 | `POST /v1/remote/sessions/{uuid}/share-started` | Adds optional `surfaceWidth`, `surfaceHeight` (`track.getSettings()`, 1..16384, both or neither). |
 | `GET /v1/remote/sessions/{uuid}/control` | Adds `companion`, `sharedSurface`, `controlBlockedReason`, `grantId` (below). |
 
-`POST /companion` errors: `SESSION_ALREADY_ENDED` 409, `REMOTE_CONTROL_NOT_ALLOWED` 403 (also for a personal
-session), `CONTROL_ACCEPT_DENIED` 403, `NOT_SESSION_HOST` 403 (the caller must be the joined, sharing host),
-`NOT_FOUND` 404 (not the caller's device, or another company's), `DEVICE_NOT_ACTIVE` 409, `DEVICE_OFFLINE` 409,
+`POST /companion` errors: `SESSION_ALREADY_ENDED` 409, `COMPANION_SCOPE` 403 (a support session),
+`REMOTE_CONTROL_NOT_ALLOWED` 403, `CONTROL_ACCEPT_DENIED` 403, `NOT_SESSION_HOST` 403 (the caller must be the joined, sharing host),
+`NOT_FOUND` 404 (not the caller's device, or not in the session's scope), `DEVICE_NOT_ACTIVE` 409, `DEVICE_OFFLINE` 409,
 `DEVICE_NOT_CONTROLLABLE` 409 (the device ∩ policy has no `remote_control`), `COMPANION_ALREADY_LINKED` 409
 (a live link, or the session already has a controllable agent), `DEVICE_BUSY` 409 (live link elsewhere, or the
 machine is already in this session as its shared screen).

@@ -1068,6 +1068,27 @@ impl ApiClient {
         Ok(body.device)
     }
 
+    /// Revoke this machine on the server — the first half of "Sign this
+    /// computer out", made while the key that proves which machine is asking
+    /// still exists.
+    ///
+    /// The route names no device; the credential does, so this can revoke
+    /// nothing but this machine. Its answer is the last thing the credential
+    /// is good for: every device call after it is refused, because the row it
+    /// names is no longer active.
+    pub async fn revoke_self(&self) -> Result<DeviceResource, ApiError> {
+        #[derive(Deserialize)]
+        struct Body {
+            device: DeviceResource,
+        }
+
+        let body: Body = self
+            .post("/v1/remote/devices/me/revoke", &serde_json::json!({}))
+            .await?;
+
+        Ok(body.device)
+    }
+
     async fn get<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T, ApiError> {
         let credential = self.credential.as_ref().ok_or(ApiError::NoCredential)?;
         let url = self.config.endpoint(path)?;
@@ -1719,6 +1740,103 @@ mod tests {
         assert_eq!(
             client.describe_self().await.unwrap_err(),
             ApiError::NoCredential
+        );
+        assert_eq!(
+            client.revoke_self().await.unwrap_err(),
+            ApiError::NoCredential
+        );
+    }
+
+    /// A loopback HTTP server that answers one request with `body` and hands
+    /// back what it was sent — enough to see what the real client puts on the
+    /// wire, without a mock-server crate.
+    async fn answer_once(body: &'static str) -> (String, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("binds a loopback port");
+        let base = format!("http://{}/api", listener.local_addr().expect("an address"));
+
+        let request = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("a request arrives");
+            let mut received = Vec::new();
+            let mut chunk = [0_u8; 4096];
+
+            // The head, then as much body as it says follows: answering before
+            // the body has been read can reset the connection under the reply.
+            loop {
+                let read = socket.read(&mut chunk).await.expect("reads");
+                if read == 0 {
+                    break;
+                }
+                received.extend_from_slice(&chunk[..read]);
+
+                let Some(head) = received.windows(4).position(|w| w == b"\r\n\r\n") else {
+                    continue;
+                };
+                let length = String::from_utf8_lossy(&received[..head])
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                    .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                if received.len() >= head + 4 + length {
+                    break;
+                }
+            }
+
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(reply.as_bytes()).await.expect("answers");
+            let _ = socket.shutdown().await;
+
+            String::from_utf8_lossy(&received).into_owned()
+        });
+
+        (base, request)
+    }
+
+    /// Signing out revokes this machine with its own credential, at the route
+    /// that takes no device — so nothing in the request could name another
+    /// one — and the window is told what the server now says the device is.
+    #[tokio::test]
+    async fn revoking_itself_sends_its_own_credential_to_the_route_that_names_no_device() {
+        let (base, request) = answer_once(
+            r#"{"data":{"device":{"uuid":"device-1","deviceName":"WS-01","status":"REVOKED",
+                "companyId":null,"keyFingerprint":"AAAA BBBB","unattendedAccessEnabled":false,
+                "unattendedEnabledAt":null,"unattendedLastUsedAt":null,"revokedAt":"2026-10-30T09:00:00+00:00",
+                "capabilities":{"screen_share":true,"screen_view":true,"remote_control":true,
+                "unattended_access":false,"file_transfer":false,"clipboard_sync":true,"reboot":false}}}}"#,
+        )
+        .await;
+
+        let client = ApiClient::new(AgentConfig {
+            api_base_url: base,
+            ..AgentConfig::default()
+        })
+        .expect("builds")
+        .with_credential(credential());
+
+        let device = client
+            .revoke_self()
+            .await
+            .expect("the server's answer is read");
+
+        assert!(device.is_revoked());
+        assert!(!device.unattended_access_enabled);
+
+        let sent = request.await.expect("the server saw one request");
+        assert!(
+            sent.starts_with("POST /api/v1/remote/devices/me/revoke HTTP/1.1\r\n"),
+            "{sent}"
+        );
+        assert!(
+            sent.to_ascii_lowercase()
+                .contains("\r\nauthorization: bearer device.super-secret-token-value\r\n"),
+            "the device credential, and nothing else, says which machine this is"
         );
     }
 

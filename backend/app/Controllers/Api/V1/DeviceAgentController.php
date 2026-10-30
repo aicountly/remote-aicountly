@@ -20,10 +20,11 @@ use Config\Services;
  * route by which an agent could read a session, administer a company or see
  * another device.
  *
- * What an agent can do here is exactly five things: say it is still there,
+ * What an agent can do here is exactly six things: say it is still there,
  * find out what it is currently permitted to do, pick up an unattended session
  * it has been asked to host, report what the person at the machine decided
- * about remote control, and switch its own unattended access off.
+ * about remote control, switch its own unattended access off, and revoke
+ * itself when somebody signs the computer out.
  */
 class DeviceAgentController extends BaseApiController
 {
@@ -378,5 +379,28 @@ class DeviceAgentController extends BaseApiController
         );
 
         return $this->ok(['device' => Presenter::device($device, true)]);
+    }
+
+    /**
+     * `POST /devices/me/revoke`
+     *
+     * "Sign this computer out", from the desktop app: the machine revokes its
+     * own row before it deletes its key, so the computer leaves its owner's
+     * Computers page rather than staying there ACTIVE for somebody to remove.
+     * The same revocation an owner's revoke from the console makes, and it
+     * names no device — the credential does — so there is nothing in the
+     * request that could point it at another one.
+     *
+     * The last call this credential is good for: the filter re-reads the row
+     * on every request, and from here on it is not ACTIVE.
+     */
+    public function revoke(): ResponseInterface
+    {
+        $principal = $this->context()->requireDevice();
+        $principal->assertScope(DevicePrincipal::SCOPE_MANAGE);
+
+        $device = Services::deviceService()->revokeByDevice($principal);
+
+        return $this->ok(['device' => Presenter::device($device)]);
     }
 }

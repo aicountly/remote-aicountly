@@ -7,14 +7,29 @@
  * app falls back to, beside the Remote product mark — a screen outline with a
  * signal arc, which *is* ours and carries no text.
  */
-export function Brand({ version }: { version: string }) {
+export function Brand({
+  version,
+  build = null,
+  platform = null,
+}: {
+  version: string
+  /** Which build of the version, from the About panel; the installer's name carries the same number. */
+  build?: string | null
+  /** `Windows` or `macOS`: this is the application, not the web portal it shows. */
+  platform?: string | null
+}) {
   return (
     <div className="app__brand">
       <span className="app__brand-mark" aria-hidden="true">
         <RemoteMark />
       </span>
       <span>AICOUNTLY Remote</span>
-      <span className="app__version">{version}</span>
+      {platform === 'Windows' || platform === 'macOS' ? (
+        <span className="app__platform">{platform === 'macOS' ? 'for Mac' : 'for Windows'}</span>
+      ) : null}
+      <span className="app__version" title={build ? `Build ${build}` : undefined}>
+        {version}
+      </span>
     </div>
   )
 }

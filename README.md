@@ -58,7 +58,9 @@ connection are all built and tested; the **video encoder** is not, so the agent
 carries control without a picture. See
 [docs/desktop/ARCHITECTURE.md](docs/desktop/ARCHITECTURE.md#what-is-built-and-what-is-not).
 
-**macOS and Linux agents are not built.** Every provider returns
+**A Mac is a control companion only, and there is no Linux agent.** On macOS
+the application carries the input for a screen its owner shares from the
+browser; it does not capture or host. Every provider it does not have returns
 `Unsupported` rather than pretending.
 
 ## Layout
@@ -124,10 +126,11 @@ cd desktop    && npm test                #  36 — the agent's own interface
 ```
 
 The backend suite runs against a real PostgreSQL and applies the migrations
-itself. `.github/workflows/ci.yml` runs the first three on every pull request
-and every push to `main` and verifies that the migrations roll back cleanly;
-`.github/workflows/desktop-ci.yml` runs the desktop workspace on Linux **and**
-on a Windows runner, with `cargo audit` and `npm audit`, for changes under
+itself. Every workflow is started by hand — none runs on a pull request or a
+push. `.github/workflows/ci.yml` runs the first three when started or when a
+deploy calls it, and verifies that the migrations roll back cleanly;
+`.github/workflows/desktop-ci.yml` (also run first by both desktop releases)
+runs the desktop workspace on Linux **and** on a Windows runner, with `cargo audit` and `npm audit`, for changes under
 `desktop/` — and builds the Windows installer there, unsigned and thrown away,
 so a broken `installers/windows/hooks.nsh` fails a check rather than a
 release. Neither deploys. The manual deploys call `ci.yml` first and the

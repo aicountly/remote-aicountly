@@ -30,6 +30,7 @@ import { PERMISSIONS } from '../types/remote'
 import AicountlyLogo, { RemoteMark } from '../components/brand/AicountlyLogo'
 import { AppLauncher } from '../components/AppLauncher'
 import { isDesktopApp } from '../features/desktop/embedding'
+import { ORGANISATIONS_ENABLED } from './organisations'
 import { consumeDesktopSignInReturnPath } from '../features/desktop/returnPath'
 import { ConnectMount } from '../connect/ConnectMount'
 import Modal from '../components/ui/Modal'
@@ -133,7 +134,8 @@ function SignedInShell() {
   const scopeLabel = scopeType === 'PERSONAL' ? 'Personal' : (activeCompany?.name ?? 'Organisation')
 
   const showAdministration =
-    can(PERMISSIONS.POLICY_VIEW) || can(PERMISSIONS.POLICY_MANAGE) || can(PERMISSIONS.AUDIT_VIEW)
+    ORGANISATIONS_ENABLED &&
+    (can(PERMISSIONS.POLICY_VIEW) || can(PERMISSIONS.POLICY_MANAGE) || can(PERMISSIONS.AUDIT_VIEW))
 
   const isSupportAgent = bootstrap?.user.isSupportAgent ?? false
   // The portal (my.aicountly) user id — what support asks for as the "Cust ID".
@@ -164,7 +166,9 @@ function SignedInShell() {
         ]
       : []),
     // Company access (Manage's company registry): who may open this organisation in Remote.
-    ...(scopeType === 'COMPANY' ? [{ to: '/settings/users-access', label: 'Users & Access', icon: UsersRound }] : []),
+    ...(ORGANISATIONS_ENABLED && scopeType === 'COMPANY'
+      ? [{ to: '/settings/users-access', label: 'Users & Access', icon: UsersRound }]
+      : []),
     { to: '/settings', label: 'Settings', icon: Settings },
   ]
 
@@ -200,6 +204,8 @@ function SignedInShell() {
           <span className="shell__product">Remote</span>
         </div>
 
+        {/* Always Personal for now (organisations.ts), so there is nothing to switch. */}
+        {!ORGANISATIONS_ENABLED ? null : (
         <div className="shell__scope" ref={scopeRef}>
           <button
             type="button"
@@ -277,9 +283,10 @@ function SignedInShell() {
             </div>
           ) : null}
         </div>
+        )}
 
         <Modal
-          open={browsingCompanies}
+          open={ORGANISATIONS_ENABLED && browsingCompanies}
           title="Workspace companies"
           description="Every company you can see in your Aicountly workspaces. Seeing a company does not give access to it."
           onClose={() => setBrowsingCompanies(false)}
@@ -354,10 +361,13 @@ function SignedInShell() {
           </ul>
 
           <div className="shell__nav-foot">
-            <p className="shell__nav-footnote">
-              <ClipboardList size={13} aria-hidden="true" />
-              Browser assistance. No installation required.
-            </p>
+            {/* True of the browser, and the opposite of true inside the desktop application. */}
+            {isDesktopApp() ? null : (
+              <p className="shell__nav-footnote">
+                <ClipboardList size={13} aria-hidden="true" />
+                Browser assistance. No installation required.
+              </p>
+            )}
             {/* Closes the phone's navigation drawer first, which would otherwise cover the banner. */}
             <AnalyticsPreferencesButton
               className="btn btn--ghost btn--sm shell__nav-preferences"

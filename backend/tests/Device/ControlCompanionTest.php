@@ -90,23 +90,87 @@ final class ControlCompanionTest extends RemoteTestCase
         $this->assertSame([], $result['restrictions']);
     }
 
-    public function testAPersonalSessionHasNoCompanionsAndSaysWhy(): void
+    /**
+     * AICOUNTLY Remote is used with a personal account, so this is the case that has to work: somebody
+     * shares their own screen from the browser in a personal session, links their own computer, it
+     * confirms, and the person they admitted controls it once they say so.
+     */
+    public function testAPersonalSessionControlsThePersonsOwnComputer(): void
+    {
+        $sharer = $this->makeIdentity('Priya at home');
+        $viewer = $this->makeIdentity('Ravi helping');
+        $policy = static fn (RemoteIdentity $who) => Services::policyResolver()->resolve($who, 'PERSONAL', null);
+
+        ['device' => $device] = $this->enrolDevice($sharer, null, ['deviceName' => 'Priya laptop']);
+        $this->markDeviceOnline((string) $device['uuid']);
+
+        $session      = $this->makeSession($sharer);
+        $participants = Services::participantService();
+        $joining      = $participants->requestJoin($session, $viewer, $viewer->displayName, ParticipantService::ROLE_VIEWER);
+        $participants->approve($session, (string) $joining['uuid'], $sharer);
+        $participants->markJoined($session, (string) $joining['uuid']);
+
+        // An entire screen: the only share a companion can serve, and a personal account's own to share.
+        Services::sessionService()->recordShareStarted($this->reload($session), $sharer, 'monitor', $policy($sharer), 1920, 1080);
+
+        $companions = Services::companionService();
+        $eligible   = $companions->eligibleDevices($this->reload($session), $sharer, $policy($sharer));
+        $this->assertSame(['Priya laptop'], array_map(static fn (array $d) => $d['device_name'], $eligible['devices']));
+        $this->assertSame([], $eligible['restrictions']);
+
+        $link      = $companions->link($this->reload($session), $sharer, $policy($sharer), (string) $device['uuid'])['link'];
+        $principal = $this->principalFor((string) $device['uuid'], null);
+
+        $pending = $companions->pendingFor($principal);
+        $this->assertSame([(string) $link['uuid']], array_column($pending, 'companionUuid'));
+        $this->assertNull($pending[0]['companyName'], 'nobody\'s organisation is named for a personal session');
+
+        $companions->join($principal, (string) $link['uuid']);
+        $companions->selectMonitor($principal, (string) $link['uuid'], $this->monitor(), 'AUTO_SINGLE');
+
+        $control = Services::controlService();
+        $control->request($this->reload($session), $viewer, $policy($viewer));
+        $granted = $control->grant($this->reload($session), $sharer, (string) $joining['uuid'], $policy($sharer));
+
+        $this->assertSame('GRANTED', (string) $granted['control_state']);
+    }
+
+    /** A personal session reaches its owner's personal computers and nothing an organisation holds. */
+    public function testAPersonalSessionNeverReachesAnOrganisationsComputer(): void
     {
         $fixture  = $this->companionScenario();
         $personal = $this->makeSession($fixture['sharer']);
+        $policy   = Services::policyResolver()->resolve($fixture['sharer'], 'PERSONAL', null);
 
-        $result = Services::companionService()->eligibleDevices(
-            $personal,
-            $fixture['sharer'],
-            Services::policyResolver()->resolve($fixture['sharer'], 'PERSONAL', null),
-        );
+        Services::sessionService()->recordShareStarted($this->reload($personal), $fixture['sharer'], 'monitor', $policy, 1920, 1080);
+
+        // The scenario's machine is enrolled in the company: not listed here, and not linkable by uuid.
+        $result = Services::companionService()->eligibleDevices($this->reload($personal), $fixture['sharer'], $policy);
         $this->assertSame([], $result['devices']);
-        $this->assertSame(['PERSONAL_SCOPE'], $result['restrictions']);
+        $this->assertSame(['NO_ELIGIBLE_DEVICE'], $result['restrictions']);
 
-        $this->expectApiError('REMOTE_CONTROL_NOT_ALLOWED', fn () => Services::companionService()->link(
-            $personal,
+        $this->expectApiError('NOT_FOUND', fn () => Services::companionService()->link(
+            $this->reload($personal),
             $fixture['sharer'],
-            Services::policyResolver()->resolve($fixture['sharer'], 'PERSONAL', null),
+            $policy,
+            (string) $fixture['device']['uuid'],
+        ));
+    }
+
+    /** A support session is neither the person's own nor their organisation's. */
+    public function testASupportSessionHasNoCompanionsAndSaysWhy(): void
+    {
+        $fixture = $this->companionScenario();
+        $support = ['scope_type' => 'AICOUNTLY_SUPPORT'] + $fixture['session'];
+
+        $result = Services::companionService()->eligibleDevices($support, $fixture['sharer'], $this->policyOf($fixture['sharer']));
+        $this->assertSame([], $result['devices']);
+        $this->assertSame(['COMPANION_SCOPE'], $result['restrictions']);
+
+        $this->expectApiError('COMPANION_SCOPE', fn () => Services::companionService()->link(
+            $support,
+            $fixture['sharer'],
+            $this->policyOf($fixture['sharer']),
             (string) $fixture['device']['uuid'],
         ));
     }

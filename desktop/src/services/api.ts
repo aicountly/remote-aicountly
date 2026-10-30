@@ -19,20 +19,22 @@
  * `startDesktopSignIn` and `pollDesktopSignIn` in `services/tauri.ts` now,
  * where `reqwest` has no origin to be refused.
  *
- * `sessionKey` below is accordingly never set by anything any more, so the two
- * calls that still need a person's credential — `enableUnattended` and the
- * best-effort revoke in `unregisterDevice`'s caller — refuse with
- * `UNAUTHENTICATED` and say where to go instead. That is not an oversight:
- * both are decisions the API deliberately keeps with a person. Switching
- * unattended access *on* needs the confirmation screen behind
- * `POST /devices/{uuid}/unattended/enable`, and revoking a device is an
- * administrator's act.
+ * `sessionKey` below is accordingly never set by anything any more, so the one
+ * call that still needs a person's credential — `enableUnattended` — refuses
+ * with `UNAUTHENTICATED` and says where to go instead. That is not an
+ * oversight: switching unattended access *on* is a decision the API
+ * deliberately keeps with a person, behind the confirmation screen of
+ * `POST /devices/{uuid}/unattended/enable`.
  *
  * Switching it *off* is not, and no longer lives here: the machine does that
  * itself with its own device credential through
  * `POST /devices/me/unattended/disable`, which the API has always provided for
- * exactly this. See `disableUnattended` in `services/tauri.ts`. A machine may
- * always stop being reachable; only turning it back on needs a person.
+ * exactly this. See `disableUnattended` in `services/tauri.ts`. Signing this
+ * computer out is the same: the machine revokes its own device row with its
+ * own credential, through `POST /devices/me/revoke`, before it deletes its key
+ * — `unregister_device` on the Rust side, behind `unregisterDevice`. A machine
+ * may always stop being reachable, and may always take itself away; only
+ * turning unattended access back on needs a person.
  */
 
 import type { DeviceResource } from '../types/agent'
@@ -121,13 +123,6 @@ export function enableUnattended(
   return request<{ device: DeviceResource }>(baseUrl, `/devices/${deviceUuid}/unattended/enable`, {
     method: 'POST',
     body: { confirm: true },
-  })
-}
-
-export function revokeDevice(baseUrl: string, deviceUuid: string): Promise<{ device: DeviceResource }> {
-  return request<{ device: DeviceResource }>(baseUrl, `/devices/${deviceUuid}/revoke`, {
-    method: 'POST',
-    body: { reason: 'Unregistered from the desktop application' },
   })
 }
 

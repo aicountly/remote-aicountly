@@ -122,9 +122,9 @@ enrolled device, not a credential to enrol one with. That closes off more than
 the loopback failure: it also means an action that genuinely needs a person's
 own credential — turning unattended access *on*, today — cannot be
 self-served from this window at all any more, only from the web console.
-Turning it *off*, and unregistering, already have (or are meant to have) a
-path through the machine's own device credential instead of a person's; see
-`services/api.ts`'s header comment for where that still needs finishing.
+Turning it *off*, and unregistering, each have a path through the machine's
+own device credential instead of a person's — `POST /devices/me/unattended/disable`
+and `POST /devices/me/revoke`; see `services/api.ts`'s header comment.
 
 ### 4. Proving possession
 
@@ -163,7 +163,7 @@ Short-lived, held in memory, scoped:
 |---|---|
 | `device.presence` | presence, and a token for its own presence room |
 | `device.session` | joining a session it was invited to; reading and reporting control |
-| `device.self` | switching its own unattended access off |
+| `device.self` | switching its own unattended access off, and revoking itself when it is signed out |
 
 Nothing under `devices/me` can reach a session it was not invited to, another
 device, or a company. `DeviceAuthFilter` re-reads the device row on **every**
@@ -205,6 +205,11 @@ its connection loop treats as terminal.
 Unregistering does both halves deliberately. A key left on a machine whose row
 was revoked authenticates nothing but is still on the machine; a row left
 active for a machine whose key was deleted is a row somebody has to clean up.
+The row goes first — the machine revokes it with its own credential,
+`POST /devices/me/revoke`, the same revocation as an administrator's — because
+once the key is gone nothing is left to prove which machine is asking. That
+half is best effort: a computer that is offline is still signed out, and its
+row is left for an administrator to revoke.
 
 ## Uninstalling
 

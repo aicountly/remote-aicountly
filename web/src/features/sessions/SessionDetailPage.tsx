@@ -151,7 +151,7 @@ export default function SessionDetailPage() {
           <div className="card__body detail-grid">
             <Fact label="Status" value={statusPresentation(session.status).label} />
             <Fact label="Scope" value={describeScope(session.scopeType, null)} />
-            <Fact label="Organisation" value={session.companyName ?? 'Personal (no organisation)'} />
+            {session.companyName ? <Fact label="Organisation" value={session.companyName} /> : null}
             <Fact label="Session type" value={describeSessionType(session.sessionType)} />
             <Fact label="Started from" value={session.sourceProductLabel ?? '—'} />
             <Fact label="Area" value={session.sourceRoute ?? '—'} />

@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 import { GuestRemoteProvider } from '../../app/RemoteProvider'
 import { RemoteApiError } from '../../services/api/client'
+import { installFullscreen } from '../../test/fullscreen'
+import type { EnginePeer, EngineSnapshot } from '../../services/webrtc/RemoteSessionEngine'
 import type { Participant, SessionDetail } from '../../types/remote'
 
 /**
@@ -24,9 +26,15 @@ const actions = vi.hoisted(() => ({
   resume: vi.fn(),
   approve: vi.fn(),
   deny: vi.fn(),
+  stopControl: vi.fn(),
 }))
-/** The session a test renders, when it is not the default one below. */
-const room = vi.hoisted(() => ({ session: null as SessionDetail | null }))
+/** The session a test renders, when it is not the default one below — and the live state, when there is one. */
+const room = vi.hoisted(() => ({
+  session: null as SessionDetail | null,
+  live: null as EngineSnapshot | null,
+  isControlling: false,
+  controllableHost: null as EnginePeer | null,
+}))
 
 const session: SessionDetail = {
   uuid: 'sess-1',
@@ -68,13 +76,13 @@ vi.mock('./useRemoteSession', () => ({
     error: null,
     ended: false,
     messages: [],
-    live: null,
+    live: room.live,
     shareIntent: { phase: 'idle' },
     control: null,
     controlBusy: false,
     controlNotice: null,
-    controllableHost: null,
-    isControlling: false,
+    controllableHost: room.controllableHost,
+    isControlling: room.isControlling,
     controlPaused: null,
     actions,
   }),
@@ -82,8 +90,8 @@ vi.mock('./useRemoteSession', () => ({
 
 const { default: SessionRoomPage } = await import('./SessionRoomPage')
 
-function renderRoom() {
-  return render(
+function roomTree() {
+  return (
     <MemoryRouter initialEntries={['/room/sess-1']}>
       <GuestRemoteProvider>
         <Routes>
@@ -91,8 +99,12 @@ function renderRoom() {
           <Route path="*" element={<p>left the room</p>} />
         </Routes>
       </GuestRemoteProvider>
-    </MemoryRouter>,
+    </MemoryRouter>
   )
+}
+
+function renderRoom() {
+  return render(roomTree())
 }
 
 const unreachable = () =>
@@ -112,6 +124,9 @@ describe('the room header', () => {
   afterEach(() => {
     sessionStorage.clear()
     room.session = null
+    room.live = null
+    room.isControlling = false
+    room.controllableHost = null
     for (const action of Object.values(actions)) action.mockReset()
   })
 
@@ -180,5 +195,131 @@ describe('the room header', () => {
 
     expect(actions.deny).toHaveBeenCalledWith('p-guest')
     expect(await screen.findByText('Declining them did not go through. Try again.')).toBeInTheDocument()
+  })
+})
+
+/**
+ * Full screen in the room (§18, §30, §33).
+ *
+ * The browser shows nothing but the stage while it is full screen, so the room
+ * moves its status line and its banners onto the stage — the stop control is
+ * on screen for as long as input is flowing, exactly once — and a knock at the
+ * door takes the stage back out, so the host can answer it.
+ */
+describe('full screen in the room', () => {
+  const sharer = { ...knocking, uuid: 'p-host', displayName: 'Asha', role: 'SHARER', status: 'JOINED', isHost: true, isSharing: true } as Participant
+  const viewer = { ...knocking, uuid: 'p-viewer', displayName: 'Bala', role: 'VIEWER', status: 'JOINED' } as Participant
+
+  const agent: EnginePeer = {
+    participantUuid: 'p-host',
+    role: 'SHARER',
+    name: 'WS-01',
+    capabilities: { remote_control: true },
+    connectionState: 'connected',
+    dataChannelReady: true,
+    controlChannelReady: true,
+  }
+
+  const watching = (): EngineSnapshot => ({
+    connection: 'connected',
+    signalling: 'open',
+    quality: 'good',
+    stats: { roundTripMs: 45, framesPerSecond: 15 },
+    peers: [agent],
+    remoteStream: { id: 'asha-screen' } as unknown as MediaStream,
+    localStream: null,
+    isSharing: false,
+    microphoneOn: false,
+    pointers: {},
+    annotations: [],
+    transfers: [],
+    relayAvailable: true,
+    relayDenied: false,
+    controllingPeerId: null,
+    controlPaused: null,
+    network: {
+      path: 'direct',
+      relayNode: null,
+      relayProtocol: null,
+      recovering: false,
+      restarts: 0,
+      verdict: null,
+      message: null,
+      credentialsExpireAt: null,
+    },
+    lastError: null,
+  })
+
+  let fullscreen: ReturnType<typeof installFullscreen>
+
+  beforeEach(() => {
+    fullscreen = installFullscreen()
+    // jsdom cannot play a stream, and the stage plays the one it is given.
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
+  })
+
+  afterEach(() => {
+    fullscreen.uninstall()
+    room.session = null
+    room.live = null
+    room.isControlling = false
+    room.controllableHost = null
+    for (const action of Object.values(actions)) action.mockReset()
+  })
+
+  it('keeps “Stop controlling” on screen in full screen — on the stage, and only there', async () => {
+    room.session = { ...session, participants: [sharer, viewer], me: viewer }
+    room.live = { ...watching(), controllingPeerId: 'p-host' }
+    room.isControlling = true
+    room.controllableHost = agent
+    renderRoom()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Full screen' }))
+
+    const stage = within(fullscreen.element as HTMLElement)
+    expect(screen.getAllByRole('button', { name: 'Stop controlling' })).toHaveLength(1)
+    expect(stage.getByText(/You’re controlling/)).toBeInTheDocument()
+    // The connection comes too: a frozen picture is explained where the person is looking.
+    expect(stage.getByText('45 ms · 15 fps')).toBeInTheDocument()
+
+    await userEvent.click(stage.getByRole('button', { name: 'Stop controlling' }))
+    expect(actions.stopControl).toHaveBeenCalledOnce()
+
+    // Esc, and the banner is back above the stage — still exactly once.
+    act(() => fullscreen.escape())
+
+    const stop = screen.getAllByRole('button', { name: 'Stop controlling' })
+    expect(stop).toHaveLength(1)
+    expect(document.querySelector('.stage')).not.toContainElement(stop[0])
+  })
+
+  it('leaves full screen when somebody knocks, so the host can answer', async () => {
+    // A host watching a computer in the session share its screen.
+    room.session = { ...session, isHost: true, participants: [sharer, { ...viewer, isHost: true }], me: { ...viewer, isHost: true } }
+    room.live = watching()
+    const view = renderRoom()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Full screen' }))
+    expect(fullscreen.element).not.toBeNull()
+
+    room.session = { ...room.session, waiting: [knocking] }
+    view.rerender(roomTree())
+
+    expect(fullscreen.element).toBeNull()
+    expect(screen.getByRole('alertdialog', { name: 'Someone wants to join' })).toBeInTheDocument()
+  })
+
+  it('leaves full screen when the request for control is declined, rather than leave the viewer waiting', async () => {
+    room.session = { ...session, participants: [sharer, viewer], me: { ...viewer, controlState: 'REQUESTED' } }
+    room.live = watching()
+    const view = renderRoom()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Full screen' }))
+    expect(fullscreen.element).not.toBeNull()
+
+    room.session = { ...room.session, me: { ...viewer, controlState: 'DENIED' } }
+    view.rerender(roomTree())
+
+    expect(fullscreen.element).toBeNull()
   })
 })

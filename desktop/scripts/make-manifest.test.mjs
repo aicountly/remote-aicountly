@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, describe, it } from 'node:test'
 
-import { canonicalName, classify, labelFor, makeManifest, parseSums, peIsSigned } from './make-manifest.mjs'
+import { buildOf, canonicalName, classify, labelFor, makeManifest, parseSums, peIsSigned } from './make-manifest.mjs'
 
 const made = []
 
@@ -122,8 +122,46 @@ describe('classify', () => {
   })
 })
 
+describe('buildOf', () => {
+  it('reads the build number the release workflows put into a name', () => {
+    assert.equal(buildOf('Aicountly-Remote-1.0.0-b202610301030-x64-Setup.exe'), '202610301030')
+    assert.equal(buildOf('Aicountly-Remote-1.0.0-b202610301030-arm64.dmg'), '202610301030')
+    assert.equal(buildOf('AICOUNTLY.Remote_1.0.0_b202610301030_x64-setup.exe'), '202610301030', 'as GitHub rewrites a name')
+  })
+
+  it('is empty for a name from before builds were numbered, or anything that only looks like one', () => {
+    for (const name of [
+      'AICOUNTLY Remote_1.0.0_x64-setup.exe',
+      'Aicountly-Remote-1.0.0-x64-Setup.exe',
+      'Aicountly-Remote-1.0.0-b2026103010-x64-Setup.exe',
+      'Aicountly-Remote-1.0.0-b2026103010301-x64-Setup.exe',
+      'Aicountly-Remote-1.0.0-xb202610301030-x64-Setup.exe',
+    ]) {
+      assert.equal(buildOf(name), '', name)
+    }
+  })
+})
+
 describe('canonicalName', () => {
-  it('derives a name that is safe in a URL and the same every release', () => {
+  it('puts the build into the name, so no two builds share a URL', () => {
+    assert.equal(
+      canonicalName({ product: 'remote', version: '1.0.0', build: '202610301030', platform: 'windows', arch: 'x64', kind: 'installer' }),
+      'Aicountly-Remote-1.0.0-b202610301030-x64-Setup.exe',
+    )
+    assert.equal(
+      canonicalName({ product: 'remote', version: '1.0.0', build: '202610301030', platform: 'macos', arch: 'arm64', kind: 'disk-image' }),
+      'Aicountly-Remote-1.0.0-b202610301030-arm64.dmg',
+    )
+  })
+
+  it('refuses a build number that is not one', () => {
+    assert.throws(
+      () => canonicalName({ product: 'remote', version: '1.0.0', build: '../x', platform: 'windows', arch: 'x64', kind: 'installer' }),
+      /not a build number/,
+    )
+  })
+
+  it('names a build from before builds were numbered as it always did', () => {
     assert.equal(
       canonicalName({ product: 'remote', version: '1.0.0', platform: 'windows', arch: 'x64', kind: 'installer' }),
       'Aicountly-Remote-1.0.0-x64-Setup.exe',
@@ -385,6 +423,49 @@ describe('makeManifest', () => {
     })
 
     assert.equal(manifest.files[0].signed, true)
+  })
+
+  /**
+   * Windows and macOS are built by separate runs, so the newest build of each
+   * can be from different commits. Each keeps its own number, in its name and
+   * beside it, because each platform's update check compares its own.
+   */
+  it('keeps each build its own number, in its name and in the manifest', async () => {
+    const win = 'windows installer bytes'
+    const mac = 'mac disk image bytes'
+    const dir = await release({
+      'Aicountly-Remote-1.0.0-b202610301030-x64-Setup.exe': win,
+      'Aicountly-Remote-1.0.0-b202610290915-arm64.dmg': mac,
+      'SHA256SUMS.txt': `${sha(win)}  Aicountly-Remote-1.0.0-b202610301030-x64-Setup.exe\n`,
+      'SHA256SUMS-macos.txt': `${sha(mac)}  Aicountly-Remote-1.0.0-b202610290915-arm64.dmg\n`,
+    })
+
+    const manifest = await makeManifest({ dir, product: 'remote', version: '1.0.0', channel: 'beta', signed: true })
+
+    assert.deepEqual(
+      manifest.files.map(({ file, build }) => ({ file, build })),
+      [
+        { file: 'Aicountly-Remote-1.0.0-b202610301030-x64-Setup.exe', build: '202610301030' },
+        { file: 'Aicountly-Remote-1.0.0-b202610290915-arm64.dmg', build: '202610290915' },
+      ],
+    )
+    assert.equal(
+      await readFile(join(dir, 'SHA256SUMS.txt'), 'utf8'),
+      `${sha(win)}  Aicountly-Remote-1.0.0-b202610301030-x64-Setup.exe\n` +
+        `${sha(mac)}  Aicountly-Remote-1.0.0-b202610290915-arm64.dmg\n`,
+    )
+  })
+
+  it('refuses two builds of the same thing, rather than offering both', async () => {
+    const dir = await release({
+      'Aicountly-Remote-1.0.0-b202610290915-x64-Setup.exe': 'older',
+      'Aicountly-Remote-1.0.0-b202610301030-x64-Setup.exe': 'newer',
+    })
+
+    await assert.rejects(
+      makeManifest({ dir, product: 'remote', version: '1.0.0', channel: 'beta', signed: true }),
+      /Publish one build of each/,
+    )
   })
 
   it('refuses a directory with nothing installable in it', async () => {

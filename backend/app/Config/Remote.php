@@ -128,7 +128,12 @@ class Remote extends BaseConfig
      */
     public string $desktopMinimumAgentVersion = '1.0.0';
 
-    /** Where the agent's signed update manifest lives. Empty disables updates. */
+    /**
+     * An update feed to hand the agent in its presence answer (`updateFeedUrl`).
+     * Empty disables it. The desktop application does not follow it: it checks
+     * the downloads host's own manifest (`remote_core::update::UPDATE_MANIFEST_URL`),
+     * which is not signed — see docs/audit/PUBLIC_READINESS_AUDIT.md, P0-1.
+     */
     public string $desktopUpdateFeedUrl = '';
 
     /**

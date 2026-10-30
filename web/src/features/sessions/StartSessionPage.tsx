@@ -10,6 +10,8 @@ import { PERMISSIONS } from '../../types/remote'
 import type { ScopeType, ShareMode } from '../../types/remote'
 import ShareModePicker from './ShareModePicker'
 import RestrictionNotice from '../../components/ui/RestrictionNotice'
+import { isDesktopApp } from '../desktop/embedding'
+import { ORGANISATIONS_ENABLED } from '../../app/organisations'
 
 /**
  * Starting a session (§6A, §6B, §30).
@@ -27,7 +29,13 @@ export default function StartSessionPage() {
   const { bootstrap, policy, scopeType, companyId, capabilities, switchScope, can } = useRemote()
   const navigate = useNavigate()
 
-  const [shareMode, setShareMode] = useState<ShareMode>('SAFE_SHARE')
+  // Inside the desktop application the point of a session is usually to be
+  // helped on this computer, and only an entire screen can be controlled from
+  // it (docs/desktop/CONTROL_COMPANION.md) — so that is where it starts, when
+  // the policy allows it. The person can still choose something smaller.
+  const [shareMode, setShareMode] = useState<ShareMode>(() =>
+    isDesktopApp() && policy?.allowedShareModes.includes('ENTIRE_MONITOR') ? 'ENTIRE_MONITOR' : 'SAFE_SHARE',
+  )
   const [useMicrophone, setUseMicrophone] = useState(false)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<RemoteApiError | null>(null)
@@ -119,6 +127,8 @@ export default function StartSessionPage() {
 
         {error ? <RestrictionNotice error={error} /> : null}
 
+        {/* Always Personal for now (organisations.ts): there is no context to choose. */}
+        {!ORGANISATIONS_ENABLED ? null : (
         <section className="card">
           <div className="card__header">
             <div>
@@ -168,6 +178,7 @@ export default function StartSessionPage() {
             )}
           </div>
         </section>
+        )}
 
         <section className="card">
           <div className="card__body">
