@@ -278,18 +278,27 @@ What it changes:
 * macOS builds ad-hoc signed, with no notarisation submitted. Gatekeeper
   blocks the first launch; the user allows it from System Settings → Privacy
   & Security.
-* Each writes `UNSIGNED.txt` beside the installers, saying plainly what is
-  missing and that AICOUNTLY Remote installs a service that runs as the
-  machine — so the checksum matters more here than it would for an app you
-  merely open.
+* Each writes a notice beside the installers — `UNSIGNED.txt` for Windows,
+  `UNSIGNED-macos.txt` for macOS, named apart because both attach to the same
+  release — saying plainly what is missing and that AICOUNTLY Remote installs
+  a service that runs as the machine, so the checksum matters more here than
+  it would for an app you merely open.
 * The GitHub release body says it too, so a link to the release cannot be
   mistaken for a signed one.
 
 The manifest does **not** take anyone's word for this. `make-manifest.mjs`
 reads the Windows binary's own certificate table — data directory entry 4 —
 and reports `signed` from the file. A build that failed to sign cannot be
-published as though it had, whatever flag was passed. A `.dmg` cannot answer
-for itself, so there the workflow's word stands.
+published as though it had, whatever flag was passed.
+
+A `.dmg` cannot answer for itself — only Apple's tools can, on a Mac — so a
+disk image is reported signed only when its release carries the positive word
+for it: `NOTARISED-macos.txt`, which `release-macos.yml` writes only after
+`codesign --verify`, `spctl --assess` and `stapler validate` have all passed.
+Without it, the disk image is published as unsigned. (It used to be the
+workflow's word, and the word was "signed" for every beta, so the unsigned Mac
+builds were published as signed and the download page showed no warning
+beside them.)
 
 The download page then shows the warning beside the button, with the SHA-256
 under it. `includes/remote-downloads.php` in `aicountly/aicountly-com` carries

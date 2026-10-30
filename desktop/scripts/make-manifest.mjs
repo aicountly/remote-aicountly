@@ -32,8 +32,13 @@
  * `signed` is read from a Windows binary rather than taken on trust: it
  * decides whether the website offers a build at all and whether it prints a
  * SmartScreen warning beside it, so it must not come from a flag somebody can
- * get wrong. A .dmg cannot answer for itself, so there the caller's word
- * stands.
+ * get wrong. A .dmg cannot answer for itself — only Apple's tools can, on a
+ * Mac — so a disk image is signed only when its release carries the positive
+ * word `release-macos.yml` writes once codesign, Gatekeeper and the stapled
+ * notarisation ticket have all passed: `NOTARISED-macos.txt`. Without it, it
+ * is unsigned, whatever the caller says. It used to be the caller's word, and
+ * the caller said "signed" for every beta, so every unsigned Mac build so far
+ * was published as signed and the download page showed no warning beside it.
  *
  * Hashes are computed from the files themselves rather than read out of a
  * `SHA256SUMS` file. If one is present it is cross-checked and a
@@ -65,6 +70,7 @@ const NOT_A_BUILD = [
   /^SHA256SUMS.*\.txt$/i,
   /^manifest\.json$/i,
   /^UNSIGNED/i,
+  /^NOTARISED/i,
   /^INSTALL\.txt$/i,
   /\.blockmap$/i,
   /\.sig$/i,
@@ -272,6 +278,12 @@ function compare(a, b) {
 export async function makeManifest({ dir, product, version, channel, signed }) {
   const names = await readdir(dir)
 
+  // The platforms whose release said, after verifying it, that they are signed
+  // and notarised. Only macOS writes one; Windows answers from the file.
+  const notarised = new Set(
+    names.map((name) => /^NOTARISED-([a-z]+)\.txt$/i.exec(name)?.[1]?.toLowerCase()).filter(Boolean),
+  )
+
   const sumsFiles = names.filter((name) => /^SHA256SUMS.*\.txt$/i.test(name))
 
   const claimed = new Map()
@@ -343,10 +355,11 @@ export async function makeManifest({ dir, product, version, channel, signed }) {
       await rename(from, to)
     }
 
-    // Windows answers for itself. Everything else -- a .dmg, where only
-    // Apple's tools can say -- is the caller's word, which is why the caller
-    // has to establish it before it says so.
-    let fileSigned = signed
+    // Windows answers for itself, below. Everything else -- a .dmg, where only
+    // Apple's tools can say -- is signed only with its release's notarisation
+    // marker, and never on the caller's word alone: the caller can only take
+    // a signature away (a sandbox channel), never vouch for one.
+    let fileSigned = what.platform === 'windows' ? signed : signed && notarised.has(what.platform)
     if (what.platform === 'windows') {
       const handle = await open(to, 'r')
       try {
