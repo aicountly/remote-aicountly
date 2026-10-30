@@ -486,6 +486,63 @@ class DeviceService
         $device = $this->findForUser($identity, $uuid);
         $this->assertManageable($identity, $device);
 
+        return $this->revokeDevice($device, $identity->id, 'USER', $reason);
+    }
+
+    /**
+     * The machine revoking itself: "Sign this computer out" in the desktop app,
+     * made with the device's own credential because that is the only one the
+     * app holds.
+     *
+     * Not a second way of revoking. It is {@see revokeDevice()}, the same
+     * revocation an owner's revoke from the console makes, so it takes away
+     * exactly what that takes away and leaves the same audit entry — with the
+     * machine as its actor, recorded against the person it belongs to, as
+     * every other decision a device reports is. Without it, signing a computer
+     * out deleted its key and left its row ACTIVE, on its owner's Computers
+     * page for good.
+     *
+     * No permission is consulted, for the reason switching unattended access
+     * off needs none: a machine taking itself away is not the act that needed
+     * authorising. And it can reach no other device, because the only device
+     * it is told about is the one its signed credential names.
+     *
+     * @return array<string, mixed>
+     */
+    public function revokeByDevice(DevicePrincipal $principal): array
+    {
+        $device = $this->findByUuidOrFail($principal->deviceUuid);
+
+        return $this->revokeDevice(
+            $device,
+            $device['user_id'] !== null ? (int) $device['user_id'] : null,
+            'DEVICE',
+            'Signed out from the desktop app',
+            ['by' => 'DEVICE'],
+        );
+    }
+
+    /**
+     * The one revocation, whoever asked for it.
+     *
+     * Idempotent. A device already revoked comes back as it is, and the UPDATE
+     * is guarded on the status as well, so two revocations racing — the person
+     * signing the computer out while an administrator removes it, or one
+     * request retried — change the row once and record it once.
+     *
+     * @param  array<string, mixed> $device
+     * @param  array<string, mixed> $metadata added to the audit entry
+     * @return array<string, mixed>
+     */
+    private function revokeDevice(
+        array $device,
+        ?int $actorUserId,
+        string $actorType,
+        ?string $reason,
+        array $metadata = [],
+    ): array {
+        $uuid = (string) $device['uuid'];
+
         if ((string) $device['status'] === self::STATUS_REVOKED) {
             return $device;
         }
@@ -501,23 +558,31 @@ class DeviceService
                 'unattended_enabled_at'     => null,
                 'presence_state'            => 'OFFLINE',
                 'revoked_at'                => Clock::now(),
-                'revoked_by_user_id'        => $identity->id,
+                'revoked_by_user_id'        => $actorUserId,
                 'updated_at'                => Clock::now(),
             ]);
 
+        if ($this->db->affectedRows() === 0) {
+            // Revoked by somebody else between the read and this statement.
+            // Theirs is the change, and theirs is the record of it.
+            $this->db->transComplete();
+
+            return $this->findByUuidOrFail($uuid);
+        }
+
         $this->audit->recordMaterial(
             EventType::DEVICE_REVOKED,
-            $identity->id,
-            'USER',
+            $actorUserId,
+            $actorType,
             $device['company_id'] !== null ? (int) $device['company_id'] : null,
             null,
             null,
             null,
-            [
+            array_merge([
                 'deviceUuid' => $uuid,
                 'reason'     => $this->clean($reason, 120),
                 'changes'    => AuditService::diff($device, ['status' => self::STATUS_REVOKED, 'unattended_access_enabled' => false]),
-            ],
+            ], $metadata),
             ['type' => 'device', 'id' => $uuid, 'label' => (string) $device['device_name']],
             'Revoked device ' . $device['device_name'],
         );

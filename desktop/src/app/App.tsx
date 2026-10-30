@@ -342,22 +342,15 @@ export default function App() {
   const unregister = useCallback(
     () =>
       run(async () => {
-        const uuid = state?.deviceUuid
-
-        // The server-side revocation first, then the local key. In that order
-        // because a key removed from a machine whose device row is still
-        // active would leave a device an administrator can see and nobody can
-        // reach — and the reverse leaves a key that authenticates nothing.
-        //
-        // In practice this call always refuses: this window has no way to
-        // obtain a portal credential any more, see services/api.ts. Left in
-        // place — rather than skipped outright — so it starts working on its
-        // own the day that revocation moves onto the device's own credential,
-        // the way disabling unattended access already has on the server.
-        if (uuid && config) {
-          await api.revokeDevice(config.apiBaseUrl, uuid).catch(() => undefined)
-        }
-
+        // One call: the Rust side revokes this computer on the server with its
+        // own device credential, then deletes its key. The server first,
+        // because a key removed from a machine whose row is still active leaves
+        // a device an administrator can see and nobody can reach — and once the
+        // key is gone, nothing is left to prove which machine is asking. (This
+        // window used to try the revocation itself, with a portal credential it
+        // can never hold; see services/api.ts.) Best effort: an offline
+        // computer is still signed out here, and its row is left for the
+        // console.
         await bridge.unregisterDevice()
 
         // Signing the computer out signs its portal out too. Best effort: a
@@ -365,7 +358,7 @@ export default function App() {
         await bridge.portalAction('sign_out').catch(() => undefined)
         forgetPortalPage()
       }),
-    [run, state, config],
+    [run],
   )
 
   const enableUnattended = useCallback(

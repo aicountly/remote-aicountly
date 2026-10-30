@@ -219,6 +219,13 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
     $routes->post('devices/me/unattended/disable', 'DeviceAgentController::disableUnattended', [
         'filter' => 'device-auth:device.self',
     ]);
+    // "Sign this computer out": the machine revoking its own row with its own
+    // credential, through the same revocation as `devices/(:segment)/revoke`.
+    // It takes no device uuid — the credential names the device — so it can
+    // reach no other machine.
+    $routes->post('devices/me/revoke', 'DeviceAgentController::revoke', [
+        'filter' => ['device-auth:device.self', 'rate-limit:device-revoke,10,60'],
+    ]);
 
     // Unauthenticated by design — a nonce is worthless without the private key,
     // and the signature *is* the authentication. Both are rate-limited because

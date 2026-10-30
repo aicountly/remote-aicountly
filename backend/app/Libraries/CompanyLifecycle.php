@@ -56,6 +56,7 @@ final class CompanyLifecycle
         'POST /v1/remote/devices/*/revoke',
         'POST /v1/remote/devices/*/unattended/disable',
         'POST /v1/remote/devices/me/unattended/disable',
+        'POST /v1/remote/devices/me/revoke',
         'POST /v1/remote/devices/me/presence',
     ];
 
