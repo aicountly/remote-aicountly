@@ -1,5 +1,6 @@
 import { useState } from 'react'
 
+import * as bridge from '../../services/tauri'
 import type { About, AgentConfig } from '../../types/agent'
 import { StatusPill } from '../../components/StatusPill'
 
@@ -147,6 +148,18 @@ function Diagnostics({ about }: { about: About }) {
             ) : (
               <StatusPill tone="attention">Not running</StatusPill>
             )}
+          </span>
+        </div>
+        <div className="row">
+          <span className="row__label">Privacy</span>
+          <span className="row__value">
+            <button
+              type="button"
+              className="link-button"
+              onClick={() => void bridge.openUrl(about.privacyPolicyUrl).catch(() => undefined)}
+            >
+              Privacy policy
+            </button>
           </span>
         </div>
       </div>

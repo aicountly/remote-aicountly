@@ -189,6 +189,8 @@ export interface About {
    */
   logFile: string | null
   service: ServiceStatus
+  /** AICOUNTLY's privacy policy, opened in the browser from the About panel. */
+  privacyPolicyUrl: string
 }
 
 /** Everything the enrolment call needs. The **public** key, and nothing else. */

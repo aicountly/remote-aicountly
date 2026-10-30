@@ -37,6 +37,11 @@ use remote_core::AGENT_VERSION;
 /// The product name, as a person sees it.
 pub const PRODUCT_NAME: &str = "AICOUNTLY Remote";
 
+/// AICOUNTLY's privacy policy — the page the web app's consent banner links
+/// to — linked from the About panel, because an application that can be
+/// handed control of a computer should say where its privacy terms are.
+pub const PRIVACY_POLICY_URL: &str = "https://aicountly.com/privacy-policy";
+
 /// This build's version. One authoritative value — see `desktop/Cargo.toml`.
 pub const VERSION: &str = AGENT_VERSION;
 

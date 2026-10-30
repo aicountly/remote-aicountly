@@ -52,6 +52,8 @@ pub struct About {
     pub log_file: Option<String>,
     /// The background service, as this process sees it.
     pub service: ipc::ServiceStatus,
+    /// AICOUNTLY's privacy policy, which the About panel links to.
+    pub privacy_policy_url: String,
 }
 
 /// The state the window renders from.
@@ -599,6 +601,7 @@ pub fn is_permitted_url(url: &str, config: &AgentConfig) -> bool {
         app_origin,
         download_page,
         Some(remote_core::update::DOWNLOADS_BASE_URL.to_owned()),
+        Some(crate::PRIVACY_POLICY_URL.to_owned()),
     ];
 
     permitted.iter().flatten().any(|origin| {
@@ -786,6 +789,7 @@ pub fn about(agent: tauri::State<'_, Arc<Agent>>) -> About {
         key_storage: platform::secure_storage().describe().to_owned(),
         log_file: remote_core::log_path("agent").map(|path| path.display().to_string()),
         service: ipc::service_status(),
+        privacy_policy_url: crate::PRIVACY_POLICY_URL.to_owned(),
     }
 }
 
@@ -816,6 +820,17 @@ mod tests {
             "https://remote.aicountly.com/api/v1/remote/devices",
             &config()
         ));
+    }
+
+    /// The About panel's link, and nothing that merely starts like it.
+    #[test]
+    fn the_privacy_policy_is_opened_and_its_lookalikes_are_not() {
+        assert!(is_permitted_url(crate::PRIVACY_POLICY_URL, &config()));
+        assert!(!is_permitted_url(
+            "https://aicountly.com/privacy-policy.attacker.example",
+            &config()
+        ));
+        assert!(!is_permitted_url("https://aicountly.com/", &config()));
     }
 
     /// The page a device-code sign-in opens to be confirmed
