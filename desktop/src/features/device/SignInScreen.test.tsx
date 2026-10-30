@@ -41,10 +41,10 @@ describe('SignInScreen', () => {
     expect(screen.getByRole('button', { name: /sign in to aicountly/i })).toBeTruthy()
   })
 
-  it('says when an administrator removed the computer', () => {
+  it('says when the computer was signed out from elsewhere', () => {
     render(<SignInScreen revoked deviceId="A1B2 C3D4 E5F6 A7B8" onSignIn={vi.fn()} />)
 
-    expect(screen.getByText(/administrator removed this computer/i)).toBeTruthy()
+    expect(screen.getByText(/this computer was signed out of AICOUNTLY Remote/i)).toBeTruthy()
   })
 
   it('cannot be used while something else is in flight', async () => {

@@ -115,6 +115,11 @@ function Diagnostics({ about }: { about: About }) {
           <span className="row__label">Version</span>
           <span className="row__value row__value--mono">{about.version}</span>
         </div>
+        {/* The same number as in the installer's name, so somebody can tell which build they have. */}
+        <div className="row">
+          <span className="row__label">Build</span>
+          <span className="row__value row__value--mono">{about.build ?? 'Local build'}</span>
+        </div>
         <div className="row">
           <span className="row__label">Platform</span>
           <span className="row__value">

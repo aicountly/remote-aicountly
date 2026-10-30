@@ -34,7 +34,7 @@ export function UnattendedCard({
     <section className="card">
       <h2 className="card__title">Unattended access</h2>
       <p className="card__subtitle">
-        Whether an authorised colleague can connect to this computer when nobody is at it.
+        Whether this computer can be reached when nobody is at it.
       </p>
 
       <div className="row">
@@ -71,8 +71,7 @@ export function UnattendedCard({
 
       {!unattended.allowedByPolicy && !unattended.enabled ? (
         <div className="notice notice--info" style={{ marginTop: 'var(--space-4)' }}>
-          Your organisation has not enabled unattended access. An administrator turns it on for
-          the whole organisation before it can be switched on here.
+          Unattended access is not available for your account.
         </div>
       ) : null}
 
@@ -90,9 +89,9 @@ export function UnattendedCard({
         <div className="notice notice--warning" style={{ marginTop: 'var(--space-4)' }}>
           <p className="notice__title">Before you turn this on</p>
           <p>
-            An authorised colleague in your organisation will be able to connect to this computer
-            <strong> when nobody is sitting at it</strong>, see the screen, and — where your
-            organisation allows remote control — use the keyboard and mouse.
+            The people allowed to will be able to connect to this computer
+            <strong> when nobody is sitting at it</strong>, see the screen, and — where remote
+            control is allowed — use the keyboard and mouse.
           </p>
           <p>
             Every connection is recorded, this window and the icon beside the clock show one while

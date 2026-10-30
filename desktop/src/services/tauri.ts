@@ -236,6 +236,16 @@ export function onStateChange(handler: (state: AgentState) => void): Promise<() 
   return listen<AgentState>('aicountly-remote://state', (event) => handler(event.payload))
 }
 
+/** Where the portal is: one of its own pages, or a sign-in page it went to. */
+export interface PortalPage {
+  onPortal: boolean
+}
+
+/** Every page the portal loads (`portal.rs`, `PORTAL_PAGE_EVENT`). */
+export function onPortalPage(handler: (page: PortalPage) => void): Promise<() => void> {
+  return listen<PortalPage>('aicountly-remote://portal-page', (event) => handler(event.payload))
+}
+
 /** The tray asking the window to show a particular screen. */
 export function onNavigate(handler: (screen: string) => void): Promise<() => void> {
   return listen<string>('aicountly-remote://navigate', (event) => handler(event.payload))

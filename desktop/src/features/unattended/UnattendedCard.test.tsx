@@ -78,7 +78,7 @@ describe('UnattendedCard', () => {
   })
 
   /** A switch that always refuses is worse than no switch. */
-  it('explains rather than offering a switch the organisation forbids', () => {
+  it('explains rather than offering a switch the account cannot use', () => {
     render(
       <UnattendedCard
         state={state({ allowedByPolicy: false })}
@@ -88,7 +88,7 @@ describe('UnattendedCard', () => {
     )
 
     expect(screen.getByRole('button', { name: /turn on unattended access/i })).toBeDisabled()
-    expect(screen.getByText(/has not enabled unattended access/i)).toBeInTheDocument()
+    expect(screen.getByText(/not available for your account/i)).toBeInTheDocument()
   })
 
   it('says the warning before it is confirmed, not after', async () => {

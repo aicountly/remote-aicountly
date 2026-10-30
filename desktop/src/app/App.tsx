@@ -7,7 +7,7 @@ import { CompanionConfirm } from '../features/companion/CompanionConfirm'
 import { MonitorPicker } from '../features/companion/MonitorPicker'
 import { DeviceCard } from '../features/device/DeviceCard'
 import { DesktopSignInPending } from '../features/device/DesktopSignInPending'
-import { PortalView, forgetPortalPage } from '../features/portal/PortalView'
+import { PortalTools, PortalView, forgetPortalPage } from '../features/portal/PortalView'
 import { RecentSessions } from '../features/home/RecentSessions'
 import { PermissionsCard } from '../features/permissions/PermissionsCard'
 import { ControlRequest } from '../features/session/ControlRequest'
@@ -57,6 +57,10 @@ export default function App() {
   const [portalHome, setPortalHome] = useState(0)
   // The update prompt is this window's own; the portal steps aside for it.
   const [updatePrompt, setUpdatePrompt] = useState(false)
+  // Whether the portal is on one of its own pages or on a sign-in page, as
+  // the Rust side reports after every page it loads. Browser buttons only for
+  // the second.
+  const [portalOnOwnPage, setPortalOnOwnPage] = useState(true)
   // A signed-in computer opens on the portal, once, when the window first
   // learns that it is signed in.
   const landed = useRef(false)
@@ -91,6 +95,7 @@ export default function App() {
   useEffect(() => {
     let disposeState: (() => void) | undefined
     let disposeNavigate: (() => void) | undefined
+    let disposePortalPage: (() => void) | undefined
 
     void bridge.onStateChange(setState).then((dispose) => {
       disposeState = dispose
@@ -100,10 +105,16 @@ export default function App() {
       .then((dispose) => {
         disposeNavigate = dispose
       })
+    void bridge
+      .onPortalPage((page) => setPortalOnOwnPage(page.onPortal))
+      .then((dispose) => {
+        disposePortalPage = dispose
+      })
 
     return () => {
       disposeState?.()
       disposeNavigate?.()
+      disposePortalPage?.()
     }
   }, [])
 
@@ -424,7 +435,7 @@ export default function App() {
   return (
     <div className={portalMode ? 'app app--portal' : 'app'}>
       <header className="app__header">
-        <Brand version={state.agentVersion} />
+        <Brand version={state.agentVersion} build={about?.build ?? null} platform={about?.platform ?? null} />
 
         <nav className="app__nav">
           {/*
@@ -441,7 +452,12 @@ export default function App() {
           <NavItem screen="home" current={screen} onSelect={selectScreen}>
             {signedOut ? 'Sign in' : 'This computer'}
           </NavItem>
-          {!signedOut && about?.supportsHosting !== false ? (
+          {/*
+           * Only where it can be used, or has to be switched off. A personal
+           * account cannot turn unattended access on, and a tab whose only
+           * content is "not available" was a door to nowhere.
+           */}
+          {!signedOut && about?.supportsHosting !== false && (state.unattended.enabled || state.unattended.allowedByPolicy) ? (
             <NavItem screen="unattended" current={screen} onSelect={selectScreen}>
               Unattended access
             </NavItem>
@@ -450,6 +466,8 @@ export default function App() {
             App settings
           </NavItem>
         </nav>
+
+        {portalMode && portalOnOwnPage ? <PortalTools /> : null}
       </header>
 
       <main className="app__main">
@@ -532,17 +550,6 @@ export default function App() {
           </div>
         ) : null}
 
-        {about && about.supportsCompanion && !about.supportsHosting && !companion ? (
-          <div className="notice notice--info">
-            <p className="notice__title">Works alongside your browser</p>
-            <p>
-              On {about.platform}, AICOUNTLY Remote does not share this screen itself. Share your
-              entire screen from Chrome or Edge in a session, link this {computerName} from there, and
-              the people you approve can use its mouse and keyboard while you watch.
-            </p>
-          </div>
-        ) : null}
-
         {error ? <div className="notice notice--danger">{error}</div> : null}
 
         {screen === 'register' && signIn ? (
@@ -558,11 +565,11 @@ export default function App() {
               busy={busy}
             />
             {signIn.outcome === 'pending' && confirmPath ? (
-              <PortalView path={confirmPath} hidden={updatePrompt} />
+              <PortalView path={confirmPath} hidden={updatePrompt} signInPage={!portalOnOwnPage} />
             ) : null}
           </>
         ) : screen === 'portal' && !signedOut ? (
-          <PortalView path="/" navigateKey={portalHome} hidden={updatePrompt} />
+          <PortalView path="/" navigateKey={portalHome} hidden={updatePrompt} signInPage={!portalOnOwnPage} />
         ) : signedOut && screen !== 'settings' ? (
           <SignInScreen
             revoked={revoked}
@@ -588,6 +595,14 @@ export default function App() {
           />
         ) : (
           <>
+            {about && about.supportsCompanion && !companion ? (
+              <HowItWorks
+                computerName={computerName}
+                stopShortcut={about.stopShortcut}
+                onOpenRemote={() => selectScreen('portal')}
+              />
+            ) : null}
+
             <DeviceCard state={state} onUnregister={unregister} busy={busy} />
 
             <PermissionsCard
@@ -601,6 +616,50 @@ export default function App() {
         )}
       </main>
     </div>
+  )
+}
+
+/**
+ * How somebody gets help on this computer, in the order they do it.
+ *
+ * The picture comes from the portal's own screen share and the mouse and
+ * keyboard from this application (docs/desktop/CONTROL_COMPANION.md), so the
+ * steps cross between the two — which is exactly why they are written down
+ * here rather than left for somebody to discover.
+ */
+function HowItWorks({
+  computerName,
+  stopShortcut,
+  onOpenRemote,
+}: {
+  computerName: string
+  stopShortcut: string
+  onOpenRemote: () => void
+}) {
+  return (
+    <section className="card how-it-works" aria-labelledby="how-it-works-title">
+      <h2 className="card__title" id="how-it-works-title">
+        Getting help on this {computerName}
+      </h2>
+      <ol className="how-it-works__steps">
+        <li>
+          In <strong>Remote</strong>, start a session and give the person helping you its code.
+        </li>
+        <li>Admit them when they join, then share your entire screen.</li>
+        <li>
+          Choose <strong>Enable control from this computer</strong> and confirm here. Whenever they ask to
+          use the mouse and keyboard, you decide.
+        </li>
+      </ol>
+      <p className="card__subtitle">
+        Stop control at any time with <kbd>{stopShortcut}</kbd>, from the banner, or from the tray icon.
+      </p>
+      <div className="how-it-works__actions">
+        <button type="button" className="btn btn--primary" onClick={onOpenRemote}>
+          Open Remote
+        </button>
+      </div>
+    </section>
   )
 }
 

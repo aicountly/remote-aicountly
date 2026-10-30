@@ -26,7 +26,9 @@ const DOWNLOAD_PAGE = 'https://aicountly.com/remote#download'
 function update(overrides: Partial<UpdateInfo> = {}): UpdateInfo {
   return {
     currentVersion: '1.0.0',
+    currentBuild: null,
     latestVersion: '1.1.0',
+    latestBuild: null,
     installer: {
       file: 'Aicountly-Remote-1.1.0-x64-Setup.exe',
       url: INSTALLER_URL,
@@ -54,6 +56,19 @@ describe('the update check when the window opens', () => {
     expect(screen.getByRole('button', { name: 'Install update' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Skip' })).toBeInTheDocument()
     expect(bridge.checkForUpdate).toHaveBeenCalledTimes(1)
+  })
+
+  /** Several builds go out as one version; "1.0.0 is available. You have 1.0.0." would say nothing. */
+  it('names the builds when a later build of the same version is published', async () => {
+    bridge.checkForUpdate.mockResolvedValue(
+      update({ latestVersion: '1.0.0', currentBuild: '202610300712', latestBuild: '202610301030' }),
+    )
+    render(<Updates sessionActive={false} />)
+
+    const dialog = await screen.findByRole('dialog', { name: 'Update available' })
+    expect(dialog).toHaveTextContent(
+      'AICOUNTLY Remote 1.0.0 (build 202610301030) is available. You have 1.0.0 (build 202610300712).',
+    )
   })
 
   it('shows nothing at all when this is the latest version', async () => {

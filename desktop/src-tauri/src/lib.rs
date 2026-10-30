@@ -277,8 +277,29 @@ pub fn run() {
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("AICOUNTLY Remote failed to start");
+        .build(tauri::generate_context!())
+        .expect("AICOUNTLY Remote failed to start")
+        .run(on_run_event);
+}
+
+/// What the running application does about the operating system's own events.
+///
+/// macOS has one Windows does not. Clicking the Dock icon, or opening the
+/// application from Finder, while it is already running does not start a
+/// second copy — so the single-instance handler above never hears of it — but
+/// asks the running one to *reopen*. Closing the window only hides it, so that
+/// request used to find nothing visible and do nothing: the application was
+/// running, the Dock said so, and the only way back to the window was the
+/// menu-bar icon. Shown, unminimised and focused, as a second launch is on
+/// Windows.
+fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
+    #[cfg(target_os = "macos")]
+    if let tauri::RunEvent::Reopen { .. } = event {
+        tray::show_window(app);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, event);
 }
 
 #[cfg(test)]

@@ -41,10 +41,12 @@ use CodeIgniter\Database\Exceptions\DatabaseException;
  * The picture still comes from A's browser; the companion is an input-only participant with one capability,
  * `remote_control`, linked to A's browser participant. What has to hold before a keystroke moves:
  *
- *   1. the session is a COMPANY session whose organisation permits remote control (policy ∧ the
- *      `desktop_devices` entitlement ∧ the desktop feature) — never a personal session, never a guest;
+ *   1. the session is A's personal session, or a COMPANY session, and its scope permits remote control
+ *      (policy ∧ the `desktop_devices` entitlement ∧ the desktop feature) — never a support session,
+ *      never a guest;
  *   2. A holds `remote.control.accept` and is the joined, sharing host; the device is A's own, in the
- *      session's company, ACTIVE, online and declares remote control;
+ *      session's scope (a personal device for a personal session, the session's company's otherwise),
+ *      ACTIVE, online and declares remote control;
  *   3. somebody at that machine confirmed the link there (decision 2), within five minutes;
  *   4. the link is ACTIVE (it knows the monitor), A is still sharing, and A shares an entire screen;
  *   5. A granted B's request in the browser — the companion can stop control but never grant it.
@@ -76,7 +78,8 @@ class CompanionService
      * A's own devices that could serve this session as a control companion.
      *
      * Never another person's machine, never another company's: the list is the caller's own enrolled
-     * devices in the session's company, and only those that are ACTIVE, online and declare remote control.
+     * devices in the session's scope — their personal ones for a personal session, the session's
+     * company's otherwise — and only those that are ACTIVE, online and declare remote control.
      *
      * @param  array<string, mixed> $session
      * @return array{devices: list<array<string, mixed>>, restrictions: list<string>}
@@ -85,19 +88,17 @@ class CompanionService
     {
         $restrictions = $this->restrictionsFor($session, $policy);
 
+        if (! self::scopeTakesCompanions($session)) {
+            return ['devices' => [], 'restrictions' => $restrictions];
+        }
+
         // A personal session can link a personal device: the person sharing
         // their screen is the person whose computer it is, which is the only
         // relationship this has ever required. What it cannot do is reach
         // across that line — a company session lists that company's devices,
         // a personal session lists the ones belonging to nobody but its owner.
-        $personal = $session['company_id'] === null && (string) $session['scope_type'] === 'PERSONAL';
-
-        if (! $personal && ($session['company_id'] === null || (string) $session['scope_type'] !== 'COMPANY')) {
-            return ['devices' => [], 'restrictions' => $restrictions];
-        }
-
         $rows = $this->db->table('remote_devices')
-            ->where('company_id', $personal ? null : (int) $session['company_id'])
+            ->where('company_id', self::companyOf($session))
             ->where('user_id', $identity->id)
             ->where('status', DeviceService::STATUS_ACTIVE)
             ->orderBy('device_name', 'ASC')
@@ -135,7 +136,14 @@ class CompanionService
             throw ApiException::conflict('SESSION_ALREADY_ENDED', 'This Remote session has already finished.');
         }
 
-        if ((string) $session['scope_type'] !== 'COMPANY' || $session['company_id'] === null || ! $policy->allowRemoteControl) {
+        if (! self::scopeTakesCompanions($session)) {
+            throw ApiException::forbidden(
+                'COMPANION_SCOPE',
+                'Control from your own computer is not available in this kind of session.',
+            );
+        }
+
+        if (! $policy->allowRemoteControl) {
             throw ApiException::forbidden(
                 'REMOTE_CONTROL_NOT_ALLOWED',
                 'Remote control is not enabled for this organisation.',
@@ -160,8 +168,9 @@ class CompanionService
             );
         }
 
-        // The caller's own machine, in this session's company — anything else is "not found", so a device
-        // uuid from another person or another tenant cannot be probed for.
+        // The caller's own machine, in this session's scope — anything else is "not found", so a device
+        // uuid from another person or another tenant cannot be probed for. A personal session takes only
+        // a personal device (both `company_id IS NULL`), and a company session only that company's.
         $device = $this->devices->findByUuid($deviceUuid);
 
         if ($device === null
@@ -871,8 +880,8 @@ class CompanionService
      */
     private function restrictionsFor(array $session, EffectivePolicy $policy): array
     {
-        if ((string) $session['scope_type'] !== 'COMPANY' || $session['company_id'] === null) {
-            return ['PERSONAL_SCOPE'];
+        if (! self::scopeTakesCompanions($session)) {
+            return ['COMPANION_SCOPE'];
         }
 
         $restrictions = [];
@@ -944,5 +953,23 @@ class CompanionService
     private static function companyOf(array $row): ?int
     {
         return $row['company_id'] !== null ? (int) $row['company_id'] : null;
+    }
+
+    /**
+     * Whether a session can have a control companion at all: a person's own session, or a company's.
+     *
+     * Personal is where most people are — AICOUNTLY Remote is used with a personal account — and the
+     * person sharing is the person whose computer it is either way. A support session is neither: the
+     * machine would be controlled on a ticket's say-so, which is a separate decision nobody has made.
+     *
+     * @param array<string, mixed> $session
+     */
+    private static function scopeTakesCompanions(array $session): bool
+    {
+        return match ((string) $session['scope_type']) {
+            'PERSONAL' => $session['company_id'] === null,
+            'COMPANY'  => $session['company_id'] !== null,
+            default    => false,
+        };
     }
 }

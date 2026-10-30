@@ -108,7 +108,12 @@ pub fn init(component: &str) -> Option<PathBuf> {
     }
 
     if let Some(path) = written_to.as_ref() {
-        tracing::info!(log = %path.display(), version = crate::AGENT_VERSION, "AICOUNTLY Remote starting");
+        tracing::info!(
+            log = %path.display(),
+            version = crate::AGENT_VERSION,
+            build = crate::AGENT_BUILD.unwrap_or("local"),
+            "AICOUNTLY Remote starting"
+        );
     }
 
     record_panics();

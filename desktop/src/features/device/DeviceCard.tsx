@@ -40,10 +40,13 @@ export function DeviceCard({
           <span className="row__value row__value--mono">{state.deviceUuid ?? '—'}</span>
         </div>
 
-        <div className="row">
-          <span className="row__label">Organisation</span>
-          <span className="row__value">{state.companyName ?? '—'}</span>
-        </div>
+        {/* A personal computer belongs to nobody's organisation, so it has no row for one. */}
+        {state.companyName ? (
+          <div className="row">
+            <span className="row__label">Organisation</span>
+            <span className="row__value">{state.companyName}</span>
+          </div>
+        ) : null}
 
         <div className="row">
           <span className="row__label">Key fingerprint</span>

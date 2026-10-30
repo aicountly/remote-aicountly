@@ -99,6 +99,7 @@ jobs:
 
     outputs:
       signed: ${{ steps.build.outputs.signed }}
+      build: ${{ steps.stamp.outputs.build }}
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -137,6 +138,53 @@ jobs:
           }
           if ($conf.version -ne $workspace) { throw 'tauri.conf.json disagrees with the workspace version.' }
           if ($package.version -ne $workspace) { throw 'package.json disagrees with the workspace version.' }
+
+      # Every build gets a number of its own, because the version does not
+      # move with every build: several go out as the same version, and the
+      # downloads host serves an installer as immutable for a year. Published
+      # under one name, a second build of 1.0.0 reached nobody whose browser
+      # had fetched the first -- reinstalling "the latest" handed people the
+      # build they were replacing.
+      #
+      # The number is the commit's own time, UTC, to the minute. The macOS
+      # release computes it the same way, so both platforms built from one
+      # commit share a number and a GitHub release, and a later commit always
+      # gets a larger one -- which is what the application's update check
+      # compares (remote_core::update). It is compiled in through
+      # AICOUNTLY_REMOTE_BUILD and is in the installer's name, the release tag
+      # and the About panel.
+      - name: Stamp the build
+        id: stamp
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+        run: |
+          $seconds = [long](git show -s --format=%ct HEAD)
+          $build = [DateTimeOffset]::FromUnixTimeSeconds($seconds).UtcDateTime.ToString('yyyyMMddHHmm')
+          $suffix = if ($env:INPUT_CHANNEL -eq 'beta') { '-beta' } else { '' }
+          $tag = "desktop-v$($env:REQUESTED_VERSION)$suffix-b$build"
+
+          # Two commits made within the same minute would share a number. The
+          # first one released keeps it; a release of the other would attach
+          # its installers to the first one's release under the first one's
+          # names, which is the collision all of this exists to prevent.
+          if ($env:INPUT_CHANNEL -ne 'sandbox') {
+            $existing = gh api "repos/$($env:GITHUB_REPOSITORY)/commits/$tag" --jq '.sha' 2>$null
+            if ($LASTEXITCODE -eq 0 -and $existing -and $existing.Trim() -ne $env:GITHUB_SHA) {
+              throw "Build $build is already released as $tag, from $($existing.Trim()). Two commits made in the same minute share a build number: release a newer commit instead."
+            }
+          }
+
+          "AICOUNTLY_REMOTE_BUILD=$build" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "build=$build" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Build $build of $($env:REQUESTED_VERSION), from $($env:GITHUB_SHA); release tag $tag"
+
+          # gh's answer for a tag that does not exist yet is an exit code, and
+          # Actions ends a pwsh step with whatever the last one was.
+          $global:LASTEXITCODE = 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -267,11 +315,21 @@ jobs:
         env:
           INPUT_CHANNEL: ${{ inputs.channel }}
           INPUT_ALLOW_UNSIGNED: ${{ inputs.allow_unsigned }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           $target = 'target/x86_64-pc-windows-msvc/release'
           New-Item -ItemType Directory -Force -Path release | Out-Null
 
-          Get-ChildItem "$target/bundle/nsis/*.exe" | Copy-Item -Destination release
+          # The installer this run built, under the name it is published as:
+          # the build number in it, so it can never be mistaken for -- or
+          # cached as -- another build of the same version. make-manifest.mjs
+          # reads the number back out of the name.
+          $installers = @(Get-ChildItem "$target/bundle/nsis/*_$($env:INPUT_VERSION)_x64-setup.exe")
+          if ($installers.Count -ne 1) {
+            throw "Expected one installer for $($env:INPUT_VERSION) in $target/bundle/nsis, found $($installers.Count)."
+          }
+          $published = "Aicountly-Remote-$($env:INPUT_VERSION)-b$($env:AICOUNTLY_REMOTE_BUILD)-x64-Setup.exe"
+          Copy-Item $installers[0].FullName -Destination (Join-Path release $published)
 
           # Checksums, so somebody who downloaded an installer from anywhere
           # can tell whether it is the one this run produced.
@@ -290,7 +348,7 @@ jobs:
               'UNSIGNED DEVELOPMENT BUILD',
               '==========================',
               '',
-              "Built from ${{ github.sha }} on the sandbox channel.",
+              "Build $($env:AICOUNTLY_REMOTE_BUILD), from ${{ github.sha }}, on the sandbox channel.",
               '',
               'These installers are NOT signed. Windows SmartScreen will warn about them and',
               'that warning is correct — nothing here vouches for who produced them.',
@@ -305,7 +363,7 @@ jobs:
               'UNSIGNED RELEASE BUILD',
               '======================',
               '',
-              "Built from ${{ github.sha }} on the ${{ inputs.channel }} channel, deliberately",
+              "Build $($env:AICOUNTLY_REMOTE_BUILD), from ${{ github.sha }}, on the ${{ inputs.channel }} channel, deliberately",
               'without code signing, while a certificate is being obtained.',
               '',
               'Windows will show "Windows protected your PC" the first time this runs. That',
@@ -324,7 +382,7 @@ jobs:
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: aicountly-remote-windows-${{ inputs.version }}-${{ inputs.channel }}
+          name: aicountly-remote-windows-${{ inputs.version }}-b${{ steps.stamp.outputs.build }}-${{ inputs.channel }}
           path: desktop/release/*
           # A development build is a thing somebody looked at this week, not an
           # archive. Signed builds live in the GitHub release below.
@@ -333,21 +391,29 @@ jobs:
 
       # A GitHub release only for a channel that actually signs. There is no
       # branch here that could publish an unsigned artifact as a release.
+      #
+      # One release per build, tagged on the commit that was built. The tag
+      # used to be the version alone, so a second build of a version had to
+      # delete the first one's release -- and a tag created without a target
+      # was put on whatever main was when the release finished, not on what
+      # had been built. publish-downloads.yml takes the newest build of each
+      # platform.
       - name: Publish a GitHub release
         if: inputs.channel != 'sandbox'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          tag_name: desktop-v${{ inputs.version }}${{ inputs.channel == 'beta' && '-beta' || '' }}
-          name: AICOUNTLY Remote for Windows ${{ inputs.version }}
+          tag_name: ${{ steps.stamp.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: AICOUNTLY Remote ${{ inputs.version }} (build ${{ steps.stamp.outputs.build }})
           prerelease: ${{ inputs.channel == 'beta' }}
           draft: false
           files: desktop/release/*
           body: |
-            AICOUNTLY Remote for Windows ${{ inputs.version }} (${{ inputs.channel }}).
+            AICOUNTLY Remote for Windows ${{ inputs.version }}, build ${{ steps.stamp.outputs.build }} (${{ inputs.channel }}).
 
             ${{ inputs.allow_unsigned && '**This build is NOT code-signed.** Windows will show "Windows protected your PC" on first run, and that warning is correct. See UNSIGNED.txt in the assets. Replace it with a signed build as soon as one exists.' || 'Signed and timestamped.' }} Verify a download against `SHA256SUMS.txt`,
             and check the signature with:
 
-                Get-AuthenticodeSignature .\AICOUNTLY-Remote-x64-Setup.exe
+                Get-AuthenticodeSignature .\Aicountly-Remote-${{ inputs.version }}-b${{ steps.stamp.outputs.build }}-x64-Setup.exe
 
             Built from ${{ github.sha }}.

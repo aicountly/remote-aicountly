@@ -45,6 +45,15 @@ on:
         required: false
         default: ''
         type: string
+      build:
+        description: >-
+          Leave empty to publish the newest build of each platform. A build
+          number (yyyyMMddHHmm, from a release name) publishes what was newest
+          at that build instead -- which is how one build is rolled back to
+          an earlier one.
+        required: false
+        default: ''
+        type: string
       channel:
         description: Which channel's release to publish
         required: true
@@ -133,12 +142,14 @@ jobs:
 
       # The GitHub release, not a workflow artifact: a release only exists for
       # a channel that signs, which makes "is this signed?" a question already
-      # answered rather than one asked here. Both platforms' releases carry
-      # the same tag, so this collects whatever built.
+      # answered rather than one asked here. Every build has a release of its
+      # own (desktop-v<version>[-beta]-b<build>), and Windows and macOS are
+      # built separately, so this takes the newest build of each platform.
       - name: Check the version was given
         if: inputs.mode != 'check-access'
         env:
           VERSION: ${{ inputs.version }}
+          BUILD: ${{ inputs.build }}
         run: |
           set -euo pipefail
           if [ -z "${VERSION}" ]; then
@@ -149,40 +160,96 @@ jobs:
             echo "::error title=Not a version::'${VERSION}' does not look like 1.2.3 or 1.2.3-beta.1."
             exit 1
           fi
+          if [ -n "${BUILD}" ] && ! printf '%s' "${BUILD}" | grep -Eq '^[0-9]{12}$'; then
+            echo "::error title=Not a build number::'${BUILD}' is not a build number. It is twelve digits, yyyyMMddHHmm, as in a release named 'AICOUNTLY Remote 1.0.0 (build 202610301030)'."
+            exit 1
+          fi
 
       - name: Fetch the signed release
         if: inputs.mode != 'check-access'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: desktop-v${{ inputs.version }}${{ inputs.channel == 'beta' && '-beta' || '' }}
+          VERSION: ${{ inputs.version }}
+          BUILD: ${{ inputs.build }}
           CHANNEL: ${{ inputs.channel }}
         run: |
           set -euo pipefail
-          mkdir -p staging
+          mkdir -p staging work
 
-          # `gh release download` says "release not found" and stops, which is
-          # true and useless: it does not say what does exist, and the usual
-          # cause is not a typo. So find out first and explain.
-          if ! gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "There is no release tagged ${TAG}."
+          suffix=""
+          [ "${CHANNEL}" = "beta" ] && suffix="-beta"
+          base="desktop-v${VERSION}${suffix}"
+
+          # Every build of this version on this channel, newest first -- or,
+          # given a build, that one and those before it. The release from
+          # before builds were numbered, if there still is one, comes last:
+          # it is older than any of them.
+          releases=$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 200 \
+            --json tagName,isDraft --jq '.[] | select(.isDraft | not) | .tagName')
+
+          candidates=()
+          while IFS= read -r tag; do
+            number="${tag#"${base}-b"}"
+            [ "${number}" != "${tag}" ] || continue
+            [[ "${number}" =~ ^[0-9]{12}$ ]] || continue
+            if [ -n "${BUILD}" ] && [ "${number}" \> "${BUILD}" ]; then
+              continue
+            fi
+            candidates+=("${tag}")
+          done < <(printf '%s\n' "${releases}" | sort -r)
+
+          if printf '%s\n' "${releases}" | grep -qxF "${base}"; then
+            candidates+=("${base}")
+          fi
+
+          if [ "${#candidates[@]}" -eq 0 ]; then
+            echo "There is no release of ${VERSION} on the ${CHANNEL} channel."
             echo
             echo "Releases that do exist in ${GITHUB_REPOSITORY}:"
-            existing=$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 20 2>/dev/null || true)
-
-            if [ -z "${existing}" ]; then
+            if [ -z "${releases}" ]; then
               echo "  (none -- this repository has never published one)"
               echo "::error title=Nothing has been released yet::This workflow publishes a release; it does not build one, and ${GITHUB_REPOSITORY} has no releases at all. Build one first with release-windows.yml (and release-macos.yml for a Mac build), using channel beta or production. Note that channel: sandbox deliberately publishes NO release -- a sandbox build is unsigned, and nothing unsigned may reach the downloads host -- so a green sandbox run leaves nothing here to publish."
               exit 1
             fi
-
-            printf '%s\n' "${existing}" | sed 's/^/  /'
+            printf '%s\n' "${releases}" | head -20 | sed 's/^/  /'
             echo
-            echo "::error title=No release tagged ${TAG}::The channel chosen here decides the tag: beta looks for desktop-v<version>-beta, production for desktop-v<version>. This run asked for '${CHANNEL}', so it looked for ${TAG}. If the build was made on the other channel, re-run this with that channel selected rather than renaming anything."
+            echo "::error title=No release of ${VERSION} (${CHANNEL})::The channel chosen here decides the tag: beta looks for ${base%-beta}-beta-b<build>, production for desktop-v<version>-b<build>. This run asked for '${CHANNEL}'${BUILD:+ at or before build ${BUILD}}. If the build was made on the other channel, re-run this with that channel selected rather than renaming anything."
             exit 1
           fi
 
-          echo "Downloading ${TAG}"
-          gh release download "${TAG}" --dir staging --repo "${GITHUB_REPOSITORY}"
+          echo "Builds of ${VERSION} (${CHANNEL}), newest first:"
+          printf '  %s\n' "${candidates[@]}"
+
+          # The newest release that has each platform's installers, with its
+          # own checksums. Their sums files are named apart
+          # (SHA256SUMS.txt, SHA256SUMS-macos.txt), so the two can share a
+          # directory; the notices cannot, and are named apart here.
+          found=0
+          take() {
+            local platform="$1" extension="$2" sums="$3" tag names
+            for tag in "${candidates[@]}"; do
+              names=$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')
+              if printf '%s\n' "${names}" | grep -q "\.${extension}\$"; then
+                echo "${platform}: ${tag}"
+                mkdir -p "work/${platform}"
+                gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" --dir "work/${platform}" \
+                  --pattern "*.${extension}" --pattern "${sums}" --pattern 'UNSIGNED.txt'
+                [ -f "work/${platform}/UNSIGNED.txt" ] && mv "work/${platform}/UNSIGNED.txt" "work/${platform}/UNSIGNED-${platform}.txt"
+                mv "work/${platform}"/* staging/
+                found=$((found + 1))
+                return 0
+              fi
+            done
+            echo "${platform}: no build of ${VERSION} has one"
+          }
+
+          take windows exe 'SHA256SUMS.txt'
+          take macos dmg 'SHA256SUMS-macos.txt'
+
+          if [ "${found}" -eq 0 ]; then
+            echo "::error title=Nothing to publish::None of the releases above carries an installer or a disk image."
+            exit 1
+          fi
           ls -la staging
 
       # Block maps are for differential updates and the macOS .zip is what an
@@ -192,8 +259,8 @@ jobs:
         if: inputs.mode != 'check-access'
         run: rm -f staging/*.zip staging/*.blockmap
 
-      # Renames each installer to a name that is safe in a URL and the same
-      # every release, hashes it, cross-checks SHA256SUMS.txt, and writes the
+      # Renames each installer to a name that is safe in a URL and carries its
+      # build, hashes it, cross-checks SHA256SUMS.txt, and writes the
       # manifest beside the workspace rather than into staging -- so the
       # upload below cannot carry it up early.
       - name: Describe the release
@@ -261,9 +328,14 @@ jobs:
             "${SSH_USER}@${SSH_HOST}" "ls -la '${REMOTE_ROOT}/${PRODUCT}' 2>/dev/null || echo '  nothing yet'" || true
 
       # Into the version's own directory, so publishing 1.1.0 cannot disturb
-      # 1.0.0 and a link that worked yesterday still works. --delete is scoped
-      # to that one directory: it clears a previous attempt at this same
-      # version and can reach nothing else.
+      # 1.0.0 and a link that worked yesterday still works.
+      #
+      # No --delete. Every build has a name of its own, so nothing here is
+      # ever overwritten -- and the manifest the website is reading right now
+      # still names the previous build until the last step replaces it, so
+      # deleting that build first would break every download button for as
+      # long as this run takes. Older builds stay, which is also what lets
+      # mode=manifest-only with a build roll back to one.
       - name: Upload the installers
         if: inputs.mode == 'files-and-manifest'
         env:
@@ -276,7 +348,7 @@ jobs:
           set -euo pipefail
           DEST="${REMOTE_ROOT%/}/${PRODUCT}/${VERSION}"
           echo "Uploading to ${DEST}"
-          rsync -avz --delete --chmod=D755,F644 \
+          rsync -avz --chmod=D755,F644 \
             --exclude='manifest.json' \
             --rsync-path="mkdir -p '${DEST}' && rsync" \
             -e "ssh -p ${SSH_PORT} -o StrictHostKeyChecking=accept-new" \
@@ -384,6 +456,7 @@ jobs:
         if: always()
         env:
           VERSION: ${{ inputs.version }}
+          BUILD: ${{ inputs.build }}
           CHANNEL: ${{ inputs.channel }}
           MODE: ${{ inputs.mode }}
         run: |
@@ -406,6 +479,7 @@ jobs:
             echo "## Remote ${VERSION} (${CHANNEL})"
             echo
             echo "- Mode: \`${MODE}\`"
+            echo "- Build: ${BUILD:-newest of each platform}"
             echo "- Files: ${BASE_URL}/${PRODUCT}/${VERSION}/"
             echo "- Manifest: ${BASE_URL}/${PRODUCT}/manifest.json"
             echo

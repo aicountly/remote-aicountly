@@ -72,7 +72,7 @@ function outcomeNote(link: CompanionLink | null): string | null {
 function restrictionMessage(restrictions: string[], desktopAgent: boolean): string {
   if (restrictions.includes('CONTROL_ACCEPT_DENIED')) return 'You do not have permission to hand over control.'
   if (restrictions.some((r) => r.startsWith('REMOTE_CONTROL'))) return 'Remote control is not enabled for this organisation.'
-  if (restrictions.includes('PERSONAL_SCOPE')) return 'Control is available only in organisation sessions.'
+  if (restrictions.includes('COMPANION_SCOPE')) return 'Control from your own computer is not available in this kind of session.'
 
   return desktopAgent
     ? 'No AICOUNTLY Remote desktop app is signed in for you. Open it on this computer, sign in and try again.'
@@ -143,8 +143,8 @@ export default function CompanionPanel({
           {desktopAgent ? (
             <>
               <p className="control__empty">
-                Let someone you allow control this computer while you share your entire screen. This needs AICOUNTLY
-                Remote for Windows open on it, signed in with your AICOUNTLY account.
+                Let someone you allow control this computer while you share your entire screen. This needs the
+                AICOUNTLY Remote app for Windows or Mac open on it, signed in with your AICOUNTLY account.
               </p>
               <p className="control__hint">
                 <DesktopAppDownloadLink className="control__link" />

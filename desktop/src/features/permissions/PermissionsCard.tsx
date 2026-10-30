@@ -53,7 +53,7 @@ export function PermissionsCard({
     <section className="card">
       <h2 className="card__title">Permissions</h2>
       <p className="card__subtitle">
-        A capability works only when this computer and your organisation both allow it.
+        A capability works only when this computer and your AICOUNTLY account both allow it.
       </p>
 
       <div className="card__rows">
@@ -104,10 +104,10 @@ function PermissionRow({
         {organisation === undefined ? null : organisation ? (
           <span className="pill pill--neutral">Allowed by policy</span>
         ) : (
-          // Named as the organisation's decision rather than as a failure:
-          // there is nothing the person at this computer can do about it, and
-          // implying otherwise sends them looking for a setting.
-          <span className="pill pill--neutral">Off for your organisation</span>
+          // Named as the account's limit rather than as a failure: there is
+          // nothing the person at this computer can do about it, and implying
+          // otherwise sends them looking for a setting.
+          <span className="pill pill--neutral">Not available for your account</span>
         )}
       </span>
     </div>

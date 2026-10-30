@@ -17,7 +17,7 @@ const bridge = vi.hoisted(() => ({
 
 vi.mock('../../services/tauri', () => bridge)
 
-const { PortalView, forgetPortalPage } = await import('./PortalView')
+const { PortalTools, PortalView, forgetPortalPage } = await import('./PortalView')
 
 const RECT = { left: 0, top: 120, width: 960, height: 600, right: 960, bottom: 720, x: 0, y: 120, toJSON: () => ({}) }
 
@@ -102,14 +102,32 @@ describe('PortalView', () => {
     )
   })
 
-  it('offers back, reload and open in browser', async () => {
-    render(<PortalView path="/" />)
+  it('offers back, reload and open in browser on a sign-in page', async () => {
+    render(<PortalView path="/" signInPage />)
 
     await userEvent.click(screen.getByRole('button', { name: /back/i }))
     await userEvent.click(screen.getByRole('button', { name: 'Reload' }))
     await userEvent.click(screen.getByRole('button', { name: 'Open in browser' }))
 
     expect(bridge.portalAction.mock.calls.map(([action]) => action)).toEqual(['back', 'reload', 'open_in_browser'])
+  })
+
+  /** Signed in, the portal has its own menus; a row of browser buttons above them is noise. */
+  it('shows no browser buttons on the portal’s own pages', () => {
+    render(<PortalView path="/" />)
+
+    expect(screen.queryByRole('button', { name: /back/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Open in browser' })).toBeNull()
+  })
+
+  it('keeps reload and open in browser for the header, as two small buttons', async () => {
+    render(<PortalTools />)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Reload this page' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Open this page in your browser' }))
+
+    expect(bridge.portalAction.mock.calls.map(([action]) => action)).toEqual(['reload', 'open_in_browser'])
   })
 
   it('says so when the portal could not be opened', async () => {

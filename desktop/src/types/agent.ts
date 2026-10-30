@@ -168,6 +168,8 @@ export interface ServiceStatus {
 export interface About {
   product: string
   version: string
+  /** Which build of the version (`yyyyMMddHHmm`), as in the installer's name; null for a local build. */
+  build: string | null
   platform: string
   supported: boolean
   /** Whether this build can share its own screen and be controlled (Windows). */
@@ -220,7 +222,11 @@ export interface EnrolmentConfirmation {
  */
 export interface UpdateInfo {
   currentVersion: string
+  /** Which build is installed; null for a local build. */
+  currentBuild: string | null
   latestVersion: string
+  /** Which build is published, when the manifest says. */
+  latestBuild: string | null
   /** The installer for this OS and architecture; null when there is none to fetch automatically. */
   installer: { file: string; url: string; size: number; sha256: string } | null
   /** The download page, for installing by hand. */

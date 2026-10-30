@@ -13,10 +13,21 @@
  * spaces in release asset names, so what comes back out of a release is not
  * reliably what went in. The website refuses a file name that is not a single
  * safe path segment, which is the correct rule and would refuse both. So the
- * published name is derived here from the product, version and architecture
- * rather than carried over from the build, and is the same every release.
- * Authenticode signs a file's contents, not its name, so a rename costs
- * nothing.
+ * published name is derived here from the product, version, build and
+ * architecture rather than carried over from the build. Authenticode signs a
+ * file's contents, not its name, so a rename costs nothing.
+ *
+ * The build is in the name because the version is not enough. Several builds
+ * go out as the same version, and the downloads host serves an installer as
+ * immutable for a year (aicountly/aicountly-downloads, `site/.htaccess`):
+ * a second build published under the first one's name was never fetched by a
+ * browser that had fetched the first, so somebody reinstalling "the latest"
+ * was handed the build they were replacing. The release workflows put the
+ * build — the commit's time, `yyyyMMddHHmm` — into each installer's name as
+ * `-b<build>-`; it is read back out here, kept in the published name and
+ * recorded per file, which is what the application's update check compares.
+ * A name without one (a release from before builds were numbered) publishes
+ * as it always did.
  *
  * `signed` is read from a Windows binary rather than taken on trust: it
  * decides whether the website offers a build at all and whether it prints a
@@ -60,6 +71,9 @@ const NOT_A_BUILD = [
   /\.pdb$/i,
   /__uninstaller/i,
 ]
+
+/** `-b202610301030-`: a build number, as the release workflows write it into a name. */
+const BUILD_IN_NAME = /(?:^|[-_.])b(\d{12})(?=[-_.])/
 
 /** How a product's files are named once published. */
 const PRODUCT_PREFIX = {
@@ -108,6 +122,17 @@ export function classify(name) {
 }
 
 /**
+ * The build number carried in an artefact's name, or '' for one from before
+ * builds were numbered.
+ *
+ * @param {string} name
+ * @returns {string}
+ */
+export function buildOf(name) {
+  return BUILD_IN_NAME.exec(name)?.[1] ?? ''
+}
+
+/**
  * How a build is described on the page, once it has a button.
  *
  * The same words Connect uses (`scripts/make-manifest.mjs` there), because
@@ -127,10 +152,10 @@ export function labelFor(platform, arch) {
 }
 
 /**
- * The name a build is published under: safe in a URL, and the same every
- * release, so a link can be written down.
+ * The name a build is published under: safe in a URL, and different for every
+ * build, so a link always fetches the build it names.
  */
-export function canonicalName({ product, version, platform, arch, kind }) {
+export function canonicalName({ product, version, build = '', platform, arch, kind }) {
   const prefix = PRODUCT_PREFIX[product]
   if (prefix === undefined) {
     throw new Error(`No published naming is defined for product '${product}'.`)
@@ -138,8 +163,11 @@ export function canonicalName({ product, version, platform, arch, kind }) {
   if (arch === '') {
     throw new Error('A build whose architecture cannot be read from its name cannot be published.')
   }
+  if (build !== '' && !/^\d{12}$/.test(build)) {
+    throw new Error(`'${build}' is not a build number (yyyyMMddHHmm).`)
+  }
 
-  const stem = `${prefix}-${version}-${arch}`
+  const stem = `${prefix}-${version}${build === '' ? '' : `-b${build}`}-${arch}`
 
   if (kind === 'installer' && platform === 'windows') {
     return `${stem}-Setup.exe`
@@ -273,7 +301,8 @@ export async function makeManifest({ dir, product, version, channel, signed }) {
       continue
     }
 
-    const published = canonicalName({ product, version, ...what })
+    const build = buildOf(name)
+    const published = canonicalName({ product, version, build, ...what })
     const to = join(dir, published)
 
     // Two builds that would publish under one name means one of them is
@@ -284,6 +313,19 @@ export async function makeManifest({ dir, product, version, channel, signed }) {
       throw new Error(
         `${name} and ${clash.source} would both be published as ${published}. ` +
           'Refusing to overwrite one with the other.',
+      )
+    }
+
+    // Two builds of one thing — say an older Windows installer left beside a
+    // newer one — would both get a button, and an update check would take
+    // whichever it met first. One of each, or nothing.
+    const twin = files.find(
+      (file) => file.platform === what.platform && file.arch === what.arch && file.kind === what.kind,
+    )
+    if (twin !== undefined) {
+      throw new Error(
+        `${name} and ${twin.source} are both a ${what.platform} ${what.arch} ${what.kind}. ` +
+          'Publish one build of each.',
       )
     }
 
@@ -326,6 +368,7 @@ export async function makeManifest({ dir, product, version, channel, signed }) {
       kind: what.kind,
       label: labelFor(what.platform, what.arch),
       file: published,
+      ...(build === '' ? {} : { build }),
       size: (await stat(to)).size,
       sha256: digest,
       signed: fileSigned,

@@ -23,8 +23,12 @@ use crate::{ipc, platform, Agent};
 pub struct About {
     /// The product name.
     pub product: String,
-    /// This build.
+    /// This build's version.
     pub version: String,
+    /// Which build of that version (`yyyyMMddHHmm`, the commit's time), or
+    /// `None` for a local build. The same number is in the installer's name,
+    /// so somebody can tell which one they are running.
+    pub build: Option<String>,
     /// `Windows`, `macOS`, or `unsupported`.
     pub platform: String,
     /// Whether this build has a real platform implementation — either role.
@@ -666,10 +670,17 @@ pub async fn check_for_update() -> Option<remote_core::UpdateInfo> {
         }
     };
 
-    match checker.check(crate::VERSION, platform, arch).await {
+    match checker
+        .check(crate::VERSION, remote_core::AGENT_BUILD, platform, arch)
+        .await
+    {
         Ok(update) => {
             if let Some(update) = &update {
-                tracing::info!(latest = %update.latest_version, "a newer version is published");
+                tracing::info!(
+                    latest = %update.latest_version,
+                    build = update.latest_build.as_deref().unwrap_or("-"),
+                    "a newer build is published"
+                );
             }
             update
         }
@@ -725,7 +736,7 @@ pub async fn install_update(
     let checker = remote_core::UpdateChecker::new().map_err(|error| error.to_string())?;
 
     let update = checker
-        .check(crate::VERSION, platform, arch)
+        .check(crate::VERSION, remote_core::AGENT_BUILD, platform, arch)
         .await
         .map_err(|error| error.to_string())?
         .ok_or("This is already the latest version of AICOUNTLY Remote.")?;
@@ -766,6 +777,7 @@ pub fn about(agent: tauri::State<'_, Arc<Agent>>) -> About {
     About {
         product: crate::PRODUCT_NAME.to_owned(),
         version: crate::VERSION.to_owned(),
+        build: remote_core::AGENT_BUILD.map(str::to_owned),
         platform: platform::platform_name().to_owned(),
         supported: platform::is_supported(),
         supports_hosting: platform::supports_hosting(),

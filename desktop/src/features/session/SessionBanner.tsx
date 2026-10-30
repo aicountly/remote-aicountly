@@ -46,7 +46,7 @@ export function SessionBanner({
 
       <div className="session-banner__facts">
         <Fact label="Connected person" value={session.connectedName} />
-        <Fact label="Organisation" value={session.companyName ?? 'Not specified'} />
+        {session.companyName ? <Fact label="Organisation" value={session.companyName} /> : null}
         <Fact label="Started" value={<Elapsed since={session.startedAt} />} />
         <Fact
           label="Control"

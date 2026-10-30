@@ -50,7 +50,7 @@ export function CompanionBanner({
 
       <div className="session-banner__facts">
         <Fact label="Session" value={companion.displayId} />
-        <Fact label="Organisation" value={companion.companyName ?? 'Not specified'} />
+        {companion.companyName ? <Fact label="Organisation" value={companion.companyName} /> : null}
         {companion.startedAt ? <Fact label="Since" value={<Elapsed since={companion.startedAt} />} /> : null}
         <Fact label="Screen" value={companion.monitor?.name ?? 'Not chosen yet'} />
       </div>

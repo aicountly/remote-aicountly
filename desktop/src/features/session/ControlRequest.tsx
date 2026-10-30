@@ -59,8 +59,8 @@ export function ControlRequest({
           <span>
             <span className="field__label">Also share the clipboard</span>
             <span className="field__hint">
-              Text you copy can be pasted by {requesterName}, and text they copy can be pasted
-              here. Off unless you tick it.
+              Text {requesterName} copies can be pasted on this computer. Nothing you copy here is
+              sent to them. Off unless you tick it.
             </span>
           </span>
           <input

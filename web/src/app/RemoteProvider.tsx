@@ -7,6 +7,7 @@ import { getCapabilities } from '../services/browser/capabilities'
 import type { RemoteBrowserCapabilities } from '../services/browser/capabilities'
 import type { Bootstrap, EffectivePolicy, ScopeType } from '../types/remote'
 import { noteCompanyLifecycle, setActiveCompanyForRestrictions } from '../services/companyRestriction'
+import { isDesktopApp } from '../features/desktop/embedding'
 
 /**
  * Application-wide Remote state: who you are, which organisation you are acting
@@ -114,15 +115,23 @@ export function RemoteProvider({ children }: { children: ReactNode }) {
       // A verified launch context decides the scope — a company-scoped workflow
       // must not open in Personal (§13). Otherwise the last choice is restored,
       // and only if the user still has access to that company.
-      const stored = readStoredScope()
+      //
+      // Inside the desktop application it is always Personal. The computer it
+      // runs on is registered to the person, not to an organisation, so a
+      // session in any other scope could never be controlled from it — and
+      // the application offers no way to choose one.
+      const desktop = isDesktopApp()
+      const stored = desktop ? null : readStoredScope()
       const hasStoredCompany =
         stored?.companyId != null && data.companies.some((c) => c.companyId === stored.companyId)
 
-      const next: StoredScope = data.launchContext?.companyId
-        ? { scopeType: data.activeScope.scopeType, companyId: data.activeScope.companyId }
-        : hasStoredCompany
-          ? { scopeType: stored!.scopeType, companyId: stored!.companyId }
-          : { scopeType: 'PERSONAL', companyId: null }
+      const next: StoredScope = desktop
+        ? { scopeType: 'PERSONAL', companyId: null }
+        : data.launchContext?.companyId
+          ? { scopeType: data.activeScope.scopeType, companyId: data.activeScope.companyId }
+          : hasStoredCompany
+            ? { scopeType: stored!.scopeType, companyId: stored!.companyId }
+            : { scopeType: 'PERSONAL', companyId: null }
 
       setScopeType(next.scopeType)
       setCompanyId(next.companyId)

@@ -15,7 +15,11 @@
 //!     window has to explain. The application works the same either way.
 //!   * **only newer.** Versions are compared as semver; an unparseable
 //!     version on either side is never "newer", so a malformed manifest
-//!     cannot nag anybody.
+//!     cannot nag anybody. Several builds go out as the same version, so for
+//!     the same version the build number decides (`crate::AGENT_BUILD`): a
+//!     later build is offered, the same or an earlier one never is, and a
+//!     local build — which has no number — is only ever offered a newer
+//!     version.
 //!   * **nothing runs that was not verified.** The installer is fetched from
 //!     the downloads host under the name the manifest gives it, its size and
 //!     SHA-256 are checked against the manifest, and only a file that matches
@@ -91,8 +95,13 @@ pub struct ReleaseFile {
     pub arch: String,
     /// `installer`, `disk-image` or `archive`.
     pub kind: String,
-    /// The published name, e.g. `Aicountly-Remote-1.1.0-x64-Setup.exe`.
+    /// The published name, e.g.
+    /// `Aicountly-Remote-1.0.0-b202610301030-x64-Setup.exe`.
     pub file: String,
+    /// Which build of the version this is (`yyyyMMddHHmm`). Missing from a
+    /// manifest written before builds were numbered.
+    #[serde(default)]
+    pub build: Option<String>,
     /// Bytes.
     pub size: u64,
     /// Lower-case hex.
@@ -105,8 +114,12 @@ pub struct ReleaseFile {
 pub struct UpdateInfo {
     /// What is installed.
     pub current_version: String,
+    /// Which build of it, when it has a number.
+    pub current_build: Option<String>,
     /// What is published.
     pub latest_version: String,
+    /// Which build of it, when the manifest says.
+    pub latest_build: Option<String>,
     /// The installer for this operating system and architecture, if the
     /// release has one.
     pub installer: Option<UpdateInstaller>,
@@ -163,8 +176,48 @@ pub fn is_newer(installed: &str, latest: &str) -> bool {
     }
 }
 
+/// Whether two versions are the same release, by semver precedence.
+fn is_same_version(installed: &str, latest: &str) -> bool {
+    match (
+        semver::Version::parse(installed.trim().trim_start_matches('v')),
+        semver::Version::parse(latest.trim().trim_start_matches('v')),
+    ) {
+        (Ok(installed), Ok(latest)) => latest.cmp_precedence(&installed).is_eq(),
+        _ => false,
+    }
+}
+
+/// A build number as the release workflows write it: the commit's time,
+/// `yyyyMMddHHmm`, digits only.
+fn parse_build(value: &str) -> Option<u64> {
+    let value = value.trim();
+
+    if value.len() != 12 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+
+    value.parse().ok()
+}
+
+/// Whether `latest` is a later build than `installed`, of the same version.
+///
+/// Both have to be numbers. A local build has none and is never offered the
+/// same version again, and a manifest from before builds were numbered never
+/// offers one.
+#[must_use]
+pub fn is_newer_build(installed: Option<&str>, latest: Option<&str>) -> bool {
+    match (
+        installed.and_then(parse_build),
+        latest.and_then(parse_build),
+    ) {
+        (Some(installed), Some(latest)) => latest > installed,
+        _ => false,
+    }
+}
+
 /// What a manifest means for this installation: `Some` only when it
-/// publishes a newer version **for this platform**.
+/// publishes a newer version — or a later build of the same one — **for this
+/// platform**.
 ///
 /// A release that carries no build for this operating system is not an
 /// update for it — Windows and macOS are built by separate workflows, and a
@@ -175,15 +228,12 @@ pub fn is_newer(installed: &str, latest: &str) -> bool {
 pub fn evaluate(
     manifest: &ReleaseManifest,
     installed: &str,
+    installed_build: Option<&str>,
     platform: &str,
     arch: &str,
     base_url: &str,
 ) -> Option<UpdateInfo> {
     if manifest.product != "remote" || manifest.channel == "sandbox" {
-        return None;
-    }
-
-    if !is_newer(installed, &manifest.version) {
         return None;
     }
 
@@ -197,24 +247,50 @@ pub fn evaluate(
         return None;
     }
 
-    let installer = for_platform
+    let candidate = for_platform
         .iter()
-        .find(|file| file.arch == arch && is_safe_file_name(&file.file) && is_sha256(&file.sha256))
-        .map(|file| UpdateInstaller {
-            file: file.file.clone(),
-            url: format!(
-                "{}/{}/{}",
-                base_url.trim_end_matches('/'),
-                manifest.version.trim(),
-                file.file
-            ),
-            size: file.size,
-            sha256: file.sha256.to_ascii_lowercase(),
-        });
+        .find(|file| file.arch == arch && is_safe_file_name(&file.file) && is_sha256(&file.sha256));
+
+    // The build this machine would get: its own installer's, or — when there
+    // is none to fetch for this architecture — the newest of the platform's,
+    // which is what the download page would hand it.
+    let latest_build = match candidate {
+        Some(file) => file
+            .build
+            .as_deref()
+            .filter(|build| parse_build(build).is_some()),
+        None => for_platform
+            .iter()
+            .filter_map(|file| file.build.as_deref())
+            .filter(|build| parse_build(build).is_some())
+            .max_by_key(|build| parse_build(build)),
+    };
+
+    let newer = is_newer(installed, &manifest.version)
+        || (is_same_version(installed, &manifest.version)
+            && is_newer_build(installed_build, latest_build));
+
+    if !newer {
+        return None;
+    }
+
+    let installer = candidate.map(|file| UpdateInstaller {
+        file: file.file.clone(),
+        url: format!(
+            "{}/{}/{}",
+            base_url.trim_end_matches('/'),
+            manifest.version.trim(),
+            file.file
+        ),
+        size: file.size,
+        sha256: file.sha256.to_ascii_lowercase(),
+    });
 
     Some(UpdateInfo {
         current_version: installed.to_owned(),
+        current_build: installed_build.map(str::to_owned),
         latest_version: manifest.version.trim().to_owned(),
+        latest_build: latest_build.map(str::to_owned),
         installer,
         download_page_url: DOWNLOAD_PAGE_URL.to_owned(),
     })
@@ -300,10 +376,12 @@ impl UpdateChecker {
             .map_err(|error| UpdateError::Manifest(error.to_string()))
     }
 
-    /// Whether there is a newer version for this platform.
+    /// Whether there is a newer version, or a later build of this one, for
+    /// this platform.
     pub async fn check(
         &self,
         installed: &str,
+        installed_build: Option<&str>,
         platform: &str,
         arch: &str,
     ) -> Result<Option<UpdateInfo>, UpdateError> {
@@ -312,6 +390,7 @@ impl UpdateChecker {
         Ok(evaluate(
             &manifest,
             installed,
+            installed_build,
             platform,
             arch,
             &self.base_url,
@@ -437,6 +516,7 @@ mod tests {
             arch: arch.into(),
             kind: kind.into(),
             file: name.into(),
+            build: None,
             size: INSTALLER.len() as u64,
             sha256: sha(INSTALLER),
         };
@@ -468,21 +548,45 @@ mod tests {
         }
     }
 
+    /// What `make-manifest.mjs --build` publishes: every file numbered, and
+    /// named with its number.
+    fn built(version: &str, build: &str) -> ReleaseManifest {
+        let mut m = manifest(version);
+        for file in &mut m.files {
+            file.file = file
+                .file
+                .replace(&format!("-{version}-"), &format!("-{version}-b{build}-"));
+            file.build = Some(build.into());
+        }
+        m
+    }
+
     fn manifest_json(version: &str) -> String {
-        let m = manifest(version);
+        to_json(&manifest(version))
+    }
+
+    /// As the publish workflow writes it, including the fields this does not
+    /// read.
+    fn to_json(m: &ReleaseManifest) -> String {
         let files: Vec<String> = m
             .files
             .iter()
             .map(|f| {
+                let build = f
+                    .build
+                    .as_ref()
+                    .map(|build| format!(r#""build":"{build}","#))
+                    .unwrap_or_default();
                 format!(
-                    r#"{{"platform":"{}","arch":"{}","kind":"{}","label":"x","file":"{}","size":{},"sha256":"{}","signed":true}}"#,
+                    r#"{{"platform":"{}","arch":"{}","kind":"{}","label":"x","file":"{}",{build}"size":{},"sha256":"{}","signed":true}}"#,
                     f.platform, f.arch, f.kind, f.file, f.size, f.sha256
                 )
             })
             .collect();
 
         format!(
-            r#"{{"product":"remote","version":"{version}","channel":"production","generated":"2026-10-29T00:00:00Z","files":[{}]}}"#,
+            r#"{{"product":"remote","version":"{}","channel":"production","generated":"2026-10-29T00:00:00Z","files":[{}]}}"#,
+            m.version,
             files.join(",")
         )
     }
@@ -582,10 +686,127 @@ mod tests {
     }
 
     #[test]
+    fn builds_of_one_version_compare_by_number() {
+        assert!(is_newer_build(Some("202610300712"), Some("202610301030")));
+        assert!(is_newer_build(Some("202612312359"), Some("202701010000")));
+
+        assert!(
+            !is_newer_build(Some("202610301030"), Some("202610301030")),
+            "the same build is not an update"
+        );
+        assert!(
+            !is_newer_build(Some("202610301030"), Some("202610300712")),
+            "an earlier build is never offered"
+        );
+        assert!(
+            !is_newer_build(None, Some("202610301030")),
+            "a local build has no number to compare"
+        );
+        assert!(
+            !is_newer_build(Some("202610301030"), None),
+            "a manifest from before builds were numbered offers none"
+        );
+        for junk in [
+            "",
+            "2026103010301",
+            "20261030103x",
+            "-20261030103",
+            " 2026-10-30 ",
+        ] {
+            assert!(
+                !is_newer_build(Some("202610300712"), Some(junk)),
+                "{junk:?} is not a build"
+            );
+            assert!(!is_newer_build(Some(junk), Some("202610301030")));
+        }
+    }
+
+    #[test]
+    fn a_later_build_of_the_same_version_is_an_update() {
+        let info = evaluate(
+            &built("1.0.0", "202610301030"),
+            "1.0.0",
+            Some("202610300712"),
+            "windows",
+            "x64",
+            DOWNLOADS_BASE_URL,
+        )
+        .unwrap();
+
+        assert_eq!(info.latest_version, "1.0.0");
+        assert_eq!(info.latest_build.as_deref(), Some("202610301030"));
+        assert_eq!(info.current_build.as_deref(), Some("202610300712"));
+        assert_eq!(
+            info.installer.unwrap().url,
+            "https://downloads.aicountly.com/remote/1.0.0/Aicountly-Remote-1.0.0-b202610301030-x64-Setup.exe"
+        );
+
+        for installed in [Some("202610301030"), Some("202610311200"), None] {
+            assert_eq!(
+                evaluate(
+                    &built("1.0.0", "202610301030"),
+                    "1.0.0",
+                    installed,
+                    "windows",
+                    "x64",
+                    DOWNLOADS_BASE_URL
+                ),
+                None,
+                "installed build {installed:?}: the same build, a later one, or a local build is told nothing"
+            );
+        }
+    }
+
+    #[test]
+    fn the_version_outranks_the_build() {
+        let info = evaluate(
+            &built("1.1.0", "202601010000"),
+            "1.0.0",
+            Some("202610301030"),
+            "macos",
+            "arm64",
+            DOWNLOADS_BASE_URL,
+        )
+        .unwrap();
+        assert_eq!(info.latest_version, "1.1.0");
+        assert_eq!(info.latest_build.as_deref(), Some("202601010000"));
+
+        assert_eq!(
+            evaluate(
+                &built("1.0.0", "209912312359"),
+                "1.1.0",
+                Some("202610301030"),
+                "macos",
+                "arm64",
+                DOWNLOADS_BASE_URL
+            ),
+            None,
+            "an older version is never offered, however late its build"
+        );
+    }
+
+    #[test]
+    fn another_architecture_still_learns_of_a_later_build() {
+        let info = evaluate(
+            &built("1.0.0", "202610301030"),
+            "1.0.0",
+            Some("202610300712"),
+            "windows",
+            "arm64",
+            DOWNLOADS_BASE_URL,
+        )
+        .unwrap();
+
+        assert_eq!(info.installer, None);
+        assert_eq!(info.latest_build.as_deref(), Some("202610301030"));
+    }
+
+    #[test]
     fn a_newer_release_offers_this_platforms_own_installer() {
         let windows = evaluate(
             &manifest("1.1.0"),
             "1.0.0",
+            None,
             "windows",
             "x64",
             DOWNLOADS_BASE_URL,
@@ -602,6 +823,7 @@ mod tests {
         let mac = evaluate(
             &manifest("1.1.0"),
             "1.0.0",
+            None,
             "macos",
             "arm64",
             DOWNLOADS_BASE_URL,
@@ -615,6 +837,7 @@ mod tests {
         let intel = evaluate(
             &manifest("1.1.0"),
             "1.0.0",
+            None,
             "macos",
             "x64",
             DOWNLOADS_BASE_URL,
@@ -632,6 +855,7 @@ mod tests {
             evaluate(
                 &manifest("1.0.0"),
                 "1.0.0",
+                None,
                 "windows",
                 "x64",
                 DOWNLOADS_BASE_URL
@@ -642,6 +866,7 @@ mod tests {
             evaluate(
                 &manifest("0.9.0"),
                 "1.0.0",
+                None,
                 "windows",
                 "x64",
                 DOWNLOADS_BASE_URL
@@ -656,10 +881,25 @@ mod tests {
         windows_only.files.retain(|file| file.platform == "windows");
 
         assert_eq!(
-            evaluate(&windows_only, "1.0.0", "macos", "arm64", DOWNLOADS_BASE_URL),
+            evaluate(
+                &windows_only,
+                "1.0.0",
+                None,
+                "macos",
+                "arm64",
+                DOWNLOADS_BASE_URL
+            ),
             None
         );
-        assert!(evaluate(&windows_only, "1.0.0", "windows", "x64", DOWNLOADS_BASE_URL).is_some());
+        assert!(evaluate(
+            &windows_only,
+            "1.0.0",
+            None,
+            "windows",
+            "x64",
+            DOWNLOADS_BASE_URL
+        )
+        .is_some());
     }
 
     #[test]
@@ -667,6 +907,7 @@ mod tests {
         let info = evaluate(
             &manifest("1.1.0"),
             "1.0.0",
+            None,
             "windows",
             "arm64",
             DOWNLOADS_BASE_URL,
@@ -682,14 +923,28 @@ mod tests {
         let mut sandbox = manifest("9.0.0");
         sandbox.channel = "sandbox".into();
         assert_eq!(
-            evaluate(&sandbox, "1.0.0", "windows", "x64", DOWNLOADS_BASE_URL),
+            evaluate(
+                &sandbox,
+                "1.0.0",
+                None,
+                "windows",
+                "x64",
+                DOWNLOADS_BASE_URL
+            ),
             None
         );
 
         let mut connect = manifest("9.0.0");
         connect.product = "connect".into();
         assert_eq!(
-            evaluate(&connect, "1.0.0", "windows", "x64", DOWNLOADS_BASE_URL),
+            evaluate(
+                &connect,
+                "1.0.0",
+                None,
+                "windows",
+                "x64",
+                DOWNLOADS_BASE_URL
+            ),
             None
         );
     }
@@ -708,7 +963,7 @@ mod tests {
             let mut m = manifest("1.1.0");
             m.files[0].file = name.into();
 
-            let info = evaluate(&m, "1.0.0", "windows", "x64", DOWNLOADS_BASE_URL).unwrap();
+            let info = evaluate(&m, "1.0.0", None, "windows", "x64", DOWNLOADS_BASE_URL).unwrap();
             assert_eq!(
                 info.installer, None,
                 "{name:?} must not be offered as an installer"
@@ -731,7 +986,7 @@ mod tests {
         let checker = UpdateChecker::with_urls(&format!("{base}/manifest.json"), &base).unwrap();
 
         let info = checker
-            .check("1.0.0", "windows", "x64")
+            .check("1.0.0", None, "windows", "x64")
             .await
             .unwrap()
             .unwrap();
@@ -749,6 +1004,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_later_build_is_fetched_from_its_own_name() {
+        let release = built("1.0.0", "202610301030");
+        let name = "Aicountly-Remote-1.0.0-b202610301030-x64-Setup.exe";
+        let base = serve(HashMap::from([
+            (
+                "/manifest.json".to_owned(),
+                (200, to_json(&release).into_bytes()),
+            ),
+            (format!("/1.0.0/{name}"), (200, INSTALLER.to_vec())),
+        ]))
+        .await;
+
+        let checker = UpdateChecker::with_urls(&format!("{base}/manifest.json"), &base).unwrap();
+
+        let info = checker
+            .check("1.0.0", Some("202610300712"), "windows", "x64")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(info.latest_build.as_deref(), Some("202610301030"));
+
+        let dir = temp_dir("build");
+        let path = checker
+            .download(&info.installer.unwrap(), &dir)
+            .await
+            .unwrap();
+        assert_eq!(path, dir.join(name));
+
+        assert_eq!(
+            checker
+                .check("1.0.0", Some("202610301030"), "windows", "x64")
+                .await
+                .unwrap(),
+            None,
+            "once installed, the same build is not offered again"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
     async fn an_up_to_date_check_against_the_server_is_none() {
         let base = serve(HashMap::from([(
             "/manifest.json".to_owned(),
@@ -759,7 +1055,10 @@ mod tests {
         let checker = UpdateChecker::with_urls(&format!("{base}/manifest.json"), &base).unwrap();
 
         assert_eq!(
-            checker.check("1.0.0", "windows", "x64").await.unwrap(),
+            checker
+                .check("1.0.0", None, "windows", "x64")
+                .await
+                .unwrap(),
             None
         );
     }
@@ -809,7 +1108,7 @@ mod tests {
             UpdateChecker::with_urls(&format!("http://{address}/manifest.json"), "http://x")
                 .unwrap();
         assert!(matches!(
-            checker.check("1.0.0", "windows", "x64").await,
+            checker.check("1.0.0", None, "windows", "x64").await,
             Err(UpdateError::Transport(_))
         ));
 
@@ -824,13 +1123,13 @@ mod tests {
 
         let broken = UpdateChecker::with_urls(&format!("{base}/manifest.json"), &base).unwrap();
         assert!(matches!(
-            broken.check("1.0.0", "windows", "x64").await,
+            broken.check("1.0.0", None, "windows", "x64").await,
             Err(UpdateError::Manifest(_))
         ));
 
         let down = UpdateChecker::with_urls(&format!("{base}/missing.json"), &base).unwrap();
         assert!(matches!(
-            down.check("1.0.0", "windows", "x64").await,
+            down.check("1.0.0", None, "windows", "x64").await,
             Err(UpdateError::Status(503))
         ));
     }

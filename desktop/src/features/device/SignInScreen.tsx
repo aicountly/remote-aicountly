@@ -36,7 +36,7 @@ export function SignInScreen({
       <h2 className="card__title">Sign in to AICOUNTLY</h2>
       <p className="card__subtitle">
         {revoked
-          ? 'An administrator removed this computer from AICOUNTLY Remote. Sign in again to start using it.'
+          ? 'This computer was signed out of AICOUNTLY Remote. Sign in again to start using it.'
           : 'Sign in to let the people you approve connect to this computer.'}
       </p>
 

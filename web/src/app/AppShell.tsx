@@ -200,6 +200,8 @@ function SignedInShell() {
           <span className="shell__product">Remote</span>
         </div>
 
+        {/* Inside the desktop application it is always Personal (RemoteProvider), so there is nothing to switch. */}
+        {isDesktopApp() ? null : (
         <div className="shell__scope" ref={scopeRef}>
           <button
             type="button"
@@ -277,6 +279,7 @@ function SignedInShell() {
             </div>
           ) : null}
         </div>
+        )}
 
         <Modal
           open={browsingCompanies}
@@ -354,10 +357,13 @@ function SignedInShell() {
           </ul>
 
           <div className="shell__nav-foot">
-            <p className="shell__nav-footnote">
-              <ClipboardList size={13} aria-hidden="true" />
-              Browser assistance. No installation required.
-            </p>
+            {/* True of the browser, and the opposite of true inside the desktop application. */}
+            {isDesktopApp() ? null : (
+              <p className="shell__nav-footnote">
+                <ClipboardList size={13} aria-hidden="true" />
+                Browser assistance. No installation required.
+              </p>
+            )}
             {/* Closes the phone's navigation drawer first, which would otherwise cover the banner. */}
             <AnalyticsPreferencesButton
               className="btn btn--ghost btn--sm shell__nav-preferences"
