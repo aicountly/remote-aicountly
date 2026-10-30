@@ -94,12 +94,17 @@ final class ManageRegistryRelayTest extends CIUnitTestCase
         }
     }
 
-    public function testCompanyAccess120AndTheFleetContractRoutesAreRelayed(): void
+    public function testCompanyAccess140AndTheFleetContractRoutesAreRelayed(): void
     {
-        $this->assertSame('1.2.0', trim((string) file_get_contents(dirname(ROOTPATH) . '/web/src/company-access/VERSION')));
+        // 1.4.0 adds no call: setting the same team permissions for several people, or moving several Company users
+        // to the team, makes the per-person calls below (PATCH …/members/{ref}, POST …/move), one after another.
+        $this->assertSame('1.4.0', trim((string) file_get_contents(dirname(ROOTPATH) . '/web/src/company-access/VERSION')));
         foreach ([['GET', 'v1/app-roles'], ['GET', 'v1/company-creation-targets'], ['PATCH', 'v1/workspaces/12'],
             ['PATCH', 'v1/workspaces/12/members/1f2e-uuid'], ['POST', 'v1/companies/74/creator-access/retry'],
-            ['GET', 'v1/companies/74/plan'], ['GET', 'v1/me/plan'], ['GET', 'v1/me/pending']] as [$method, $path]) {
+            ['GET', 'v1/companies/74/plan'], ['GET', 'v1/me/plan'], ['GET', 'v1/me/pending'],
+            // 1.3.0: Workspace team and Company users.
+            ['GET', 'v1/workspaces/12/company-users'], ['POST', 'v1/workspaces/12/members/1f2e-uuid/move'],
+            ['POST', 'v1/workspaces/12/members/1f2e-uuid:remote/move'], ['DELETE', 'v1/companies/74/members/1f2e-uuid']] as [$method, $path]) {
             $this->assertTrue(ManageRegistryRelay::isRegistryRoute($method, $path), "{$method} {$path} is relayed");
         }
     }
@@ -114,6 +119,31 @@ final class ManageRegistryRelayTest extends CIUnitTestCase
         $this->assertFalse(ManageRegistryRelay::isRegistryRoute('GET', 'v1/audit-log'));
         $this->assertFalse(ManageRegistryRelay::isRegistryRoute('GET', 'v1/companies/74/permissions/extra/level'));
         $this->assertFalse(ManageRegistryRelay::isRegistryRoute('OPTIONS', 'v1/workspaces'));
+    }
+
+    /** company-access 1.3.0's three calls are relayed with their own method and shape only. */
+    public function testTheWorkspaceTeamAndCompanyUsersCallsAreNoWider(): void
+    {
+        foreach ([
+            // The wrong method.
+            ['POST', 'v1/workspaces/3/company-users'], ['DELETE', 'v1/workspaces/3/company-users'],
+            ['GET', 'v1/workspaces/3/members/1f2e-uuid/move'], ['PATCH', 'v1/workspaces/3/members/1f2e-uuid/move'],
+            ['DELETE', 'v1/workspaces/3/members/1f2e-uuid/move'], ['GET', 'v1/companies/74/members/1f2e-uuid'],
+            ['PATCH', 'v1/companies/74/members/1f2e-uuid'], ['POST', 'v1/companies/74/members/1f2e-uuid'],
+            // Extra or missing path segments.
+            ['GET', 'v1/workspaces/3/company-users/1f2e-uuid'], ['GET', 'v1/workspaces/company-users'],
+            ['POST', 'v1/workspaces/3/members/1f2e-uuid/move/now'], ['POST', 'v1/workspaces/3/members/move'],
+            ['POST', 'v1/workspaces/3/members/a/b/move'], ['DELETE', 'v1/companies/74/members'],
+            ['DELETE', 'v1/companies/74/members/1f2e-uuid/extra'], ['DELETE', 'v1/companies/74/members/../../permissions'],
+            // Other ids: a workspace or company is a number; a person is never `.` / `..`.
+            ['GET', 'v1/workspaces/abc/company-users'], ['GET', 'v1/workspaces/-3/company-users'],
+            ['POST', 'v1/workspaces/x/members/1f2e-uuid/move'], ['POST', 'v1/workspaces/3/members/../move'],
+            ['DELETE', 'v1/companies/x/members/1f2e-uuid'], ['DELETE', 'v1/companies/74/members/..'],
+            // Another resource under the same shape.
+            ['GET', 'v1/companies/74/company-users'], ['POST', 'v1/companies/74/members/1f2e-uuid/move'],
+        ] as [$method, $path]) {
+            $this->assertFalse(ManageRegistryRelay::isRegistryRoute($method, $path), "{$method} {$path} is not relayed");
+        }
     }
 
     public function testAWriteGoesOnWithThePersonsTokenAndNothingElseOfTheBrowsers(): void
@@ -146,6 +176,9 @@ final class ManageRegistryRelayTest extends CIUnitTestCase
         yield 'a parent segment' => ['DELETE', ['v1', 'companies', '74', 'permissions', '..']];
         yield 'an encoded parent segment' => ['DELETE', ['v1', 'companies', '74', 'permissions', '%2e%2e']];
         yield 'an encoded slash' => ['DELETE', ['v1', 'workspaces', '3', 'members', 'a%2Fb']];
+        yield 'a climb out of a company member' => ['DELETE', ['v1', 'companies', '3', 'members', '%2E%2E']];
+        yield 'a climb out of a move' => ['POST', ['v1', 'workspaces', '3', 'members', '..', 'move']];
+        yield 'a move read' => ['GET', ['v1', 'workspaces', '3', 'members', '1f2e', 'move']];
         yield 'a current-directory segment' => ['GET', ['v1', '.', 'workspaces']];
         yield 'an empty segment' => ['GET', ['v1', '', 'workspaces']];
         yield 'an odd character' => ['DELETE', ['v1', 'companies', '74', 'permissions', 'a b']];
@@ -191,10 +224,16 @@ final class ManageRegistryRelayTest extends CIUnitTestCase
 
         $this->withHeaders(['Authorization' => 'Bearer ses-1'])->call('delete', 'manage/v1/workspaces/3/members/1f2e')->assertStatus(201);
         $this->withHeaders(['Authorization' => 'Bearer ses-1'])->call('get', 'manage/v1/workspaces')->assertStatus(201);
-        $this->assertCount(3, $relay->sent);
+        $this->withHeaders(['Authorization' => 'Bearer ses-1', 'Content-Type' => 'application/json'])
+            ->withBody('{"to":"company_users"}')
+            ->call('post', 'manage/v1/workspaces/3/members/1f2e:remote/move')
+            ->assertStatus(201);
+        $this->assertSame('https://manage.example.test/api/v1/workspaces/3/members/1f2e%3Aremote/move', $relay->sent[3]['url']);
+        $this->assertSame('{"to":"company_users"}', $relay->sent[3]['body']);
+        $this->assertCount(4, $relay->sent);
 
         $this->call('get', 'manage/v1/audit-log')->assertStatus(404);
-        $this->assertCount(3, $relay->sent, 'nothing else reaches Manage');
+        $this->assertCount(4, $relay->sent, 'nothing else reaches Manage');
     }
 
     /** CodeIgniter throws for a status it has no reason phrase for (a CDN's 522, a host's 509): a 502 instead. */

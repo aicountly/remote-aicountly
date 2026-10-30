@@ -13,6 +13,9 @@ import './styles/tokens.css'
 import './styles/base.css'
 import './styles/app.css'
 import './styles/room.css'
+// The shared company-access screens' styles (Users & Access, the company directory), served as a
+// same-origin stylesheet; while it is applied the package injects no <style> of its own (its README).
+import './company-access/company-access.css'
 
 // The desktop application's sign-in hand-off leaves the address before
 // analytics or the router can see it — see auth/desktopHandoff.ts.

@@ -168,13 +168,19 @@ Manage's company registry decides who may see and who may open a company, per pr
 - **Client:** `web/src/services/companyRegistry.ts` (browser → Remote's own `/api/manage/v1/*` with the
   in-memory ses_key, relayed to Manage `/api/v1/*` by `backend/app/Domain/Directory/ManageRegistryRelay.php` —
   exactly the shared client's calls, 404 otherwise; production hosting can answer a direct cross-site call to
-  Manage with a challenge page that has no CORS headers). `web/src/company-access/` is copied verbatim from Manage (`Saas Common Handler/company-access`).
+  Manage with a challenge page that has no CORS headers). `web/src/company-access/` (**v1.4.0**) is copied verbatim from Manage (`Saas Common Handler/company-access`)
+  with Manage's `node scripts/sync-shared.mjs --to ../remote-aicountly --as books` (`--check` reports drift; stamp in
+  `.shared-stamp.json`). Its styles come from `company-access.css`, imported once in `web/src/main.tsx` after Remote's own CSS.
 - **Discovery is not access:** a company listed in the directory may still be closed to Remote.
 - **company-access 1.2.0** (workspace sharing settings, CONTRACTS §1/§2): the workspace owner renames the
   workspace, invites with sharing settings and edits each member's settings in My workspaces / the panel's
   Workspace tab. The relay passes the 1.2.0 calls (`GET v1/app-roles`, `v1/company-creation-targets`,
   `v1/me/pending`, `PATCH v1/workspaces/{id}`, `PATCH v1/workspaces/{id}/members/{ref}`,
   `POST v1/companies/{cmp}/creator-access/retry`) and the plan reads (`GET v1/companies/{cmp}/plan`, `v1/me/plan`).
+- **company-access 1.3.0 / 1.4.0** (Workspace team and Company users): the owner's workspace lists its Workspace team
+  and its Company users, moves people between them, removes someone from one company, and (1.4.0) gives several
+  people one set of team permissions at once. The relay passes 1.3.0's `GET v1/workspaces/{id}/company-users`,
+  `POST v1/workspaces/{id}/members/{ref}/move` and `DELETE v1/companies/{cmp}/members/{ref}`; 1.4.0 adds no call.
 - **Workspace-wide access** (`app_access_source: workspace` on companyinfo) is a member's access here: the
   projection row stays `MEMBER`, never a company administrator — Remote derives no role from Manage's
   `app_role_key`. Remote has no Manage seat route: its per-company rows are the local projection of Manage's
