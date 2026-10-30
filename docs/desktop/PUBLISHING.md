@@ -15,13 +15,44 @@ downloads.aicountly.com/
   remote/
     manifest.json                               what the website reads
     1.0.0/
-      Aicountly-Remote-1.0.0-x64-Setup.exe
+      Aicountly-Remote-1.0.0-b202610301030-x64-Setup.exe
+      Aicountly-Remote-1.0.0-b202610301030-arm64.dmg
+      Aicountly-Remote-1.0.0-b202610301030-x64.dmg
       SHA256SUMS.txt
 ```
 
-Each release has its own version directory. Publishing 1.1.0 cannot disturb
-1.0.0, a link that worked yesterday still works, and a rollback is a matter of
-pointing `manifest.json` at a directory that is already there.
+Each version has its own directory and each build its own file names.
+Publishing 1.1.0 cannot disturb 1.0.0, a link that worked yesterday still
+works, and a rollback is a matter of pointing `manifest.json` at files that
+are already there — nothing is deleted from the host by a publish.
+
+## Every build has a number
+
+The version only moves when a release is decided on, so several builds go out
+as the same version. Each build is numbered with the time of the commit it was
+built from, UTC, to the minute — `yyyyMMddHHmm`, e.g. `202610301030` — and the
+number is in:
+
+* the binary (`AICOUNTLY_REMOTE_BUILD` → `remote_core::AGENT_BUILD`), shown in
+  **App settings → About → Build** and in the log's first line;
+* every installer's file name, `Aicountly-Remote-<version>-b<build>-<arch>…`;
+* the GitHub release, one per build: `desktop-v<version>[-beta]-b<build>`,
+  tagged on the commit that was built;
+* the manifest (`files[].build`), which is what the application's update check
+  compares.
+
+It exists because the downloads host serves an installer as `immutable` for a
+year (`site/.htaccess` in aicountly/aicountly-downloads). When every 1.0.0
+build was published as `Aicountly-Remote-1.0.0-x64-Setup.exe`, a browser that
+had fetched one build was handed the same file again for every later one: a
+person reinstalling "the latest" got the build they were replacing, with
+nothing on screen to tell them so. A new number is a new URL, so that cannot
+happen, and the number in About says which build is installed.
+
+Both release workflows compute the number the same way, so a Windows and a
+macOS build of one commit share it and share a release. Two commits made in
+the same minute would share one too; the release refuses the second rather
+than mixing them.
 
 The host belongs to `aicountly/aicountly-downloads`, which owns its landing
 page and its `.htaccess` and deliberately cannot delete the installers. The
@@ -32,8 +63,9 @@ offers whatever it names.
 
 AICOUNTLY Remote checks `remote/manifest.json` itself each time its window
 opens (`desktop/crates/remote-core/src/update.rs`). If the manifest's version
-is newer than the installed one *and* names a build for that computer's
-operating system, the window offers **Install update** or **Skip**, and keeps
+is newer than the installed one — or the same version in a later build — *and*
+names a build for that computer's operating system, the window offers
+**Install update** or **Skip**, and keeps
 an **Update now** banner up until it is updated. Install update downloads the
 installer for that OS and architecture from
 `downloads.aicountly.com/remote/<version>/`, checks its size and SHA-256
@@ -48,7 +80,8 @@ and:
   Windows build prompts Windows and leaves Macs on the old version until the
   manifest is published again with the Mac build in it.
 * **a rollback stops the prompt** but does not downgrade anybody: only a
-  *newer* version is ever offered.
+  *newer* version, or a later build of the installed one, is ever offered. A
+  local build has no number and is only ever offered a newer version.
 * **a `sandbox` manifest is never offered.** Nor is a manifest for another
   product, or one whose version does not parse.
 
@@ -63,30 +96,38 @@ of a release is not reliably what went in. The website refuses a file name
 that is not a single safe path segment, which is the right rule and would
 refuse both.
 
-So `desktop/scripts/make-manifest.mjs` derives the published name from the
-product, version and architecture instead of carrying it over from the build.
-Every release names its files the same way, which is what lets a link be
-written down. Authenticode signs a file's contents and not its name, so the
+So the release workflows name each installer
+`Aicountly-Remote-<version>-b<build>-<arch>-Setup.exe` (or `…-<arch>.dmg`) as
+they collect it, and `desktop/scripts/make-manifest.mjs` reads the build back
+out of the name and derives the published name from the product, version,
+build and architecture instead of carrying it over from the build. A name with
+no build in it — a release from before builds were numbered — publishes as it
+always did. Authenticode signs a file's contents and not its name, so the
 rename costs nothing — `verify.ps1` passes on the renamed file exactly as it
 did on the built one.
 
 ## Running it
 
 1. **`release-windows.yml`**, `channel: beta` or `production`. It signs,
-   verifies, and publishes a GitHub release tagged `desktop-v<version>` (or
-   `desktop-v<version>-beta`).
-2. **`release-macos.yml`**, the same version and channel, if there is a Mac
-   build to ship. It attaches to the same tag.
+   verifies, and publishes a GitHub release tagged
+   `desktop-v<version>-b<build>` (or `desktop-v<version>-beta-b<build>`).
+   Nothing has to be deleted first: a new build is a new release.
+2. **`release-macos.yml`**, the same version and channel, from the same
+   commit, if there is a Mac build to ship. It attaches to the same release.
 3. **`publish-downloads.yml`**, the same version and channel,
-   `mode: files-and-manifest`.
+   `mode: files-and-manifest`. It publishes the newest build of each platform
+   of that version — so a Windows rebuild on its own still publishes with the
+   Mac build that is already out.
 4. Make sure `REMOTE_DESKTOP_RELEASED` is `true` on `aicountly/aicountly-com`
    and that site has been deployed — see "Publishing is not releasing" below.
 5. Load `https://aicountly.com/remote#download`. The cards should name the new
    version, and the SHA-256 shown there should match `SHA256SUMS.txt` from the
    downloads host. The page caches for ten minutes, so give it a moment.
 
-A rollback is step 2 again with the previous version and `mode: manifest-only`.
-The files are still on the host; only the manifest moves.
+A rollback is step 3 again with `mode: manifest-only` — with the previous
+version, or with the same version and `build` set to the build to go back to
+(each platform then gets its newest build at or before that number). The files
+are still on the host; only the manifest moves.
 
 ## The order of the steps, which is the safety property
 
@@ -206,13 +247,14 @@ Until those exist there is no macOS build to publish, the website refuses an
 unsigned one (`REMOTE_DOWNLOAD_REQUIRES_SIGNING` names both platforms), and
 `/remote` shows macOS as coming soon. That is the correct state, not a bug.
 
-### One tag, both platforms
+### One release per build, both platforms
 
-`release-windows.yml` and `release-macos.yml` attach their artefacts to the
-same tag — `desktop-v<version>` or `desktop-v<version>-beta` — so one tag
-carries every platform of a version and `publish-downloads.yml` collects them
-in a single fetch. Whichever runs second adds to the release the first one
-created.
+`release-windows.yml` and `release-macos.yml` run from the same commit attach
+their artefacts to the same release — `desktop-v<version>-b<build>` or
+`desktop-v<version>-beta-b<build>`, tagged on that commit. Whichever runs
+second adds to the release the first one created. `publish-downloads.yml`
+takes each platform from the newest release that has it, so the two can also
+come from different builds.
 
 They cannot share a checksum file, though. One `SHA256SUMS.txt` uploaded
 twice means the second silently replaces the first, after which every

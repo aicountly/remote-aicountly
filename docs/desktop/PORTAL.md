@@ -2,10 +2,23 @@
 
 Once a computer is signed in, the desktop window's **Remote** tab shows the
 AICOUNTLY Remote web portal: the same Dashboard, Start session, Join session,
-Support requests, Sessions, Computers, Settings and, for administrators, the
-administration pages that a browser shows. The other tabs (This computer,
-Unattended access, App settings) are about the machine itself and exist only
-in the application.
+Support requests, Sessions, Computers and Settings that a browser shows. The
+other tabs (This computer, App settings, and Unattended access where it can be
+used) are about the machine itself and exist only in the application.
+
+The window's own chrome — the dark header with the product name, "for
+Windows"/"for Mac", the version and the tabs — is the application's; everything
+below it on the Remote tab is the web portal. **Back**, **Reload** and **Open in
+browser** appear above the portal only while it is on a sign-in page (the
+AICOUNTLY sign-in, or an identity provider's), where somebody can get stuck; on
+the portal's own pages the header carries Reload and Open in browser as two
+small buttons instead. The Rust side tells the window which it is after every
+page the portal loads (`portal.rs`, `PORTAL_PAGE_EVENT`).
+
+Inside the application the portal is always **Personal**: no organisation
+switcher, no session-context choice, and Start session begins with the entire
+screen selected, because only an entire screen can be controlled from this
+computer (`CONTROL_COMPANION.md`).
 
 ## How it works
 

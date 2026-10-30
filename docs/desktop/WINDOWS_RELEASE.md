@@ -230,9 +230,17 @@ that has to be revoked.
 
 ## Automatic updates
 
-**Not built in.** `tauri-plugin-updater` is not a dependency, there is no
-`plugins.updater` block in `tauri.conf.json`, and the window has no updater
-permission.
+**Not Tauri's updater — the application's own check.** Each time the window
+opens it reads the manifest the website's download section reads, and offers
+**Install update** when a newer version, or a later build of this one, is
+published for this computer; the installer is downloaded, checked against the
+manifest's size and SHA-256, and run (`desktop/crates/remote-core/src/update.rs`,
+"The application reads the same manifest" in `PUBLISHING.md`). Nothing below
+about `tauri-plugin-updater` changes because of it: that plugin, its signing
+keys and its update feed are still not in the build.
+
+`tauri-plugin-updater` is not a dependency, there is no `plugins.updater`
+block in `tauri.conf.json`, and the window has no updater permission.
 
 It used to be present and switched off — `active: false`, no endpoints, no
 public key — waiting for the chain below. What ended that was
@@ -243,9 +251,12 @@ advisory inside a binary that runs as the signed-in person, for a feature
 that was turned off, is not a trade worth making, so the dependency went
 instead of being annotated. See `desktop/.cargo/audit.toml`.
 
-Updating is therefore: download the new installer and run it. The installer
-stops the service first, so an upgrade over a running installation is an
-ordinary install rather than a reboot-required one.
+Updating is therefore: the application's prompt, or download the new
+installer and run it. Either way the installer stops the service first, so an
+upgrade over a running installation is an ordinary install rather than a
+reboot-required one. Installing a later build of the same version shows
+NSIS's "already installed" page; **Add/Reinstall** is the choice that
+replaces it.
 
 ### Putting it back
 
