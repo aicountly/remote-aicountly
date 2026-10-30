@@ -163,7 +163,7 @@ jobs:
           INPUT_CHANNEL: ${{ inputs.channel }}
         run: |
           $seconds = [long](git show -s --format=%ct HEAD)
-          $build = [DateTimeOffset]::FromUnixTimeSeconds($seconds).UtcDateTime.ToString('yyyyMMddHHmm')
+          $build = [DateTimeOffset]::FromUnixTimeSeconds($seconds).UtcDateTime.ToString('yyyyMMddHHmm', [Globalization.CultureInfo]::InvariantCulture)
           $suffix = if ($env:INPUT_CHANNEL -eq 'beta') { '-beta' } else { '' }
           $tag = "desktop-v$($env:REQUESTED_VERSION)$suffix-b$build"
 
@@ -171,10 +171,18 @@ jobs:
           # first one released keeps it; a release of the other would attach
           # its installers to the first one's release under the first one's
           # names, which is the collision all of this exists to prevent.
+          #
+          # A tag that does not exist yet is the usual answer, and gh gives it
+          # as an error on stderr — which Actions' $ErrorActionPreference of
+          # Stop would otherwise turn into a failed step.
           if ($env:INPUT_CHANNEL -ne 'sandbox') {
-            $existing = gh api "repos/$($env:GITHUB_REPOSITORY)/commits/$tag" --jq '.sha' 2>$null
-            if ($LASTEXITCODE -eq 0 -and $existing -and $existing.Trim() -ne $env:GITHUB_SHA) {
-              throw "Build $build is already released as $tag, from $($existing.Trim()). Two commits made in the same minute share a build number: release a newer commit instead."
+            $ErrorActionPreference = 'Continue'
+            $existing = (gh api "repos/$($env:GITHUB_REPOSITORY)/commits/$tag" --jq '.sha' 2>&1 | Out-String).Trim()
+            $found = $LASTEXITCODE -eq 0
+            $ErrorActionPreference = 'Stop'
+
+            if ($found -and $existing -and $existing -ne $env:GITHUB_SHA) {
+              throw "Build $build is already released as $tag, from $existing. Two commits made in the same minute share a build number: release a newer commit instead."
             }
           }
 
