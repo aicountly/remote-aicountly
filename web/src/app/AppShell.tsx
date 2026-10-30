@@ -30,6 +30,7 @@ import { PERMISSIONS } from '../types/remote'
 import AicountlyLogo, { RemoteMark } from '../components/brand/AicountlyLogo'
 import { AppLauncher } from '../components/AppLauncher'
 import { isDesktopApp } from '../features/desktop/embedding'
+import { ORGANISATIONS_ENABLED } from './organisations'
 import { consumeDesktopSignInReturnPath } from '../features/desktop/returnPath'
 import { ConnectMount } from '../connect/ConnectMount'
 import Modal from '../components/ui/Modal'
@@ -133,7 +134,8 @@ function SignedInShell() {
   const scopeLabel = scopeType === 'PERSONAL' ? 'Personal' : (activeCompany?.name ?? 'Organisation')
 
   const showAdministration =
-    can(PERMISSIONS.POLICY_VIEW) || can(PERMISSIONS.POLICY_MANAGE) || can(PERMISSIONS.AUDIT_VIEW)
+    ORGANISATIONS_ENABLED &&
+    (can(PERMISSIONS.POLICY_VIEW) || can(PERMISSIONS.POLICY_MANAGE) || can(PERMISSIONS.AUDIT_VIEW))
 
   const isSupportAgent = bootstrap?.user.isSupportAgent ?? false
   // The portal (my.aicountly) user id — what support asks for as the "Cust ID".
@@ -164,7 +166,9 @@ function SignedInShell() {
         ]
       : []),
     // Company access (Manage's company registry): who may open this organisation in Remote.
-    ...(scopeType === 'COMPANY' ? [{ to: '/settings/users-access', label: 'Users & Access', icon: UsersRound }] : []),
+    ...(ORGANISATIONS_ENABLED && scopeType === 'COMPANY'
+      ? [{ to: '/settings/users-access', label: 'Users & Access', icon: UsersRound }]
+      : []),
     { to: '/settings', label: 'Settings', icon: Settings },
   ]
 
@@ -200,8 +204,8 @@ function SignedInShell() {
           <span className="shell__product">Remote</span>
         </div>
 
-        {/* Inside the desktop application it is always Personal (RemoteProvider), so there is nothing to switch. */}
-        {isDesktopApp() ? null : (
+        {/* Always Personal for now (organisations.ts), so there is nothing to switch. */}
+        {!ORGANISATIONS_ENABLED ? null : (
         <div className="shell__scope" ref={scopeRef}>
           <button
             type="button"
@@ -282,7 +286,7 @@ function SignedInShell() {
         )}
 
         <Modal
-          open={browsingCompanies}
+          open={ORGANISATIONS_ENABLED && browsingCompanies}
           title="Workspace companies"
           description="Every company you can see in your Aicountly workspaces. Seeing a company does not give access to it."
           onClose={() => setBrowsingCompanies(false)}

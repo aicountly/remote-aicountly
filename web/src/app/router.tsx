@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react'
 import { createBrowserRouter, Navigate } from 'react-router-dom'
 
 import AppShell from './AppShell'
+import { ORGANISATIONS_ENABLED } from './organisations'
 import RouteFallback from '../components/ui/RouteFallback'
 
 /**
@@ -50,12 +51,22 @@ export const router = createBrowserRouter([
       { path: 'sessions/:uuid', element: page(<SessionDetail />) },
       { path: 'support', element: page(<SupportRequests />) },
       { path: 'devices', element: page(<Devices />) },
-      { path: 'admin/policy', element: page(<AdminPolicy />) },
-      { path: 'admin/permissions', element: page(<AdminPermissions />) },
-      { path: 'admin/roles', element: page(<AdminRolePermissions />) },
-      { path: 'admin/audit', element: page(<AdminAudit />) },
+      // An organisation's administration, and its users and access. While
+      // Remote has no organisations (organisations.ts) an old bookmark to one
+      // of these goes to the dashboard rather than to a page about nothing.
+      ...(ORGANISATIONS_ENABLED
+        ? [
+            { path: 'admin/policy', element: page(<AdminPolicy />) },
+            { path: 'admin/permissions', element: page(<AdminPermissions />) },
+            { path: 'admin/roles', element: page(<AdminRolePermissions />) },
+            { path: 'admin/audit', element: page(<AdminAudit />) },
+            { path: 'settings/users-access', element: page(<UsersAccessPage />) },
+          ]
+        : [
+            { path: 'admin/*', element: <Navigate to="/" replace /> },
+            { path: 'settings/users-access', element: <Navigate to="/" replace /> },
+          ]),
       { path: 'settings', element: page(<SettingsPage />) },
-      { path: 'settings/users-access', element: page(<UsersAccessPage />) },
       { path: 'desktop-signin', element: page(<DesktopSignIn />) },
       { path: '*', element: page(<NotFound />) },
     ],

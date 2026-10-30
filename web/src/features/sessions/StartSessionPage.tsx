@@ -11,6 +11,7 @@ import type { ScopeType, ShareMode } from '../../types/remote'
 import ShareModePicker from './ShareModePicker'
 import RestrictionNotice from '../../components/ui/RestrictionNotice'
 import { isDesktopApp } from '../desktop/embedding'
+import { ORGANISATIONS_ENABLED } from '../../app/organisations'
 
 /**
  * Starting a session (§6A, §6B, §30).
@@ -126,8 +127,8 @@ export default function StartSessionPage() {
 
         {error ? <RestrictionNotice error={error} /> : null}
 
-        {/* Inside the desktop application a session is always Personal (RemoteProvider). */}
-        {isDesktopApp() ? null : (
+        {/* Always Personal for now (organisations.ts): there is no context to choose. */}
+        {!ORGANISATIONS_ENABLED ? null : (
         <section className="card">
           <div className="card__header">
             <div>

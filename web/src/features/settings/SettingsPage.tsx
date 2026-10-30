@@ -43,11 +43,7 @@ export default function SettingsPage() {
             <dl className="detail-list">
               <Row label="Name" value={bootstrap?.user.displayName ?? '—'} />
               <Row label="Email" value={bootstrap?.user.email ?? '—'} />
-              <Row
-                label="Current context"
-                value={policy?.companyName ?? 'Personal (no organisation)'}
-              />
-              <Row label="Policy preset" value={policy?.policyPreset ?? '—'} />
+              <Row label="Account" value="Personal" />
             </dl>
           </div>
         </section>
@@ -72,12 +68,12 @@ export default function SettingsPage() {
               <Capability
                 supported={capabilities.displaySurfaceDetection}
                 label="Sharing-surface verification"
-                note="Your browser reports which surface you picked, so your organisation’s sharing rules can be verified. Firefox and Safari do not report this."
+                note="Your browser reports which surface you picked, so the sharing rules for this session can be verified. Firefox and Safari do not report this."
               />
               <Capability
                 supported={capabilities.safeShareContext}
                 label="AICOUNTLY Safe Share verification"
-                note="Lets Remote confirm that a shared AICOUNTLY tab belongs to this session’s organisation. Available in Chromium-based browsers."
+                note="Lets Remote confirm that a shared AICOUNTLY tab belongs to this session. Available in Chromium-based browsers."
               />
             </ul>
           </div>
@@ -88,7 +84,7 @@ export default function SettingsPage() {
             <div>
               <h2 className="card__title">What you can do here</h2>
               <p className="card__subtitle">
-                Resolved from your organisation’s policy, your role and your account.
+                What your AICOUNTLY account allows in Remote.
               </p>
             </div>
           </div>

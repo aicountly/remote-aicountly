@@ -7,7 +7,7 @@ import { getCapabilities } from '../services/browser/capabilities'
 import type { RemoteBrowserCapabilities } from '../services/browser/capabilities'
 import type { Bootstrap, EffectivePolicy, ScopeType } from '../types/remote'
 import { noteCompanyLifecycle, setActiveCompanyForRestrictions } from '../services/companyRestriction'
-import { isDesktopApp } from '../features/desktop/embedding'
+import { ORGANISATIONS_ENABLED } from './organisations'
 
 /**
  * Application-wide Remote state: who you are, which organisation you are acting
@@ -77,7 +77,10 @@ function captureLaunchContextFromUrl(): void {
 
   if (!token) return
 
-  setLaunchContextToken(token)
+  // Taken out of the address either way. Used only while Remote works with
+  // organisations: a context names one, and the API rightly refuses to let a
+  // session it names be Personal — which, for now, every session is.
+  if (ORGANISATIONS_ENABLED) setLaunchContextToken(token)
 
   params.delete('context')
   params.delete('remote_context')
@@ -116,16 +119,12 @@ export function RemoteProvider({ children }: { children: ReactNode }) {
       // must not open in Personal (§13). Otherwise the last choice is restored,
       // and only if the user still has access to that company.
       //
-      // Inside the desktop application it is always Personal. The computer it
-      // runs on is registered to the person, not to an organisation, so a
-      // session in any other scope could never be controlled from it — and
-      // the application offers no way to choose one.
-      const desktop = isDesktopApp()
-      const stored = desktop ? null : readStoredScope()
+      // For now it is always Personal (organisations.ts).
+      const stored = ORGANISATIONS_ENABLED ? readStoredScope() : null
       const hasStoredCompany =
         stored?.companyId != null && data.companies.some((c) => c.companyId === stored.companyId)
 
-      const next: StoredScope = desktop
+      const next: StoredScope = !ORGANISATIONS_ENABLED
         ? { scopeType: 'PERSONAL', companyId: null }
         : data.launchContext?.companyId
           ? { scopeType: data.activeScope.scopeType, companyId: data.activeScope.companyId }
