@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ipc, platform, Agent};
 
+pub mod computers;
+
 /// What the About panel shows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

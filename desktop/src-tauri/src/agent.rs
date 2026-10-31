@@ -65,6 +65,9 @@ pub struct Agent {
     /// When input was last injected, so the local-input override does not
     /// mistake this agent's own events for the person at the machine.
     last_injection: Mutex<Option<Instant>>,
+    /// A help session the person at the machine started from the window
+    /// ("give your code"), until the connection loop hosts it.
+    help_request: Mutex<Option<String>>,
 }
 
 /// The companion link this machine has joined.
@@ -100,6 +103,7 @@ impl Agent {
             companion_leave: AtomicBool::new(false),
             stop_notice: AtomicBool::new(false),
             last_injection: Mutex::new(None),
+            help_request: Mutex::new(None),
         }
     }
 
@@ -865,6 +869,145 @@ impl Agent {
         self.apply(AgentEvent::CompanionEnded)
     }
 
+    // ------------------------------------------------------- help sessions
+
+    /// Ask the connection loop to host a help session the person at the
+    /// machine started here. The loop picks it up within half a second.
+    pub fn request_help_session(&self, session_uuid: &str) {
+        if let Ok(mut request) = self.help_request.lock() {
+            *request = Some(session_uuid.to_owned());
+        }
+    }
+
+    /// Whether a help session is waiting to be hosted.
+    #[must_use]
+    pub fn has_help_request(&self) -> bool {
+        self.help_request
+            .lock()
+            .map(|request| request.is_some())
+            .unwrap_or(false)
+    }
+
+    /// The help session waiting to be hosted, taken so it is hosted once.
+    pub fn take_help_request(&self) -> Option<String> {
+        self.help_request
+            .lock()
+            .ok()
+            .and_then(|mut request| request.take())
+    }
+
+    /// Drop the waiting help session if it is `session_uuid`, so a session
+    /// ended before the loop reached it is never hosted.
+    pub fn cancel_help_request(&self, session_uuid: &str) {
+        if let Ok(mut request) = self.help_request.lock() {
+            if request.as_deref() == Some(session_uuid) {
+                *request = None;
+            }
+        }
+    }
+
+    /// Whether `session_uuid` is the session this machine is hosting.
+    ///
+    /// False once the person at the machine has ended it in the window, which
+    /// is how the session loop learns to stop: ending a session here only
+    /// changes state, and the loop reads that state on every turn.
+    #[must_use]
+    pub fn is_hosting(&self, session_uuid: &str) -> bool {
+        self.state
+            .lock()
+            .map(|state| {
+                state
+                    .active_session()
+                    .is_some_and(|session| session.session_uuid == session_uuid)
+            })
+            .unwrap_or(false)
+    }
+
+    // ------------------------------------------------------------ capture
+
+    /// Start capturing the display a hosted session shows: the primary one,
+    /// or the first the platform lists. Input is then mapped onto the same
+    /// display, because `dispatch` reads the capture's active monitor.
+    ///
+    /// Returns the layout, with the captured display as the active one, for
+    /// the controller.
+    pub fn start_capture(
+        &self,
+        profile: remote_device::frame::CaptureProfile,
+    ) -> PlatformResult<MonitorLayout> {
+        let mut providers = self
+            .providers
+            .lock()
+            .map_err(|_| remote_device::PlatformError::NotFound("The screen capture"))?;
+
+        let capture = &mut providers
+            .as_mut()
+            .ok_or(remote_device::PlatformError::Unsupported(
+                "Showing this computer's screen",
+            ))?
+            .capture;
+
+        let layout = capture.monitors()?;
+        let monitor_id = shared_monitor(&layout)
+            .ok_or(remote_device::PlatformError::NotFound("A display to show"))?;
+
+        if capture.is_running() {
+            let _ = capture.stop();
+        }
+
+        capture.start(monitor_id, profile)?;
+
+        Ok(MonitorLayout {
+            active_monitor_id: monitor_id,
+            ..layout
+        })
+    }
+
+    /// The next captured frame, if one is due.
+    pub fn next_frame(&self) -> PlatformResult<Option<remote_device::Frame>> {
+        let mut providers = self
+            .providers
+            .lock()
+            .map_err(|_| remote_device::PlatformError::NotFound("The screen capture"))?;
+
+        match providers.as_mut() {
+            Some(providers) if providers.capture.is_running() => providers.capture.next_frame(),
+            _ => Ok(None),
+        }
+    }
+
+    /// Change the capture's size or frame rate, under congestion.
+    pub fn reconfigure_capture(
+        &self,
+        profile: remote_device::frame::CaptureProfile,
+    ) -> PlatformResult<()> {
+        let mut providers = self
+            .providers
+            .lock()
+            .map_err(|_| remote_device::PlatformError::NotFound("The screen capture"))?;
+
+        match providers.as_mut() {
+            Some(providers) if providers.capture.is_running() => {
+                providers.capture.reconfigure(profile)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Stop capturing. Called on every exit from a hosted session, so the
+    /// screen is never captured for a session that has ended.
+    pub fn stop_capture(&self) {
+        if let Ok(mut providers) = self.providers.lock() {
+            if let Some(providers) = providers.as_mut() {
+                if providers.capture.is_running() {
+                    if let Err(error) = providers.capture.stop() {
+                        tracing::warn!(%error, "the screen capture did not stop cleanly");
+                    }
+                }
+            }
+        }
+    }
+
     /// Every display the platform can see, in its injection space.
     pub fn monitor_layout(&self) -> PlatformResult<MonitorLayout> {
         let providers = self
@@ -1049,6 +1192,16 @@ impl Agent {
             .and_then(|gate| gate.as_ref().map(ControlGate::rejected_count))
             .unwrap_or(0)
     }
+}
+
+/// The display a hosted session shows: the primary one, else the first.
+fn shared_monitor(layout: &MonitorLayout) -> Option<u32> {
+    layout
+        .monitors
+        .iter()
+        .find(|monitor| monitor.primary)
+        .or_else(|| layout.monitors.first())
+        .map(|monitor| monitor.id)
 }
 
 /// What happened to a control message that got past the gate.
@@ -1666,5 +1819,65 @@ mod tests {
         let state = agent.set_allowed_capabilities(allowed);
 
         assert_eq!(state.allowed_capabilities, Some(allowed));
+    }
+
+    /// A help session started in the window is hosted once, and the loop can
+    /// see one is waiting without taking it.
+    #[test]
+    fn a_help_session_request_is_taken_once() {
+        let agent = Agent::new();
+        assert!(!agent.has_help_request());
+
+        agent.request_help_session("help-1");
+        assert!(agent.has_help_request());
+        assert_eq!(agent.take_help_request().as_deref(), Some("help-1"));
+        assert!(!agent.has_help_request());
+        assert_eq!(agent.take_help_request(), None);
+
+        agent.request_help_session("help-2");
+        agent.cancel_help_request("help-1");
+        assert!(
+            agent.has_help_request(),
+            "only the named session is dropped"
+        );
+        agent.cancel_help_request("help-2");
+        assert!(!agent.has_help_request());
+    }
+
+    /// Ending a session in the window is what tells the session loop to stop.
+    #[test]
+    fn a_session_ended_in_the_window_is_no_longer_hosted() {
+        let agent = enrolled_agent();
+        agent.begin_session(summary());
+        assert!(agent.is_hosting(SESSION));
+        assert!(!agent.is_hosting("another-session"));
+
+        agent.end_session();
+        assert!(!agent.is_hosting(SESSION));
+    }
+
+    /// A hosted session shows the primary display, or the first one listed
+    /// when none says it is primary.
+    #[test]
+    fn a_hosted_session_shows_the_primary_display() {
+        let mut second = display(2);
+        second.primary = false;
+        let layout = MonitorLayout {
+            monitors: vec![second.clone(), display(1)],
+            active_monitor_id: 2,
+        };
+        assert_eq!(shared_monitor(&layout), Some(1));
+
+        let layout = MonitorLayout {
+            monitors: vec![second],
+            active_monitor_id: 2,
+        };
+        assert_eq!(shared_monitor(&layout), Some(2));
+
+        let empty = MonitorLayout {
+            monitors: Vec::new(),
+            active_monitor_id: 0,
+        };
+        assert_eq!(shared_monitor(&empty), None);
     }
 }
