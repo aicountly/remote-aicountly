@@ -572,6 +572,9 @@ impl CapturePump {
                     );
                     self.layout = Some(layout);
                     self.next_frame_at = now;
+
+                    // The viewer can draw nothing until a keyframe arrives.
+                    peer.request_keyframe();
                 }
                 Err(error) => {
                     self.next_attempt_at = now + CAPTURE_RETRY;
@@ -604,7 +607,12 @@ impl CapturePump {
 
                 if next != self.profile {
                     match agent.reconfigure_capture(next) {
-                        Ok(()) => self.profile = next,
+                        Ok(()) => {
+                            // The encoder follows the capture: its size limit,
+                            // frame rate and bitrate come from the same profile.
+                            peer.set_capture_profile(next);
+                            self.profile = next;
+                        }
                         Err(error) => tracing::debug!(%error, "the capture was not reconfigured"),
                     }
                 }
@@ -618,11 +626,19 @@ impl CapturePump {
         self.next_frame_at = now + Duration::from_millis(self.profile.frame_interval_ms());
 
         match agent.next_frame() {
-            Ok(Some(frame)) => {
-                if let Err(error) = peer.send_frame(frame).await {
-                    tracing::debug!(%error, "a frame was not sent");
+            Ok(Some(frame)) => match peer.send_frame(frame).await {
+                Ok(()) => {}
+                // The connection is over: nothing more is captured for it.
+                // A new connection in the same session starts it again.
+                Err(remote_webrtc::WebRtcError::WrongState(state)) => {
+                    tracing::info!(?state, "the connection ended; the capture stops");
+                    agent.stop_capture();
+                    self.layout = None;
+                    self.layout_sent = false;
+                    self.next_attempt_at = now + CAPTURE_RETRY;
                 }
-            }
+                Err(error) => tracing::debug!(%error, "a frame was not sent"),
+            },
             Ok(None) => {}
             Err(error) => tracing::debug!(%error, "no frame was captured"),
         }

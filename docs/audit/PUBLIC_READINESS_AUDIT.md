@@ -92,6 +92,8 @@ These P0 blockers must be fixed first (§6.1):
 7. **Pricing and free-tier limits are not decided.** TURN admission only observes and refuses nobody. Its capacity
    figures are placeholders, and the relays are shared with Connect.
 
+8. **The H.264 encoder needs a patent licence, or Cisco's own binary** (P0-10), before the app is distributed publicly.
+
 Two more are blockers only in some cases. If you market outside India, you need relays near those users. If you serve
 the EU, analytics must not load before consent.
 
@@ -371,11 +373,20 @@ Developer ID certificate and notarisation (`docs/desktop/PUBLISHING.md:183-196`)
   (`web/src/components/AnalyticsConsent.tsx:38`).
 * *Fix.* Set `ANALYTICS_BEFORE_CHOICE = 'none'` and soften the banner's wording.
 
+**P0-10. An H.264 patent licence for the encoder we ship.** **S** to decide, with counsel. **M** to switch.
+
+* *Why it matters.* The app compiles OpenH264 from source into the installer (`remote-webrtc/src/video/h264.rs`, top of
+  file). Cisco pays the H.264 royalties only for its own binary, downloaded by the user's machine from Cisco; a build of
+  our own is not covered. Distributing it to the public needs an AVC licence from the patent pool (Via LA), or a change.
+* *Fix.* Either take the Via LA AVC licence (its low-volume tier may cost nothing, but it still has to be signed), or
+  switch `openh264` to its `libloading` feature: ship no encoder and download Cisco's binary from Cisco at first run.
+  The office pilot is internal use and is not blocked by this.
+
 ### 6.2 P1: needed to compete credibly (the first quarter after launch)
 
 | # | Finding | Why it matters | Where | Effort |
 |---|---|---|---|---|
-| P1-1 | ~~A video encoder in the app.~~ **Built in this release**: software H.264 (OpenH264, Constrained Baseline) on Windows and Mac, with capture that follows the link. Left: a hardware encoder for large screens, ScreenCaptureKit on macOS 14+, and testing on real machines (§11). | — | `remote-webrtc/src/video/`; `session.rs` `CapturePump`; `platform/macos/capture.rs` | Done (hardware encoder: M) |
+| P1-1 | ~~A video encoder in the app.~~ **Built in this release**: software H.264 (OpenH264, Constrained Baseline) on Windows and Mac, with capture that follows the link, decoded by Chromium in `tests/browser_interop.rs`. Measured on a 4-core 2.1 GHz VM: 1080p 24 ms a frame (fits 30 fps), a Retina or 4K screen scaled to 1080p about 45–50 ms (about 20 fps). The encode holds up the session loop for that long, so control input waits up to one encode. Left: a hardware encoder (Media Foundation, VideoToolbox) or an encode thread of its own, ScreenCaptureKit on macOS 14+, the licence (P0-10), and testing on real machines (§11). | — | `remote-webrtc/src/video/`; `session.rs` `CapturePump`; `platform/macos/capture.rs` | Done (hardware encoder: M) |
 | P1-2 | **UAC, elevated windows and the Secure Desktop.** First, *tell* the helper when the computer is on the Secure Desktop or when input to a window was refused (send `control_paused` with a reason). Then support it properly, through the service on the Secure Desktop or with `uiAccess`. Both need signing. | IT support often means installing software, and installing software means UAC. | `secure_desktop_state()` is never called (`windows/capture.rs:77-89`); `Handled::Failed` is ignored (`companion.rs:865-868`) | S to tell the helper; XL for real support |
 | P1-3 | ~~Unattended access to your own computers.~~ **Built in this release**: off by default, switched on per computer with a confirmation, owner only. Left: the 2FA step (P1-9). | — | `CompanyPolicyDefaults::personal()`; `PermissionCatalog`; migration `EntitleUnattendedAccessByDefault` | Done (2FA: P1-9) |
 | P1-4 | **Connect by computer ID, and an address book.** A real ID that a helper can type to *ask* for a session, with the consent still at the computer. The rename to "Key fingerprint" is **fixed in this release**. | People used to other tools expect to read out an ID. | `SignInScreen.tsx`; `agent.rs:313-328` | Rename done; L to build |
