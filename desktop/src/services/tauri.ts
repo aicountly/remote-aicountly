@@ -18,8 +18,13 @@ import type {
   AgentState,
   DesktopSignInOutcome,
   DesktopSignInStart,
+  DeviceHistory,
   EnrolmentConfirmation,
   EnrolmentMaterial,
+  HelpSession,
+  HostedParticipant,
+  HostedParticipants,
+  OwnComputers,
   PermissionSummary,
   UpdateInfo,
   UpdateStarted,
@@ -157,8 +162,42 @@ export function identifyMonitors(): Promise<void> {
 }
 
 /** Ask the operating system to prompt for a permission (macOS Accessibility). */
-export function requestPermission(permission: 'input_injection'): Promise<PermissionSummary> {
+export function requestPermission(permission: 'input_injection' | 'screen_capture'): Promise<PermissionSummary> {
   return invoke<PermissionSummary>('request_permission', { permission })
+}
+
+/** The signed-in person's computers, this one first, and how many. */
+export function listComputers(): Promise<OwnComputers> {
+  return invoke<OwnComputers>('list_computers')
+}
+
+/** This computer's sessions and changes, newest first. */
+export function computerHistory(limit = 20): Promise<DeviceHistory> {
+  return invoke<DeviceHistory>('computer_history', { limit })
+}
+
+/** Start a help session on this computer; the agent hosts it at once. */
+export function startHelpSession(issueSummary: string | null = null): Promise<HelpSession> {
+  return invoke<HelpSession>('start_help_session', { issueSummary })
+}
+
+/** Who is waiting to be let in to a help session, and who is in. */
+export function helpParticipants(sessionUuid: string): Promise<HostedParticipants> {
+  return invoke<HostedParticipants>('help_participants', { sessionUuid })
+}
+
+/** Let somebody in to a help session, or turn them away. */
+export function answerHelpParticipant(
+  sessionUuid: string,
+  participantUuid: string,
+  admit: boolean,
+): Promise<HostedParticipant> {
+  return invoke<HostedParticipant>('answer_help_participant', { sessionUuid, participantUuid, admit })
+}
+
+/** End a help session this computer hosts. */
+export function endHelpSession(sessionUuid: string): Promise<AgentState> {
+  return invoke<AgentState>('end_help_session', { sessionUuid })
 }
 
 export function endSession(): Promise<AgentState> {

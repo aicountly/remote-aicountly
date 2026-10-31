@@ -8,27 +8,37 @@ import { MonitorPicker } from '../features/companion/MonitorPicker'
 import { DeviceCard } from '../features/device/DeviceCard'
 import { DesktopSignInPending } from '../features/device/DesktopSignInPending'
 import { PortalTools, PortalView, forgetPortalPage } from '../features/portal/PortalView'
-import { RecentSessions } from '../features/home/RecentSessions'
+import { ComputerHistory } from '../features/home/ComputerHistory'
+import { ConnectScreen } from '../features/connect/ConnectScreen'
+import { GetHelp, HelpAdmission } from '../features/help/GetHelp'
 import { PermissionsCard } from '../features/permissions/PermissionsCard'
 import { ControlRequest } from '../features/session/ControlRequest'
 import { SessionBanner } from '../features/session/SessionBanner'
 import { SettingsPage } from '../features/settings/SettingsPage'
 import { UnattendedCard } from '../features/unattended/UnattendedCard'
 import { Updates } from '../features/update/Updates'
-import * as api from '../services/api'
 import * as bridge from '../services/tauri'
 import type {
   About,
   AgentConfig,
   AgentState,
   DesktopSignInStart,
+  HelpSession,
+  HostedParticipant,
+  HostedParticipants,
   MonitorOption,
   PermissionSummary,
 } from '../types/agent'
 import { activeCompanion, activeSession, isEnrolled, isUsable } from '../types/agent'
 import { SignInScreen } from '../features/device/SignInScreen'
 
-type Screen = 'portal' | 'home' | 'unattended' | 'settings' | 'register'
+type Screen = 'portal' | 'connect' | 'help' | 'home' | 'unattended' | 'settings' | 'register'
+
+/** How often the waiting list of a help session is read. */
+const HELP_POLL_MS = 2_000
+
+/** How long a help session may take to start on this computer before it is given up on. */
+const HELP_START_TIMEOUT_MS = 30_000
 
 /**
  * The window.
@@ -53,8 +63,14 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [shareClipboard, setShareClipboard] = useState(false)
-  // Bumped to send the portal back to its dashboard (choosing "Remote" again).
+  // Bumped to send the portal back to its dashboard (choosing "Remote" again),
+  // or to a page this window chose: a computer to connect to, a code to join.
   const [portalHome, setPortalHome] = useState(0)
+  const [portalPath, setPortalPath] = useState('/')
+  // The help session started here ("Get help"), and who is waiting for it.
+  const [help, setHelp] = useState<HelpSession | null>(null)
+  const [participants, setParticipants] = useState<HostedParticipants | null>(null)
+  const helpSeenRunning = useRef(false)
   // The update prompt is this window's own; the portal steps aside for it.
   const [updatePrompt, setUpdatePrompt] = useState(false)
   // Whether the portal is on one of its own pages or on a sign-in page, as
@@ -177,7 +193,125 @@ export default function App() {
     [run],
   )
 
-  const endSession = useCallback(() => run(() => bridge.endSession()), [run])
+  const helpUuid = help?.uuid ?? null
+  const hostingHelp = helpUuid !== null && session?.sessionUuid === helpUuid
+
+  const forgetHelp = useCallback(() => {
+    setHelp(null)
+    setParticipants(null)
+    helpSeenRunning.current = false
+  }, [])
+
+  // A help session also ends on the server, so the helper's page closes too.
+  const endSession = useCallback(
+    () =>
+      run(async () => {
+        if (helpUuid && session?.sessionUuid === helpUuid) {
+          setState(await bridge.endHelpSession(helpUuid))
+          forgetHelp()
+
+          return
+        }
+
+        await bridge.endSession()
+      }),
+    [run, helpUuid, session, forgetHelp],
+  )
+
+  const startHelp = useCallback(
+    () =>
+      run(async () => {
+        setHelp(await bridge.startHelpSession())
+        setParticipants(null)
+        helpSeenRunning.current = false
+        setScreen('help')
+      }),
+    [run],
+  )
+
+  const endHelp = useCallback(
+    () =>
+      run(async () => {
+        if (!helpUuid) return
+
+        setState(await bridge.endHelpSession(helpUuid))
+        forgetHelp()
+      }),
+    [run, helpUuid, forgetHelp],
+  )
+
+  const answerHelp = useCallback(
+    (person: HostedParticipant, admit: boolean) =>
+      run(async () => {
+        if (!helpUuid) return
+
+        await bridge.answerHelpParticipant(helpUuid, person.uuid, admit)
+        setParticipants(await bridge.helpParticipants(helpUuid))
+      }),
+    [run, helpUuid],
+  )
+
+  // Once the help session has run here, its end — from the banner, the tray,
+  // the helper, the server — is the end of it on this screen too.
+  useEffect(() => {
+    if (!help) return
+    if (hostingHelp) {
+      helpSeenRunning.current = true
+    } else if (helpSeenRunning.current) {
+      forgetHelp()
+    }
+  }, [help, hostingHelp, forgetHelp])
+
+  // A help session that never starts here (the screen could not be shown) is
+  // ended rather than left open with a code somebody might still type.
+  useEffect(() => {
+    if (!helpUuid || hostingHelp || helpSeenRunning.current) return undefined
+
+    const timer = setTimeout(() => {
+      void bridge.endHelpSession(helpUuid).catch(() => undefined)
+      forgetHelp()
+      setError('The help session could not start on this computer. Check that AICOUNTLY Remote may show your screen, then try again.')
+    }, HELP_START_TIMEOUT_MS)
+
+    return () => clearTimeout(timer)
+  }, [helpUuid, hostingHelp, forgetHelp])
+
+  // Who is waiting to be let in. Read from the API, never from a peer, so
+  // nobody can put the question on this screen by sending a message.
+  useEffect(() => {
+    if (!helpUuid || !hostingHelp) return undefined
+
+    let cancelled = false
+    const read = () =>
+      void bridge.helpParticipants(helpUuid).then(
+        (next) => {
+          if (!cancelled) setParticipants(next)
+        },
+        () => undefined,
+      )
+
+    read()
+    const timer = setInterval(read, HELP_POLL_MS)
+
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [helpUuid, hostingHelp])
+
+  const openPortal = useCallback((path: string) => {
+    setPortalPath(path)
+    setPortalHome((count) => count + 1)
+    setScreen('portal')
+  }, [])
+
+  const openScreenRecording = useCallback(
+    () =>
+      run(async () => {
+        setPermissions(await bridge.requestPermission('screen_capture'))
+      }),
+    [run],
+  )
 
   const companionUuid = companion?.companionUuid ?? null
 
@@ -361,16 +495,11 @@ export default function App() {
     [run],
   )
 
-  const enableUnattended = useCallback(
-    () =>
-      run(async () => {
-        if (!config || !state?.deviceUuid) throw new Error('This device is not registered.')
-
-        const { device } = await api.enableUnattended(config.apiBaseUrl, state.deviceUuid)
-        await bridge.recordUnattendedEnabled(device.unattendedEnabledAt)
-      }),
-    [run, config, state],
-  )
+  // Switching unattended access on is a decision the API keeps with a person
+  // signed in as themselves, behind its own confirmation — so it is made in
+  // Remote → Computers, inside this window, and the next poll brings the
+  // switch here.
+  const enableUnattended = useCallback(() => openPortal('/devices'), [openPortal])
 
   // One call, and it is the one that matters. This used to ask the API with a
   // portal credential this window cannot obtain, swallow the refusal, and
@@ -403,12 +532,20 @@ export default function App() {
 
   const selectScreen = useCallback(
     (next: Screen) => {
-      // "Remote" again, while already on it: back to the dashboard.
-      if (next === 'portal' && screen === 'portal') setPortalHome((count) => count + 1)
+      // "Remote" again, while already on it: back to the dashboard. Coming
+      // back to it from another tab finds the person where they were — in a
+      // session they connected to, say.
+      if (next === 'portal' && screen === 'portal') {
+        setPortalPath('/')
+        setPortalHome((count) => count + 1)
+      }
       setScreen(next)
     },
     [screen],
   )
+
+  const needsScreenRecording =
+    about?.platform === 'macOS' && permissions !== null && !isUsable(permissions.screen_capture)
 
   // The confirmation page, as a path on this deployment's portal.
   const confirmPath = signIn ? pathOf(signIn.start.verificationUriComplete) : null
@@ -442,13 +579,22 @@ export default function App() {
               Remote
             </NavItem>
           ) : null}
+          {!signedOut ? (
+            <NavItem screen="connect" current={screen} onSelect={selectScreen}>
+              Connect
+            </NavItem>
+          ) : null}
+          {!signedOut ? (
+            <NavItem screen="help" current={screen} onSelect={selectScreen}>
+              Get help
+            </NavItem>
+          ) : null}
           <NavItem screen="home" current={screen} onSelect={selectScreen}>
             {signedOut ? 'Sign in' : 'This computer'}
           </NavItem>
           {/*
-           * Only where it can be used, or has to be switched off. A personal
-           * account cannot turn unattended access on, and a tab whose only
-           * content is "not available" was a door to nowhere.
+           * Only where it can be used, or has to be switched off: a tab whose
+           * only content is "not available" was a door to nowhere.
            */}
           {!signedOut && about?.supportsHosting !== false && (state.unattended.enabled || state.unattended.allowedByPolicy) ? (
             <NavItem screen="unattended" current={screen} onSelect={selectScreen}>
@@ -526,6 +672,11 @@ export default function App() {
           />
         ) : null}
 
+        {/* Somebody typed this computer's code: asked on every screen. */}
+        {hostingHelp ? (
+          <HelpAdmission waiting={participants?.waiting ?? []} onAnswer={answerHelp} busy={busy} />
+        ) : null}
+
         {/*
          * Whether a newer version is published: a prompt when the window
          * opens, then a banner for as long as this one is out of date.
@@ -562,12 +713,32 @@ export default function App() {
             ) : null}
           </>
         ) : screen === 'portal' && !signedOut ? (
-          <PortalView path="/" navigateKey={portalHome} hidden={updatePrompt} signInPage={!portalOnOwnPage} />
+          <PortalView path={portalPath} navigateKey={portalHome} hidden={updatePrompt} signInPage={!portalOnOwnPage} />
         ) : signedOut && screen !== 'settings' ? (
           <SignInScreen
             revoked={revoked}
             deviceId={deviceId}
             onSignIn={() => void beginRegistration()}
+            busy={busy}
+          />
+        ) : screen === 'connect' ? (
+          <ConnectScreen
+            onConnect={(computer) => openPortal(`/connect/${encodeURIComponent(computer.uuid)}`)}
+            onJoin={(code) => openPortal(`/join?code=${code}`)}
+            onManage={() => openPortal('/devices')}
+          />
+        ) : screen === 'help' ? (
+          <GetHelp
+            computerName={computerName}
+            help={help}
+            hosting={hostingHelp}
+            participants={participants}
+            canHost={about?.supportsHosting ?? false}
+            needsScreenRecording={needsScreenRecording}
+            onOpenScreenRecording={openScreenRecording}
+            onStart={startHelp}
+            onAnswer={answerHelp}
+            onEnd={endHelp}
             busy={busy}
           />
         ) : screen === 'unattended' ? (
@@ -588,7 +759,7 @@ export default function App() {
           />
         ) : (
           <>
-            {about && about.supportsCompanion && !companion ? (
+            {about && about.supportsCompanion && !about.supportsHosting && !companion ? (
               <HowItWorks
                 computerName={computerName}
                 stopShortcut={about.stopShortcut}
@@ -604,7 +775,7 @@ export default function App() {
               companionOnly={about ? about.supportsCompanion && !about.supportsHosting : false}
             />
 
-            <RecentSessions sessions={state.recentSessions} />
+            <ComputerHistory recent={state.recentSessions} />
           </>
         )}
       </main>
