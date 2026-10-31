@@ -34,12 +34,19 @@ use Config\Remote as RemoteConfig;
  * Six things must all be true before this class will start one, and the order
  * is deliberate — the cheapest tenant check first, the device's own state last:
  *
- *   1. the caller is a member of the device's company;
- *   2. the organisation permits unattended access (policy ∧ entitlement);
+ *   1. the caller is a member of the device's company — or, for a personal
+ *      computer, which has no company, is its owner;
+ *   2. the scope permits unattended access (policy ∧ entitlement);
  *   3. the caller holds `remote.unattended.access`;
  *   4. the device is ACTIVE — not suspended, not revoked;
  *   5. the device has unattended access enabled, by somebody, on a date;
  *   6. the device is actually reachable.
+ *
+ * For a personal account the second and third are the platform's own answer
+ * and are yes: reaching your own computer is what Basic is for. The first and
+ * the fifth are what keep that safe — nobody but the owner can reach a
+ * personal computer at all, and none can be reached until somebody at it
+ * switched unattended access on and confirmed it there.
  *
  * The tray application still shows a session is running. There is no hidden
  * mode, and this class provides no way to create one.
@@ -94,11 +101,14 @@ class DeviceSessionService
             throw ApiException::notFound('That device could not be found.');
         }
 
-        // (2) and (3).
+        // (2) and (3). A personal computer has no organisation to blame for a
+        // refusal, so it is not told it has one.
         if (! $policy->allowUnattendedAccess) {
             throw ApiException::forbidden(
                 'UNATTENDED_ACCESS_NOT_ALLOWED',
-                'Unattended access is not enabled for this organisation.',
+                $companyId === null
+                    ? 'Unattended access is not available for this account.'
+                    : 'Unattended access is not enabled for this organisation.',
                 ['restrictions' => $policy->restrictions],
             );
         }
@@ -302,6 +312,12 @@ class DeviceSessionService
      * sleep/wake cycle and a service restart. The push over the presence room
      * is what makes it fast; this is what makes it reliable.
      *
+     * Unattended only, by the `access_mode` predicate below, and that matters
+     * now that an attended session can name a device too: one started from
+     * the desktop app ({@see startAttended()}) carries this device's id, but
+     * the app that asked for it already has it, and an agent that found it
+     * here would treat it as somebody connecting with nobody at the machine.
+     *
      * @return list<array<string, mixed>>
      */
     public function pendingFor(DevicePrincipal $principal): array
@@ -348,6 +364,289 @@ class DeviceSessionService
             ->getResultArray();
 
         return array_map(fn (array $row) => $this->sessions->castRow($row), $rows);
+    }
+
+    // ------------------------------------------- sessions the desktop hosts
+
+    /**
+     * "Give your code": somebody at this computer starts a session from the
+     * desktop app, reads its code to a helper, and admits them when they ask.
+     *
+     * The attended counterpart of {@see startUnattended()}, and an ordinary
+     * session for the same reason that one is: it goes through
+     * `SessionService::create()`, so it gets the same quota, policy snapshot,
+     * expiry, join code and SESSION_CREATED audit as one started in a browser,
+     * and the person it belongs to is the computer's owner — the only person
+     * a device credential can speak for. Nothing about how a helper gets in
+     * changes: they join by the code like any other session's, land in the
+     * waiting room, and are admitted or declined by the person at the machine
+     * ({@see admit()}, {@see decline()}). Control stays attended as well —
+     * the helper asks, the computer decides, through the same control route as
+     * any session it shares.
+     *
+     * Three things differ from a browser session, and they are what make it a
+     * session *this computer* hosts:
+     *
+     *   * `device_id` names this device, which is what lets it join as the
+     *     session's sharer (`joinAsHost`'s `namedForThisDevice`) and what every
+     *     route below checks before acting. `access_mode` stays ATTENDED, so
+     *     {@see pendingFor()} never offers it back as an unattended request.
+     *   * The whole screen is the requested share: an agent shares a monitor,
+     *     not a browser tab, and a scope that forbids that refuses here rather
+     *     than producing a session the computer cannot share in.
+     *   * The owner's browser seat goes. `create()` makes its creator the
+     *     joined, sharing host, because creating a session in a browser means
+     *     that; here the owner is at the machine, not in a browser, and the
+     *     machine is the host once it joins. Left as it was, a helper's browser
+     *     would wait for a picture from a sharer who is not there. It is kept as
+     *     a row — the session's owner always has one — but as a viewer who
+     *     left without ever joining, which is the truth.
+     *
+     * A company device (dormant: every account is personal now) would get a
+     * session in its own company, exactly as {@see startUnattended()} gives
+     * one, because a device can host only a session in its own scope.
+     *
+     * @return array<string, mixed> the session
+     */
+    public function startAttended(DevicePrincipal $principal, ?string $issueSummary = null): array
+    {
+        $device    = $this->devices->findByUuidOrFail($principal->deviceUuid);
+        $companyId = $device['company_id'] !== null ? (int) $device['company_id'] : null;
+        $owner     = $this->requireOwner($device);
+
+        // The owner's policy in the device's own scope: a personal computer's
+        // session is its owner's personal session.
+        $policy = $this->policies->resolveForDevice($owner, $device);
+
+        $this->db->transException(true)->transStart();
+
+        try {
+            $session = $this->sessions->create($owner, [
+                'scopeType'          => $companyId === null ? 'PERSONAL' : 'COMPANY',
+                'companyId'          => $companyId,
+                'sessionType'        => $companyId === null ? 'ASSISTANCE' : 'INTERNAL',
+                'requestedShareMode' => 'ENTIRE_MONITOR',
+                'issueSummary'       => $issueSummary,
+            ], $policy);
+
+            $this->db->table('remote_sessions')->where('id', $session['id'])->update([
+                'access_mode' => 'ATTENDED',
+                'device_id'   => $device['id'],
+                'updated_at'  => Clock::now(),
+            ]);
+
+            $seat = $this->participants->findByUser((int) $session['id'], $owner->id);
+            if ($seat !== null) {
+                $this->db->table('remote_participants')->where('id', $seat['id'])->update([
+                    'participant_role' => ParticipantService::ROLE_VIEWER,
+                    'is_host'          => false,
+                    'is_sharing'       => false,
+                    'status'           => 'LEFT',
+                    'joined_at'        => null,
+                    'left_at'          => Clock::now(),
+                    'connection_state' => 'CLOSED',
+                    'updated_at'       => Clock::now(),
+                ]);
+            }
+
+            // What SESSION_CREATED cannot say: that a machine asked for this,
+            // and which one. Recorded as the device acting for its owner, as
+            // every other decision a device reports is.
+            $this->audit->record(
+                $session,
+                EventType::DEVICE_SESSION_STARTED,
+                $owner->id,
+                'DEVICE',
+                null,
+                null,
+                [
+                    'deviceUuid' => (string) $device['uuid'],
+                    'deviceName' => (string) $device['device_name'],
+                ],
+            );
+
+            $this->db->transComplete();
+        } catch (\Throwable $e) {
+            $this->db->transRollback();
+
+            throw $e;
+        }
+
+        return $this->sessions->findByUuidOrFail((string) $session['uuid']);
+    }
+
+    /**
+     * Who is waiting to be let in, and who is in, for the session this
+     * computer hosts.
+     *
+     * People only. The computer's own participant is not listed — it is the
+     * thing being joined — and nor is any other machine; the owner's browser
+     * seat in a session started here never joined, so it is in neither list.
+     *
+     * @return array{session: array<string, mixed>, waiting: list<array<string, mixed>>, joined: list<array<string, mixed>>}
+     */
+    public function participantsOfHosted(DevicePrincipal $principal, string $sessionUuid): array
+    {
+        ['session' => $session] = $this->hostedSession($principal, $sessionUuid);
+
+        $waiting = [];
+        $joined  = [];
+
+        foreach ($this->participants->forSession((int) $session['id']) as $participant) {
+            if ($participant['device_id'] !== null) {
+                continue;
+            }
+
+            $status = (string) $participant['status'];
+            if ($status === 'REQUESTED') {
+                $waiting[] = $participant;
+            } elseif ($status === 'APPROVED' || $status === 'JOINED') {
+                $joined[] = $participant;
+            }
+        }
+
+        // Longest-waiting first, as the browser host's queue is.
+        usort($waiting, static fn (array $a, array $b): int => strcmp((string) $a['requested_at'], (string) $b['requested_at']));
+
+        return ['session' => $session, 'waiting' => $waiting, 'joined' => $joined];
+    }
+
+    /**
+     * Let a waiting person in, as the computer's owner.
+     *
+     * `ParticipantService::approve()` with the owner as the host, which is the
+     * same call, the same guarded update and the same PARTICIPANT_APPROVED
+     * record as the browser host's Admit — the person at the machine is that
+     * host; they are only using a different screen to say so.
+     *
+     * @return array<string, mixed> the participant
+     */
+    public function admit(DevicePrincipal $principal, string $sessionUuid, string $participantUuid): array
+    {
+        ['session' => $session, 'owner' => $owner] = $this->attendedHostedSession($principal, $sessionUuid);
+        $this->requirePerson($session, $participantUuid);
+
+        return $this->participants->approve($session, $participantUuid, $owner);
+    }
+
+    /**
+     * Turn a waiting person away, as the computer's owner — the browser host's
+     * Decline, through the same call.
+     *
+     * @return array<string, mixed> the participant
+     */
+    public function decline(DevicePrincipal $principal, string $sessionUuid, string $participantUuid): array
+    {
+        ['session' => $session, 'owner' => $owner] = $this->attendedHostedSession($principal, $sessionUuid);
+        $this->requirePerson($session, $participantUuid);
+
+        return $this->participants->deny($session, $participantUuid, $owner);
+    }
+
+    /**
+     * End the session this computer hosts, as its owner.
+     *
+     * `SessionService::end()`, so it closes exactly what ending from a browser
+     * closes — everybody still in it or waiting, the join code, any companion
+     * link, the invitations — and records SESSION_ENDED against the owner.
+     * Attended or not: the tray shows a session is running either way, and
+     * whoever is at the machine must be able to stop one.
+     *
+     * @return array<string, mixed> the session
+     */
+    public function endHosted(DevicePrincipal $principal, string $sessionUuid): array
+    {
+        ['session' => $session, 'owner' => $owner] = $this->hostedSession($principal, $sessionUuid);
+
+        return $this->sessions->end($session, $owner);
+    }
+
+    /**
+     * A session this device hosts, or 404.
+     *
+     * "Hosts" means the session names this device (`device_id`), in the
+     * device's own scope. That is narrower than "a session the device could
+     * join": an attended browser session the owner started can take their
+     * computer as its shared screen, but its waiting room is the browser
+     * host's, and a machine must not be able to admit people to a session
+     * somebody else is running. Refused as not found, like a session in
+     * another scope, so the answer does not confirm a session exists.
+     *
+     * @return array{session: array<string, mixed>, device: array<string, mixed>, owner: RemoteIdentity}
+     */
+    private function hostedSession(DevicePrincipal $principal, string $sessionUuid): array
+    {
+        $device  = $this->devices->findByUuidOrFail($principal->deviceUuid);
+        $session = Ids::isUuid($sessionUuid) ? $this->sessions->findByUuid($sessionUuid) : null;
+
+        if ($session === null
+            || ! self::sameScope($device, $session)
+            || $session['device_id'] === null
+            || (int) $session['device_id'] !== (int) $device['id']
+        ) {
+            throw ApiException::notFound('That Remote session could not be found.');
+        }
+
+        return ['session' => $session, 'device' => $device, 'owner' => $this->requireOwner($device)];
+    }
+
+    /**
+     * A hosted session that somebody is sitting at.
+     *
+     * An unattended session has nobody at the machine, by definition — that is
+     * what the owner agreed to when they switched it on. Whoever connected to
+     * it decides who else may watch, from their browser; the machine letting
+     * people in on its own would be an empty chair admitting strangers.
+     *
+     * @return array{session: array<string, mixed>, device: array<string, mixed>, owner: RemoteIdentity}
+     */
+    private function attendedHostedSession(DevicePrincipal $principal, string $sessionUuid): array
+    {
+        $hosted = $this->hostedSession($principal, $sessionUuid);
+
+        if ((string) ($hosted['session']['access_mode'] ?? 'ATTENDED') !== 'ATTENDED') {
+            throw ApiException::forbidden(
+                'SESSION_NOT_ATTENDED',
+                'Nobody is at this computer in an unattended session, so it does not admit anyone. The person who connected decides who joins.',
+            );
+        }
+
+        return $hosted;
+    }
+
+    /**
+     * The participant is a person in this session — not the computer itself
+     * and not another machine. A device row is never "waiting to join", and
+     * declining this computer's own participant would take the shared screen
+     * out of its own session.
+     *
+     * @param array<string, mixed> $session
+     */
+    private function requirePerson(array $session, string $participantUuid): void
+    {
+        $participant = $this->participants->findByUuid($participantUuid);
+
+        if ($participant === null
+            || (int) $participant['session_id'] !== (int) $session['id']
+            || $participant['device_id'] !== null
+        ) {
+            throw ApiException::notFound('That participant could not be found.');
+        }
+    }
+
+    /** @param array<string, mixed> $device */
+    private function requireOwner(array $device): RemoteIdentity
+    {
+        $owner = $this->ownerIdentity($device);
+
+        if ($owner === null) {
+            throw ApiException::conflict(
+                'DEVICE_OWNER_MISSING',
+                'This device is not linked to an AICOUNTLY user any more. Register it again.',
+            );
+        }
+
+        return $owner;
     }
 
     // ------------------------------------------------------------- internals

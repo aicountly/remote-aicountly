@@ -219,6 +219,29 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
     $routes->post('devices/me/unattended/disable', 'DeviceAgentController::disableUnattended', [
         'filter' => 'device-auth:device.self',
     ]);
+    // For the person at the machine: their own computers, and this computer's history. Both answer from the
+    // device row the credential names — nothing in the request names a person, a company or another device.
+    $routes->get('devices/me/computers', 'DeviceAgentController::computers', ['filter' => 'device-auth:device.self']);
+    $routes->get('devices/me/history', 'DeviceAgentController::history', ['filter' => 'device-auth:device.self']);
+    // "Give your code": a session started at this computer, for a helper to join by its code and the person at
+    // the machine to admit. The agent joins it as its host through devices/me/sessions/{uuid}/join above, and
+    // answers control through devices/me/sessions/{uuid}/control, as for any session it shares. Each of these
+    // acts only on a session that names this device (404 otherwise), and as the device's owner.
+    $routes->post('devices/me/sessions', 'DeviceAgentController::startSession', [
+        'filter' => ['device-auth:device.self', 'rate-limit:device-session-start,10,60'],
+    ]);
+    $routes->get('devices/me/sessions/(:segment)/participants', 'DeviceAgentController::sessionParticipants/$1', [
+        'filter' => ['device-auth:device.self', 'rate-limit:device-session-participants,120,60'],
+    ]);
+    $routes->post('devices/me/sessions/(:segment)/participants/(:segment)/admit', 'DeviceAgentController::admitParticipant/$1/$2', [
+        'filter' => ['device-auth:device.self', 'rate-limit:device-session-admit,30,60'],
+    ]);
+    $routes->post('devices/me/sessions/(:segment)/participants/(:segment)/decline', 'DeviceAgentController::declineParticipant/$1/$2', [
+        'filter' => ['device-auth:device.self', 'rate-limit:device-session-admit,30,60'],
+    ]);
+    $routes->post('devices/me/sessions/(:segment)/end', 'DeviceAgentController::endSession/$1', [
+        'filter' => ['device-auth:device.self', 'rate-limit:device-session-end,30,60'],
+    ]);
     // "Sign this computer out": the machine revoking its own row with its own
     // credential, through the same revocation as `devices/(:segment)/revoke`.
     // It takes no device uuid — the credential names the device — so it can
@@ -262,6 +285,7 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
     ]);
 
     $routes->get('devices/(:segment)', 'DeviceController::show/$1', ['filter' => 'api-auth']);
+    $routes->get('devices/(:segment)/history', 'DeviceController::history/$1', ['filter' => 'api-auth']);
     $routes->patch('devices/(:segment)', 'DeviceController::update/$1', ['filter' => 'api-auth']);
     $routes->post('devices/(:segment)/revoke', 'DeviceController::revoke/$1', ['filter' => 'api-auth']);
     $routes->post('devices/(:segment)/unattended/enable', 'DeviceController::enableUnattended/$1', ['filter' => 'api-auth']);

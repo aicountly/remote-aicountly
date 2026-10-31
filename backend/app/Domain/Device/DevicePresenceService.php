@@ -198,10 +198,14 @@ class DevicePresenceService
         $device = $this->devices->findForUser($identity, $deviceUuid);
         $policy = $this->policies->resolveForDevice($identity, $device);
 
+        // Always the answer for a personal computer, whose policy keeps reboot
+        // off — and said without an organisation it does not have.
         if (! $policy->allowDeviceReboot) {
             throw ApiException::forbidden(
                 'DEVICE_REBOOT_NOT_ALLOWED',
-                'Restarting a computer remotely is not enabled for this organisation.',
+                $device['company_id'] === null
+                    ? 'Restarting a computer remotely is not available for this account.'
+                    : 'Restarting a computer remotely is not enabled for this organisation.',
                 ['restrictions' => $policy->restrictions],
             );
         }

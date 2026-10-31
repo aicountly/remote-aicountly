@@ -113,6 +113,14 @@ final class EventType
     public const UNATTENDED_ACCESS_DISABLED = 'UNATTENDED_ACCESS_DISABLED';
     public const UNATTENDED_SESSION_STARTED = 'UNATTENDED_SESSION_STARTED';
 
+    /**
+     * Somebody at a computer started a session from the desktop app for a
+     * helper to join by its code ("give your code"). The attended counterpart
+     * of UNATTENDED_SESSION_STARTED: SESSION_CREATED says a session exists and
+     * whose it is, this says it was the machine that asked, and which machine.
+     */
+    public const DEVICE_SESSION_STARTED = 'DEVICE_SESSION_STARTED';
+
     public const DEVICE_REBOOT_REQUESTED = 'DEVICE_REBOOT_REQUESTED';
 
     /** A person, in their browser, confirming or declining a desktop agent's sign-in code. */
@@ -141,7 +149,7 @@ final class EventType
 
             self::SESSION_CREATED, self::SESSION_ENDED, self::INVITATION_CREATED, self::INVITATION_REVOKED,
             self::PARTICIPANT_APPROVED, self::PARTICIPANT_DENIED, self::DEVICE_UPDATED,
-            self::DEVICE_REBOOT_REQUESTED, self::UNATTENDED_SESSION_STARTED,
+            self::DEVICE_REBOOT_REQUESTED, self::UNATTENDED_SESSION_STARTED, self::DEVICE_SESSION_STARTED,
             self::FILE_TRANSFER_STARTED, self::FILE_TRANSFER_COMPLETED,
             self::RECORDING_STARTED, self::RECORDING_STOPPED,
             self::CONTROL_COMPANION_DECLINED, self::CONTROL_COMPANION_READY,

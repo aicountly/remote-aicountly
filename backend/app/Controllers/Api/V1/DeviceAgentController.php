@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controllers\Api\V1;
 
 use App\Controllers\BaseApiController;
+use App\Domain\Device\DeviceHistory;
 use App\Domain\Device\DevicePrincipal;
 use App\Domain\Support\ApiException;
 use App\Domain\Support\Presenter;
@@ -20,11 +21,16 @@ use Config\Services;
  * route by which an agent could read a session, administer a company or see
  * another device.
  *
- * What an agent can do here is exactly six things: say it is still there,
- * find out what it is currently permitted to do, pick up an unattended session
- * it has been asked to host, report what the person at the machine decided
- * about remote control, switch its own unattended access off, and revoke
- * itself when somebody signs the computer out.
+ * What an agent can do here: say it is still there, find out what it is
+ * currently permitted to do, pick up an unattended session it has been asked
+ * to host, report what the person at the machine decided about remote control,
+ * switch its own unattended access off, and revoke itself when somebody signs
+ * the computer out — and, for the person sitting at it, list their own
+ * computers, read this computer's history, and host a session they started
+ * here ("give your code"): start it, see who is waiting, admit or decline
+ * them, and end it. Every one of those answers about this device or its
+ * owner, from the device row its credential names; none of them takes a
+ * person, a company or another device as input.
  */
 class DeviceAgentController extends BaseApiController
 {
@@ -362,6 +368,117 @@ class DeviceAgentController extends BaseApiController
             'participant' => Presenter::participant($result['participant']),
             'control'     => Services::controlService()->stateFor($session),
         ]);
+    }
+
+    // ------------------------------------------------- the owner's computers
+
+    /**
+     * `GET /devices/me/computers` — `{computers: Computer[], count}`
+     *
+     * The owner's computers in this computer's scope, this one first. Asked
+     * with the machine's credential, so the only person it can be about is the
+     * one this machine belongs to.
+     */
+    public function computers(): ResponseInterface
+    {
+        $principal = $this->context()->requireDevice();
+        $principal->assertScope(DevicePrincipal::SCOPE_MANAGE);
+
+        $devices = Services::deviceService();
+        $result  = $devices->computersFor($principal);
+        $thisId  = (int) $result['device']['id'];
+
+        $computers = array_map(
+            static fn (array $row): array => Presenter::computer($row, $devices->isOnline($row), (int) $row['id'] === $thisId),
+            $result['items'],
+        );
+
+        return $this->ok(['computers' => $computers, 'count' => count($computers)]);
+    }
+
+    /**
+     * `GET /devices/me/history[?limit=]` — `{sessions, events}` for this
+     * computer: the same history its owner reads in the console.
+     */
+    public function history(): ResponseInterface
+    {
+        $principal = $this->context()->requireDevice();
+        $principal->assertScope(DevicePrincipal::SCOPE_MANAGE);
+
+        $device = Services::deviceService()->findByUuidOrFail($principal->deviceUuid);
+
+        return $this->ok(Presenter::deviceHistory(
+            Services::deviceHistory()->for($device, DeviceHistory::limit($this->request->getGet('limit'))),
+        ));
+    }
+
+    // ----------------------------------------- sessions this computer hosts
+
+    /**
+     * `POST /devices/me/sessions` `{issueSummary?}` — `201 {session}`
+     *
+     * Somebody at this computer starting a session for a helper to join by its
+     * code. The agent then joins it as its host through
+     * `devices/me/sessions/{uuid}/join`, exactly as it joins an unattended one.
+     */
+    public function startSession(): ResponseInterface
+    {
+        $principal = $this->context()->requireDevice();
+        $principal->assertScope(DevicePrincipal::SCOPE_MANAGE);
+
+        $session = Services::deviceSessionService()->startAttended(
+            $principal,
+            $this->optionalString($this->body(), 'issueSummary', 500),
+        );
+
+        return $this->created(['session' => Presenter::session($session)]);
+    }
+
+    /** `GET /devices/me/sessions/{uuid}/participants` — `{waiting, joined}` */
+    public function sessionParticipants(string $uuid): ResponseInterface
+    {
+        $principal = $this->context()->requireDevice();
+        $principal->assertScope(DevicePrincipal::SCOPE_MANAGE);
+
+        $result = Services::deviceSessionService()->participantsOfHosted($principal, $uuid);
+
+        return $this->ok([
+            'waiting' => array_map([Presenter::class, 'hostedParticipant'], $result['waiting']),
+            'joined'  => array_map([Presenter::class, 'hostedParticipant'], $result['joined']),
+        ]);
+    }
+
+    /** `POST /devices/me/sessions/{uuid}/participants/{participantUuid}/admit` — `{participant}` */
+    public function admitParticipant(string $uuid, string $participantUuid): ResponseInterface
+    {
+        $principal = $this->context()->requireDevice();
+        $principal->assertScope(DevicePrincipal::SCOPE_MANAGE);
+
+        $participant = Services::deviceSessionService()->admit($principal, $uuid, $participantUuid);
+
+        return $this->ok(['participant' => Presenter::hostedParticipant($participant)]);
+    }
+
+    /** `POST /devices/me/sessions/{uuid}/participants/{participantUuid}/decline` — `{participant}` */
+    public function declineParticipant(string $uuid, string $participantUuid): ResponseInterface
+    {
+        $principal = $this->context()->requireDevice();
+        $principal->assertScope(DevicePrincipal::SCOPE_MANAGE);
+
+        $participant = Services::deviceSessionService()->decline($principal, $uuid, $participantUuid);
+
+        return $this->ok(['participant' => Presenter::hostedParticipant($participant)]);
+    }
+
+    /** `POST /devices/me/sessions/{uuid}/end` — `{session}` */
+    public function endSession(string $uuid): ResponseInterface
+    {
+        $principal = $this->context()->requireDevice();
+        $principal->assertScope(DevicePrincipal::SCOPE_MANAGE);
+
+        $session = Services::deviceSessionService()->endHosted($principal, $uuid);
+
+        return $this->ok(['session' => Presenter::session($session)]);
     }
 
     /**
