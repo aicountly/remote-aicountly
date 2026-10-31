@@ -23,9 +23,10 @@
 //!
 //! # Screen frames
 //!
-//! Frames go from [`remote_device::Frame`] into the encoder and out over
-//! SRTP. They are never written to disk, never sent to the API, never
-//! retained past the encode. There is no method here that would let them be.
+//! Frames go from [`remote_device::Frame`] into the H.264 encoder in
+//! [`video`] and out over SRTP. They are never written to disk, never sent to
+//! the API, never retained past the encode. There is no method here that
+//! would let them be.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -34,6 +35,8 @@ use std::fmt;
 
 use remote_device::{CaptureProfile, Frame};
 use serde::{Deserialize, Serialize};
+
+pub mod video;
 
 #[cfg(feature = "webrtc-rs")]
 pub mod webrtc_rs;
@@ -215,7 +218,57 @@ pub trait PeerSession: Send {
     ///
     /// Takes the frame by value and drops it: nothing here retains a frame,
     /// and there is no method that would return one.
+    ///
+    /// The frame is the capture's own: [`remote_device::PixelFormat::Bgra8`]
+    /// as `ScreenCaptureProvider::next_frame` returns it on Windows, `Rgba8`,
+    /// or `I420`, at any size and with any row padding. It is cropped to even
+    /// dimensions, scaled down to the session's [`CaptureProfile`] if it is
+    /// larger, encoded as H.264 and sent. `timestamp_us` should be the capture
+    /// time on any clock — Windows stamps microseconds since 1970, the Mac
+    /// capture microseconds since it started — because only the differences
+    /// between frames are used: they become the RTP timestamps, so a still
+    /// screen's gaps reach the viewer as gaps. A timestamp that stands still,
+    /// runs backwards or leaps ahead of the wall clock is replaced by the
+    /// wall-clock gap.
+    ///
+    /// `Ok(())` does not promise the frame was sent. A frame is deliberately
+    /// dropped — and that is not an error — when the connection is not yet
+    /// (or not currently) up, when it arrives faster than the profile's frame
+    /// rate, or when the encoder's rate control skips it to stay inside the
+    /// bitrate. Each of those is the alternative to a queue.
+    ///
+    /// # Errors
+    ///
+    /// [`WebRtcError::Media`] for a frame that does not describe its own
+    /// bytes, a layout the encoder does not take (`Nv12`), a session with no
+    /// video track (a control-only session), or a viewer whose browser did
+    /// not accept H.264. [`WebRtcError::WrongState`] once the connection has
+    /// failed or been closed.
     async fn send_frame(&mut self, frame: Frame) -> Result<(), WebRtcError>;
+
+    /// Make the next frame sent an IDR — a keyframe a decoder can start from
+    /// with no history.
+    ///
+    /// The session already asks for one itself when the connection comes up
+    /// (and comes back up), and whenever the viewer's browser reports a lost
+    /// picture with a PLI or FIR. This is for the host's own reasons: a new
+    /// viewer joining a session, or a switch to a different monitor.
+    ///
+    /// A session with no video track has nothing to do, which is the default.
+    fn request_keyframe(&mut self) {}
+
+    /// Follow a new capture profile: a quality change from the interface, or
+    /// a step `Congestion::adjust` suggested.
+    ///
+    /// The encoder takes its ceiling, frame rate and bitrate from the profile,
+    /// so the host passes the same profile here that it passes to
+    /// `ScreenCaptureProvider::reconfigure`. A change that reshapes the stream
+    /// restarts it with a keyframe at the next frame.
+    ///
+    /// A session with no video track has nothing to do, which is the default.
+    fn set_capture_profile(&mut self, profile: CaptureProfile) {
+        let _ = profile;
+    }
 
     /// Send a control-protocol message on the control channel.
     async fn send_control(&mut self, bytes: &[u8]) -> Result<(), WebRtcError>;
@@ -249,6 +302,9 @@ pub trait PeerSessionFactory: Send + Sync {
 
     /// Create a session for one peer, using the ICE configuration the API gave
     /// us for this session.
+    ///
+    /// The session offers one H.264 video track, encoded under `profile`
+    /// (see [`PeerSession::set_capture_profile`] to change it later).
     async fn create(
         &self,
         ice: IceConfiguration,

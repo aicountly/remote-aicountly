@@ -34,7 +34,7 @@ pub mod capability;
 pub mod frame;
 
 pub use capability::{AgentCapabilities, PermissionState, PermissionSummary};
-pub use frame::{CaptureProfile, Frame, PixelFormat};
+pub use frame::{CaptureProfile, Frame, I420Planes, PixelFormat};
 
 /// Why a native operation failed.
 ///
