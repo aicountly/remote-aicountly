@@ -12,6 +12,7 @@ import { ComputerHistory } from '../features/home/ComputerHistory'
 import { ConnectScreen } from '../features/connect/ConnectScreen'
 import { GetHelp, HelpAdmission } from '../features/help/GetHelp'
 import { PermissionsCard } from '../features/permissions/PermissionsCard'
+import { ScreenRecordingNotice } from '../features/permissions/ScreenRecordingNotice'
 import { ControlRequest } from '../features/session/ControlRequest'
 import { SessionBanner } from '../features/session/SessionBanner'
 import { SettingsPage } from '../features/settings/SettingsPage'
@@ -765,6 +766,10 @@ export default function App() {
                 stopShortcut={about.stopShortcut}
                 onOpenRemote={() => selectScreen('portal')}
               />
+            ) : null}
+
+            {needsScreenRecording && about?.supportsHosting ? (
+              <ScreenRecordingNotice computerName={computerName} onOpen={openScreenRecording} busy={busy} />
             ) : null}
 
             <DeviceCard state={state} onUnregister={unregister} busy={busy} />

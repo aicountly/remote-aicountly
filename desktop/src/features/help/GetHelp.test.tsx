@@ -82,7 +82,7 @@ describe('GetHelp', () => {
 
     render(<GetHelp {...props({ computerName: 'Mac', needsScreenRecording: true, onOpenScreenRecording })} />)
 
-    await userEvent.click(screen.getByRole('button', { name: 'Open System Settings' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Open Screen Recording settings' }))
     expect(onOpenScreenRecording).toHaveBeenCalledOnce()
   })
 

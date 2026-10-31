@@ -1,4 +1,5 @@
 import type { HelpSession, HostedParticipant, HostedParticipants } from '../../types/agent'
+import { ScreenRecordingNotice } from '../permissions/ScreenRecordingNotice'
 import { formatSessionCode } from '../connect/ConnectScreen'
 
 /**
@@ -57,16 +58,7 @@ export function GetHelp({
       </h2>
 
       {needsScreenRecording ? (
-        <div className="notice notice--warning">
-          <p className="notice__title">Allow screen recording first</p>
-          <p>
-            macOS asks before any app can show your screen. Allow <strong>AICOUNTLY Remote</strong> under System
-            Settings → Privacy &amp; Security → Screen &amp; System Audio Recording, then come back here.
-          </p>
-          <button type="button" className="btn btn--secondary" onClick={onOpenScreenRecording} disabled={busy}>
-            Open System Settings
-          </button>
-        </div>
+        <ScreenRecordingNotice computerName={computerName} onOpen={onOpenScreenRecording} busy={busy} />
       ) : null}
 
       {!help ? (

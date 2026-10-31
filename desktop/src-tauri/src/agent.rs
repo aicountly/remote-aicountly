@@ -231,17 +231,27 @@ impl Agent {
     /// so an agent on a box with no background service does not enrol claiming
     /// it can be reached unattended.
     ///
-    /// A companion-only platform (macOS) is the exception: its one capability,
-    /// `remote_control`, depends on Accessibility, which a person grants in
-    /// System Settings — typically *after* registering, when first asked. The
-    /// declaration is fixed at enrolment, so constraining it by a permission
-    /// not granted yet would enrol a Mac that can never be a companion. The
-    /// permission is instead checked live, every time, before the companion
-    /// reports itself ready (`companion::CompanionApi::can_inject`).
+    /// macOS is the exception: its capabilities depend on Accessibility and
+    /// Screen Recording, which a person grants in System Settings — typically
+    /// *after* registering, when first asked. The declaration is fixed at
+    /// enrolment, so constraining it by a permission not granted yet would
+    /// enrol a Mac that can never host or be a companion. The permissions are
+    /// instead checked live, every time: capture refuses without Screen
+    /// Recording, and a companion reports itself ready only with
+    /// Accessibility (`companion::CompanionApi::can_inject`).
     pub fn capabilities(&self) -> AgentCapabilities {
         let declared = platform::declared_capabilities();
 
-        if platform::supports_companion() && !platform::supports_hosting() {
+        // A Mac's capabilities all wait on permissions a person grants in
+        // System Settings, typically after registering, and the declaration is
+        // fixed at enrolment — so it is not constrained here. Each is checked
+        // live instead: capture refuses without Screen Recording, and a
+        // companion waits for Accessibility (`can_inject`). Constraining it
+        // registered a Mac with no capabilities at all, which could then never
+        // host or be a companion.
+        if cfg!(target_os = "macos")
+            || (platform::supports_companion() && !platform::supports_hosting())
+        {
             return declared;
         }
 
