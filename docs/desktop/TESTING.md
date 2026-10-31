@@ -150,10 +150,12 @@ Read this rather than assuming the test count covers it.
   in `platform/` cover — but a passing `to_virtual_desktop` is not a
   pointer that moved. `desktop/tests/MANUAL.md` is the pass
   that has to happen before a release, and it is not a formality.
-* **There is no end-to-end media test**, because there is no encoder — see
-  [ARCHITECTURE.md](ARCHITECTURE.md#what-is-built-and-what-is-not). The WebRTC
-  tests negotiate a real session, exchange SDP and assert that the answer
-  carries `m=video`, `VP8` and `m=application`; nothing sends a frame.
+* **Media is tested up to a real browser decoder, not a real screen.** The
+  encoder's unit tests cover colour conversion, stride, odd sizes, downscaling
+  and keyframes; a loopback test sends H.264 to a second webrtc-rs peer; and
+  `desktop/scripts/interop/` streams synthetic frames to headless Chromium and
+  checks `framesDecoded`. Capturing a real screen is a step in
+  `desktop/tests/MANUAL.md`.
 * **There is no test against a running relay.** The signalling messages are
   parsed and asserted against the shapes `signalling/src/server.js` relays, and
   the session loop's join handling is tested; nothing in CI opens a socket to a

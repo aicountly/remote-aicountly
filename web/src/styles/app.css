@@ -1731,3 +1731,35 @@
   align-items: center;
   gap: var(--space-2);
 }
+
+/* A computer's history: its connections, then what changed. */
+.device-history__title {
+  font-size: 0.95rem;
+  margin: 0 0 0.5rem;
+}
+
+.device-history__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.device-history__item {
+  display: grid;
+  grid-template-columns: minmax(9rem, auto) 1fr;
+  gap: 0.15rem 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+}
+
+.device-history__item > :nth-child(n + 3) {
+  grid-column: 2;
+}
+
+.device-history__when {
+  color: var(--text-muted, #6b7280);
+  font-size: 0.85rem;
+}

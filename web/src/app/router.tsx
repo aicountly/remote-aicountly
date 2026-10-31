@@ -34,6 +34,7 @@ const AdminAudit = lazy(() => import('../features/admin/AuditPage'))
 const SettingsPage = lazy(() => import('../features/settings/SettingsPage'))
 const UsersAccessPage = lazy(() => import('../features/settings/UsersAccessPage'))
 const DesktopSignIn = lazy(() => import('../features/desktop/DesktopSignInPage'))
+const ConnectDevice = lazy(() => import('../features/devices/ConnectDevicePage'))
 const NotFound = lazy(() => import('../features/misc/NotFoundPage'))
 
 function page(element: React.ReactNode) {
@@ -53,6 +54,9 @@ export const router = createBrowserRouter([
       { path: 'sessions/:uuid', element: page(<SessionDetail />) },
       { path: 'support', element: page(<SupportRequests />) },
       { path: 'devices', element: page(<Devices />) },
+      // Connect to one of your own computers and go straight to the session —
+      // what the desktop application's "Your computers" list opens.
+      { path: 'connect/:deviceUuid', element: page(<ConnectDevice />) },
       // An organisation's administration, and its users and access. While
       // Remote has no organisations (organisations.ts) an old bookmark to one
       // of these goes to the dashboard rather than to a page about nothing.

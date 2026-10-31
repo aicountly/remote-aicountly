@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controllers\Api\V1;
 
 use App\Controllers\BaseApiController;
+use App\Domain\Device\DeviceHistory;
 use App\Domain\Device\DeviceService;
 use App\Domain\Policy\PermissionCatalog;
 use App\Domain\Support\ApiException;
@@ -135,14 +136,38 @@ class DeviceController extends BaseApiController
         ]);
     }
 
+    /**
+     * `GET /devices/{uuid}/history[?limit=]` — `{sessions, events}`
+     *
+     * The same history the desktop app reads about itself, for somebody who
+     * may manage this computer: its owner, for a personal one, and nobody else
+     * (`findForUser()` answers 404 to anybody else, so the history of a
+     * computer that is not yours cannot be told apart from one that does not
+     * exist).
+     */
+    public function history(string $uuid): ResponseInterface
+    {
+        $device = Services::deviceService()->findForUser($this->identity(), $uuid);
+
+        return $this->ok(Presenter::deviceHistory(
+            Services::deviceHistory()->for($device, DeviceHistory::limit($this->request->getGet('limit'))),
+        ));
+    }
+
     /** `PATCH /devices/{uuid}` — rename, suspend or resume. */
     public function update(string $uuid): ResponseInterface
     {
-        $body   = $this->body();
-        $device = Services::deviceService()->update($this->identity(), $uuid, [
-            'deviceName' => $this->optionalString($body, 'deviceName', 160) ?? '',
-            'status'     => $this->optionalString($body, 'status', 16) ?? '',
-        ]);
+        $body = $this->body();
+
+        // Only what was sent. A field that is absent is not a field set to
+        // nothing: passing `''` for it made the service read a rename as an
+        // invalid status ("Revoking is a separate action") and a suspension as
+        // a missing name, so the console's Rename and Suspend — each of which
+        // sends its one field — were both refused.
+        $device = Services::deviceService()->update($this->identity(), $uuid, array_filter([
+            'deviceName' => $this->optionalString($body, 'deviceName', 160),
+            'status'     => $this->optionalString($body, 'status', 16),
+        ], static fn (?string $value): bool => $value !== null));
 
         return $this->ok(['device' => Presenter::device($device, Services::deviceService()->isOnline($device))]);
     }

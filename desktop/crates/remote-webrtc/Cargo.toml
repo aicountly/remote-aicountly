@@ -12,7 +12,13 @@ publish.workspace = true
 # build the abstraction without pulling the whole media stack, which is what
 # keeps a Linux type-check to seconds rather than minutes.
 default = ["webrtc-rs"]
-webrtc-rs = ["dep:webrtc", "dep:rtc", "dep:async-trait", "dep:bytes"]
+webrtc-rs = ["dep:webrtc", "dep:rtc", "dep:async-trait", "dep:bytes", "openh264"]
+# The software H.264 encoder on its own. Implied by `webrtc-rs`, because a
+# session that negotiates a video track it cannot fill is the bug this crate
+# used to have; separate so the encoder can be built and measured without the
+# network stack. The colour conversion, scaling and keyframe scheduling it
+# relies on are plain Rust and compile without either feature.
+openh264 = ["dep:openh264"]
 
 [dependencies]
 serde.workspace = true
@@ -47,6 +53,9 @@ async-trait = { version = "0.1", optional = true }
 # The data channel's send API takes a `BytesMut`; the same version webrtc-rs
 # itself resolves, so the two are the same type rather than two of them.
 bytes = { version = "1", optional = true }
+# The screen encoder. See the workspace manifest and `src/video/h264.rs` for
+# why it is built from source and what that means for licensing.
+openh264 = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }

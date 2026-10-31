@@ -213,6 +213,12 @@ pub fn run() {
             commands::portal_hide,
             commands::portal_action,
             commands::about,
+            commands::computers::list_computers,
+            commands::computers::computer_history,
+            commands::computers::start_help_session,
+            commands::computers::help_participants,
+            commands::computers::answer_help_participant,
+            commands::computers::end_help_session,
         ])
         .setup(|app| {
             use tauri::Manager;

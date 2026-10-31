@@ -691,6 +691,165 @@ fn require_identifier(value: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// One of the owner's computers (`GET /devices/me/computers`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnComputer {
+    /// The device's id.
+    pub uuid: String,
+    /// What its owner calls it.
+    pub device_name: String,
+    /// `Windows` or `macOS`.
+    #[serde(default)]
+    pub operating_system: Option<String>,
+    /// The operating system's version.
+    #[serde(default)]
+    pub os_version: Option<String>,
+    /// `ACTIVE` or `SUSPENDED` — a removed computer is not listed.
+    pub status: String,
+    /// Reachable now.
+    #[serde(default)]
+    pub online: bool,
+    /// When it was last heard from.
+    #[serde(default)]
+    pub last_seen_at: Option<String>,
+    /// When it was registered.
+    #[serde(default)]
+    pub enrolled_at: Option<String>,
+    /// Whether it can be connected to with nobody at it.
+    #[serde(default)]
+    pub unattended_access_enabled: bool,
+    /// This machine.
+    #[serde(default)]
+    pub is_this_computer: bool,
+}
+
+/// The owner's computers and how many there are.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnComputers {
+    /// This one first, then by name.
+    pub computers: Vec<OwnComputer>,
+    /// How many are registered.
+    pub count: u32,
+}
+
+/// One session a computer took part in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistorySession {
+    /// The session's id.
+    pub uuid: String,
+    /// Its short public id, e.g. `AR-10042`.
+    #[serde(default)]
+    pub display_id: String,
+    /// `ATTENDED` or `UNATTENDED`.
+    #[serde(default)]
+    pub access_mode: String,
+    /// `HOST` (its screen was shared) or `COMPANION`.
+    #[serde(default)]
+    pub role: String,
+    /// How it ended, or that it is still running.
+    #[serde(default)]
+    pub status: String,
+    /// When it started.
+    #[serde(default)]
+    pub started_at: Option<String>,
+    /// When it ended.
+    #[serde(default)]
+    pub ended_at: Option<String>,
+    /// How long it lasted.
+    #[serde(default)]
+    pub duration_seconds: Option<u64>,
+    /// The other people in it, by name.
+    #[serde(default)]
+    pub peers: Vec<String>,
+    /// Whether anybody controlled the computer in it.
+    #[serde(default)]
+    pub controlled: bool,
+}
+
+/// Something that happened to a computer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryEvent {
+    /// The audit event, e.g. `UNATTENDED_ACCESS_ENABLED`.
+    pub event: String,
+    /// When.
+    #[serde(default)]
+    pub at: Option<String>,
+    /// In a sentence.
+    #[serde(default)]
+    pub summary: String,
+    /// Who, when it was a person.
+    #[serde(default)]
+    pub actor_name: Option<String>,
+}
+
+/// A computer's history (`GET /devices/me/history`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceHistory {
+    /// Newest first.
+    #[serde(default)]
+    pub sessions: Vec<HistorySession>,
+    /// Newest first.
+    #[serde(default)]
+    pub events: Vec<HistoryEvent>,
+}
+
+/// A help session this computer hosts, as it was created.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HelpSession {
+    /// The session's id.
+    pub uuid: String,
+    /// Its short public id.
+    #[serde(default)]
+    pub display_id: String,
+    /// The nine-digit code the helper types.
+    #[serde(default)]
+    pub session_code: Option<String>,
+    /// Its status.
+    #[serde(default)]
+    pub status: String,
+}
+
+/// Somebody in, or waiting for, a session this computer hosts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostedParticipant {
+    /// Their participant id.
+    pub uuid: String,
+    /// Their name.
+    #[serde(default)]
+    pub display_name: String,
+    /// `VIEWER`, `GUEST`…
+    #[serde(default)]
+    pub role: String,
+    /// `REQUESTED`, `APPROVED`, `JOINED`…
+    #[serde(default)]
+    pub status: String,
+    /// When they asked to join.
+    #[serde(default)]
+    pub requested_at: Option<String>,
+    /// When they joined.
+    #[serde(default)]
+    pub joined_at: Option<String>,
+}
+
+/// Who is waiting, and who is in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostedParticipants {
+    /// Waiting to be admitted.
+    #[serde(default)]
+    pub waiting: Vec<HostedParticipant>,
+    /// In the session.
+    #[serde(default)]
+    pub joined: Vec<HostedParticipant>,
+}
+
 /// The agent's HTTP client.
 pub struct ApiClient {
     config: AgentConfig,
@@ -1087,6 +1246,106 @@ impl ApiClient {
             .await?;
 
         Ok(body.device)
+    }
+
+    /// The owner's computers, this one first: what the window's "Your
+    /// computers" list and its count are drawn from.
+    ///
+    /// With the device's own credential, because the window holds no other.
+    /// The route answers only with the computers of the person this machine
+    /// belongs to, and nothing about anybody else's.
+    pub async fn own_computers(&self) -> Result<OwnComputers, ApiError> {
+        self.get("/v1/remote/devices/me/computers").await
+    }
+
+    /// This computer's history: the sessions it took part in and what
+    /// changed on it, newest first.
+    pub async fn own_history(&self, limit: u32) -> Result<DeviceHistory, ApiError> {
+        self.get(&format!(
+            "/v1/remote/devices/me/history?limit={}",
+            limit.clamp(1, 50)
+        ))
+        .await
+    }
+
+    /// Start a help session that this computer hosts: an attended session in
+    /// its owner's name, whose code the person here reads out to whoever is
+    /// helping. Joining it as its screen is the ordinary
+    /// [`ApiClient::join_session`] afterwards.
+    pub async fn start_help_session(
+        &self,
+        issue_summary: Option<&str>,
+    ) -> Result<HelpSession, ApiError> {
+        #[derive(Deserialize)]
+        struct Body {
+            session: HelpSession,
+        }
+
+        let body = match issue_summary.map(str::trim).filter(|text| !text.is_empty()) {
+            Some(text) => serde_json::json!({ "issueSummary": text }),
+            None => serde_json::json!({}),
+        };
+
+        let body: Body = self.post("/v1/remote/devices/me/sessions", &body).await?;
+
+        Ok(body.session)
+    }
+
+    /// Who is waiting to be admitted to a session this computer hosts, and
+    /// who is in it.
+    pub async fn hosted_participants(
+        &self,
+        session_uuid: &str,
+    ) -> Result<HostedParticipants, ApiError> {
+        require_identifier(session_uuid)?;
+
+        self.get(&format!(
+            "/v1/remote/devices/me/sessions/{session_uuid}/participants"
+        ))
+        .await
+    }
+
+    /// Admit, or decline, somebody waiting to join a session this computer
+    /// hosts — the answer the person at the machine gave.
+    pub async fn answer_participant(
+        &self,
+        session_uuid: &str,
+        participant_uuid: &str,
+        admit: bool,
+    ) -> Result<HostedParticipant, ApiError> {
+        require_identifier(session_uuid)?;
+        require_identifier(participant_uuid)?;
+
+        #[derive(Deserialize)]
+        struct Body {
+            participant: HostedParticipant,
+        }
+
+        let verb = if admit { "admit" } else { "decline" };
+        let body: Body = self
+            .post(
+                &format!(
+                    "/v1/remote/devices/me/sessions/{session_uuid}/participants/{participant_uuid}/{verb}"
+                ),
+                &serde_json::json!({}),
+            )
+            .await?;
+
+        Ok(body.participant)
+    }
+
+    /// End a session this computer hosts, for everybody in it.
+    pub async fn end_hosted_session(&self, session_uuid: &str) -> Result<(), ApiError> {
+        require_identifier(session_uuid)?;
+
+        let _: serde_json::Value = self
+            .post(
+                &format!("/v1/remote/devices/me/sessions/{session_uuid}/end"),
+                &serde_json::json!({}),
+            )
+            .await?;
+
+        Ok(())
     }
 
     async fn get<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T, ApiError> {
@@ -1838,6 +2097,113 @@ mod tests {
                 .contains("\r\nauthorization: bearer device.super-secret-token-value\r\n"),
             "the device credential, and nothing else, says which machine this is"
         );
+    }
+
+    /// "Your computers" in the window: the owner's machines, read with this
+    /// one's credential, from the route that names no device.
+    #[tokio::test]
+    async fn the_owners_computers_are_read_with_this_computers_credential() {
+        let (base, request) = answer_once(
+            r#"{"data":{"count":2,"computers":[
+                {"uuid":"d-1","deviceName":"Office PC","operatingSystem":"Windows","osVersion":"11",
+                 "status":"ACTIVE","online":true,"lastSeenAt":"2026-10-31T09:00:00+00:00",
+                 "enrolledAt":"2026-10-30T08:00:00+00:00","unattendedAccessEnabled":false,"isThisComputer":true},
+                {"uuid":"d-2","deviceName":"Home Mac","operatingSystem":"macOS","osVersion":"15.1",
+                 "status":"ACTIVE","online":false,"lastSeenAt":null,"enrolledAt":null,
+                 "unattendedAccessEnabled":true,"isThisComputer":false}]}}"#,
+        )
+        .await;
+
+        let client = ApiClient::new(AgentConfig {
+            api_base_url: base,
+            ..AgentConfig::default()
+        })
+        .expect("builds")
+        .with_credential(credential());
+
+        let listing = client.own_computers().await.expect("read");
+
+        assert_eq!(listing.count, 2);
+        assert!(listing.computers[0].is_this_computer);
+        assert!(listing.computers[1].unattended_access_enabled);
+        assert!(!listing.computers[1].online);
+
+        let sent = request.await.expect("one request");
+        assert!(
+            sent.starts_with("GET /api/v1/remote/devices/me/computers HTTP/1.1\r\n"),
+            "{sent}"
+        );
+    }
+
+    /// The person at the machine admits somebody: the answer goes to the
+    /// session and participant the window named, and nowhere else.
+    #[tokio::test]
+    async fn admitting_somebody_posts_to_that_session_and_that_participant() {
+        let (base, request) = answer_once(
+            r#"{"data":{"participant":{"uuid":"p-1","displayName":"Ravi","role":"VIEWER","status":"APPROVED",
+                "requestedAt":"2026-10-31T09:00:00+00:00","joinedAt":null}}}"#,
+        )
+        .await;
+
+        let client = ApiClient::new(AgentConfig {
+            api_base_url: base,
+            ..AgentConfig::default()
+        })
+        .expect("builds")
+        .with_credential(credential());
+
+        let admitted = client
+            .answer_participant("sess-1", "p-1", true)
+            .await
+            .expect("read");
+        assert_eq!(admitted.status, "APPROVED");
+
+        let sent = request.await.expect("one request");
+        assert!(
+            sent.starts_with(
+                "POST /api/v1/remote/devices/me/sessions/sess-1/participants/p-1/admit HTTP/1.1\r\n"
+            ),
+            "{sent}"
+        );
+    }
+
+    #[test]
+    fn a_help_session_and_a_history_read_from_what_the_api_sends() {
+        let session: HelpSession = serde_json::from_value(serde_json::json!({
+            "uuid": "s-1", "displayId": "AR-10042", "sessionCode": "583194726", "status": "WAITING",
+            "scopeType": "PERSONAL", "ownerName": "Priya"
+        }))
+        .expect("extra fields are ignored");
+        assert_eq!(session.session_code.as_deref(), Some("583194726"));
+
+        let history: DeviceHistory = serde_json::from_value(serde_json::json!({
+            "sessions": [{"uuid": "s-1", "displayId": "AR-1", "accessMode": "UNATTENDED", "role": "HOST",
+                          "status": "ENDED", "startedAt": null, "endedAt": null, "durationSeconds": 60,
+                          "peers": ["Priya"], "controlled": true}],
+            "events": [{"event": "DEVICE_ENROLLED", "at": null, "summary": "Registered", "actorName": null}]
+        }))
+        .expect("reads");
+        assert_eq!(history.sessions[0].peers, vec!["Priya".to_owned()]);
+        assert_eq!(history.events[0].summary, "Registered");
+    }
+
+    #[test]
+    fn a_participant_or_session_id_that_could_leave_its_path_is_refused() {
+        let client = ApiClient::new(AgentConfig::default())
+            .expect("builds")
+            .with_credential(credential());
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        for bad in ["../x", "a/b", ""] {
+            assert!(runtime
+                .block_on(client.answer_participant("sess-1", bad, true))
+                .is_err());
+            assert!(runtime.block_on(client.hosted_participants(bad)).is_err());
+        }
     }
 
     /// An older API does not send `allowedShareModes` at all, and an agent

@@ -10,6 +10,7 @@ use App\Domain\Auth\PortalClient;
 use App\Domain\Auth\SourceContextVerifier;
 use App\Domain\Device\CompanionService;
 use App\Domain\Device\DeviceAuthenticationService;
+use App\Domain\Device\DeviceHistory;
 use App\Domain\Device\DevicePresenceService;
 use App\Domain\Device\DeviceService;
 use App\Domain\Device\DeviceSessionService;
@@ -295,6 +296,16 @@ class Services extends BaseService
             static::auditService(),
             static::remoteConfig(),
         );
+    }
+
+    /** A computer's sessions and the things done to it, for the desktop app and the owner's console. */
+    public static function deviceHistory(bool $getShared = true): DeviceHistory
+    {
+        if ($getShared) {
+            return static::getSharedInstance('deviceHistory');
+        }
+
+        return new DeviceHistory(db_connect(), static::sessionService());
     }
 
     public static function devicePresenceService(bool $getShared = true): DevicePresenceService

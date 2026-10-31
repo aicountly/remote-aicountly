@@ -192,8 +192,11 @@ final class DesktopPolicyTest extends RemoteTestCase
      * install the agent, sign in, and be told they had no permission to
      * register the computer in front of them.
      *
-     * What personal scope still does not grant is the pair that happens with
-     * nobody watching: unattended access, and restarting the machine.
+     * Reaching your own computer with nobody at it is personal scope's too
+     * now: the policy permits it, Basic entitles it and the person holds the
+     * permission. That reaches nothing on its own — every computer's own
+     * switch is off until somebody at it turns it on, and only its owner can
+     * connect (UnattendedAccessTest). Restarting the machine stays off.
      */
     public function testAPersonMayRegisterAndControlTheirOwnComputer(): void
     {
@@ -212,9 +215,13 @@ final class DesktopPolicyTest extends RemoteTestCase
         // administrator who, for a personal device, does not exist.
         $this->assertFalse($policy->can(PermissionCatalog::DEVICE_MANAGE));
 
-        $this->assertFalse($policy->allowUnattendedAccess);
+        $this->assertTrue($policy->allowUnattendedAccess);
+        $this->assertTrue($policy->can(PermissionCatalog::UNATTENDED_ACCESS));
+        $this->assertNotContains('UNATTENDED_ACCESS_NOT_ENTITLED', $policy->restrictions);
+        $this->assertTrue($policy->desktopCapabilityCeiling()['unattended_access']);
+
         $this->assertFalse($policy->allowDeviceReboot);
-        $this->assertFalse($policy->can(PermissionCatalog::UNATTENDED_ACCESS));
+        $this->assertFalse($policy->desktopCapabilityCeiling()['reboot']);
 
         // Company administration still is not a personal thing.
         $this->assertFalse($policy->can(PermissionCatalog::POLICY_MANAGE));

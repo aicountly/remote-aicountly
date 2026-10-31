@@ -66,12 +66,13 @@ Tell the pilot group these limits before they start (details in §5.2):
 
 ### Public launch: not yet
 
-Today AICOUNTLY Remote is a careful tool for *attended* help in the browser. People who compare it with AnyDesk,
-TeamViewer or UltraViewer will expect three things it does not have yet:
+People who compare AICOUNTLY Remote with AnyDesk, TeamViewer or UltraViewer expect three things. Two of them are built
+in this release and still need testing on real machines (§11, steps 33–39):
 
-* a desktop app that sends its own picture (`session.rs:34-39`);
-* a way through UAC prompts (`windows-app-manifest.xml:18`);
-* unattended access to their own computers (`CompanyPolicyDefaults.php:197`).
+* ~~a desktop app that sends its own picture~~ — built: H.264 from the app on Windows and Mac, and **Get help** ("give
+  your code") hosted by the app itself;
+* ~~unattended access to their own computers~~ — built: per computer, owner only, recorded;
+* a way through UAC prompts (`windows-app-manifest.xml:18`) — still missing (P1-2).
 
 These P0 blockers must be fixed first (§6.1):
 
@@ -86,10 +87,12 @@ These P0 blockers must be fixed first (§6.1):
    * CI no longer runs on pull requests.
    * This repository shows no monitoring or alerting.
    * Everything runs on one server, and signalling is a single process that keeps all its state in memory.
-6. **Positioning needs a decision.** Either launch as "attended help in the browser" and say plainly what it does not do,
-   or wait for native video, UAC support and unattended access. That is about a quarter of work (XL).
+6. **Positioning needs a decision.** Native video and unattended access now exist; UAC support does not. Either launch
+   saying plainly that administrator prompts cannot be answered remotely, or wait for the signed service (P1-2).
 7. **Pricing and free-tier limits are not decided.** TURN admission only observes and refuses nobody. Its capacity
    figures are placeholders, and the relays are shared with Connect.
+
+8. **The H.264 encoder needs a patent licence, or Cisco's own binary** (P0-10), before the app is distributed publicly.
 
 Two more are blockers only in some cases. If you market outside India, you need relays near those users. If you serve
 the EU, analytics must not load before consent.
@@ -111,6 +114,17 @@ match the competitors take a quarter or more.
 ---
 
 ## 2. What this release changed
+
+**Hosting, unattended access, your computers** (the release after the office-test build):
+
+| Change | Where |
+|---|---|
+| **The app sends its own picture**: capture once the peer connection is up, H.264 (OpenH264) at the profile's rate, stepping down and back up with the link, stopped on every exit. | `remote-webrtc/src/video/`; `session.rs` `CapturePump`; `agent.rs` `start_capture` |
+| **A Mac hosts**: Core Graphics capture, the Screen Recording permission asked for where it is needed. | `platform/macos/capture.rs`, `permissions.rs`; `ScreenRecordingNotice.tsx` |
+| **Get help ("give your code")** from the app: an attended session in the owner's name naming this computer; the person admits each helper in the app (asked on every screen) and grants control as in any session. | `DeviceSessionService` (`devices/me/sessions`…); `commands/computers.rs`; `GetHelp.tsx` |
+| **Unattended access to your own computers**, per computer with a confirmation, owner only. | `CompanyPolicyDefaults::personal()`; migration `EntitleUnattendedAccessByDefault`; `PersonalUnattendedAccessTest` |
+| **Your computers**: how many are registered and online, Connect, and each computer's history (connections and changes), in the web and the app; remove a computer from the web. | `DevicesPage.tsx` `describeCount`, `DeviceHistory.tsx`, `ConnectDevicePage.tsx`; desktop `YourComputers.tsx`, `ComputerHistory.tsx`; `DeviceHistory.php` |
+| A personal computer answers only to its owner (a platform-wide `remote.device.manage` no longer reaches it); renaming or suspending a computer from the web works again. | `DeviceService::findForUser`; `DeviceController::update` |
 
 Done in `8cefb42` / `7274918`:
 
@@ -186,9 +200,9 @@ advertised. Verify before quoting publicly.**
 
 | Capability | AICOUNTLY Remote | AnyDesk | TeamViewer | UltraViewer |
 |---|---|---|---|---|
-| Connect by ID or code | A 9-digit session code, and the host admits each person (`Remote.php:217`, `JoinService.php:29`). There is no connecting to a computer by its ID: what the app shows is its key fingerprint, now labelled as one (`SignInScreen.tsx`, `agent.rs:313-328`). | Yes. A permanent ID or alias. | Yes. ID and password. | Yes. ID and password. |
-| Attended control | Yes, on Windows and Mac. The browser shares the whole screen and the person's own app carries the input. Two consents. | Yes | Yes | Yes |
-| Unattended access | No. It is off for personal accounts (`CompanyPolicyDefaults.php:197`), and the app sends no picture anyway (`session.rs:34-39`). | Yes | Yes | Yes |
+| Connect by ID or code | A 9-digit session code, and the host admits each person (`Remote.php:217`, `JoinService.php:29`). The app's **Get help** gives that code from the computer itself and admits the helper there; **Connect → Help someone** joins by it. Your own computers are connected to from a list, not by an ID (`ConnectScreen.tsx`). | Yes. A permanent ID or alias. | Yes. ID and password. | Yes. ID and password. |
+| Attended control | Yes, on Windows and Mac, two ways: the app hosts and streams its own screen (H.264, `session.rs` `CapturePump`), or the browser shares the whole screen and the app carries the input (companion). Admitting and control are separate consents. | Yes | Yes | Yes |
+| Unattended access | Yes, to **your own** computers: switched on per computer with a confirmation in Remote → Computers, only the owner can connect, every connection is recorded and shown on the machine (`DeviceSessionService::startUnattended`, `PersonalUnattendedAccessTest`). No 2FA step yet (P1-9). On a Mac it needs the app running and Screen Recording allowed. | Yes | Yes | Yes |
 | UAC and elevated windows | No. The app runs `asInvoker` (`windows-app-manifest.xml:18`), and refused input is dropped without a word (`agent.rs:1017`, `companion.rs:867`). | Yes, when installed | Yes, when installed | Usually yes when installed (verify) |
 | Multi-monitor | One shared screen at a time, picked by the person in the browser. The helper cannot switch screens (`agent.rs:963-966`). | Yes. Switch, or show all. | Yes | Yes. Switch. |
 | File transfer | Browser to browser. The recipient must accept. 25 MB at most (`Remote.php:248`). | Yes, with a file manager | Yes | Yes |
@@ -196,7 +210,7 @@ advertised. Verify before quoting publicly.**
 | Chat | Yes, in the web | Yes | Yes | Yes, a main feature |
 | Annotations and whiteboard | A live pointer and annotation, in the web | Whiteboard | Yes | Not advertised (verify) |
 | Recording | No (`Remote.php:225`) | Yes, on paid plans | Yes | Not advertised (verify) |
-| Address book | A list of your own computers only | Yes, on paid plans | Yes (Computers & Contacts) | A basic partner list (verify) |
+| Address book | Your own computers, with how many are registered and online, each one's connection history, and Remove, in the web and the app (`DevicesPage.tsx`, `YourComputers.tsx`) | Yes, on paid plans | Yes (Computers & Contacts) | A basic partner list (verify) |
 | Wake-on-LAN | No | Yes, on paid plans | Yes | Not advertised (verify) |
 | Reboot and reconnect | No. The API call exists but no screen uses it (`api/remote.ts:512-518`), and it is off for personal accounts (`CompanyPolicyDefaults.php:199`). | Yes | Yes, including safe mode | Verify |
 | Mobile apps | None. A mobile browser can join, watch and chat, but cannot share (`docs/BROWSER_SUPPORT.md:56-64`). | iOS and Android | iOS and Android | Not offered (verify) |
@@ -359,13 +373,22 @@ Developer ID certificate and notarisation (`docs/desktop/PUBLISHING.md:183-196`)
   (`web/src/components/AnalyticsConsent.tsx:38`).
 * *Fix.* Set `ANALYTICS_BEFORE_CHOICE = 'none'` and soften the banner's wording.
 
+**P0-10. An H.264 patent licence for the encoder we ship.** **S** to decide, with counsel. **M** to switch.
+
+* *Why it matters.* The app compiles OpenH264 from source into the installer (`remote-webrtc/src/video/h264.rs`, top of
+  file). Cisco pays the H.264 royalties only for its own binary, downloaded by the user's machine from Cisco; a build of
+  our own is not covered. Distributing it to the public needs an AVC licence from the patent pool (Via LA), or a change.
+* *Fix.* Either take the Via LA AVC licence (its low-volume tier may cost nothing, but it still has to be signed), or
+  switch `openh264` to its `libloading` feature: ship no encoder and download Cisco's binary from Cisco at first run.
+  The office pilot is internal use and is not blocked by this.
+
 ### 6.2 P1: needed to compete credibly (the first quarter after launch)
 
 | # | Finding | Why it matters | Where | Effort |
 |---|---|---|---|---|
-| P1-1 | **A video encoder in the Windows app** (Media Foundation H.264, or libvpx). | Without it the app cannot host. Everything users of other products expect depends on it: unattended access, one app instead of a browser plus an app, and later the Secure Desktop. | `session.rs:34-39`; `docs/desktop/ARCHITECTURE.md:228-233` | XL |
+| P1-1 | ~~A video encoder in the app.~~ **Built in this release**: software H.264 (OpenH264, Constrained Baseline) on Windows and Mac, with capture that follows the link, decoded by Chromium in `tests/browser_interop.rs`. Measured on a 4-core 2.1 GHz VM: 1080p 24 ms a frame (fits 30 fps), a Retina or 4K screen scaled to 1080p about 45–50 ms (about 20 fps). The encode holds up the session loop for that long, so control input waits up to one encode. Left: a hardware encoder (Media Foundation, VideoToolbox) or an encode thread of its own, ScreenCaptureKit on macOS 14+, the licence (P0-10), and testing on real machines (§11). | — | `remote-webrtc/src/video/`; `session.rs` `CapturePump`; `platform/macos/capture.rs` | Done (hardware encoder: M) |
 | P1-2 | **UAC, elevated windows and the Secure Desktop.** First, *tell* the helper when the computer is on the Secure Desktop or when input to a window was refused (send `control_paused` with a reason). Then support it properly, through the service on the Secure Desktop or with `uiAccess`. Both need signing. | IT support often means installing software, and installing software means UAC. | `secure_desktop_state()` is never called (`windows/capture.rs:77-89`); `Handled::Failed` is ignored (`companion.rs:865-868`) | S to tell the helper; XL for real support |
-| P1-3 | **Unattended access to your own computers**: off by default, switched on deliberately, with 2FA. | People expect AnyDesk-style "reach my own PC". Today it is off for personal accounts and has no picture. | `CompanyPolicyDefaults.php:197`; `EffectivePolicyResolver.php:534` | L (after P1-1) |
+| P1-3 | ~~Unattended access to your own computers.~~ **Built in this release**: off by default, switched on per computer with a confirmation, owner only. Left: the 2FA step (P1-9). | — | `CompanyPolicyDefaults::personal()`; `PermissionCatalog`; migration `EntitleUnattendedAccessByDefault` | Done (2FA: P1-9) |
 | P1-4 | **Connect by computer ID, and an address book.** A real ID that a helper can type to *ask* for a session, with the consent still at the computer. The rename to "Key fingerprint" is **fixed in this release**. | People used to other tools expect to read out an ID. | `SignInScreen.tsx`; `agent.rs:313-328` | Rename done; L to build |
 | P1-5 | **Clipboard during companion control**: text, both ways, only when ticked. | Pasting a command or a URL is everyday support work. | `CompanionService.php:771`; `docs/desktop/CONTROL_COMPANION.md:27-28` | M |
 | P1-6 | **Session continuity.** Warn before the time limit and allow extending it. Bring a session back after the helped computer restarts. Add an idle timeout. | Today a session simply ends at 60 minutes, and nothing brings it back after a restart. | `CompanyPolicyDefaults.php:200`; `SessionService.php:391-434`; the app's own reconnect window is 30 seconds (`session.rs:85-86`) | M |
@@ -657,6 +680,28 @@ Use this to brief counsel. It is not legal advice.
     *Pass:*
     * The app offers "1.0.0 (build …)", or a newer version, with a higher build number than yours.
     * After installing it, About shows the new build.
+
+**The app hosting its own screen** (this release):
+
+33. **PC-1 (account A): Get help.** In the app choose **Get help → Get a code**.
+    *Pass:* a nine-digit code appears, and within a few seconds the banner says a session is active.
+34. **PC-2 (account B): Connect → Help someone**, type the code, Join.
+    *Pass:* PC-1 asks "B wants to join your help session" on whichever tab is open. **Let B in**: within about 10 seconds
+    PC-2 sees PC-1's screen (from the app, not a browser share), moving, sharp enough to read.
+35. **PC-2: ask for control.** PC-1 approves. Move, click, type, scroll.
+    *Pass:* the input lands where PC-2 points, on the screen PC-2 sees. Ctrl+Alt+Shift+S on PC-1 stops it at once.
+36. **PC-1: End the session** in Get help.
+    *Pass:* PC-2's room closes; PC-1 shows no session.
+37. **Unattended (account A on both).** Sign PC-2 in as account A. On PC-1 open **Unattended access → Turn on in Remote →
+    Computers**, confirm. Leave PC-1 alone.
+    *Pass:* PC-1's row says unattended access is on. On PC-2, **Connect** lists both computers with "2 computers
+    registered · 2 online"; **Connect** on PC-1 shows its screen and controls it without anybody at PC-1, and PC-1's
+    banner shows the connection. Account B cannot connect to PC-1.
+38. **History.** On PC-1, **This computer → History**, and in the web **Computers → History** for PC-1.
+    *Pass:* both list the sessions from steps 33–37 and the change "Unattended access switched on."
+39. **Mac: repeat 33–37 with the Mac as the computer being helped.** The first time, allow Screen Recording in System
+    Settings and reopen the app.
+    *Pass:* the same as on PC-1. On a Retina Mac a click lands where it was pointed.
 
 **Results sheet.** Copy this table and fill in one row for each step:
 

@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ipc, platform, Agent};
 
+pub mod computers;
+
 /// What the About panel shows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -493,9 +495,16 @@ pub fn leave_companion(agent: tauri::State<'_, Arc<Agent>>) -> remote_core::Agen
     agent.state()
 }
 
-/// Ask macOS to prompt for a permission (Accessibility). Returns what the
+/// Ask macOS to prompt for a permission, named by the `PermissionSummary`
+/// field it reports in: `input_injection` (Accessibility) or `screen_capture`
+/// (Screen Recording, which a Mac needs only to host). Returns what the
 /// machine permits afterwards — usually unchanged until the person has acted
-/// in System Settings.
+/// in System Settings, and for Screen Recording until they have also quit and
+/// reopened the app.
+///
+/// The name is not checked against a list here: the platform's provider is
+/// the one list of what it can ask for, and refuses every other name as
+/// unsupported, so a second list here could only ever drift from it.
 #[tauri::command]
 pub fn request_permission(
     agent: tauri::State<'_, Arc<Agent>>,

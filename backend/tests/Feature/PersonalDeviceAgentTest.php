@@ -114,6 +114,31 @@ final class PersonalDeviceAgentTest extends RemoteTestCase
         ));
     }
 
+    /**
+     * The console's Rename sends a name and nothing else, and Suspend a status and nothing else. An absent
+     * field used to reach the service as an empty one, so each was refused for the field it did not send.
+     */
+    public function testTheOwnerRenamesAndSuspendsTheirComputerOneFieldAtATime(): void
+    {
+        $owner = $this->makeIdentity('Rahul');
+        $uuid  = (string) $this->enrolDevice($owner, null, ['deviceName' => 'Old name'])['device']['uuid'];
+        $auth  = $this->asUser($owner);
+
+        $renamed = $this->withHeaders($auth)->withBodyFormat('json')->patch("v1/remote/devices/{$uuid}", ['deviceName' => 'Rahul laptop']);
+        $renamed->assertStatus(200);
+        $this->assertSame('Rahul laptop', $this->data($renamed)['device']['deviceName']);
+        $this->assertSame('ACTIVE', $this->data($renamed)['device']['status']);
+
+        $suspended = $this->withHeaders($auth)->withBodyFormat('json')->patch("v1/remote/devices/{$uuid}", ['status' => 'SUSPENDED']);
+        $suspended->assertStatus(200);
+        $this->assertSame('SUSPENDED', $this->data($suspended)['device']['status']);
+        $this->assertSame('Rahul laptop', $this->data($suspended)['device']['deviceName']);
+
+        $this->withHeaders($auth)->withBodyFormat('json')
+            ->patch("v1/remote/devices/{$uuid}", ['status' => 'REVOKED'])
+            ->assertStatus(400);
+    }
+
     /** The web console's own view of a person's computer. */
     public function testTheOwnerCanOpenTheirPersonalDeviceInTheConsole(): void
     {

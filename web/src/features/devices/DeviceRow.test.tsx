@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 
 import DeviceRow from './DeviceRow'
 import type { RemoteDevice } from '../../types/remote'
@@ -54,6 +55,7 @@ function row(props: Partial<Parameters<typeof DeviceRow>[0]> = {}) {
     onEnableUnattended: vi.fn(),
     onDisableUnattended: vi.fn(),
     onRevoke: vi.fn(),
+    onHistory: vi.fn(),
   }
 
   render(
@@ -72,6 +74,15 @@ function row(props: Partial<Parameters<typeof DeviceRow>[0]> = {}) {
 }
 
 describe('DeviceRow', () => {
+  it('offers the history of every computer, removed ones included', async () => {
+    const handlers = row({ device: device({ status: 'REVOKED' }), canManage: true })
+
+    await userEvent.click(screen.getByRole('button', { name: 'History' }))
+
+    expect(handlers.onHistory).toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull()
+  })
+
   it('says unattended access is off, and offers to turn it on', () => {
     row()
 
@@ -81,13 +92,12 @@ describe('DeviceRow', () => {
     expect(screen.queryByRole('button', { name: /^connect$/i })).not.toBeInTheDocument()
   })
 
-  it('does not offer unattended access when the organisation forbids it', () => {
-    // A company prohibition defeats every lower grant. Explained rather than
-    // hidden, so an administrator does not conclude Remote cannot do it.
+  it('does not offer unattended access when the account cannot have it', () => {
+    // Explained rather than hidden, so nobody concludes Remote cannot do it.
     row({ unattendedAllowed: false })
 
     expect(screen.queryByRole('button', { name: /allow unattended/i })).not.toBeInTheDocument()
-    expect(screen.getByText(/off for this organisation/i)).toBeInTheDocument()
+    expect(screen.getByText(/not available for your account/i)).toBeInTheDocument()
   })
 
   it('offers Connect only for a machine that will actually answer', () => {
@@ -111,12 +121,12 @@ describe('DeviceRow', () => {
     expect(screen.queryByRole('button', { name: /^connect$/i })).not.toBeInTheDocument()
   })
 
-  it('keeps a removed machine listed, with nothing left to do to it', () => {
+  it('keeps a removed machine listed, with nothing left to do to it but read its history', () => {
     row({ device: device({ status: 'REVOKED', online: false, revokedAt: '2026-02-01T10:00:00Z' }) })
 
     expect(screen.getByText('WS-01')).toBeInTheDocument()
     expect(screen.getByText('Removed')).toBeInTheDocument()
-    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['History'])
   })
 
   it('shows the key fingerprint, so a person can check the row is that machine', () => {

@@ -188,13 +188,24 @@ final class CompanyPolicyDefaults
             // approve control one — which is the whole product, and used to be
             // refused here because a device could not exist without a company.
             //
-            // Unattended access and restarting a machine stay off. Both are
-            // things that happen with nobody watching, and neither should
-            // arrive switched on because somebody installed an application;
-            // unattended access has its own deliberate act, and reboot belongs
-            // to an administrator.
+            // Unattended access is *permitted* here, and permitted is all it
+            // is. Reaching your own computer from somewhere else is what
+            // people install a remote-access tool for, and a personal account
+            // that could never do it sent them to another product. What makes
+            // that safe is not this switch but everything still standing
+            // behind it: the per-device switch is off on every computer until
+            // somebody at that machine turns it on and confirms what it means
+            // (`DeviceService::enableUnattended`), and only the computer's own
+            // owner can then connect to it (`DeviceSessionService::
+            // startUnattended`) — there is no organisation whose
+            // administrators could reach it too. Nothing arrives switched on
+            // because somebody installed an application.
+            //
+            // Restarting a machine stays off. It happens with nobody watching,
+            // it is not needed to reach your own computer, and it belongs to an
+            // administrator where there is one.
             'allow_remote_control'         => true,
-            'allow_unattended_access'      => false,
+            'allow_unattended_access'      => true,
             'allow_clipboard_sync'         => true,
             'allow_device_reboot'          => false,
             'max_session_duration_minutes' => 60,

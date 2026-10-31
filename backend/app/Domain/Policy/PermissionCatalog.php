@@ -50,9 +50,13 @@ final class PermissionCatalog
     public const AUDIT_VIEW = 'remote.audit.view';
 
     // --- Desktop agents (§52, docs/DESKTOP_AGENT.md) -----------------------
-    // Every one of these defaults OFF, in every baseline. A browser cannot do
-    // any of them, and a desktop agent may only do them where the company
-    // policy, the plan entitlement and the person's own grant all agree.
+    // Off in every organisation's baseline below. A browser cannot do any of
+    // them, and a desktop agent may only do them where the company policy,
+    // the plan entitlement and the person's own grant all agree. A personal
+    // account is its own administrator, so `EffectivePolicyResolver`'s
+    // personal baseline adds CONTROL_REQUEST and UNATTENDED_ACCESS for the
+    // person's own session and their own computers — and the mask still
+    // takes either away wherever the platform's personal policy says no.
     public const CONTROL_REQUEST = 'remote.control.request';
     public const CONTROL_ACCEPT  = 'remote.control.accept';
 

@@ -163,7 +163,7 @@ Short-lived, held in memory, scoped:
 |---|---|
 | `device.presence` | presence, and a token for its own presence room |
 | `device.session` | joining a session it was invited to; reading and reporting control |
-| `device.self` | switching its own unattended access off, and revoking itself when it is signed out |
+| `device.self` | switching its own unattended access off, revoking itself when it is signed out, listing its owner's computers, reading its own history, and hosting a session started at it (start, list participants, admit, decline, end — docs/desktop/CONTROL_COMPANION.md) |
 
 Nothing under `devices/me` can reach a session it was not invited to, another
 device, or a company. `DeviceAuthFilter` re-reads the device row on **every**

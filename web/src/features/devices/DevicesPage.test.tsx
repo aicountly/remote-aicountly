@@ -111,7 +111,7 @@ describe('the Computers page in a personal scope', () => {
 
     expect(await screen.findByText('Registered computers')).toBeInTheDocument()
     expect(fetchDevices).toHaveBeenCalledWith(null)
-    expect(screen.getByText('Your computers running AICOUNTLY Remote for Windows.')).toBeInTheDocument()
+    expect(screen.getByText(/Your computers running AICOUNTLY Remote for Windows or Mac/)).toBeInTheDocument()
     expect(screen.queryByText(/belong to an organisation/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/Switch to an organisation/i)).not.toBeInTheDocument()
   })

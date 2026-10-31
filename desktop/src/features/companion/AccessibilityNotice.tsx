@@ -26,7 +26,7 @@ export function AccessibilityNotice({
         <li>Turn on <strong>AICOUNTLY Remote</strong>. If it was already on from an earlier version, turn it off and on again.</li>
         <li>Come back here — no restart is needed.</li>
       </ol>
-      <p>Screen Recording is not needed: the picture comes from your browser&apos;s share.</p>
+      <p>Screen Recording is not needed for this: the picture comes from your browser&apos;s share.</p>
       <div className="session-banner__actions">
         <button type="button" className="btn btn--secondary" onClick={onOpen} disabled={busy}>
           Open Accessibility settings

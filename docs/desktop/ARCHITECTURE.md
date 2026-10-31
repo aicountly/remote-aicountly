@@ -225,12 +225,10 @@ gap at the wrong moment.
 
 **Not built**
 
-* **A video encoder.** `remote-webrtc` negotiates a VP8 track and the capture
-  provider produces BGRA frames; nothing converts one into the other. Until it
-  does, an agent can join a session and carry control messages but cannot send
-  a picture. This is the single largest remaining piece and it is a real
-  dependency decision (libvpx, or a Media Foundation hardware encoder), not an
-  afternoon's work.
+* **A hardware video encoder.** Frames are encoded in software with OpenH264
+  (`remote-webrtc`'s `video` module), which is fast enough for 1080p at the
+  default profile; Media Foundation or VideoToolbox would take load off the CPU
+  on larger screens.
 * **File transfer in the agent.** The protocol and the browser half exist; the
   agent does not read the collaboration channel, so it neither offers nor
   receives a file.
@@ -241,8 +239,10 @@ gap at the wrong moment.
   [WINDOWS_RELEASE.md](WINDOWS_RELEASE.md). The application checks for a newer
   version, or a later build of this one, itself when its window opens, from
   the manifest the download page reads (`remote_core::update`).
-* **macOS as a host.** A Mac is a control companion only: no capture, no
-  encoder, no clipboard, no restart, never unattended.
+* **macOS: ScreenCaptureKit, the clipboard, restart and a background service.**
+  A Mac hosts with Core Graphics capture (`platform/macos/capture.rs`), which
+  macOS 14 deprecates; ScreenCaptureKit is the follow-up. Unattended on a Mac
+  means the app left signed in and running — there is no service.
 
 ## Where the boundaries are enforced
 

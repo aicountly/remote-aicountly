@@ -351,6 +351,71 @@ class DeviceService
     }
 
     /**
+     * The computers the calling device's owner has, as the desktop app's own
+     * "Your computers" list shows them.
+     *
+     * Asked with the device's credential, not a person's, so it is answered
+     * from the device row alone: its owner, and its scope. A personal
+     * computer's list is its owner's other personal computers (`company_id IS
+     * NULL`) — never their organisation's machines, and never anybody else's,
+     * because nothing in the request names a person or a company for it to be
+     * pointed at. A company device would list its owner's devices in that same
+     * company and nothing wider, which is the same rule written for the other
+     * scope.
+     *
+     * Revoked computers are left out: they cannot be connected to, they cannot
+     * come back (re-enrolling a revoked key is refused), and a list that keeps
+     * every computer somebody ever signed out of fills up with machines that
+     * no longer exist. The rest are listed whatever their state, because a
+     * suspended computer is still one of theirs and the status says why it
+     * cannot be reached.
+     *
+     * This computer comes first, then the rest by name, so the app can mark it
+     * without searching — and a device whose owner has gone (`user_id` null,
+     * the identity deleted) lists only itself, since there is nobody whose
+     * other computers it could mean.
+     *
+     * @return array{device: array<string, mixed>, items: list<array<string, mixed>>}
+     */
+    public function computersFor(DevicePrincipal $principal): array
+    {
+        $device = $this->findByUuidOrFail($principal->deviceUuid);
+
+        if ($device['user_id'] === null) {
+            return ['device' => $device, 'items' => [$device]];
+        }
+
+        $builder = $this->db->table('remote_devices')
+            ->where('user_id', (int) $device['user_id'])
+            ->where('status !=', self::STATUS_REVOKED);
+
+        if ($device['company_id'] === null) {
+            $builder->where('company_id', null);
+        } else {
+            $builder->where('company_id', (int) $device['company_id']);
+        }
+
+        $rows = $builder
+            ->orderBy('LOWER(device_name)', 'ASC', false)
+            ->orderBy('created_at', 'ASC')
+            ->orderBy('id', 'ASC')
+            ->get()
+            ->getResultArray();
+
+        $first  = [];
+        $others = [];
+        foreach ($rows as $row) {
+            if ((int) $row['id'] === (int) $device['id']) {
+                $first[] = $this->castRow($row);
+            } else {
+                $others[] = $this->castRow($row);
+            }
+        }
+
+        return ['device' => $device, 'items' => array_merge($first, $others)];
+    }
+
+    /**
      * One page of a device listing, in the order every listing uses.
      *
      * @return array{items: list<array<string, mixed>>, total: int}
@@ -383,6 +448,21 @@ class DeviceService
     public function findForUser(RemoteIdentity $identity, string $uuid): array
     {
         $device = $this->findByUuidOrFail($uuid);
+
+        // A personal device answers to its owner and to nobody else, whatever
+        // anybody holds. `remote.device.manage` means "an organisation's
+        // devices", and a personal computer is in no organisation — but the
+        // check below would read it from the *caller's* personal policy, where
+        // a platform-wide role or user rule could switch it on, and so let one
+        // person rename, revoke or open the history of another's computer.
+        // There is no administrator of somebody else's own computer.
+        if ($device['company_id'] === null) {
+            if ($device['user_id'] !== null && (int) $device['user_id'] === $identity->id) {
+                return $device;
+            }
+
+            throw ApiException::notFound('That device could not be found.');
+        }
 
         try {
             $policy = $this->policyForDevice($identity, $device);
@@ -598,10 +678,14 @@ class DeviceService
      *
      * This is deliberately not a flag inside an attended session. It is a
      * distinct call, requiring a distinct permission
-     * (`remote.unattended.access`), gated by a distinct company switch
-     * (`allow_unattended_access`) and a distinct entitlement
-     * (`remote_entitlements.unattended_access`), recorded with who enabled it
-     * and when, and visible in both the desktop agent and the web console.
+     * (`remote.unattended.access`), gated by a distinct policy switch
+     * (`allow_unattended_access` — an organisation's, or for a personal
+     * computer the platform's personal policy, which permits it) and a
+     * distinct entitlement (`remote_entitlements.unattended_access`, which
+     * Basic includes), recorded with who enabled it and when, and visible in
+     * both the desktop agent and the web console. For a personal computer
+     * `findForUser()` has already established that the caller is its owner:
+     * nobody else can switch it on, as nobody else can connect to it.
      *
      * The caller must also acknowledge what it means. `confirm` is not
      * ceremony: the agent and the web console both show the same warning, and a
@@ -614,10 +698,17 @@ class DeviceService
         $device = $this->findForUser($identity, $uuid);
         $policy = $this->policies->resolveForDevice($identity, $device);
 
+        // A person's own computer has no organisation and no colleagues, so
+        // the sentences it is refused or warned with must not invent either.
+        // The checks are the same; only who they talk about differs.
+        $personal = $device['company_id'] === null;
+
         if (! $policy->allowUnattendedAccess) {
             throw ApiException::forbidden(
                 'UNATTENDED_ACCESS_NOT_ALLOWED',
-                'Unattended access is not enabled for this organisation.',
+                $personal
+                    ? 'Unattended access is not available for this account.'
+                    : 'Unattended access is not enabled for this organisation.',
                 ['restrictions' => $policy->restrictions],
             );
         }
@@ -637,10 +728,14 @@ class DeviceService
             );
         }
 
+        // The warning says who could connect, because that is what is being
+        // agreed to: on a personal computer, its owner and nobody else.
         if (! $confirmed) {
             throw ApiException::badRequest(
                 'UNATTENDED_CONFIRMATION_REQUIRED',
-                'Unattended access lets an authorised colleague connect to this machine when nobody is at it. Confirm to continue.',
+                $personal
+                    ? 'Unattended access lets you connect to this computer from your own account when nobody is at it. Confirm to continue.'
+                    : 'Unattended access lets an authorised colleague connect to this machine when nobody is at it. Confirm to continue.',
             );
         }
 

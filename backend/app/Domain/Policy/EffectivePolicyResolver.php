@@ -328,13 +328,24 @@ class EffectivePolicyResolver
         //     confirmed it would serve as the companion;
         //   * sharing an entire screen, which is the only share a companion
         //     can control (docs/desktop/CONTROL_COMPANION.md). The browser
-        //     still asks which screen, every time, and it is their own.
+        //     still asks which screen, every time, and it is their own;
+        //   * connecting to one of their own computers when nobody is at it.
+        //     In an organisation that is a grant, because an administrator
+        //     decides who may reach a machine nobody is watching. Here the
+        //     only computers it can reach are the person's own: a personal
+        //     device answers to its owner and to nobody else
+        //     (`DeviceSessionService::startUnattended`), and each one stays
+        //     unreachable until somebody at it switched unattended access on
+        //     and confirmed what that means (`DeviceService::
+        //     enableUnattended`). Holding this permission reaches nothing by
+        //     itself.
         //
-        // The capability mask below still removes either wherever the
+        // The capability mask below still removes any of them wherever the
         // platform's personal policy switches it off.
         if ($scopeType === 'PERSONAL') {
             $baseline[] = PermissionCatalog::CONTROL_REQUEST;
             $baseline[] = PermissionCatalog::MONITOR_SHARE;
+            $baseline[] = PermissionCatalog::UNATTENDED_ACCESS;
         }
 
         // A platform administrator can read policy and audit anywhere, but
@@ -520,8 +531,17 @@ class EffectivePolicyResolver
         // `desktop_devices` is true because it is the switch that decides
         // whether a person may register the computer they are sitting at, and
         // a remote-support product where they cannot is not a product.
-        // `unattended_access` stays false: being reachable with nobody
-        // watching is a deliberate act, not a default.
+        //
+        // `unattended_access` is true for the same reason: reaching your own
+        // computer with nobody at it is part of what Basic is for. It is an
+        // entitlement — what a licence *allows* — and not the act itself.
+        // Being reachable with nobody watching is still a deliberate act, made
+        // once per computer by somebody at it and confirmed there; a policy
+        // still has to permit it (an organisation's presets all leave
+        // `allow_unattended_access` off, so a company entitled by this row
+        // still has nothing switched on); and the person connecting still
+        // needs `remote.unattended.access`. The platform-wide row carries the
+        // same value (`EntitleUnattendedAccessByDefault`).
         $row ??= [
             'plan_code'                    => 'REMOTE_BASIC',
             'max_monthly_sessions'         => null,
@@ -531,7 +551,7 @@ class EffectivePolicyResolver
             'file_transfer'                => true,
             'advanced_audit'               => true,
             'desktop_devices'              => true,
-            'unattended_access'            => false,
+            'unattended_access'            => true,
         ];
 
         foreach (['external_guests', 'recording', 'file_transfer', 'advanced_audit', 'desktop_devices', 'unattended_access'] as $flag) {

@@ -205,6 +205,14 @@ jobs:
             *) echo "::error title=Wrong kind of certificate::MACOS_RELEASE_SIGNING_IDENTITY is '${IDENTITY}'. It must be a 'Developer ID Application: ...' certificate. A Development or Apple Distribution certificate produces a build Gatekeeper refuses from a download."; exit 1 ;;
           esac
 
+      # NASM, for OpenH264's x86 assembly in the Intel build (the Apple
+      # silicon build assembles its NEON code with clang). Without it the
+      # encoder falls back to plain C without a word and is 3-4x slower.
+      - name: Install NASM
+        run: |
+          brew install nasm
+          nasm -v
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:

@@ -311,3 +311,76 @@ export function isBeingControlled(state: AgentState): boolean {
 export function isUsable(permission: PermissionState): boolean {
   return permission === 'ready' || permission === 'not_applicable'
 }
+
+// ------------------------------------------------- your computers, history
+
+/** One of the signed-in person's computers (`GET /devices/me/computers`). */
+export interface OwnComputer {
+  uuid: string
+  deviceName: string
+  operatingSystem: string
+  osVersion: string | null
+  status: string
+  online: boolean
+  lastSeenAt: string | null
+  enrolledAt: string | null
+  unattendedAccessEnabled: boolean
+  isThisComputer: boolean
+}
+
+export interface OwnComputers {
+  computers: OwnComputer[]
+  count: number
+}
+
+/** A session this computer took part in, newest first. */
+export interface HistorySession {
+  uuid: string
+  displayId: string
+  accessMode: string
+  role: 'HOST' | 'COMPANION' | string
+  status: string
+  startedAt: string | null
+  endedAt: string | null
+  durationSeconds: number | null
+  peers: string[]
+  controlled: boolean
+}
+
+/** A change to this computer — registered, signed out, unattended on or off. */
+export interface HistoryEvent {
+  event: string
+  at: string | null
+  summary: string
+  actorName: string | null
+}
+
+export interface DeviceHistory {
+  sessions: HistorySession[]
+  events: HistoryEvent[]
+}
+
+// ------------------------------------------------------------ help sessions
+
+/** A help session this computer hosts ("give your code"). */
+export interface HelpSession {
+  uuid: string
+  displayId: string
+  sessionCode: string | null
+  status: string
+}
+
+/** Somebody waiting for, or in, a help session this computer hosts. */
+export interface HostedParticipant {
+  uuid: string
+  displayName: string
+  role: string
+  status: string
+  requestedAt: string | null
+  joinedAt: string | null
+}
+
+export interface HostedParticipants {
+  waiting: HostedParticipant[]
+  joined: HostedParticipant[]
+}

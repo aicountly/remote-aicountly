@@ -39,11 +39,12 @@
 //!
 //! # What it does not do
 //!
-//! It does not open a media session. The session runtime — signalling, the
 //! It does not run a session itself. When one is waiting it hands over to
-//! [`crate::session`], which joins, negotiates and pumps the control channel,
-//! and comes back here when the session ends. What is and is not built of that
-//! — there is no encoder — is set out in `docs/desktop/ARCHITECTURE.md`.
+//! [`crate::session`], which joins, negotiates, sends the picture and pumps the
+//! control channel, and comes back here when the session ends. It also hosts a
+//! help session the person at the machine started in the window
+//! (`Agent::request_help_session`). What is and is not built is set out in
+//! `docs/desktop/ARCHITECTURE.md`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -399,6 +400,38 @@ where
                 // is not a decision anybody should have to make afterwards.
                 let hosting = platform::supports_hosting();
 
+                // A help session the person at this machine started in the
+                // window ("give your code"). Theirs is the choice made here
+                // and now, so it goes first. It was created in their name and
+                // names this computer, and the helper still has to be admitted
+                // in the window and granted control there.
+                if let Some(help) = agent.take_help_request() {
+                    if hosting && may_share_a_screen {
+                        tracing::info!(session = %help, "hosting a help session started here");
+
+                        let ended = session::host(
+                            Arc::clone(agent),
+                            Arc::clone(sink),
+                            factory.clone(),
+                            help.clone(),
+                            false,
+                            Arc::clone(stopping),
+                        )
+                        .await;
+
+                        tracing::info!(?ended, session = %help, "the help session ended");
+
+                        return Ended::Renew;
+                    }
+
+                    tracing::warn!(
+                        session = %help,
+                        hosting,
+                        may_share_a_screen,
+                        "a help session was started here, but this computer cannot show its screen"
+                    );
+                }
+
                 if let Some(pending) = description.pending_sessions.first().filter(|_| hosting) {
                     if may_share_a_screen {
                         tracing::info!(
@@ -525,7 +558,7 @@ where
         }
 
         let Some(pending) = awaiting else {
-            if wait_for_nudge(client, &mut presence, interval, stopping).await {
+            if wait_for_nudge(agent, client, &mut presence, interval, stopping).await {
                 tracing::debug!("nudged in the presence room; reading the API now");
             }
 
@@ -614,9 +647,11 @@ fn read_presence_token(
 }
 
 /// Sleep for `total`, waking early — `true` — when the presence room carries
-/// a `device-invite`. The invite is only a reason to read the API sooner; it
+/// a `device-invite`, or when the person at the machine starts a help session
+/// in the window. The invite is only a reason to read the API sooner; it
 /// names nothing the agent acts on.
 async fn wait_for_nudge(
+    agent: &Arc<Agent>,
     client: &ApiClient,
     presence: &mut Option<PresenceRoom>,
     total: Duration,
@@ -638,6 +673,10 @@ async fn wait_for_nudge(
     while std::time::Instant::now() < until {
         if stopping.load(Ordering::SeqCst) {
             return false;
+        }
+
+        if agent.has_help_request() {
+            return true;
         }
 
         let slice = until

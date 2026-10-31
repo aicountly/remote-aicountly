@@ -31,12 +31,16 @@
 //! path, and the indicator is derived from that state rather than set beside
 //! it.
 //!
-//! # What is not here
+//! # The picture
 //!
-//! No frame is sent. `PeerSession::send_frame` exists and there is no encoder
-//! behind it yet, so this negotiates a video track the agent does not fill.
-//! See `docs/desktop/ARCHITECTURE.md` — the omission is deliberate and stated
-//! rather than hidden behind a loop that quietly does nothing.
+//! Capture starts once the peer connection is up, never before, and stops on
+//! every exit from [`host`]. [`CapturePump`] takes a frame from the platform at
+//! the profile's rate and hands it to `PeerSession::send_frame`, which encodes
+//! it; under congestion the profile steps down and back up towards the
+//! configured ceiling, never above it. The display shown is the primary one,
+//! and input lands on the same display because the agent maps it onto the
+//! capture's active monitor. The controller is told which display that is with
+//! a `monitor_layout` message as soon as the control channel opens.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -71,6 +75,20 @@ pub(crate) const CONTROL_POLL: Duration = Duration::from_secs(3);
 /// agent that waited for ever would keep an indicator on somebody's screen for
 /// a connection that is not coming.
 const PEER_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// How long a help session started at this machine waits for its helper.
+///
+/// Longer than an unattended connection's, because a person reads the code
+/// out over the phone and the helper types it and is admitted before anybody
+/// joins — but still bounded, for the same reason.
+const HELP_PEER_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// How long to wait before trying to start a capture the platform refused
+/// (Screen Recording not yet allowed on a Mac, a display being reconfigured).
+const CAPTURE_RETRY: Duration = Duration::from_secs(3);
+
+/// How often the link is read to step the capture down or back up.
+const CONGESTION_INTERVAL: Duration = Duration::from_secs(2);
 
 /// How long before its token expires the signalling connection is replaced with a fresh one. The relay closes a
 /// socket when its token expires; replacing it first means the room never sees this computer leave.
@@ -227,11 +245,26 @@ where
         &joined,
         &session_uuid,
         &stopping,
+        if unattended {
+            PEER_TIMEOUT
+        } else {
+            HELP_PEER_TIMEOUT
+        },
     )
     .await;
 
+    // Nothing is captured for a session that has ended, on any path out.
+    agent.stop_capture();
+
     let _ = crate::ipc::session_ended(&session_uuid);
-    sink(agent.end_session());
+
+    // Ended in the window already, in which case the state says so and there
+    // is nothing to release twice.
+    if agent.is_hosting(&session_uuid) {
+        sink(agent.end_session());
+    } else {
+        sink(agent.state());
+    }
 
     ended
 }
@@ -245,6 +278,7 @@ async fn run<F>(
     joined: &Joined,
     session_uuid: &str,
     stopping: &Arc<AtomicBool>,
+    peer_timeout: Duration,
 ) -> Ended
 where
     F: PeerSessionFactory,
@@ -252,6 +286,7 @@ where
     // The configured ceiling. It comes down from here under congestion and
     // never goes above it.
     let profile = CaptureProfile::for_quality(quality_from(&agent.config().capture_quality));
+    let mut pump = CapturePump::new(profile);
 
     let mut peer = match factory.create(joined.ice.clone(), profile).await {
         Ok(peer) => peer,
@@ -292,8 +327,19 @@ where
             return Ended::Stopped;
         }
 
+        // Ended by the person at the machine, in the window.
+        if !agent.is_hosting(session_uuid) {
+            announce_end(&mut peer, joined, session_uuid, Ended::Normally).await;
+            socket.close().await;
+
+            return Ended::Normally;
+        }
+
         // --- signalling ---------------------------------------------------
-        match tokio::time::timeout(PUMP_INTERVAL, socket.next()).await {
+        //
+        // Waited on for no longer than the next frame is due, so the picture
+        // keeps its frame rate when nothing is being signalled.
+        match tokio::time::timeout(pump.wait(Instant::now()), socket.next()).await {
             Ok(Ok(Some(signal))) => {
                 match handle_signal(
                     agent,
@@ -423,8 +469,12 @@ where
             }
         }
 
+        // --- the picture -------------------------------------------------
+        pump.turn(agent, &mut peer, session_uuid, &joined.participant_uuid)
+            .await;
+
         // --- give up on a session nobody joins ----------------------------
-        if peer_uuid.is_none() && joined_at.elapsed() >= PEER_TIMEOUT {
+        if peer_uuid.is_none() && joined_at.elapsed() >= peer_timeout {
             socket.close().await;
 
             return Ended::NoPeer;
@@ -437,6 +487,185 @@ where
             return Ended::Disconnected;
         }
     }
+}
+
+/// The picture a hosted session sends.
+///
+/// Capture starts when the peer connection reports `Connected` and not
+/// before, so nothing is captured for a session nobody has joined. A refused
+/// start (Screen Recording not allowed on a Mac) is tried again every few
+/// seconds rather than on every turn, and logged once.
+struct CapturePump {
+    /// The configured quality: the profile never steps above it.
+    ceiling: CaptureProfile,
+    /// What the capture is running at now.
+    profile: CaptureProfile,
+    /// The display being shown, once capture has started.
+    layout: Option<remote_protocol::MonitorLayout>,
+    /// Whether the controller has been told which display that is.
+    layout_sent: bool,
+    next_frame_at: Instant,
+    next_attempt_at: Instant,
+    next_congestion_at: Instant,
+    refusal_logged: bool,
+}
+
+impl CapturePump {
+    fn new(profile: CaptureProfile) -> Self {
+        let now = Instant::now();
+
+        Self {
+            ceiling: profile,
+            profile,
+            layout: None,
+            layout_sent: false,
+            next_frame_at: now,
+            next_attempt_at: now,
+            next_congestion_at: now + CONGESTION_INTERVAL,
+            refusal_logged: false,
+        }
+    }
+
+    /// How long the loop may wait on signalling before the next frame is due.
+    fn wait(&self, now: Instant) -> Duration {
+        if self.layout.is_none() {
+            return PUMP_INTERVAL;
+        }
+
+        self.next_frame_at
+            .saturating_duration_since(now)
+            .clamp(Duration::from_millis(1), PUMP_INTERVAL)
+    }
+
+    /// Whether to try starting the capture now.
+    fn should_start(&self, state: PeerState, now: Instant) -> bool {
+        self.layout.is_none() && state == PeerState::Connected && now >= self.next_attempt_at
+    }
+
+    /// The profile a congestion reading asks for, never above the ceiling.
+    fn adjusted(&self, congestion: &remote_webrtc::Congestion) -> CaptureProfile {
+        let next = congestion.adjust(self.profile);
+
+        CaptureProfile {
+            max_dimension: next.max_dimension.min(self.ceiling.max_dimension),
+            max_fps: next.max_fps.clamp(1, self.ceiling.max_fps.max(1)),
+            ..next
+        }
+    }
+
+    /// One turn of the loop: start, tell the controller, follow the link, send.
+    async fn turn<P: PeerSession>(
+        &mut self,
+        agent: &Arc<Agent>,
+        peer: &mut P,
+        session_uuid: &str,
+        participant_uuid: &str,
+    ) {
+        let now = Instant::now();
+
+        if self.should_start(peer.state(), now) {
+            match agent.start_capture(self.profile) {
+                Ok(layout) => {
+                    tracing::info!(
+                        monitor = layout.active_monitor_id,
+                        "this computer's screen is being shown"
+                    );
+                    self.layout = Some(layout);
+                    self.next_frame_at = now;
+
+                    // The viewer can draw nothing until a keyframe arrives.
+                    peer.request_keyframe();
+                }
+                Err(error) => {
+                    self.next_attempt_at = now + CAPTURE_RETRY;
+
+                    if !self.refusal_logged {
+                        self.refusal_logged = true;
+                        tracing::warn!(%error, "this computer's screen could not be captured");
+                    }
+                }
+            }
+        }
+
+        let Some(layout) = self.layout.clone() else {
+            return;
+        };
+
+        if !self.layout_sent && peer.control_channel_open().await {
+            if let Some(bytes) = layout_bytes(session_uuid, participant_uuid, layout) {
+                if peer.send_control(&bytes).await.is_ok() {
+                    self.layout_sent = true;
+                }
+            }
+        }
+
+        if now >= self.next_congestion_at {
+            self.next_congestion_at = now + CONGESTION_INTERVAL;
+
+            if let Some(congestion) = peer.congestion().await {
+                let next = self.adjusted(&congestion);
+
+                if next != self.profile {
+                    match agent.reconfigure_capture(next) {
+                        Ok(()) => {
+                            // The encoder follows the capture: its size limit,
+                            // frame rate and bitrate come from the same profile.
+                            peer.set_capture_profile(next);
+                            self.profile = next;
+                        }
+                        Err(error) => tracing::debug!(%error, "the capture was not reconfigured"),
+                    }
+                }
+            }
+        }
+
+        if now < self.next_frame_at || !peer.state().is_live() {
+            return;
+        }
+
+        self.next_frame_at = now + Duration::from_millis(self.profile.frame_interval_ms());
+
+        match agent.next_frame() {
+            Ok(Some(frame)) => match peer.send_frame(frame).await {
+                Ok(()) => {}
+                // The connection is over: nothing more is captured for it.
+                // A new connection in the same session starts it again.
+                Err(remote_webrtc::WebRtcError::WrongState(state)) => {
+                    tracing::info!(?state, "the connection ended; the capture stops");
+                    agent.stop_capture();
+                    self.layout = None;
+                    self.layout_sent = false;
+                    self.next_attempt_at = now + CAPTURE_RETRY;
+                }
+                Err(error) => tracing::debug!(%error, "a frame was not sent"),
+            },
+            Ok(None) => {}
+            Err(error) => tracing::debug!(%error, "no frame was captured"),
+        }
+    }
+}
+
+/// `monitor_layout`, telling the controller which display it is looking at.
+fn layout_bytes(
+    session_uuid: &str,
+    participant_uuid: &str,
+    layout: remote_protocol::MonitorLayout,
+) -> Option<Vec<u8>> {
+    let sequence = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(1);
+
+    let envelope = remote_protocol::ControlEnvelope::new(
+        session_uuid,
+        participant_uuid,
+        sequence,
+        remote_protocol::ControlMessage::MonitorLayout(layout),
+    );
+
+    envelope.validate().ok()?;
+
+    serde_json::to_vec(&envelope).ok()
 }
 
 /// Whether the loop carries on.
@@ -1001,5 +1230,113 @@ mod tests {
             Ended::Refused("x".into()).wire_reason(),
             ControlEndReason::RevokedByServer
         );
+    }
+
+    fn congestion(packet_loss: f64, round_trip_ms: f64) -> remote_webrtc::Congestion {
+        remote_webrtc::Congestion {
+            available_bitrate_bps: None,
+            packet_loss,
+            round_trip_ms,
+        }
+    }
+
+    /// Nothing is captured for a session nobody has joined, and a refused
+    /// start is not retried on every turn.
+    #[test]
+    fn capture_starts_only_once_the_peer_is_connected() {
+        let mut pump = CapturePump::new(CaptureProfile::adaptive());
+        let now = Instant::now();
+
+        for state in [
+            PeerState::New,
+            PeerState::Connecting,
+            PeerState::Disconnected,
+            PeerState::Failed,
+            PeerState::Closed,
+        ] {
+            assert!(!pump.should_start(state, now), "{state:?}");
+        }
+        assert!(pump.should_start(PeerState::Connected, now));
+
+        pump.next_attempt_at = now + CAPTURE_RETRY;
+        assert!(!pump.should_start(PeerState::Connected, now));
+        assert!(pump.should_start(PeerState::Connected, now + CAPTURE_RETRY));
+    }
+
+    /// While capturing, the loop waits on signalling only until the next frame
+    /// is due, so a quiet room does not cap the frame rate at the pump's 20.
+    #[test]
+    fn the_loop_waits_no_longer_than_the_next_frame() {
+        let now = Instant::now();
+        let mut pump = CapturePump::new(CaptureProfile::adaptive());
+        assert_eq!(pump.wait(now), PUMP_INTERVAL, "not capturing");
+
+        pump.layout = Some(remote_protocol::MonitorLayout {
+            monitors: Vec::new(),
+            active_monitor_id: 1,
+        });
+        pump.next_frame_at = now + Duration::from_millis(20);
+        assert_eq!(pump.wait(now), Duration::from_millis(20));
+
+        pump.next_frame_at = now;
+        assert_eq!(
+            pump.wait(now),
+            Duration::from_millis(1),
+            "never a busy spin"
+        );
+
+        pump.next_frame_at = now + Duration::from_secs(1);
+        assert_eq!(pump.wait(now), PUMP_INTERVAL);
+    }
+
+    /// The picture steps down on a bad link and back up on a good one, and
+    /// never above the quality the person chose.
+    #[test]
+    fn the_capture_follows_the_link_but_never_exceeds_the_setting() {
+        let mut pump = CapturePump::new(CaptureProfile::low_bandwidth());
+        let ceiling = CaptureProfile::low_bandwidth();
+
+        let worse = pump.adjusted(&congestion(0.2, 900.0));
+        assert!(
+            worse.max_dimension < ceiling.max_dimension || worse.max_fps < ceiling.max_fps,
+            "{worse:?}"
+        );
+
+        pump.profile = worse;
+        let better = pump.adjusted(&congestion(0.0, 20.0));
+        assert!(better.max_dimension <= ceiling.max_dimension);
+        assert!(better.max_fps <= ceiling.max_fps);
+
+        pump.profile = ceiling;
+        assert_eq!(pump.adjusted(&congestion(0.0, 20.0)), ceiling);
+    }
+
+    /// The controller is told which display it is looking at, in the same
+    /// envelope as every other control message.
+    #[test]
+    fn the_monitor_layout_goes_out_in_an_envelope() {
+        let layout = remote_protocol::MonitorLayout {
+            monitors: vec![remote_protocol::Monitor {
+                id: 1,
+                name: "Built-in display".into(),
+                primary: true,
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+                scale: 1.0,
+                refresh_hz: Some(60),
+                orientation: remote_protocol::Orientation::Landscape,
+            }],
+            active_monitor_id: 1,
+        };
+
+        let bytes = layout_bytes("session-1", "host-1", layout).expect("encoded");
+        let envelope = remote_protocol::ControlEnvelope::decode(&bytes).expect("decodes");
+
+        assert!(matches!(
+            envelope.message,
+            remote_protocol::ControlMessage::MonitorLayout(ref sent) if sent.active_monitor_id == 1
+        ));
     }
 }

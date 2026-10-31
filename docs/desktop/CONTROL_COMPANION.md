@@ -178,6 +178,91 @@ Migration `2026-10-25-000100_AddRemoteControlCompanions`:
 * `remote_sessions` — `actual_surface_width`, `actual_surface_height` (NULL or 1..16384).
 * The lifecycle manifest purges the links with the company, before sessions, participants and devices.
 
+## The desktop app as host: your computers, history, and "give your code"
+
+Remote is personal-only: every account is a personal account, and these routes are written for that case. A company
+device (the company code is dormant) gets the same rules in its own company. Every device route below is
+`device-auth:device.self`, answers from the device row its credential names, and takes no person, company or other
+device as input. Server side: `DeviceService::computersFor()`, `DeviceHistory`, `DeviceSessionService::startAttended()`
+and the hosted-session methods after it, `DeviceAgentController`, `DeviceController::history()`.
+
+### Unattended access to your own computers
+
+Personal scope permits it (`CompanyPolicyDefaults::personal()`), Basic entitles it (the built-in entitlement and the
+platform-wide row — migration `2026-10-31-000100_EntitleUnattendedAccessByDefault`, `RemotePlatformDefaultsSeeder`), and
+a personal account holds `remote.unattended.access`. That reaches nothing by itself: each computer stays unreachable
+until somebody at it turns its own switch on with `confirm: true` (`POST /devices/{uuid}/unattended/enable`), and only
+its owner can then connect (`POST /devices/{uuid}/connect`; anybody else gets 404). Reboot stays off for personal
+computers. Unattended sessions keep granting control with the session, as before. Company scope is unchanged: every
+preset still leaves `allow_unattended_access` off and an organisation grants the permission deliberately.
+
+### Endpoints
+
+| Method and path | Filter, rate limit | What it does |
+|---|---|---|
+| `GET /v1/remote/devices/me/computers` | `device-auth:device.self` | `{computers: Computer[], count}` — the owner's computers in this computer's scope (personal: `user_id` = owner, `company_id IS NULL`), REVOKED left out, this computer first, then by name. |
+| `GET /v1/remote/devices/me/history[?limit=]` | `device-auth:device.self` | `{sessions: HistorySession[], events: HistoryEvent[]}` for this computer. |
+| `GET /v1/remote/devices/{uuid}/history[?limit=]` | `api-auth` | The same, for a person who may manage the device — its owner for a personal one. 404 for anybody else. |
+| `POST /v1/remote/devices/me/sessions` `{issueSummary?}` | `device-auth:device.self`, `device-session-start,10,60` | `201 {session}` — an ATTENDED personal session owned and initiated by the device's owner, requested share `ENTIRE_MONITOR`, `device_id` = this device, created through `SessionService::create()` (quota, policy snapshot, code, `SESSION_CREATED`), plus `DEVICE_SESSION_STARTED` (actor `DEVICE`). The agent then joins it as host with `POST devices/me/sessions/{uuid}/join`. |
+| `GET /v1/remote/devices/me/sessions/{uuid}/participants` | `device-auth:device.self`, `device-session-participants,120,60` | `{waiting: Participant[], joined: Participant[]}` — people only: `waiting` is REQUESTED (longest first), `joined` is APPROVED or JOINED. |
+| `POST /v1/remote/devices/me/sessions/{uuid}/participants/{participantUuid}/admit` | `device-auth:device.self`, `device-session-admit,30,60` | `{participant}` — `ParticipantService::approve()` as the owner, exactly as the browser host's Admit (`PARTICIPANT_APPROVED`, actor the owner). Idempotent on APPROVED/JOINED; `409 PARTICIPANT_NOT_WAITING` otherwise. |
+| `POST /v1/remote/devices/me/sessions/{uuid}/participants/{participantUuid}/decline` | as admit | `{participant}` — `ParticipantService::deny()` as the owner (`PARTICIPANT_DENIED`). |
+| `POST /v1/remote/devices/me/sessions/{uuid}/end` | `device-auth:device.self`, `device-session-end,30,60` | `{session}` — `SessionService::end()` as the owner, reason `ENDED_BY_USER`. Idempotent. |
+
+`?limit=` defaults to 20 and is clamped to 1..50 (not a number → 20); it applies to each list separately.
+
+"A session this device hosts" is one whose `device_id` names this device, in its scope — a session started here, or an
+unattended one. Anything else is `404 NOT_FOUND`: another of the owner's computers, a stranger's computer, a browser
+session the owner started even with this computer joined as its screen, a malformed uuid. A participant that is not a
+person in that session (the computer's own participant, another machine, somebody in another session) is `404` too.
+Admit and decline need an ATTENDED session: in an unattended one they are `403 SESSION_NOT_ATTENDED` (nobody is at the
+machine; whoever connected decides from their browser). Listing participants and ending work for both.
+
+What changes in a session started here, and why:
+
+* The owner's browser seat that `create()` makes (the joined, sharing host) becomes a VIEWER, `is_host false`, LEFT, with
+  no `joined_at` — the owner is at the machine, and the machine is the host once it joins. A helper's browser therefore
+  sees the same shape as an unattended session: the device participant is the sharing host.
+* `access_mode` stays ATTENDED, so `pendingFor()` / `GET devices/me` `pendingSessions` never list it (unattended only).
+* Control stays attended: the helper requests it (`POST sessions/{uuid}/control/request`, which finds the device
+  participant as `controllableHost`), and the computer decides through `devices/me/sessions/{uuid}/control`.
+
+### Shapes
+
+```jsonc
+// Computer
+{"uuid": "…", "deviceName": "Meera laptop", "operatingSystem": "macOS", "osVersion": "14.5", "status": "ACTIVE",
+ "online": true, "lastSeenAt": "2026-10-31T09:36:39+00:00", "enrolledAt": "2026-10-31T09:36:39+00:00",
+ "unattendedAccessEnabled": false, "isThisComputer": true}
+
+// HistorySession — newest first; the device took part as the session's device_id or as a participant
+{"uuid": "…", "displayId": "AR-10001", "accessMode": "ATTENDED", "role": "HOST", "status": "ENDED",
+ "startedAt": "2026-10-31T09:36:39+00:00", "endedAt": "2026-10-31T09:52:10+00:00", "durationSeconds": 931,
+ "peers": ["Ravi Kumar"], "controlled": true}
+
+// HistoryEvent — newest first
+{"event": "UNATTENDED_ACCESS_ENABLED", "at": "2026-10-31T09:36:39+00:00",
+ "summary": "Unattended access switched on.", "actorName": "Meera Nair"}
+
+// Participant (participants, admit, decline)
+{"uuid": "…", "displayName": "Ravi Kumar", "role": "VIEWER", "status": "REQUESTED",
+ "requestedAt": "2026-10-31T09:36:39+00:00", "joinedAt": null}
+```
+
+* `role` is `COMPANION` when the device's participant was a control companion, `HOST` otherwise.
+* `startedAt` is `started_at`, or `created_at` for a session nobody ever joined (then `durationSeconds` is null).
+  A session past its expiry is expired on read, so it shows `EXPIRED`.
+* `peers` are the names of the other participants who were ever admitted (joined, approved, or in now; never the
+  declined, never somebody who only waited, never the owner's unused seat), in arrival order. Never an email: a name
+  that is an address shows as `Guest` (guest) or `AICOUNTLY user`.
+* `controlled` is true when the session timeline has a `CONTROL_GRANTED`.
+* `events` are these audit rows about the device, and no others: `DEVICE_ENROLLED`, `DEVICE_UPDATED` (rename,
+  suspend, resume, registering again with the same key), `DEVICE_REVOKED` ("Signed out from the desktop app." when the
+  machine did it), `UNATTENDED_ACCESS_ENABLED`, `UNATTENDED_ACCESS_DISABLED`, `DEVICE_REBOOT_REQUESTED`.
+  `DEVICE_AUTHENTICATED` (every credential renewal) and `DEVICE_AUTH_FAILED` are left out, and session rows are the
+  session list's. `actorName` is the person's current name, the computer's name when it acted itself, `AICOUNTLY
+  Remote` for the system, or null — never an email.
+
 ## Only verifiable with real machines
 
 Monitor matching against a real capture (points vs pixels, HiDPI scale, multiple monitors of the same aspect),

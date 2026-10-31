@@ -31,18 +31,16 @@ function state(unattended: Partial<AgentState['unattended']> = {}): AgentState {
 }
 
 describe('UnattendedCard', () => {
-  it('never switches on without an explicit confirmation', async () => {
+  it('is turned on in Remote, where the account confirms it, never here', async () => {
     const onEnable = vi.fn()
 
     render(<UnattendedCard state={state()} onEnable={onEnable} onDisable={vi.fn()} />)
 
-    await userEvent.click(screen.getByRole('button', { name: /turn on unattended access/i }))
-
-    // The first click shows the warning; it does not enable anything.
-    expect(onEnable).not.toHaveBeenCalled()
+    // What it means is on screen before anything is pressed.
     expect(screen.getByText(/when nobody is sitting at it/i)).toBeInTheDocument()
+    expect(screen.getByText(/you confirm it there/i)).toBeInTheDocument()
 
-    await userEvent.click(screen.getByRole('button', { name: /i understand/i }))
+    await userEvent.click(screen.getByRole('button', { name: /turn on in remote/i }))
 
     expect(onEnable).toHaveBeenCalledOnce()
   })
@@ -87,17 +85,14 @@ describe('UnattendedCard', () => {
       />,
     )
 
-    expect(screen.getByRole('button', { name: /turn on unattended access/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /turn on in remote/i })).toBeDisabled()
     expect(screen.getByText(/not available for your account/i)).toBeInTheDocument()
   })
 
-  it('says the warning before it is confirmed, not after', async () => {
+  it('says what it means: only you, recorded, shown while it happens', () => {
     render(<UnattendedCard state={state()} onEnable={vi.fn()} onDisable={vi.fn()} />)
 
-    await userEvent.click(screen.getByRole('button', { name: /turn on unattended access/i }))
-
-    const warning = screen.getByText(/when nobody is sitting at it/i)
-    expect(warning).toBeInTheDocument()
+    expect(screen.getByText(/nobody else can/i)).toBeInTheDocument()
     expect(screen.getByText(/every connection is recorded/i)).toBeInTheDocument()
   })
 })

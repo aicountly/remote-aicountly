@@ -441,6 +441,117 @@ final class Presenter
         return $resource;
     }
 
+    /**
+     * One of the owner's computers, as the desktop app's own list shows it.
+     *
+     * Deliberately narrower than {@see device()}: the app needs to name the
+     * machine, say whether it can be reached and whether it is this one, and
+     * nothing else — no key fingerprint, no hostname, no capabilities, no
+     * address. A list a desktop shows on screen is not an administration page.
+     *
+     * @param  array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    public static function computer(array $row, bool $online, bool $isThisComputer): array
+    {
+        return [
+            'uuid'                    => (string) $row['uuid'],
+            'deviceName'              => (string) $row['device_name'],
+            'operatingSystem'         => $row['operating_system'] ?? null,
+            'osVersion'               => $row['os_version'] ?? null,
+            'status'                  => (string) $row['status'],
+            'online'                  => $online,
+            'lastSeenAt'              => Clock::iso($row['last_seen_at'] ?? null),
+            'enrolledAt'              => Clock::iso($row['created_at'] ?? null),
+            'unattendedAccessEnabled' => self::bool($row['unattended_access_enabled'] ?? false),
+            'isThisComputer'          => $isThisComputer,
+        ];
+    }
+
+    /**
+     * A computer's history: `{sessions, events}`, both newest first.
+     *
+     * @param  array{sessions: list<array<string, mixed>>, events: list<array<string, mixed>>} $history
+     * @return array{sessions: list<array<string, mixed>>, events: list<array<string, mixed>>}
+     */
+    public static function deviceHistory(array $history): array
+    {
+        return [
+            'sessions' => array_map([self::class, 'deviceHistorySession'], $history['sessions']),
+            'events'   => array_map([self::class, 'deviceHistoryEvent'], $history['events']),
+        ];
+    }
+
+    /**
+     * A session in a computer's history ({@see \App\Domain\Device\DeviceHistory}).
+     *
+     * `startedAt` is when it started, or — for one nobody ever joined, which
+     * never started — when it was created, so every row in a history has a
+     * moment to be shown at. `durationSeconds` is null unless it both started
+     * and ended, so the two cases stay distinguishable.
+     *
+     * @param  array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    public static function deviceHistorySession(array $row): array
+    {
+        $startedAt = $row['started_at'] ?? null;
+        $endedAt   = $row['ended_at'] ?? null;
+
+        return [
+            'uuid'            => (string) $row['uuid'],
+            'displayId'       => (string) $row['display_id'],
+            'accessMode'      => (string) ($row['access_mode'] ?? 'ATTENDED'),
+            'role'            => (string) $row['role'],
+            'status'          => (string) $row['status'],
+            'startedAt'       => Clock::iso($startedAt ?? ($row['created_at'] ?? null)),
+            'endedAt'         => Clock::iso($endedAt),
+            'durationSeconds' => $startedAt !== null && $endedAt !== null
+                ? max(0, (int) (strtotime((string) $endedAt) - strtotime((string) $startedAt)))
+                : null,
+            'peers'           => array_values(array_map('strval', (array) ($row['peers'] ?? []))),
+            'controlled'      => self::bool($row['controlled'] ?? false),
+        ];
+    }
+
+    /**
+     * One thing that happened to a computer, as a sentence a person can read.
+     *
+     * @param  array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    public static function deviceHistoryEvent(array $row): array
+    {
+        return [
+            'event'     => (string) $row['event'],
+            'at'        => Clock::iso($row['created_at'] ?? null),
+            'summary'   => (string) $row['summary'],
+            'actorName' => $row['actor_name'] ?? null,
+        ];
+    }
+
+    /**
+     * A person in a session the desktop app hosts — waiting to be let in, or
+     * already in.
+     *
+     * The few fields somebody at the machine needs to decide whether to admit
+     * them, and no more: no email, no address, no browser, no capabilities.
+     *
+     * @param  array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    public static function hostedParticipant(array $row): array
+    {
+        return [
+            'uuid'        => (string) $row['uuid'],
+            'displayName' => (string) $row['display_name'],
+            'role'        => (string) $row['participant_role'],
+            'status'      => (string) $row['status'],
+            'requestedAt' => Clock::iso($row['requested_at'] ?? null),
+            'joinedAt'    => Clock::iso($row['joined_at'] ?? null),
+        ];
+    }
+
     public static function bool(mixed $value): bool
     {
         return $value === true || $value === 1 || $value === '1' || $value === 't' || $value === 'true';

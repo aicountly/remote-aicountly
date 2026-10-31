@@ -145,12 +145,11 @@ and defaulted to false. They are now the plan gate they were put there to be.
 policy, consent, session transport and lifecycle.** 653 automated tests across
 the five parts of the product.
 
-**Not the video.** There is no encoder: `remote-webrtc` negotiates a VP8 track
-and the Windows capture provider produces BGRA frames, and nothing converts one
-into the other. So today an agent registers, stays reachable, appears in the
-Computers page, joins a session, negotiates a peer connection, honours control
-messages through its gate and reports its own decisions — and does not yet send
-a picture.
+**And the picture.** The agent captures the screen (Windows.Graphics.Capture on
+Windows, Core Graphics on a Mac), encodes it as H.264 with OpenH264, and streams
+it to the browser on the negotiated track. It hosts an unattended session on
+your own computer, and an attended one started at the machine ("Get help":
+read out a code, let the helper in, grant control when asked).
 
 The full list of what is and is not built is in
 [ARCHITECTURE.md](desktop/ARCHITECTURE.md#what-is-built-and-what-is-not), and

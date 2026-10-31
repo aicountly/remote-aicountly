@@ -117,7 +117,7 @@ abstract class RemoteTestCase extends CIUnitTestCase
             'policyResolver', 'sessionService', 'joinService', 'invitationService',
             'fileTransferService', 'controlService', 'companionLinks', 'companionService',
             'deviceService', 'deviceAuthenticationService', 'deviceSessionService',
-            'devicePresenceService',
+            'devicePresenceService', 'deviceHistory',
             'supportRequestService', 'signallingTokenService', 'iceConfigService',
             'sourceContextVerifier', 'platformDirectory', 'portalClient',
             'membershipVerifier', 'manageClient',

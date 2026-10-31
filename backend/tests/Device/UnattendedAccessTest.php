@@ -51,20 +51,26 @@ final class UnattendedAccessTest extends RemoteTestCase
      * And its owner is refused for the reason that is actually true, rather
      * than being told their own computer does not exist.
      *
-     * Unattended access is off in personal scope: being reachable with nobody
-     * watching is a deliberate act. Before the device's own scope was used to
-     * resolve the policy, `(int) null` asked about company 0 and the refusal
-     * that came back was "could not be found".
+     * Personal scope permits unattended access now — reaching your own
+     * computer is what Basic is for — so the reason is the computer's own
+     * switch: being reachable with nobody watching is a deliberate act at the
+     * machine, and nobody has taken it yet. Before the device's own scope was
+     * used to resolve the policy, `(int) null` asked about company 0 and the
+     * refusal that came back was "could not be found".
      */
     public function testTheOwnerOfAPersonalComputerIsToldUnattendedIsOffRatherThanItIsMissing(): void
     {
         $owner  = $this->makeIdentity('Owner');
         $device = $this->enrolDevice($owner, null)['device'];
+        $this->markDeviceOnline((string) $device['uuid']);
 
-        $this->expectException(ApiException::class);
-        $this->expectExceptionMessage('Unattended access is not enabled');
-
-        Services::deviceSessionService()->startUnattended($owner, (string) $device['uuid']);
+        try {
+            Services::deviceSessionService()->startUnattended($owner, (string) $device['uuid']);
+            $this->fail('A personal computer nobody switched unattended access on for must not be reachable.');
+        } catch (ApiException $exception) {
+            $this->assertSame('UNATTENDED_NOT_ENABLED', $exception->errorCode());
+            $this->assertStringContainsString('has not been switched on for this device', $exception->getMessage());
+        }
     }
 
     /**

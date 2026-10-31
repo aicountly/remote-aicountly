@@ -1,5 +1,3 @@
-import { useState } from 'react'
-
 import type { AgentState } from '../../types/agent'
 import { StatusPill } from '../../components/StatusPill'
 
@@ -10,9 +8,14 @@ import { StatusPill } from '../../components/StatusPill'
  * this computer can be connected to when nobody is sitting at it, and the
  * screen that asks says exactly that, in those words, before anything happens.
  *
- * Turning it **off** is one click with no confirmation. The asymmetry is the
- * point: making a machine reachable deserves a moment's thought; making it
- * unreachable should never be obstructed.
+ * Turning it **on** is done in Remote → Computers, signed in as the person
+ * whose computer it is, behind the API's own confirmation: this window holds
+ * no credential of a person's, and the decision is deliberately kept with
+ * one. What it means is said here, before anybody goes there.
+ *
+ * Turning it **off** is one click with no confirmation, made by the machine
+ * itself. The asymmetry is the point: making a machine reachable deserves a
+ * moment's thought; making it unreachable should never be obstructed.
  */
 export function UnattendedCard({
   state,
@@ -27,7 +30,6 @@ export function UnattendedCard({
   busy?: boolean
   error?: string | null
 }) {
-  const [confirming, setConfirming] = useState(false)
   const { unattended } = state
 
   return (
@@ -85,51 +87,32 @@ export function UnattendedCard({
             afterwards.
           </p>
         </div>
-      ) : confirming ? (
+      ) : (
         <div className="notice notice--warning" style={{ marginTop: 'var(--space-4)' }}>
-          <p className="notice__title">Before you turn this on</p>
+          <p className="notice__title">What turning it on means</p>
           <p>
-            The people allowed to will be able to connect to this computer
-            <strong> when nobody is sitting at it</strong>, see the screen, and — where remote
-            control is allowed — use the keyboard and mouse.
+            You will be able to connect to this computer from your other computers, or from a browser signed in as
+            yourself, <strong>when nobody is sitting at it</strong> — see the screen and use the keyboard and mouse.
+            Nobody else can.
           </p>
           <p>
-            Every connection is recorded, this window and the icon beside the clock show one while
-            it is happening, and you can turn this off again at any time from here.
+            Every connection is recorded, this window and the icon beside the clock show one while it is happening,
+            and you can turn this off again at any time from here.
           </p>
 
           <div className="session-banner__actions" style={{ marginTop: 'var(--space-3)' }}>
             <button
               type="button"
               className="btn btn--primary"
-              onClick={() => {
-                setConfirming(false)
-                onEnable()
-              }}
-              disabled={busy}
+              onClick={onEnable}
+              disabled={busy || !unattended.allowedByPolicy}
             >
-              I understand — turn it on
-            </button>
-            <button
-              type="button"
-              className="btn btn--secondary"
-              onClick={() => setConfirming(false)}
-              disabled={busy}
-            >
-              Cancel
+              Turn on in Remote → Computers
             </button>
           </div>
-        </div>
-      ) : (
-        <div style={{ marginTop: 'var(--space-4)' }}>
-          <button
-            type="button"
-            className="btn btn--secondary"
-            onClick={() => setConfirming(true)}
-            disabled={busy || !unattended.allowedByPolicy}
-          >
-            Turn on unattended access
-          </button>
+          <p className="field__hint" style={{ marginTop: 'var(--space-2)' }}>
+            You confirm it there, signed in as yourself. It shows here within a minute.
+          </p>
         </div>
       )}
     </section>

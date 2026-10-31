@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { KeyRound } from 'lucide-react'
 
 import { joinByCode } from '../../services/api/remote'
@@ -18,7 +18,10 @@ import RestrictionNotice from '../../components/ui/RestrictionNotice'
  */
 export default function JoinSessionPage() {
   const navigate = useNavigate()
-  const [digits, setDigits] = useState('')
+  // `?code=` — the desktop application's "Help someone" opens this page with
+  // the code already typed, so the person only has to press Join.
+  const [params] = useSearchParams()
+  const [digits, setDigits] = useState(() => (params.get('code') ?? '').replace(/\D/g, '').slice(0, 9))
   const [joining, setJoining] = useState(false)
   const [error, setError] = useState<RemoteApiError | null>(null)
 

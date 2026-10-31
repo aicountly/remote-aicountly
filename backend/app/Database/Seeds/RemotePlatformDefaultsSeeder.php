@@ -10,7 +10,14 @@ use CodeIgniter\Database\Seeder;
  * Platform defaults. Safe to run in production, and safe to run twice.
  *
  * Only one row: the entitlement that applies to every company without one of
- * its own (§79). Role and user permission tables start empty on purpose —
+ * its own, and to every personal account (§79). It is Basic, and it matches
+ * the built-in Basic in `EffectivePolicyResolver::entitlement()`: registering
+ * a computer and reaching your own computer unattended are both included,
+ * because an entitlement is what a licence allows, not anything switched on —
+ * unattended access still needs a policy that permits it and a person at each
+ * computer turning it on there. An existing row is left as it is; the
+ * migration `EntitleUnattendedAccessByDefault` brings an older one up to date.
+ * Role and user permission tables start empty on purpose —
  * {@see \App\Domain\Policy\PermissionCatalog} supplies the baseline in code, so
  * an empty table means "the defaults", not "nobody can do anything".
  *
@@ -26,7 +33,7 @@ class RemotePlatformDefaultsSeeder extends Seeder
                     (company_id, plan_code, max_monthly_sessions, max_session_duration_minutes,
                      external_guests, recording, file_transfer, advanced_audit, desktop_devices, unattended_access,
                      created_at, updated_at)
-                SELECT NULL, 'REMOTE_BASIC', NULL, 120, TRUE, FALSE, TRUE, TRUE, TRUE, FALSE, NOW(), NOW()
+                SELECT NULL, 'REMOTE_BASIC', NULL, 120, TRUE, FALSE, TRUE, TRUE, TRUE, TRUE, NOW(), NOW()
                 WHERE NOT EXISTS (SELECT 1 FROM remote_entitlements WHERE company_id IS NULL)
                 SQL,
         );
