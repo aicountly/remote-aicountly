@@ -77,11 +77,12 @@ WebRTC's own congestion feedback (`RemoteInboundRtp`: loss and round-trip
 time). Nothing is hardcoded to 1080p30 — a connection that cannot sustain it
 gets a picture that arrives instead of one that stalls.
 
-> **Not built.** There is no encoder. `remote-webrtc` negotiates a VP8 track
-> and the capture provider produces BGRA frames; nothing converts one into the
-> other yet, so the agent joins a session and carries control without sending a
-> picture. See
-> [ARCHITECTURE.md](ARCHITECTURE.md#what-is-built-and-what-is-not).
+The session loop (`src-tauri/src/session.rs`, `CapturePump`) starts capture
+only once the peer connection is up, takes a frame at the profile's rate and
+hands it to `PeerSession::send_frame`, which converts BGRA to I420 and encodes
+it as H.264 Constrained Baseline with OpenH264. The profile follows the link
+and never rises above the configured quality; capture stops on every exit
+from the session.
 
 ## Input injection
 

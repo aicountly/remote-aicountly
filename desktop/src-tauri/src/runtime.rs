@@ -39,11 +39,12 @@
 //!
 //! # What it does not do
 //!
-//! It does not open a media session. The session runtime — signalling, the
 //! It does not run a session itself. When one is waiting it hands over to
-//! [`crate::session`], which joins, negotiates and pumps the control channel,
-//! and comes back here when the session ends. What is and is not built of that
-//! — there is no encoder — is set out in `docs/desktop/ARCHITECTURE.md`.
+//! [`crate::session`], which joins, negotiates, sends the picture and pumps the
+//! control channel, and comes back here when the session ends. It also hosts a
+//! help session the person at the machine started in the window
+//! (`Agent::request_help_session`). What is and is not built is set out in
+//! `docs/desktop/ARCHITECTURE.md`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

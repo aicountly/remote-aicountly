@@ -52,15 +52,15 @@ Desktop, which a user-session process cannot capture or inject into. The agent
 notices and says so; it does not disable UAC, and it does not ask you to. See
 [docs/desktop/WINDOWS_AGENT.md](docs/desktop/WINDOWS_AGENT.md).
 
-**The Windows agent does not yet send a picture.** Device identity, policy,
-consent, control, unattended access, joining a session and negotiating the
-connection are all built and tested; the **video encoder** is not, so the agent
-carries control without a picture. See
+**The desktop app hosts on Windows and macOS.** It captures the screen,
+encodes it as H.264 (OpenH264) and streams it to the browser, attended ("give
+your code": the person at the machine admits the helper and grants control)
+or unattended (your own computers, switched on per computer). A Mac uses Core
+Graphics capture and asks for Screen Recording. See
 [docs/desktop/ARCHITECTURE.md](docs/desktop/ARCHITECTURE.md#what-is-built-and-what-is-not).
 
-**A Mac is a control companion only, and there is no Linux agent.** On macOS
-the application carries the input for a screen its owner shares from the
-browser; it does not capture or host. Every provider it does not have returns
+**There is no Linux agent.** On macOS the clipboard, restart and the background
+service are not built; every provider a platform does not have returns
 `Unsupported` rather than pretending.
 
 ## Layout
