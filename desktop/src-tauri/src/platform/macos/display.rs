@@ -1,10 +1,12 @@
-//! The displays, as macOS lays them out — and nothing captured.
+//! The displays, as macOS lays them out.
 //!
-//! A control companion needs to know where each monitor is so it can put a
-//! click on the one its owner is sharing from the browser. It never needs to
-//! *see* one: the picture comes from the browser. So this reads the display
-//! list with `CGGetActiveDisplayList` and `CGDisplayBounds`, which need no
-//! Screen Recording permission, and refuses every capture call.
+//! Where each monitor is decides where a click lands — on a Mac a control
+//! companion's owner is sharing from the browser, or on one this Mac is
+//! hosting a session from. Reading the list needs no permission at all:
+//! `CGGetActiveDisplayList` and `CGDisplayBounds` describe the displays without
+//! looking at what is on them, which is why a companion, whose picture comes
+//! from the browser, never needs Screen Recording. Seeing a display is
+//! `capture.rs`, and that does.
 //!
 //! # Points, not pixels
 //!
@@ -12,16 +14,13 @@
 //! `CGEventPost` takes, with the main display's top-left at the origin and the
 //! y axis pointing down. A Retina display of 3024 × 1964 pixels is 1512 × 982
 //! points with a scale of 2. The scale is reported beside the size and never
-//! applied to it, exactly as on Windows; matching the browser's capture (which
-//! is in pixels) uses only the aspect ratio, so the two units never meet. See
-//! `remote_protocol::SurfaceMatch`.
+//! applied to it, exactly as on Windows. Matching the browser's capture (which
+//! is in pixels) uses only the aspect ratio (`remote_protocol::SurfaceMatch`),
+//! and a click on this Mac's own captured picture arrives as a fraction of it
+//! (`capture.rs`), so in neither case do the two units meet.
 
-use remote_device::{CaptureProfile, Frame, PlatformError, PlatformResult, ScreenCaptureProvider};
+use remote_device::{PlatformError, PlatformResult};
 use remote_protocol::{Monitor, MonitorLayout, Orientation, MAX_SCALE, MIN_SCALE};
-
-/// The display list, for a companion. Captures nothing.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct MacDisplays;
 
 /// One display as Core Graphics reports it, before it is described.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -140,34 +139,6 @@ pub fn current_layout() -> PlatformResult<MonitorLayout> {
     #[cfg(not(target_os = "macos"))]
     {
         Err(PlatformError::Unsupported("Reading the display layout"))
-    }
-}
-
-impl ScreenCaptureProvider for MacDisplays {
-    fn monitors(&self) -> PlatformResult<MonitorLayout> {
-        current_layout()
-    }
-
-    fn start(&mut self, _monitor_id: u32, _profile: CaptureProfile) -> PlatformResult<()> {
-        // Deliberately: a companion's picture comes from the browser, and
-        // capturing here would need Screen Recording for nothing.
-        Err(PlatformError::Unsupported("Screen capture"))
-    }
-
-    fn stop(&mut self) -> PlatformResult<()> {
-        Ok(())
-    }
-
-    fn next_frame(&mut self) -> PlatformResult<Option<Frame>> {
-        Err(PlatformError::Unsupported("Screen capture"))
-    }
-
-    fn reconfigure(&mut self, _profile: CaptureProfile) -> PlatformResult<()> {
-        Err(PlatformError::Unsupported("Screen capture"))
-    }
-
-    fn is_running(&self) -> bool {
-        false
     }
 }
 
@@ -307,19 +278,5 @@ mod tests {
         }])
         .unwrap();
         assert_eq!(layout.active_monitor_id, 5);
-    }
-
-    /// The companion never captures, and says so rather than pretending.
-    #[test]
-    fn capture_is_refused_but_stopping_succeeds() {
-        let mut displays = MacDisplays;
-
-        assert!(matches!(
-            displays.start(1, CaptureProfile::adaptive()),
-            Err(PlatformError::Unsupported(_))
-        ));
-        assert!(displays.next_frame().is_err());
-        assert!(displays.stop().is_ok());
-        assert!(!displays.is_running());
     }
 }
