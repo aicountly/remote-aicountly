@@ -17,6 +17,7 @@ import EmptyState from '../../components/ui/EmptyState'
 import Modal from '../../components/ui/Modal'
 import RestrictionNotice from '../../components/ui/RestrictionNotice'
 import DeviceRow from './DeviceRow'
+import DeviceHistory from './DeviceHistory'
 import type { DeviceListing, RemoteDevice } from '../../types/remote'
 import { PERMISSIONS } from '../../types/remote'
 
@@ -88,6 +89,19 @@ function DesktopAppNotice() {
   return enabled ? <DesktopAppDownloadNotice /> : <DesktopAppComingSoon />
 }
 
+/**
+ * "3 computers registered · 2 online", counting the ones still registered —
+ * a removed computer is listed, but it is no longer one of yours.
+ */
+export function describeCount(devices: RemoteDevice[]): string {
+  const registered = devices.filter((device) => device.status !== 'REVOKED')
+  if (registered.length === 0) return 'None registered yet.'
+
+  const online = registered.filter((device) => device.online).length
+
+  return `${registered.length} computer${registered.length === 1 ? '' : 's'} registered · ${online} online`
+}
+
 export default function DevicesPage() {
   const navigate = useNavigate()
   const { scopeType, companyId, can } = useRemote()
@@ -99,6 +113,7 @@ export default function DevicesPage() {
   const [confirming, setConfirming] = useState<{ device: RemoteDevice; action: 'unattended' | 'revoke' } | null>(
     null,
   )
+  const [historyOf, setHistoryOf] = useState<RemoteDevice | null>(null)
 
   const personal = scopeType !== 'COMPANY' || companyId === null
 
@@ -182,7 +197,7 @@ export default function DevicesPage() {
           <h1>Computers</h1>
           <p className="muted">
             {personal
-              ? 'Your computers running AICOUNTLY Remote for Windows.'
+              ? 'Your computers running AICOUNTLY Remote for Windows or Mac. Connect to one with nobody at it, see who has been on it, or remove it.'
               : 'Machines running AICOUNTLY Remote for Windows that are registered to this organisation.'}
           </p>
         </header>
@@ -205,11 +220,7 @@ export default function DevicesPage() {
           <div className="card__header">
             <div>
               <h2 className="card__title">Registered computers</h2>
-              <p className="card__subtitle">
-                {devices.length === 0
-                  ? 'None yet.'
-                  : `${devices.length} computer${devices.length === 1 ? '' : 's'}.`}
-              </p>
+              <p className="card__subtitle">{describeCount(devices)}</p>
             </div>
           </div>
 
@@ -237,6 +248,7 @@ export default function DevicesPage() {
                     void run(device.uuid, () => disableUnattendedAccess(device.uuid))
                   }
                   onRevoke={() => setConfirming({ device, action: 'revoke' })}
+                  onHistory={() => setHistoryOf(device)}
                 />
               ))}
             </ul>
@@ -272,16 +284,21 @@ export default function DevicesPage() {
         }
       >
         <p>
-          People in this organisation who hold unattended access will be able to connect to{' '}
-          <strong>{confirming?.device.deviceName}</strong> without anybody approving it at the machine.
+          You will be able to connect to <strong>{confirming?.device.deviceName}</strong> from anywhere, signed in
+          as yourself, see its screen and use its mouse and keyboard — without anybody approving it at the machine.
+          Nobody else can.
         </p>
         <ul className="bullets">
-          <li>Every connection is recorded in the audit trail, with who started it and when.</li>
+          <li>Every connection is recorded in the computer’s history, with when it started and how long it lasted.</li>
           <li>AICOUNTLY Remote still shows on that computer that a session is running.</li>
           <li>
             It can be turned off again from this page, or by whoever is at the machine, at any time.
           </li>
         </ul>
+      </Modal>
+
+      <Modal open={historyOf !== null} title={historyOf ? `History of ${historyOf.deviceName}` : 'History'} onClose={() => setHistoryOf(null)} size="lg">
+        {historyOf ? <DeviceHistory deviceUuid={historyOf.uuid} /> : null}
       </Modal>
 
       <Modal

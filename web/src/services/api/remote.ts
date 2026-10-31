@@ -35,6 +35,7 @@ import type {
   RemoteDevice,
   SessionControlState,
   CompanionLink,
+  DeviceHistory,
 } from '../../types/remote'
 
 // --- Bootstrap and policy ---------------------------------------------------
@@ -507,6 +508,11 @@ export function connectToDevice(
     method: 'POST',
     body: issueSummary ? { issueSummary } : {},
   })
+}
+
+/** A computer's sessions and what happened to it, newest first. */
+export function fetchDeviceHistory(uuid: string, limit = 20): Promise<DeviceHistory> {
+  return apiFetch(`/devices/${uuid}/history?limit=${limit}`)
 }
 
 /** Ask a device to restart. Separately authorised — see the API. */

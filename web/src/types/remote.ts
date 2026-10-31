@@ -470,6 +470,37 @@ export interface RemoteDevice {
   audit?: { lastIp: string | null };
 }
 
+/** One session a computer took part in, for its history. */
+export interface DeviceHistorySession {
+  uuid: string;
+  displayId: string;
+  accessMode: 'ATTENDED' | 'UNATTENDED';
+  /** How the computer took part: as the screen being shared, or as a control companion. */
+  role: 'HOST' | 'COMPANION';
+  status: string;
+  startedAt: string | null;
+  endedAt: string | null;
+  durationSeconds: number | null;
+  /** The other people in it, by display name. */
+  peers: string[];
+  /** Whether anybody controlled it at any point. */
+  controlled: boolean;
+}
+
+/** Something that happened to a computer: registered, signed out, unattended access on or off. */
+export interface DeviceHistoryEvent {
+  event: string;
+  at: string | null;
+  summary: string;
+  actorName: string | null;
+}
+
+/** `GET /devices/{uuid}/history`. */
+export interface DeviceHistory {
+  sessions: DeviceHistorySession[];
+  events: DeviceHistoryEvent[];
+}
+
 /** What `GET /devices` answers, and what the caller may do with it. */
 export interface DeviceListing {
   devices: RemoteDevice[];

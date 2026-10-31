@@ -25,6 +25,8 @@ interface Props {
   onEnableUnattended: () => void
   onDisableUnattended: () => void
   onRevoke: () => void
+  /** Its connections and changes. */
+  onHistory: () => void
 }
 
 const ICONS = {
@@ -44,6 +46,7 @@ export default function DeviceRow({
   onEnableUnattended,
   onDisableUnattended,
   onRevoke,
+  onHistory,
 }: Props) {
   const Icon = ICONS[device.deviceType] ?? Monitor
   const revoked = device.status === 'REVOKED'
@@ -107,7 +110,7 @@ export default function DeviceRow({
                 : ', not used yet.'}
             </>
           ) : (
-            <>Unattended access is off. Somebody at the computer has to approve each connection.</>
+            <>Unattended access is off. You can only reach it while somebody at it starts a session.</>
           )}
         </p>
       </div>
@@ -139,12 +142,15 @@ export default function DeviceRow({
               Allow unattended
             </button>
           ) : (
-            // Not hidden: an administrator who cannot find the option assumes
-            // the product lacks it rather than that their organisation
-            // switched it off.
-            <span className="device__blocked">Unattended access is off for this organisation</span>
+            // Not hidden: somebody who cannot find the option assumes the
+            // product lacks it rather than that their account does.
+            <span className="device__blocked">Unattended access is not available for your account</span>
           )
         ) : null}
+
+        <button type="button" className="btn btn--ghost btn--sm" onClick={onHistory}>
+          History
+        </button>
 
         {canManage && !revoked ? (
           <button type="button" className="btn btn--ghost btn--sm" onClick={onRevoke} disabled={busy}>
