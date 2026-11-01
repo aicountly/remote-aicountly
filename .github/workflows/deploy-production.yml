@@ -385,14 +385,7 @@ jobs:
           # first because rsync filters are first-match. Same rule as Connect's
           # deploy (server-php/tests/unit/DeployRsyncProtectsWritableTest.php).
           ssh deploy-target 'mkdir -p .aicountly-deploy/remote-production/stage && chmod 700 .aicountly-deploy'
-          # The maintenance flag and its notice are operator state in the document root, not
-          # build output. A --delete deploy would remove them and quietly bring the site back
-          # up in the middle of a window. No rsync here uses --delete-excluded, so an exclude
-          # protects them from deletion as well as from being overwritten.
           rsync -avz --delete \
-            --exclude='.maintenance' \
-            --exclude='.maintenance.json' \
-            --exclude='.maintenance-allow' \
             --filter='P /writable/***' \
             --exclude='.env' \
             --exclude='.env.*' \
