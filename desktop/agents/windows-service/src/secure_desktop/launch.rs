@@ -222,7 +222,7 @@ pub fn launch(exe: &Path, session_id: u32, pipe: &str) -> Result<HelperProcess, 
         // live, and a process started onto it can see and drive them.
         let mut desktop = wide(r"winsta0\winlogon");
 
-        let mut startup = STARTUPINFOW {
+        let startup = STARTUPINFOW {
             cb: std::mem::size_of::<STARTUPINFOW>() as u32,
             lpDesktop: PWSTR(desktop.as_mut_ptr()),
             ..Default::default()

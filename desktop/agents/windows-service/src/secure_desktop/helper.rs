@@ -36,8 +36,7 @@ use windows::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows::Win32::Security::{
-    GetTokenInformation, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY,
-    TOKEN_USER,
+    GetTokenInformation, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_USER,
 };
 use windows::Win32::Storage::FileSystem::{
     ReadFile, WriteFile, FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_FIRST_PIPE_INSTANCE,
@@ -336,9 +335,9 @@ impl InputDesktop {
     /// Secure Desktop (anything but `Default`).
     fn follow(&mut self) -> bool {
         use windows::Win32::System::StationsAndDesktops::{
-            DESKTOP_CREATEWINDOW, DESKTOP_ENUMERATE, DESKTOP_HOOKCONTROL, DESKTOP_JOURNALPLAYBACK,
-            DESKTOP_JOURNALRECORD, DESKTOP_READOBJECTS, DESKTOP_SWITCHDESKTOP,
-            DESKTOP_WRITEOBJECTS,
+            DESKTOP_ACCESS_FLAGS, DESKTOP_CREATEWINDOW, DESKTOP_ENUMERATE, DESKTOP_HOOKCONTROL,
+            DESKTOP_JOURNALPLAYBACK, DESKTOP_JOURNALRECORD, DESKTOP_READOBJECTS,
+            DESKTOP_SWITCHDESKTOP, DESKTOP_WRITEOBJECTS,
         };
 
         // SAFETY: OpenInputDesktop takes no pointers and returns a handle the
@@ -348,14 +347,18 @@ impl InputDesktop {
             OpenInputDesktop(
                 Default::default(),
                 false,
-                DESKTOP_READOBJECTS
-                    | DESKTOP_WRITEOBJECTS
-                    | DESKTOP_CREATEWINDOW
-                    | DESKTOP_ENUMERATE
-                    | DESKTOP_HOOKCONTROL
-                    | DESKTOP_JOURNALPLAYBACK
-                    | DESKTOP_JOURNALRECORD
-                    | DESKTOP_SWITCHDESKTOP,
+                // `DESKTOP_ACCESS_FLAGS` has no `BitOr` in windows 0.62, so
+                // the rights are combined on the raw values.
+                DESKTOP_ACCESS_FLAGS(
+                    DESKTOP_READOBJECTS.0
+                        | DESKTOP_WRITEOBJECTS.0
+                        | DESKTOP_CREATEWINDOW.0
+                        | DESKTOP_ENUMERATE.0
+                        | DESKTOP_HOOKCONTROL.0
+                        | DESKTOP_JOURNALPLAYBACK.0
+                        | DESKTOP_JOURNALRECORD.0
+                        | DESKTOP_SWITCHDESKTOP.0,
+                ),
             )
         };
 
