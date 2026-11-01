@@ -599,13 +599,14 @@ fn serve_connection(
     helpers: &SecureDesktopHelpers,
     install_dir: &std::path::Path,
 ) {
-    let mut connection = Connection::default();
-
     // Who is on the other end — our installed app, in the console session? —
     // learned once from the pipe itself and carried on the connection, so the
     // Secure Desktop decision in `machine::handle` stays pure. The kernel knows
     // the client's identity; the protocol never has to ask.
-    connection.client = crate::secure_desktop::launch::client_facts(instance.0, install_dir);
+    let mut connection = Connection {
+        client: crate::secure_desktop::launch::client_facts(instance.0, install_dir),
+        ..Connection::default()
+    };
 
     let mut last_heard = Instant::now();
 
