@@ -11,6 +11,9 @@
 
 import { getApiBaseUrl } from '../../config'
 import { ensureSesKey, AuthError } from '../../auth/portal'
+import { getTwoStepToken } from '../../auth/tokens'
+import { requestTwoStep } from '../twoStepPrompt'
+import type { TwoStepReason } from '../twoStepPrompt'
 import { activeCompanyForRestrictions, noteRestrictedResponse } from '../companyRestriction'
 import { PLAN_LIMIT_CODE, planLimitFromError, planLimitMessage } from '../planLimit'
 
@@ -173,6 +176,55 @@ async function authorization(anonymous: boolean): Promise<string | null> {
   return `Bearer ${sesKey}`
 }
 
+/** The header Remote's own two-step verification token travels in. */
+export const TWO_STEP_HEADER = 'X-Remote-Two-Step'
+
+/** The refusal of a signed-in call from a browser that has not passed two-step verification (recently enough). */
+export const TWO_STEP_REQUIRED = 'TWO_STEP_REQUIRED'
+
+/**
+ * This browser's two-step verification token, on a signed-in call. Never on a
+ * guest's (a guest has no account, and no token is asked of them) nor on the
+ * anonymous redemption.
+ */
+function addTwoStepHeader(headers: Record<string, string>, anonymous: boolean): void {
+  if (anonymous || getGuestToken()) return
+
+  const token = getTwoStepToken()
+  if (token) headers[TWO_STEP_HEADER] = token
+}
+
+/**
+ * Run a call, and when the API answers `TWO_STEP_REQUIRED`, ask for a code and
+ * run it once more — so every screen gets "enter your code, and carry on"
+ * without knowing two-step verification exists.
+ *
+ * Once only: a second refusal is the answer. A token that changed while the
+ * call was out (a code entered in another tab) is simply tried, without
+ * asking. A prompt the person cancels hands the screen the original refusal,
+ * whose message says what the code was for.
+ */
+async function withTwoStep<T>(attempt: () => Promise<T>): Promise<T> {
+  const sent = getTwoStepToken()
+
+  try {
+    return await attempt()
+  } catch (error) {
+    if (!(error instanceof RemoteApiError) || error.code !== TWO_STEP_REQUIRED || getGuestToken()) throw error
+
+    if (getTwoStepToken() === sent) {
+      const reason: TwoStepReason = error.details.reason === 'STEP_UP' ? 'STEP_UP' : 'SESSION'
+      try {
+        await requestTwoStep(reason, error.message)
+      } catch {
+        throw error
+      }
+    }
+
+    return attempt()
+  }
+}
+
 /**
  * What a failed attempt to get a session key means to the person (I-16).
  *
@@ -198,7 +250,11 @@ function authFailure(error: AuthError): RemoteApiError {
  * @throws {RemoteApiError} for every failure, including a network one — so a
  *         caller has exactly one thing to catch.
  */
-export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promise<T> {
+export function apiFetch<T>(path: string, options: ApiOptions = {}): Promise<T> {
+  return withTwoStep(() => apiFetchOnce<T>(path, options))
+}
+
+async function apiFetchOnce<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const { method = 'GET', body, withLaunchContext = false, anonymous = false, signal } = options
 
   const requestId = newRequestId()
@@ -219,6 +275,7 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
     }
     throw error
   }
+  addTwoStepHeader(headers, anonymous)
 
   if (withLaunchContext) {
     const context = consumeLaunchContextToken()
@@ -287,7 +344,14 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
 }
 
 /** Same as {@link apiFetch}, but also returns the `meta` block (totals, paging). */
-export async function apiFetchWithMeta<T>(
+export function apiFetchWithMeta<T>(
+  path: string,
+  options: ApiOptions = {},
+): Promise<{ data: T; meta: Record<string, unknown> }> {
+  return withTwoStep(() => apiFetchWithMetaOnce<T>(path, options))
+}
+
+async function apiFetchWithMetaOnce<T>(
   path: string,
   options: ApiOptions = {},
 ): Promise<{ data: T; meta: Record<string, unknown> }> {
@@ -304,6 +368,7 @@ export async function apiFetchWithMeta<T>(
     if (error instanceof AuthError) throw authFailure(error)
     throw error
   }
+  addTwoStepHeader(headers, anonymous)
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
@@ -358,7 +423,11 @@ export async function apiFetchWithMeta<T>(
  * mapping as {@link apiFetch}; `partial` is the server saying the export was
  * cut at its row cap.
  */
-export async function apiFetchText(path: string): Promise<{ text: string; partial: boolean }> {
+export function apiFetchText(path: string): Promise<{ text: string; partial: boolean }> {
+  return withTwoStep(() => apiFetchTextOnce(path))
+}
+
+async function apiFetchTextOnce(path: string): Promise<{ text: string; partial: boolean }> {
   const requestId = newRequestId()
   const headers: Record<string, string> = { Accept: 'text/csv', 'X-Request-Id': requestId }
 
@@ -369,6 +438,7 @@ export async function apiFetchText(path: string): Promise<{ text: string; partia
     if (error instanceof AuthError) throw authFailure(error)
     throw error
   }
+  addTwoStepHeader(headers, false)
 
   let response: Response
   try {

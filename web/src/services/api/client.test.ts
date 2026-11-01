@@ -8,7 +8,8 @@ vi.mock('../../auth/portal', async () => {
 })
 
 import { ensureSesKey } from '../../auth/portal'
-import { RemoteApiError, apiFetch, apiFetchWithMeta } from './client'
+import { clearAllTokens, getTwoStepToken, setTwoStepToken } from '../../auth/tokens'
+import { RemoteApiError, apiFetch, apiFetchWithMeta, setGuestToken } from './client'
 
 describe('an outage of the sign-in service is not a signed-out person (I-16)', () => {
   beforeEach(() => {
@@ -94,5 +95,77 @@ describe('a server failure carries a support reference (no blank errors)', () =>
     const error = (await apiFetchWithMeta('/sessions/history').catch((e: unknown) => e)) as RemoteApiError
     expect(error).toBeInstanceOf(RemoteApiError)
     expect(error.message).toBe('Something went wrong. Please try again. (Ref: proxy-ref-abcdef)')
+  })
+})
+
+describe("Remote's own two-step verification token", () => {
+  beforeEach(async () => {
+    vi.mocked(ensureSesKey).mockResolvedValue('ses-key')
+    localStorage.clear()
+    const { resetTwoStepPrompt } = await import('../twoStepPrompt')
+    resetTwoStepPrompt()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.resetAllMocks()
+    localStorage.clear()
+    setGuestToken(null)
+  })
+
+  it('travels on a signed-in call, and never on a guest’s', async () => {
+    setTwoStepToken('browser-token')
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: {} }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await apiFetch('/sessions/history')
+    await apiFetchWithMeta('/sessions/history')
+    setGuestToken('guest.abc')
+    await apiFetch('/sessions/s-1')
+
+    const sent = fetchMock.mock.calls.map((call) => (call as unknown as [string, RequestInit])[1].headers as Record<string, string>)
+    expect(sent[0]['X-Remote-Two-Step']).toBe('browser-token')
+    expect(sent[1]['X-Remote-Two-Step']).toBe('browser-token')
+    expect(sent[2]['X-Remote-Two-Step']).toBeUndefined()
+    expect(sent[2].Authorization).toBe('Bearer guest.abc')
+  })
+
+  it('a refusal with no prompt to ask is simply the refusal, and nothing is sent again', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: { code: 'TWO_STEP_REQUIRED', message: 'Enter the code.', details: { reason: 'SESSION' } } }), {
+          status: 403,
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(apiFetch('/sessions/history')).rejects.toMatchObject({ code: 'TWO_STEP_REQUIRED', status: 403 })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('a code entered in another tab while the call was out is used without asking again', async () => {
+    let calls = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init: RequestInit) => {
+        calls += 1
+        const token = (init.headers as Record<string, string>)['X-Remote-Two-Step']
+        if (calls === 1) {
+          // The other tab verifies while this request is on its way.
+          localStorage.setItem('remote:twoStep', 'from-the-other-tab')
+          return new Response(JSON.stringify({ error: { code: 'TWO_STEP_REQUIRED', message: 'Enter the code.', details: { reason: 'SESSION' } } }), { status: 403 })
+        }
+        return new Response(JSON.stringify({ data: { token } }), { status: 200 })
+      }),
+    )
+
+    await expect(apiFetch<{ token: string }>('/sessions/history')).resolves.toEqual({ token: 'from-the-other-tab' })
+    expect(calls).toBe(2)
+  })
+
+  it('goes when the person signs out', () => {
+    setTwoStepToken('browser-token')
+    clearAllTokens()
+    expect(getTwoStepToken()).toBeNull()
+    expect(localStorage.getItem('remote:twoStep')).toBeNull()
   })
 })

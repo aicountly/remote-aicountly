@@ -15,6 +15,7 @@ use App\Domain\Support\ApiException;
 use App\Domain\Support\Clock;
 use App\Domain\Support\Ids;
 use App\Domain\Support\Presenter;
+use App\Domain\TwoStep\TwoStepService;
 use CodeIgniter\Database\BaseBuilder;
 use CodeIgniter\Database\BaseConnection;
 use Config\Remote as RemoteConfig;
@@ -57,6 +58,7 @@ class DeviceService
         private readonly EffectivePolicyResolver $policies,
         private readonly AuditService $audit,
         private readonly RemoteConfig $config,
+        private readonly TwoStepService $twoStep,
     ) {
     }
 
@@ -691,6 +693,18 @@ class DeviceService
      * ceremony: the agent and the web console both show the same warning, and a
      * request without it is a request that skipped the screen carrying it.
      *
+     * And the caller must have passed Remote's own two-step verification
+     * **within the last few minutes** (`remote.twoStepStepUpSeconds`, ten by
+     * default) — not merely some time today. This is the act that turns a
+     * stolen portal session into a way onto somebody's computer, and the portal
+     * sign-in is the one thing Remote cannot vouch for, so it is asked for a
+     * fresh code rather than trusted. Somebody without two-step verification is
+     * told to turn it on (`TWO_STEP_SETUP_REQUIRED`); somebody whose
+     * verification is older is asked for a code (`TWO_STEP_REQUIRED`). The check
+     * comes after "is this yours" and "may you", so a stranger still learns only
+     * that the device could not be found. Switching unattended access *off*
+     * never asks: stopping a computer being reachable must never be harder.
+     *
      * @return array<string, mixed>
      */
     public function enableUnattended(RemoteIdentity $identity, string $uuid, bool $confirmed): array
@@ -727,6 +741,12 @@ class DeviceService
                 'Only an active device can be reached without somebody at it.',
             );
         }
+
+        $this->twoStep->requireVerified(
+            $identity,
+            $this->config->twoStepStepUpSeconds,
+            TwoStepService::PURPOSE_UNATTENDED_ENABLE,
+        );
 
         // The warning says who could connect, because that is what is being
         // agreed to: on a personal computer, its owner and nobody else.

@@ -290,6 +290,7 @@ final class DeviceHostedSessionTest extends RemoteTestCase
     {
         $device = $this->asDevice($this->computer);
         $uuid   = (string) $this->computer['device']['uuid'];
+        $this->turnOnTwoStep($this->owner);
         Services::deviceService()->enableUnattended($this->owner, $uuid, true);
         $unattended = Services::deviceSessionService()->startUnattended($this->owner, $uuid)['session'];
         $sessionUuid = (string) $unattended['uuid'];

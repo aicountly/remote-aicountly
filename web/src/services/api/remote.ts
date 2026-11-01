@@ -7,7 +7,7 @@
  */
 
 import { apiFetch, apiFetchText, apiFetchWithMeta, setGuestToken } from './client'
-import { getAuthToken } from '../../auth/tokens'
+import { getAuthToken, setTwoStepToken } from '../../auth/tokens'
 import type { ConnectivityReport } from '../../ice-kit/index.js'
 import { latencyBody } from './iceLatency'
 import type {
@@ -36,6 +36,11 @@ import type {
   SessionControlState,
   CompanionLink,
   DeviceHistory,
+  TwoStepConfirmation,
+  TwoStepEnrolment,
+  TwoStepProof,
+  TwoStepStatus,
+  TwoStepVerification,
 } from '../../types/remote'
 
 // --- Bootstrap and policy ---------------------------------------------------
@@ -51,6 +56,49 @@ export function fetchEffectivePolicy(scopeType: ScopeType, companyId: number | n
   if (companyId !== null) params.set('companyId', String(companyId))
 
   return apiFetch<EffectivePolicy>(`/policy/effective?${params.toString()}`)
+}
+
+// --- Two-step verification (Remote's own, docs/SECURITY.md) ------------------
+//
+// The calls that issue a verification keep its token (auth/tokens.ts), which the
+// client then sends on every signed-in request; switching it off drops it.
+
+export function fetchTwoStepStatus(): Promise<TwoStepStatus> {
+  return apiFetch<TwoStepStatus>('/me/two-step')
+}
+
+export function startTwoStepEnrolment(): Promise<TwoStepEnrolment> {
+  return apiFetch<TwoStepEnrolment>('/me/two-step/enrol', { method: 'POST', body: {} })
+}
+
+export async function confirmTwoStep(code: string): Promise<TwoStepConfirmation> {
+  const result = await apiFetch<TwoStepConfirmation>('/me/two-step/confirm', { method: 'POST', body: { code } })
+  setTwoStepToken(result.verificationToken)
+
+  return result
+}
+
+export async function verifyTwoStep(
+  proof: TwoStepProof,
+): Promise<TwoStepVerification & { method: 'TOTP' | 'RECOVERY_CODE'; recoveryCodesLeft: number }> {
+  const result = await apiFetch<TwoStepVerification & { method: 'TOTP' | 'RECOVERY_CODE'; recoveryCodesLeft: number }>(
+    '/me/two-step/verify',
+    { method: 'POST', body: proof },
+  )
+  setTwoStepToken(result.verificationToken)
+
+  return result
+}
+
+export function regenerateRecoveryCodes(): Promise<{ recoveryCodes: string[] }> {
+  return apiFetch<{ recoveryCodes: string[] }>('/me/two-step/recovery-codes', { method: 'POST', body: {} })
+}
+
+export async function disableTwoStep(proof: TwoStepProof): Promise<TwoStepStatus> {
+  const status = await apiFetch<TwoStepStatus>('/me/two-step/disable', { method: 'POST', body: proof })
+  setTwoStepToken(null)
+
+  return status
 }
 
 // --- Sessions ---------------------------------------------------------------

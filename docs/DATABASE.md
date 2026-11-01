@@ -39,6 +39,7 @@ php spark db:seed RemoteDevelopmentSeeder            # refuses to run in product
 | `…000500_CreateRemoteSupportTables` | `remote_support_requests`, `remote_session_feedback` |
 | `…000600_CreateRemotePlatformTables` | `remote_context_tokens`, `remote_devices` |
 | `2026-10-25-000100_AddRemoteControlCompanions` | `remote_control_companions`; the `CONTROL_COMPANION` participant role and `companion_of_participant_id`; `remote_sessions.actual_surface_width/height` — [desktop/CONTROL_COMPANION.md](desktop/CONTROL_COMPANION.md) |
+| `2026-11-01-000100_AddRemoteTwoStepVerification` | `remote_user_two_step`, `remote_user_recovery_codes`, `remote_two_step_verifications` — [SECURITY.md](SECURITY.md#two-step-verification) |
 
 Rollback is exercised in CI, not assumed: a migration nobody can undo is a
 migration nobody can deploy with confidence.
@@ -280,6 +281,29 @@ Checking with a `SELECT` first would leave the race open.
 
 Rows are only interesting until the token would have expired anyway; the index
 on `expires_at` drives the cleanup sweep.
+
+### Two-step verification
+
+Remote's own second step (TOTP), per person — never per company, so none of the
+three has a `company_id` and a company purge never reaches them; the account
+purge removes them with the person.
+
+* `remote_user_two_step` — one row per person who has started or finished
+  turning it on (`user_id` = `remote_identities.id`, the primary key). The
+  authenticator secret is `secret_ciphertext`, sealed with XChaCha20-Poly1305
+  bound to the row's `user_id`, beside `key_id`, the fingerprint of the key
+  that sealed it. `confirmed_at` is null while pending; `last_used_step` is the
+  RFC 6238 time step of the last accepted code, so a code is accepted once;
+  `failed_attempts` and `locked_until` are the lockout.
+* `remote_user_recovery_codes` — ten per person, `password_hash()` only,
+  `used_at` set by a guarded update when one is spent.
+* `remote_two_step_verifications` — a browser that passed: the SHA-256 of the
+  verification token it holds (`token_hash`, never the token), `method`,
+  `verified_at`, `expires_at`.
+
+Both children reference `remote_user_two_step (user_id)` with `ON DELETE
+CASCADE`, so switching it off — deleting that one row — takes every recovery
+code and every verified browser with it.
 
 ### `remote_devices`
 

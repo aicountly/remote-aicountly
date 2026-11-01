@@ -127,6 +127,22 @@ final class EventType
     public const DESKTOP_SIGNIN_CONFIRMED = 'DESKTOP_SIGNIN_CONFIRMED';
     public const DESKTOP_SIGNIN_DENIED    = 'DESKTOP_SIGNIN_DENIED';
 
+    // --- Two-step verification (docs/SECURITY.md) --------------------------
+    //
+    // Remote's own second step, on top of the portal sign-in it cannot see into.
+    // Each records *that* something happened and how (an authenticator code or
+    // a recovery code), never a code, the secret or a verification token.
+    public const TWO_STEP_ENROLMENT_STARTED          = 'TWO_STEP_ENROLMENT_STARTED';
+    public const TWO_STEP_ENABLED                    = 'TWO_STEP_ENABLED';
+    public const TWO_STEP_VERIFIED                   = 'TWO_STEP_VERIFIED';
+    public const TWO_STEP_VERIFY_FAILED              = 'TWO_STEP_VERIFY_FAILED';
+    public const TWO_STEP_LOCKED                     = 'TWO_STEP_LOCKED';
+    public const TWO_STEP_RECOVERY_CODE_USED         = 'TWO_STEP_RECOVERY_CODE_USED';
+    public const TWO_STEP_RECOVERY_CODES_REGENERATED = 'TWO_STEP_RECOVERY_CODES_REGENERATED';
+    public const TWO_STEP_DISABLED                   = 'TWO_STEP_DISABLED';
+    /** AICOUNTLY support removing it for somebody who lost both their phone and their recovery codes. */
+    public const TWO_STEP_RESET                      = 'TWO_STEP_RESET';
+
     /** Someone downloading the audit trail itself, and the feedback left on a session. */
     public const AUDIT_EXPORTED             = 'AUDIT_EXPORTED';
     public const SESSION_FEEDBACK_RECORDED  = 'SESSION_FEEDBACK_RECORDED';
@@ -145,6 +161,9 @@ final class EventType
             self::COMPANY_CONTEXT_MISMATCH, self::POLICY_REJECTED, self::CONTROL_GRANTED,
             self::CONTROL_COMPANION_REQUESTED, self::CONTROL_COMPANION_JOINED,
             self::DESKTOP_SIGNIN_CONFIRMED, self::DESKTOP_SIGNIN_DENIED,
+            self::TWO_STEP_ENABLED, self::TWO_STEP_DISABLED, self::TWO_STEP_VERIFIED,
+            self::TWO_STEP_VERIFY_FAILED, self::TWO_STEP_LOCKED, self::TWO_STEP_RECOVERY_CODE_USED,
+            self::TWO_STEP_RECOVERY_CODES_REGENERATED, self::TWO_STEP_RESET,
             self::AUDIT_EXPORTED => 'security',
 
             self::SESSION_CREATED, self::SESSION_ENDED, self::INVITATION_CREATED, self::INVITATION_REVOKED,

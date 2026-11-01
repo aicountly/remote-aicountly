@@ -218,8 +218,10 @@ final class CompanyLifecycle
      * ON DELETE NO ACTION, so the engine cannot delete it; this hook does what can be done without
      * touching any company's data: deletes the person's PERSONAL sessions (no company — their
      * participants, messages, events, transfers, recordings, invitations and feedback cascade), their
-     * personal devices (challenges cascade) and desktop sign-in codes, and anonymises the identity
-     * projection (name, e-mail, platform user id). Company sessions and devices stay with their companies.
+     * personal devices (challenges cascade), desktop sign-in codes and two-step verification (the sealed
+     * authenticator secret, the recovery-code hashes and the verified browsers — a person's, never a
+     * company's), and anonymises the identity projection (name, e-mail, platform user id). Company
+     * sessions and devices stay with their companies.
      *
      * Kit 1.1: every row it deletes or changes — the cascaded children, the rows whose device_id /
      * session_id the deletes set to NULL, the identity it anonymises — is first archived into the purge's
@@ -259,12 +261,17 @@ final class CompanyLifecycle
             $ctx->archiveRows('remote_device_challenges', "device_id IN ({$devices})");
             $ctx->archiveRows('remote_devices', "id IN ({$devices})");
             $ctx->archiveRows('remote_desktop_signin_codes', "identity_id IN ({$in})");
+            // Two-step verification: the children hang off remote_user_two_step and cascade with it.
+            $ctx->archiveRows('remote_two_step_verifications', "user_id IN ({$in})");
+            $ctx->archiveRows('remote_user_recovery_codes', "user_id IN ({$in})");
+            $ctx->archiveRows('remote_user_two_step', "user_id IN ({$in})");
             $ctx->archiveRows('remote_identities', "id IN ({$in})");
 
             $counts = [];
             $counts['personal sessions'] = $pdo->exec("DELETE FROM remote_sessions WHERE id IN ({$sessions})");
             $counts['personal devices'] = $pdo->exec("DELETE FROM remote_devices WHERE id IN ({$devices})");
             $counts['desktop sign-in codes'] = $pdo->exec("DELETE FROM remote_desktop_signin_codes WHERE identity_id IN ({$in})");
+            $counts['two-step verification settings'] = $pdo->exec("DELETE FROM remote_user_two_step WHERE user_id IN ({$in})");
             $pdo->exec("UPDATE remote_identities SET display_name = 'Former AICOUNTLY user', email = NULL, platform_user_id = NULL, updated_at = now() WHERE id IN ({$in})");
             $pdo->commit();
         } catch (\Throwable $e) {

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Support;
 
 use App\Domain\Auth\RemoteIdentity;
+use App\Domain\TwoStep\Totp;
 use CodeIgniter\Test\CIUnitTestCase;
 use CodeIgniter\Test\DatabaseTestTrait;
 use Config\Remote as RemoteConfig;
@@ -47,6 +48,9 @@ abstract class RemoteTestCase extends CIUnitTestCase
         'remote_context_tokens',
         'remote_device_challenges',
         'remote_devices',
+        'remote_two_step_verifications',
+        'remote_user_recovery_codes',
+        'remote_user_two_step',
         'remote_user_permissions',
         'remote_role_permissions',
         'remote_entitlements',
@@ -107,6 +111,11 @@ abstract class RemoteTestCase extends CIUnitTestCase
         // The suite covers desktop agents, so they start on here whatever the
         // environment says; a test about the switch turns it off.
         $config->featureDesktopAgent = true;
+        // The test signalling secret is too short to derive a two-step key from
+        // (SecretCipher::MINIMUM_SECRET_LENGTH), so the suite names one of its own;
+        // TwoStepCipherTest and TwoStepApiTest cover the derivation from the
+        // signalling secret, and a test about having no key empties this.
+        $config->twoStepKey = 'test-two-step-key-0123456789abcdef0123456789';
         $mutate($config);
 
         Services::injectMock('remoteConfig', $config);
@@ -120,7 +129,7 @@ abstract class RemoteTestCase extends CIUnitTestCase
             'devicePresenceService', 'deviceHistory',
             'supportRequestService', 'signallingTokenService', 'iceConfigService',
             'sourceContextVerifier', 'platformDirectory', 'portalClient',
-            'membershipVerifier', 'manageClient',
+            'membershipVerifier', 'manageClient', 'twoStep',
         ] as $service) {
             Services::injectMock($service, null);
         }
@@ -145,6 +154,45 @@ abstract class RemoteTestCase extends CIUnitTestCase
         )->getRowArray();
 
         return new RemoteIdentity((int) $row['id'], $uuid, $name, $email, $isSupportAgent, $isPlatformAdmin);
+    }
+
+    // ---------------------------------------------- two-step verification
+
+    /** @var array<int, string> identity id => the verification token their browser holds */
+    protected array $twoStepTokens = [];
+
+    /**
+     * Turn two-step verification on for somebody through the real service —
+     * enrol, then confirm with the code their authenticator would show — and
+     * make the verification it issues this request's, so the service calls that
+     * follow (switching unattended access on, connecting) are made by a browser
+     * that has just passed it. {@see DeviceApiRequests::asPerson()} sends it on
+     * every request as that person, too.
+     *
+     * @return array{secret: string, recoveryCodes: list<string>, token: string}
+     */
+    protected function turnOnTwoStep(RemoteIdentity $identity): array
+    {
+        $twoStep = Services::twoStep();
+        $secret  = $twoStep->enrol($identity)['secret'];
+        $result  = $twoStep->confirm($identity, Totp::at((string) Totp::base32Decode($secret), time()));
+
+        $this->twoStepTokens[$identity->id] = $result['token'];
+        $this->actAsTwoStepVerified($identity);
+
+        return ['secret' => $secret, 'recoveryCodes' => $result['recoveryCodes'], 'token' => $result['token']];
+    }
+
+    /** Make the next service call come from this person's verified browser again (after a request as somebody else). */
+    protected function actAsTwoStepVerified(RemoteIdentity $identity): void
+    {
+        Services::requestContext()->setTwoStepToken($this->twoStepTokens[$identity->id] ?? null);
+    }
+
+    /** The code a person's authenticator shows, `$stepsAhead` time steps from now. */
+    protected function totpCode(string $base32Secret, int $stepsAhead = 0): string
+    {
+        return Totp::at((string) Totp::base32Decode($base32Secret), time() + $stepsAhead * Totp::PERIOD);
     }
 
     // ------------------------------------------------------------- companies

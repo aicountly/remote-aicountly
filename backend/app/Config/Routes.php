@@ -22,6 +22,13 @@ use CodeIgniter\Router\RouteCollection;
  *   `api-auth`         a signed-in AICOUNTLY user
  *   `api-auth:guest`   …or a guest holding a one-time session token
  *   `api-auth:optional` anonymous permitted
+ *   `api-auth:allow-unverified` a signed-in user whose browser has not yet
+ *                      passed two-step verification. Every other signed-in
+ *                      route refuses such a caller with TWO_STEP_REQUIRED
+ *                      (ApiAuthFilter), so this is the whole list of
+ *                      exemptions: the two-step routes, bootstrap, the
+ *                      legacy sign-in check, and switching unattended access
+ *                      off
  *   `device-auth`      an enrolled device holding a short-lived credential it
  *                      obtained by proving possession of its private key; the
  *                      argument names the scope the route needs
@@ -47,7 +54,10 @@ $routes->match(['get', 'post'], 'global/(:segment)/(:segment)', 'PortalRelayCont
     'filter' => 'rate-limit:portal-relay,30,60',
 ]);
 
-$routes->get('session', 'PortalRelayController::whoami', ['filter' => 'api-auth']);
+// The legacy "am I signed in" check (docs/auth/AICOUNTLY_AUTH_WORKFLOW.md): it answers with nothing
+// but the name and uuid the portal session already reveals, and it is how a sign-in is verified end to
+// end, so it does not wait for two-step verification.
+$routes->get('session', 'PortalRelayController::whoami', ['filter' => 'api-auth:allow-unverified']);
 
 // Manage's company registry for the shared company-access screens, relayed so the browser never
 // calls manage.aicountly.com (production hosting can answer that with a challenge page carrying no
@@ -71,10 +81,39 @@ $routes->post('internal/manage/company-lifecycle', 'Api\CompanyLifecycleControll
 
 $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static function (RouteCollection $routes): void {
     // --- Bootstrap and policy ---------------------------------------------
+    // Allowed before two-step verification so the web can learn it has to ask —
+    // and it then answers with who the person is and nothing of their data
+    // (BootstrapController).
     $routes->get('bootstrap', 'BootstrapController::index', [
-        'filter' => ['api-auth', 'remote-context'],
+        'filter' => ['api-auth:allow-unverified', 'remote-context'],
     ]);
     $routes->get('policy/effective', 'BootstrapController::effectivePolicy', ['filter' => 'api-auth']);
+
+    // --- Two-step verification (docs/SECURITY.md) ---------------------------
+    //
+    // Remote's own second step, on top of the portal sign-in. Each route acts on
+    // the caller's own account and nothing in a path or a body names a person,
+    // so there is nobody else's to reach. All of them are reachable before this
+    // browser has passed the step — they are how it passes — and each guards
+    // itself: verifying and switching off need a code, new recovery codes need a
+    // recent verification. Codes are guessed against a per-person lockout as
+    // well as these per-address limits.
+    $routes->get('me/two-step', 'TwoStepController::show', ['filter' => 'api-auth:allow-unverified']);
+    $routes->post('me/two-step/enrol', 'TwoStepController::enrol', [
+        'filter' => ['api-auth:allow-unverified', 'rate-limit:two-step-enrol,10,60'],
+    ]);
+    $routes->post('me/two-step/confirm', 'TwoStepController::confirm', [
+        'filter' => ['api-auth:allow-unverified', 'rate-limit:two-step-verify,10,60'],
+    ]);
+    $routes->post('me/two-step/verify', 'TwoStepController::verify', [
+        'filter' => ['api-auth:allow-unverified', 'rate-limit:two-step-verify,10,60'],
+    ]);
+    $routes->post('me/two-step/recovery-codes', 'TwoStepController::recoveryCodes', [
+        'filter' => ['api-auth:allow-unverified', 'rate-limit:two-step-recovery-codes,5,60'],
+    ]);
+    $routes->post('me/two-step/disable', 'TwoStepController::disable', [
+        'filter' => ['api-auth:allow-unverified', 'rate-limit:two-step-verify,10,60'],
+    ]);
 
     // --- Sessions ----------------------------------------------------------
     $routes->post('sessions', 'SessionController::create', [
@@ -289,7 +328,11 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
     $routes->patch('devices/(:segment)', 'DeviceController::update/$1', ['filter' => 'api-auth']);
     $routes->post('devices/(:segment)/revoke', 'DeviceController::revoke/$1', ['filter' => 'api-auth']);
     $routes->post('devices/(:segment)/unattended/enable', 'DeviceController::enableUnattended/$1', ['filter' => 'api-auth']);
-    $routes->post('devices/(:segment)/unattended/disable', 'DeviceController::disableUnattended/$1', ['filter' => 'api-auth']);
+    // Switching unattended access OFF never waits for two-step verification — not the step-up, and not the
+    // browser's own verification either: stopping a computer being reachable must never be harder than
+    // making it reachable, and somebody who has lost their phone may need to do exactly this. It still
+    // needs the portal session, and still answers 404 for a computer that is not the caller's.
+    $routes->post('devices/(:segment)/unattended/disable', 'DeviceController::disableUnattended/$1', ['filter' => 'api-auth:allow-unverified']);
     $routes->post('devices/(:segment)/connect', 'DeviceController::connect/$1', [
         'filter' => ['api-auth', 'rate-limit:device-connect,20,60'],
     ]);

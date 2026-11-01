@@ -6,6 +6,8 @@ namespace App\Filters;
 
 use App\Domain\Auth\GuestPrincipal;
 use App\Domain\Auth\PortalUnavailableException;
+use App\Domain\Support\ApiException;
+use App\Domain\TwoStep\TwoStepService;
 use CodeIgniter\Filters\FilterInterface;
 use CodeIgniter\HTTP\RequestInterface;
 use CodeIgniter\HTTP\ResponseInterface;
@@ -29,7 +31,24 @@ use Config\Services;
  *   * no argument — a signed-in AICOUNTLY user is required;
  *   * `guest`     — a guest token is accepted as well;
  *   * `optional`  — anonymous is allowed through, for endpoints that behave
- *                   differently when someone happens to be signed in.
+ *                   differently when someone happens to be signed in;
+ *   * `allow-unverified` — a signed-in user who has two-step verification on
+ *                   is let through before this browser has passed it (below).
+ *
+ * **Two-step verification is enforced here**, straight after the portal has
+ * said who the caller is, rather than by a filter each route has to remember:
+ * a route added next year is covered without anybody thinking about it, and
+ * the exemptions are the ones written down in Routes.php with `allow-unverified`
+ * — the two-step routes themselves, bootstrap (so the web learns it has to
+ * ask), the legacy sign-in check, and switching unattended access off (which
+ * must never be harder than switching it on). Sign-out never reaches this
+ * filter: it is the portal relay.
+ *
+ * A person with it on whose browser has not passed it — no
+ * `X-Remote-Two-Step` token, an expired one, or somebody else's — is answered
+ * `403 TWO_STEP_REQUIRED`, and the web asks for a code and tries again. Guests
+ * and devices never get here: a guest has no account to protect, and a device
+ * is the machine itself, proven by its own key ({@see DeviceAuthFilter}).
  */
 class ApiAuthFilter implements FilterInterface
 {
@@ -39,6 +58,10 @@ class ApiAuthFilter implements FilterInterface
     {
         $context = Services::requestContext();
         $modes   = array_map('strtolower', (array) ($arguments ?? []));
+
+        // Whatever an earlier request in the same process left is not this one's.
+        $context->setTwoStepToken(null);
+        $context->setTwoStep(null);
 
         $token = $this->bearerToken($request);
 
@@ -94,6 +117,18 @@ class ApiAuthFilter implements FilterInterface
 
         $context->setIdentity($identity);
         $context->setSesKey($token);
+        $context->setTwoStepToken(trim($request->getHeaderLine(TwoStepService::HEADER)));
+
+        try {
+            $standing = Services::twoStep()->standing($identity, $context->twoStepToken());
+        } catch (ApiException $e) {
+            return SecurityHeadersFilter::apply($e->getResponse());
+        }
+        $context->setTwoStep($standing);
+
+        if ($standing->blocksRequest() && ! in_array('allow-unverified', $modes, true)) {
+            return $this->twoStepRequired();
+        }
 
         return null;
     }
@@ -139,6 +174,24 @@ class ApiAuthFilter implements FilterInterface
                     'code'    => 'AUTH_UNAVAILABLE',
                     'message' => 'The AICOUNTLY sign-in service did not answer, so your session could not be checked. You are still signed in; please retry in a moment.',
                     'details' => ['retryable' => true],
+                ]]),
+        );
+    }
+
+    /**
+     * Signed in, but this browser has not passed two-step verification. Not a
+     * 401: the portal session is good and must be kept; what is missing is the
+     * second step, which the web asks for and then retries the same call.
+     */
+    private function twoStepRequired(): ResponseInterface
+    {
+        return SecurityHeadersFilter::apply(
+            service('response')
+                ->setStatusCode(403)
+                ->setJSON(['error' => [
+                    'code'    => 'TWO_STEP_REQUIRED',
+                    'message' => 'Two-step verification is on for your AICOUNTLY Remote account. Enter the code from your authenticator app, or a recovery code, to continue.',
+                    'details' => ['reason' => 'SESSION'],
                 ]]),
         );
     }

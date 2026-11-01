@@ -36,7 +36,11 @@ trait DeviceApiRequests
         $sesKey = 'ses-key-' . $identity->id;
         $this->signedIn->register($sesKey, $identity);
 
-        return ['Authorization' => 'Bearer ' . $sesKey];
+        // A person who turned two-step verification on in this test (turnOnTwoStep())
+        // calls from the browser that passed it, as the web does.
+        $twoStep = $this->twoStepTokens[$identity->id] ?? null;
+
+        return ['Authorization' => 'Bearer ' . $sesKey] + ($twoStep !== null ? ['X-Remote-Two-Step' => $twoStep] : []);
     }
 
     /**

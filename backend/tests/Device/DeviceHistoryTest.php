@@ -42,6 +42,9 @@ final class DeviceHistoryTest extends RemoteTestCase
         $this->computer = $this->enrolDevice($this->owner, null, ['deviceName' => 'Meera laptop']);
         $this->uuid     = (string) $this->computer['device']['uuid'];
         $this->markDeviceOnline($this->uuid);
+
+        // Switching unattended access on and connecting both need two-step verification.
+        $this->turnOnTwoStep($this->owner);
     }
 
     private function principal(): DevicePrincipal

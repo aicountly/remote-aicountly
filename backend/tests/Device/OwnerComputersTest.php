@@ -31,6 +31,7 @@ final class OwnerComputersTest extends RemoteTestCase
         $office = $this->enrolDevice($owner, null, ['deviceName' => 'Attic server']);
         $home   = $this->enrolDevice($owner, null, ['deviceName' => 'bedroom PC']);
         $this->markDeviceOnline((string) $laptop['device']['uuid']);
+        $this->turnOnTwoStep($owner);
         Services::deviceService()->enableUnattended($owner, (string) $home['device']['uuid'], true);
 
         $data = $this->dataOf($this->getJson($this->asDevice($laptop), 'devices/me/computers'));

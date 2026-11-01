@@ -40,6 +40,7 @@ vi.mock('../../services/api/remote', () => ({
     },
   })),
   connectToDevice: vi.fn(),
+  fetchTwoStepStatus: vi.fn(async () => ({ enabled: false, available: true })),
   disableUnattendedAccess: vi.fn(),
   enableUnattendedAccess: vi.fn(),
   revokeDevice: vi.fn(),
