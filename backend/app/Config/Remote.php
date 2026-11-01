@@ -150,6 +150,65 @@ class Remote extends BaseConfig
     public int $desktopSignInPollIntervalSeconds = 2;
 
     // -----------------------------------------------------------------------
+    // Two-step verification (docs/SECURITY.md, "Two-step verification")
+    // -----------------------------------------------------------------------
+
+    /**
+     * Key material for the authenticator secrets Remote keeps, encrypted, for
+     * people who turned two-step verification on.
+     *
+     * Empty is the normal production arrangement: the key is then derived, by
+     * HKDF with its own label, from `remote.signallingSecret`, which every
+     * working deployment already has (no live session connects without it),
+     * which never leaves this server except to the signalling service on the
+     * same host and the same account, and which is long and random. Deriving
+     * it means a hand-edited `api/.env` needs no new line on the day this
+     * ships — and the label keeps the two keys unrelated, so the derived key
+     * reveals nothing about the signalling secret and the other way round.
+     *
+     * Setting this (at least 32 characters, `openssl rand -base64 48`)
+     * decouples the two: do it before rotating the signalling secret, with the
+     * old signalling secret in {@see $twoStepPreviousKeys}, or every stored
+     * authenticator secret becomes unreadable at once.
+     */
+    public string $twoStepKey = '';
+
+    /**
+     * Earlier values of whichever secret the key was derived from, so stored
+     * secrets sealed under them can still be read after a rotation (and are
+     * re-sealed under the current key the next time they are used, or by
+     * `php spark remote:two-step rekey`). Comma separated.
+     *
+     * @var list<string>
+     */
+    public array $twoStepPreviousKeys = [];
+
+    /** What an authenticator app lists the entry under. A sandbox can say so. */
+    public string $twoStepIssuer = 'AICOUNTLY Remote';
+
+    /**
+     * How long one successful verification keeps a browser verified.
+     *
+     * A working day: long enough that somebody is asked once a morning rather
+     * than once a page, short enough that a browser left signed in overnight
+     * has to prove itself again. It never outlives the portal sign-in either —
+     * a request with no valid `ses_key` is refused before this is looked at.
+     */
+    public int $twoStepSessionLifetimeSeconds = 43200;
+
+    /**
+     * Step-up: how recent a verification must be for the few acts that make a
+     * stolen session worth most — turning unattended access on for a computer,
+     * and issuing new recovery codes. Connecting to a computer with nobody at
+     * it needs a verification that is still within its lifetime.
+     */
+    public int $twoStepStepUpSeconds = 600;
+
+    /** Wrong codes in a row before verification is locked, and for how long. */
+    public int $twoStepMaxFailures = 5;
+    public int $twoStepLockoutSeconds = 900;
+
+    // -----------------------------------------------------------------------
     // ICE (§20). Never hardcode a credential — these come from .env.
     // -----------------------------------------------------------------------
 
@@ -331,6 +390,16 @@ class Remote extends BaseConfig
         $this->desktopUpdateFeedUrl          = rtrim($this->envString('remote.desktopUpdateFeedUrl', ''), '/');
         $this->desktopSignInCodeTtlSeconds   = $this->envInt('remote.desktopSignInCodeTtl', $this->desktopSignInCodeTtlSeconds);
         $this->desktopSignInPollIntervalSeconds = $this->envInt('remote.desktopSignInPollInterval', $this->desktopSignInPollIntervalSeconds);
+
+        $this->twoStepKey          = $this->envString('remote.twoStepKey', '');
+        $this->twoStepPreviousKeys = $this->envList('remote.twoStepPreviousKeys');
+        $this->twoStepIssuer       = $this->envString('remote.twoStepIssuer', $this->twoStepIssuer);
+        // Floors as well as defaults: a lifetime of a few seconds would ask for a
+        // code on every page, and a lockout of none would make the counter pointless.
+        $this->twoStepSessionLifetimeSeconds = max(300, $this->envInt('remote.twoStepSessionLifetime', $this->twoStepSessionLifetimeSeconds));
+        $this->twoStepStepUpSeconds          = max(60, min($this->twoStepSessionLifetimeSeconds, $this->envInt('remote.twoStepStepUpSeconds', $this->twoStepStepUpSeconds)));
+        $this->twoStepMaxFailures            = max(1, $this->envInt('remote.twoStepMaxFailures', $this->twoStepMaxFailures));
+        $this->twoStepLockoutSeconds         = max(60, $this->envInt('remote.twoStepLockoutSeconds', $this->twoStepLockoutSeconds));
 
         $stun = $this->envList('remote.stunUrls');
         if ($stun !== []) {

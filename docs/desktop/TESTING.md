@@ -156,6 +156,18 @@ Read this rather than assuming the test count covers it.
   `desktop/scripts/interop/` streams synthetic frames to headless Chromium and
   checks `framesDecoded`. Capturing a real screen is a step in
   `desktop/tests/MANUAL.md`.
+* **The tests encode with OpenH264 compiled from source, not Cisco's binary.**
+  The application loads Cisco's binary, downloaded from Cisco
+  ([docs/legal/OPENH264.md](../legal/OPENH264.md)), and no test can reach
+  Cisco's server, so `remote-webrtc`'s dev-dependencies switch on its
+  test-only `bundled-openh264` feature and the encoder, loopback, interop and
+  benchmark tests run on that. The download is tested against a local HTTP
+  server — retries, the HTTPS-to-HTTP fallback, the size limits, a tampered
+  file, switching off mid-download — with a stand-in for the final load,
+  since the bytes are not a library; the `openh264` crate's own refusal of a
+  file it does not know is tested on the real loader. Loading Cisco's real
+  DLL or dylib — and, on a Mac, that a notarised build may — is a step for a
+  real Windows PC and a real Mac.
 * **There is no test against a running relay.** The signalling messages are
   parsed and asserted against the shapes `signalling/src/server.js` relays, and
   the session loop's join handling is tested; nothing in CI opens a socket to a

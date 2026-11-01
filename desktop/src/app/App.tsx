@@ -13,9 +13,11 @@ import { ConnectScreen } from '../features/connect/ConnectScreen'
 import { GetHelp, HelpAdmission } from '../features/help/GetHelp'
 import { PermissionsCard } from '../features/permissions/PermissionsCard'
 import { ScreenRecordingNotice } from '../features/permissions/ScreenRecordingNotice'
+import { CodecNotice } from '../features/session/CodecNotice'
 import { ControlRequest } from '../features/session/ControlRequest'
 import { SessionBanner } from '../features/session/SessionBanner'
 import { SettingsPage } from '../features/settings/SettingsPage'
+import { useCodec } from '../features/settings/useCodec'
 import { UnattendedCard } from '../features/unattended/UnattendedCard'
 import { Updates } from '../features/update/Updates'
 import * as bridge from '../services/tauri'
@@ -30,7 +32,7 @@ import type {
   MonitorOption,
   PermissionSummary,
 } from '../types/agent'
-import { activeCompanion, activeSession, isEnrolled, isUsable } from '../types/agent'
+import { activeCompanion, activeSession, codecReady, isEnrolled, isUsable } from '../types/agent'
 import { SignInScreen } from '../features/device/SignInScreen'
 
 type Screen = 'portal' | 'connect' | 'help' | 'home' | 'unattended' | 'settings' | 'register'
@@ -64,6 +66,9 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [shareClipboard, setShareClipboard] = useState(false)
+  // The "also let them answer Windows administrator prompts" box in the consent
+  // dialog. Off by default, reset after every decision, the same as clipboard.
+  const [answerSecureDesktop, setAnswerSecureDesktop] = useState(false)
   // Bumped to send the portal back to its dashboard (choosing "Remote" again),
   // or to a page this window chose: a computer to connect to, a code to join.
   const [portalHome, setPortalHome] = useState(0)
@@ -81,6 +86,9 @@ export default function App() {
   // A signed-in computer opens on the portal, once, when the window first
   // learns that it is signed in.
   const landed = useRef(false)
+  // Cisco's OpenH264, which this computer's screen is encoded with. Without
+  // it a session sends no picture, and this window says so.
+  const [codec] = useCodec()
 
   const refresh = useCallback(async () => {
     const [next, perms] = await Promise.all([bridge.getState(), bridge.getPermissions()])
@@ -373,10 +381,11 @@ export default function App() {
         // already answered elsewhere while this was on screen.
         if (!requesterUuid) throw new Error('That request is no longer waiting.')
 
-        setState(await bridge.grantControl(requesterUuid, shareClipboard))
+        setState(await bridge.grantControl(requesterUuid, shareClipboard, answerSecureDesktop))
         setShareClipboard(false)
+        setAnswerSecureDesktop(false)
       }),
-    [run, session, shareClipboard],
+    [run, session, shareClipboard, answerSecureDesktop],
   )
 
   const denyControl = useCallback(
@@ -384,6 +393,7 @@ export default function App() {
       run(async () => {
         setState(await bridge.denyControl())
         setShareClipboard(false)
+        setAnswerSecureDesktop(false)
       }),
     [run],
   )
@@ -619,6 +629,15 @@ export default function App() {
           busy={busy}
         />
 
+        {/*
+         * A session with no codec to encode the screen with sends no picture.
+         * Said right under the banner, to the person at this computer, with
+         * the setting that fixes it.
+         */}
+        {session && codec && !codecReady(codec) ? (
+          <CodecNotice codec={codec} context="session" onOpenSettings={() => setScreen('settings')} />
+        ) : null}
+
         {/* The companion's banner: who is controlling, and Stop. */}
         <CompanionBanner
           state={state}
@@ -667,6 +686,9 @@ export default function App() {
             clipboardAllowedByPolicy={allowed?.clipboard_sync ?? false}
             shareClipboard={shareClipboard}
             onShareClipboardChange={setShareClipboard}
+            secureDesktopSupported={about?.supportsHosting ?? false}
+            answerSecureDesktop={answerSecureDesktop}
+            onAnswerSecureDesktopChange={setAnswerSecureDesktop}
             onAllow={grantControl}
             onDeny={denyControl}
             busy={busy}
@@ -740,6 +762,8 @@ export default function App() {
             onStart={startHelp}
             onAnswer={answerHelp}
             onEnd={endHelp}
+            codec={codec}
+            onOpenSettings={() => setScreen('settings')}
             busy={busy}
           />
         ) : screen === 'unattended' ? (
@@ -755,6 +779,7 @@ export default function App() {
             config={config}
             about={about}
             onSave={(next) => run(async () => setConfig(await bridge.saveConfiguration(next)))}
+            onConfigChange={setConfig}
             busy={busy}
             error={error}
           />

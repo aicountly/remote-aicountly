@@ -35,6 +35,24 @@ describe('ConnectDevicePage', () => {
     expect(api.connectToDevice).toHaveBeenCalledWith('dev-1')
   })
 
+  it('links to the setting when the computer needs two-step verification and the person has not turned it on', async () => {
+    api.connectToDevice.mockImplementation(() =>
+      Promise.reject(
+        new RemoteApiError(
+          'TWO_STEP_SETUP_REQUIRED',
+          'Connecting to a computer with nobody at it needs two-step verification. Turn it on in Settings, under Two-step verification, then connect again.',
+          403,
+        ),
+      ),
+    )
+
+    renderAt('/connect/dev-1')
+
+    expect(await screen.findByText('Turn on two-step verification first')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Turn on two-step verification/ })).toHaveAttribute('href', '/settings#two-step')
+    expect(screen.getByRole('link', { name: 'Back to your computers' })).toBeInTheDocument()
+  })
+
   it('says why when the computer cannot be reached, with a way back', async () => {
     api.connectToDevice.mockImplementation(() =>
       Promise.reject(new RemoteApiError('DEVICE_OFFLINE', 'That device is not reachable at the moment.', 409)),

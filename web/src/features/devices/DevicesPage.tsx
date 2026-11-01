@@ -7,6 +7,7 @@ import {
   disableUnattendedAccess,
   enableUnattendedAccess,
   fetchDevices,
+  fetchTwoStepStatus,
   revokeDevice,
 } from '../../services/api/remote'
 import { RemoteApiError } from '../../services/api/client'
@@ -18,7 +19,8 @@ import Modal from '../../components/ui/Modal'
 import RestrictionNotice from '../../components/ui/RestrictionNotice'
 import DeviceRow from './DeviceRow'
 import DeviceHistory from './DeviceHistory'
-import type { DeviceListing, RemoteDevice } from '../../types/remote'
+import TwoStepSetupLink from '../twoStep/TwoStepSetupLink'
+import type { DeviceListing, RemoteDevice, TwoStepStatus } from '../../types/remote'
 import { PERMISSIONS } from '../../types/remote'
 
 /**
@@ -90,6 +92,27 @@ function DesktopAppNotice() {
 }
 
 /**
+ * Said before anybody presses "Allow unattended": reaching a computer with
+ * nobody at it needs Remote's own two-step verification, and this person has
+ * not turned it on. With the link, so it is one step rather than a search.
+ */
+export function UnattendedNeedsTwoStep() {
+  return (
+    <div className="notice notice--info" role="note">
+      <p className="notice__title">Unattended access needs two-step verification</p>
+      <p className="notice__body">
+        To connect to a computer with nobody at it, Remote asks for a code from an authenticator app on your phone as
+        well as your AICOUNTLY sign-in — so somebody who has your password still cannot reach your computers. Turn it on
+        first, then come back here.
+      </p>
+      <p className="notice__body">
+        <TwoStepSetupLink />
+      </p>
+    </div>
+  )
+}
+
+/**
  * "3 computers registered · 2 online", counting the ones still registered —
  * a removed computer is listed, but it is no longer one of yours.
  */
@@ -114,8 +137,26 @@ export default function DevicesPage() {
     null,
   )
   const [historyOf, setHistoryOf] = useState<RemoteDevice | null>(null)
+  const [twoStep, setTwoStep] = useState<TwoStepStatus | null>(null)
 
   const personal = scopeType !== 'COMPANY' || companyId === null
+
+  // Whether to say, up front, that unattended access needs two-step
+  // verification. Read fresh rather than from bootstrap, which predates a
+  // person who has just turned it on in Settings. A failure only means the
+  // notice is not shown: the server still refuses, and says why.
+  useEffect(() => {
+    let cancelled = false
+    fetchTwoStepStatus().then(
+      (status) => {
+        if (!cancelled) setTwoStep(status)
+      },
+      () => undefined,
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -202,7 +243,20 @@ export default function DevicesPage() {
           </p>
         </header>
 
-        {error ? <RestrictionNotice error={error} /> : null}
+        {error ? (
+          <RestrictionNotice
+            error={error}
+            action={error.code === 'TWO_STEP_SETUP_REQUIRED' ? <TwoStepSetupLink /> : undefined}
+          />
+        ) : null}
+
+        {policy?.allowUnattendedAccess &&
+        devices.length > 0 &&
+        twoStep &&
+        !twoStep.enabled &&
+        error?.code !== 'TWO_STEP_SETUP_REQUIRED' ? (
+          <UnattendedNeedsTwoStep />
+        ) : null}
 
         {!loading && devices.length === 0 ? <DesktopAppNotice /> : null}
 
@@ -293,6 +347,10 @@ export default function DevicesPage() {
           <li>AICOUNTLY Remote still shows on that computer that a session is running.</li>
           <li>
             It can be turned off again from this page, or by whoever is at the machine, at any time.
+          </li>
+          <li>
+            It needs two-step verification: you will be asked for a code from your authenticator app if you have not
+            entered one in the last few minutes, and again whenever this browser’s verification has run out.
           </li>
         </ul>
       </Modal>

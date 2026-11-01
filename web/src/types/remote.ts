@@ -334,7 +334,50 @@ export interface Bootstrap {
   recentSessions: RemoteSession[];
   features: FeatureFlags;
   realtime: { signallingConfigured: boolean; relayAvailable: boolean };
+  /**
+   * Remote's own two-step verification, as it stands for this browser. With it
+   * on and this browser not yet verified, the rest of this bootstrap is
+   * deliberately empty of the person's data, and the web asks for a code.
+   */
+  twoStep?: TwoStepSummary;
 }
+
+export interface TwoStepSummary {
+  enabled: boolean;
+  sessionVerified: boolean;
+  verifiedUntil: string | null;
+}
+
+/** `GET /me/two-step`. */
+export interface TwoStepStatus extends TwoStepSummary {
+  /** Started, and waiting for a first code to confirm it. */
+  pending: boolean;
+  /** False only on a server with no key to protect a secret with. */
+  available: boolean;
+  confirmedAt: string | null;
+  recoveryCodesLeft: number;
+  verifiedAt: string | null;
+  lockedUntil: string | null;
+}
+
+/** `POST /me/two-step/enrol` — shown once, while turning it on. */
+export interface TwoStepEnrolment {
+  secret: string;
+  otpauthUri: string;
+}
+
+export interface TwoStepVerification {
+  verificationToken: string;
+  verifiedAt: string;
+  verifiedUntil: string;
+}
+
+export interface TwoStepConfirmation extends TwoStepVerification {
+  /** Ten one-time codes, shown once. */
+  recoveryCodes: string[];
+}
+
+export type TwoStepProof = { code: string } | { recoveryCode: string };
 
 export interface SessionEvent {
   eventType: string;

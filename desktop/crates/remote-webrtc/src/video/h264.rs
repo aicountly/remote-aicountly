@@ -1,34 +1,42 @@
 //! The H.264 encoder: OpenH264, configured for a remote desktop.
 //!
-//! # Licensing — read this before shipping a build
+//! # Licensing — read this before changing how the encoder is obtained
 //!
-//! OpenH264's *code* is BSD-2-Clause, which this product can ship. H.264 is
-//! also covered by patents, licensed through the AVC/H.264 patent pool (Via
-//! Licensing Alliance, formerly MPEG LA), and that is a separate question the
-//! code licence does not answer.
+//! OpenH264's *code* is BSD-2-Clause. H.264 is also covered by patents,
+//! licensed through the AVC/H.264 patent pool (Via Licensing Alliance,
+//! formerly MPEG LA), and that is a separate question the code licence does
+//! not answer.
 //!
-//! Cisco pays the pool's royalties for one thing only: **Cisco's own
-//! prebuilt OpenH264 binary**, downloaded from Cisco by the machine that runs
-//! it. This build does not use that binary. The `openh264` crate's default
-//! `source` feature compiles OpenH264 from the C++ in the crate, so the
-//! encoder that ships inside the agent is ours, and Cisco's licence does not
-//! cover it. Distributing it means AICOUNTLY holds — or decides it does not
-//! need — its own AVC licence: the pool's terms have historically included a
-//! royalty-free tier for a small number of units a year and per-unit fees
-//! above it, and some of the essential patents have expired in some
-//! countries. That is a decision for whoever signs off the release, with
-//! advice, not one this comment can make.
+//! Cisco pays the pool's royalties for one thing only: **Cisco's own prebuilt
+//! OpenH264 binary**, downloaded from Cisco onto the end user's device, and
+//! used by software that meets the four conditions in Cisco's licence text
+//! (`desktop/legal/OPENH264_BINARY_LICENSE.txt`). So that is what this
+//! encoder runs, and the only thing it runs in a build that ships:
 //!
-//! The alternative is the crate's `libloading` feature: the agent ships
-//! without an encoder and loads Cisco's binary at run time, which must be
-//! downloaded from Cisco (`ciscobinary.openh264.org`) on the customer's
-//! machine — not bundled in our installer — and checked against the hash the
-//! crate pins, for Cisco's licence to apply. That is a download on first use,
-//! a network dependency at install time, and a library loaded from disk into
-//! a process that injects input, which is why it is not the default here.
-//! Switching is a change to `desktop/Cargo.toml` and to `H264Encoder::build`
-//! (`OpenH264API::from_blob_path` in place of `from_source`), and to nothing
-//! else.
+//! * the application contains no encoder. `openh264` is built with its
+//!   `libloading` feature alone, so no OpenH264 C++ is compiled into it, and
+//!   nothing in the installer is Cisco's binary;
+//! * [`super::cisco::CodecManager`] downloads the binary for this platform from
+//!   `ciscobinary.openh264.org` onto the person's computer, checks its SHA-256
+//!   against the hash pinned for OpenH264 2.6.0 and against the crate's own
+//!   list, and loads it through `OpenH264API::from_blob_path`;
+//! * every encoder takes it from one [`CodecSource`], checking the file again
+//!   as it does, and lets go of it at the next frame when the person switches
+//!   it off in App settings — beside the sentence "OpenH264 Video Codec
+//!   provided by Cisco Systems, Inc.", with the licence text in About.
+//!
+//! Without the codec there is no picture: [`H264Encoder::encode`] returns
+//! [`VideoError::CodecUnavailable`], which the session reports as
+//! [`super::CODEC_UNAVAILABLE`] and the window turns into a notice naming the
+//! setting. docs/legal/OPENH264.md sets out the arrangement and where each of
+//! Cisco's conditions is met.
+//!
+//! The tests compile OpenH264 from source instead (the `bundled-openh264`
+//! feature, `CodecSource::bundled`), because they run where Cisco's server
+//! cannot be reached. That feature is switched on by this crate's
+//! dev-dependencies and by nothing else; a build of ours that shipped with it
+//! would be outside Cisco's licence, which is the whole reason it is not in
+//! the application's dependency graph.
 //!
 //! # The configuration, and why
 //!
@@ -72,6 +80,7 @@ use openh264::{OpenH264API, Timestamp};
 use remote_device::{CaptureProfile, Frame};
 
 use super::annexb::{self, NAL_IDR, NAL_PPS, NAL_SPS};
+use super::codec::CodecSource;
 use super::convert::{convert_into, encoded_size, ConvertError, I420Picture};
 use super::pacing::{FrameGate, KeyframeReason, KeyframeSchedule, MediaClock};
 
@@ -86,6 +95,11 @@ pub enum VideoError {
     /// a parameter or an error code and never contains pixels.
     #[error("the encoder failed: {0}")]
     Encoder(String),
+
+    /// There is no OpenH264 to encode with: Cisco's codec has not been
+    /// downloaded, could not be, failed its check, or was switched off.
+    #[error("{}", super::CODEC_UNAVAILABLE)]
+    CodecUnavailable,
 }
 
 /// One encoded picture: an H.264 access unit in Annex-B framing.
@@ -142,12 +156,18 @@ pub struct EncoderStats {
 /// rebuilt whenever the size or the profile changes — a fresh encoder rather
 /// than a reconfigured one, because a new size needs a new SPS and an IDR
 /// anyway, and a fresh instance is the one state OpenH264 is certain to get
-/// right.
+/// right. It is rebuilt, too, whenever the codec in its [`CodecSource`]
+/// changes: let go of when the person switches the codec off, and picked up
+/// when it arrives.
 pub struct H264Encoder {
     profile: CaptureProfile,
+    /// Where OpenH264 comes from.
+    codec: CodecSource,
     encoder: Option<Encoder>,
     /// The size `encoder` was built for.
     built_for: (u32, u32),
+    /// The codec generation `encoder` was built from.
+    built_from: u64,
     picture: I420Picture,
     clock: MediaClock,
     gate: FrameGate,
@@ -160,13 +180,16 @@ pub struct H264Encoder {
 }
 
 impl H264Encoder {
-    /// An encoder for `profile`. Nothing is allocated until the first frame.
+    /// An encoder for `profile`, building OpenH264 from whatever `codec`
+    /// holds. Nothing is allocated, and nothing loaded, until the first frame.
     #[must_use]
-    pub fn new(profile: CaptureProfile) -> Self {
+    pub fn new(profile: CaptureProfile, codec: CodecSource) -> Self {
         Self {
             profile,
+            codec,
             encoder: None,
             built_for: (0, 0),
+            built_from: 0,
             picture: I420Picture::new(),
             clock: MediaClock::new(),
             gate: FrameGate::new(),
@@ -222,13 +245,21 @@ impl H264Encoder {
     /// # Errors
     ///
     /// [`VideoError::Convert`] for a frame that does not describe its own
-    /// bytes or is in a layout this does not take, and
-    /// [`VideoError::Encoder`] if OpenH264 refuses.
+    /// bytes or is in a layout this does not take,
+    /// [`VideoError::CodecUnavailable`] when there is no OpenH264 to encode
+    /// with, and [`VideoError::Encoder`] if OpenH264 refuses.
     pub fn encode(
         &mut self,
         frame: &Frame,
         now: Instant,
     ) -> Result<Option<EncodedFrame>, VideoError> {
+        // The codec was switched off, or replaced, since this encoder was
+        // built: let go of the old instance — and with it this encoder's hold
+        // on the library — now, not at the next size change.
+        if self.encoder.is_some() && self.codec.generation() != self.built_from {
+            self.encoder = None;
+        }
+
         // Checked before anything else, so a malformed frame cannot so much
         // as move the clock.
         if !frame.is_well_formed() {
@@ -251,13 +282,27 @@ impl H264Encoder {
             .into());
         }
 
+        // Nothing to encode with: said before the conversion, which would be
+        // work for nothing.
+        if self.encoder.is_none() && !self.codec.is_ready() {
+            self.codec.want();
+
+            return Err(VideoError::CodecUnavailable);
+        }
+
         let size = encoded_size(&self.profile, frame.width, frame.height);
 
         convert_into(frame, size, &mut self.picture)?;
 
         if self.encoder.is_none() || self.built_for != size {
-            self.encoder = Some(Self::build(&self.profile, size)?);
+            // Dropped first, so the old instance is gone before a new one is
+            // asked for.
+            self.encoder = None;
+
+            let (api, generation) = self.codec.api()?;
+            self.encoder = Some(Self::build(api, &self.profile, size)?);
             self.built_for = size;
+            self.built_from = generation;
             self.parameter_sets.clear();
             self.keyframes.restart();
             self.stats.encoder_builds += 1;
@@ -341,8 +386,12 @@ impl H264Encoder {
         complete
     }
 
-    /// An OpenH264 encoder for `size` under `profile`.
-    fn build(profile: &CaptureProfile, (width, height): (u32, u32)) -> Result<Encoder, VideoError> {
+    /// An OpenH264 encoder for `size` under `profile`, on `api`.
+    fn build(
+        api: OpenH264API,
+        profile: &CaptureProfile,
+        (width, height): (u32, u32),
+    ) -> Result<Encoder, VideoError> {
         // Adaptive quantisation and background detection are camera-mode
         // features that OpenH264 switches off for screen content anyway —
         // with a warning on stderr for every encoder built — so they are off
@@ -371,9 +420,10 @@ impl H264Encoder {
                     .full_range(false),
             );
 
-        // Compiled from source: see the licensing note at the top of this
-        // file before changing this to Cisco's binary or back.
-        Encoder::with_api_config(OpenH264API::from_source(), config)
+        // Cisco's binary, as the codec source loaded and checked it — see the
+        // licensing note at the top of this file before changing where it
+        // comes from.
+        Encoder::with_api_config(api, config)
             .map_err(|error| VideoError::Encoder(error.to_string()))
     }
 }
@@ -382,6 +432,7 @@ impl std::fmt::Debug for H264Encoder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("H264Encoder")
             .field("profile", &self.profile)
+            .field("codec", &self.codec)
             .field("built_for", &self.built_for)
             .field("stats", &self.stats)
             .finish_non_exhaustive()
@@ -414,7 +465,7 @@ impl YUVSource for I420Picture {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "bundled-openh264"))]
 mod tests {
     use std::time::Duration;
 
@@ -426,6 +477,58 @@ mod tests {
     use crate::video::testing::{busy_pattern, pattern};
 
     const FRAME_US: u64 = 33_333;
+
+    /// An encoder on OpenH264 compiled from source: these tests run where
+    /// Cisco's server cannot be reached.
+    fn bundled(profile: CaptureProfile) -> H264Encoder {
+        H264Encoder::new(profile, CodecSource::bundled())
+    }
+
+    /// Without a codec there is no picture, and the encoder says so — before
+    /// it spends anything converting the frame. The moment one arrives it is
+    /// used, starting with an IDR; switched off again, it is let go of at the
+    /// next frame rather than kept.
+    #[test]
+    fn without_a_codec_the_encoder_says_so_and_follows_it_coming_and_going() {
+        let source = CodecSource::empty();
+        let mut encoder = H264Encoder::new(CaptureProfile::adaptive(), source.clone());
+        let start = Instant::now();
+        let frame = |index: u64| pattern(64, 64, index, index * FRAME_US);
+        let at = |index: u64| start + Duration::from_micros(index * FRAME_US);
+
+        assert_eq!(
+            encoder.encode(&frame(0), at(0)).unwrap_err(),
+            VideoError::CodecUnavailable
+        );
+        assert_eq!(encoder.stats().encoder_builds, 0);
+        assert_eq!(
+            VideoError::CodecUnavailable.to_string(),
+            crate::video::CODEC_UNAVAILABLE
+        );
+
+        source.set(Some(crate::video::codec::Codec::Bundled));
+        let first = encoder
+            .encode(&frame(1), at(1))
+            .expect("encodes")
+            .expect("not skipped");
+        assert!(first.keyframe && is_self_contained_keyframe(&first.data));
+        assert_eq!(encoder.stats().encoder_builds, 1);
+
+        source.set(None);
+        assert_eq!(
+            encoder.encode(&frame(2), at(2)).unwrap_err(),
+            VideoError::CodecUnavailable,
+            "switched off: the encoder built from it is not used again"
+        );
+
+        source.set(Some(crate::video::codec::Codec::Bundled));
+        let again = encoder
+            .encode(&frame(3), at(3))
+            .expect("encodes")
+            .expect("not skipped");
+        assert!(again.keyframe, "a new instance starts with an IDR");
+        assert_eq!(encoder.stats().encoder_builds, 2);
+    }
 
     /// Encode `count` frames of the pattern, 30 fps of capture time apart.
     fn encode_run(
@@ -457,7 +560,7 @@ mod tests {
     /// Annex-B, and it decodes at the size it says.
     #[test]
     fn the_first_frame_is_a_self_contained_idr() {
-        let mut encoder = H264Encoder::new(CaptureProfile::adaptive());
+        let mut encoder = bundled(CaptureProfile::adaptive());
         let frames = encode_run(&mut encoder, (96, 64), 0, 1);
         let first = &frames[0];
 
@@ -478,7 +581,7 @@ mod tests {
     /// constraint_set1 — which is what `profile-level-id=42e01f` promised.
     #[test]
     fn the_stream_is_constrained_baseline() {
-        let mut encoder = H264Encoder::new(CaptureProfile::adaptive());
+        let mut encoder = bundled(CaptureProfile::adaptive());
         let frames = encode_run(&mut encoder, (64, 64), 0, 1);
 
         let sps = annexb::nal_units(&frames[0].data)
@@ -493,7 +596,7 @@ mod tests {
     /// in order, and are much smaller than the IDR.
     #[test]
     fn p_frames_follow_and_decode() {
-        let mut encoder = H264Encoder::new(CaptureProfile::adaptive());
+        let mut encoder = bundled(CaptureProfile::adaptive());
         let frames = encode_run(&mut encoder, (128, 96), 0, 10);
         let mut decoder = Decoder::new().expect("decoder");
 
@@ -523,7 +626,7 @@ mod tests {
     /// An IDR every two seconds of capture time, on its own.
     #[test]
     fn a_keyframe_goes_out_every_two_seconds() {
-        let mut encoder = H264Encoder::new(CaptureProfile::adaptive());
+        let mut encoder = bundled(CaptureProfile::adaptive());
         let frames = encode_run(&mut encoder, (64, 64), 0, 125);
 
         let keyframes: Vec<u64> = frames
@@ -546,7 +649,7 @@ mod tests {
     /// A request is answered by the very next encoded frame.
     #[test]
     fn a_requested_keyframe_is_the_next_frame() {
-        let mut encoder = H264Encoder::new(CaptureProfile::adaptive());
+        let mut encoder = bundled(CaptureProfile::adaptive());
         let before = encode_run(&mut encoder, (64, 64), 0, 5);
         assert_eq!(before.iter().filter(|frame| frame.keyframe).count(), 1);
 
@@ -563,7 +666,7 @@ mod tests {
     /// different monitor, mid-session.
     #[test]
     fn a_new_size_rebuilds_the_encoder_with_an_idr() {
-        let mut encoder = H264Encoder::new(CaptureProfile::adaptive());
+        let mut encoder = bundled(CaptureProfile::adaptive());
         let mut decoder = Decoder::new().expect("decoder");
 
         let small = encode_run(&mut encoder, (64, 48), 0, 3);
@@ -592,7 +695,7 @@ mod tests {
     fn odd_and_oversized_frames_are_encoded_at_the_size_the_profile_allows() {
         let mut decoder = Decoder::new().expect("decoder");
 
-        let mut encoder = H264Encoder::new(CaptureProfile::adaptive());
+        let mut encoder = bundled(CaptureProfile::adaptive());
         let odd = encode_run(&mut encoder, (65, 33), 0, 1);
         assert_eq!((odd[0].width, odd[0].height), (64, 32));
         assert_eq!(decoded_size(&mut decoder, &odd[0].data), Some((64, 32)));
@@ -601,7 +704,7 @@ mod tests {
             max_dimension: 160,
             ..CaptureProfile::adaptive()
         };
-        let mut encoder = H264Encoder::new(small_ceiling);
+        let mut encoder = bundled(small_ceiling);
         let scaled = encode_run(&mut encoder, (640, 360), 0, 1);
         assert_eq!((scaled[0].width, scaled[0].height), (160, 90));
 
@@ -613,7 +716,7 @@ mod tests {
     /// white, black as limited-range black.
     #[test]
     fn colours_survive_encode_and_decode() {
-        let mut encoder = H264Encoder::new(CaptureProfile::adaptive());
+        let mut encoder = bundled(CaptureProfile::adaptive());
         let mut decoder = Decoder::new().expect("decoder");
         let start = Instant::now();
 
@@ -652,7 +755,7 @@ mod tests {
     /// anything, and the drop is not an error.
     #[test]
     fn frames_above_the_profiles_rate_are_dropped_not_queued() {
-        let mut encoder = H264Encoder::new(CaptureProfile::low_bandwidth());
+        let mut encoder = bundled(CaptureProfile::low_bandwidth());
         let start = Instant::now();
 
         for index in 0..60_u64 {
@@ -676,7 +779,7 @@ mod tests {
     /// encoder sees it.
     #[test]
     fn a_malformed_frame_is_an_error_not_a_crash() {
-        let mut encoder = H264Encoder::new(CaptureProfile::adaptive());
+        let mut encoder = bundled(CaptureProfile::adaptive());
         let mut frame = pattern(64, 64, 0, 0);
         frame.height = 640;
 
@@ -698,12 +801,15 @@ mod tests {
     ///
     /// ```text
     /// cd desktop
-    /// cargo test -p remote-webrtc --release --no-default-features --features openh264 \
+    /// cargo test -p remote-webrtc --release --no-default-features --features bundled-openh264 \
     ///     --lib encoding_fits_the_frame_interval -- --ignored --nocapture
     /// ```
     ///
-    /// `OPENH264_NO_ASM=1` in the environment builds OpenH264 without NASM,
-    /// which is what a Windows runner without `nasm` on its path produces.
+    /// It measures OpenH264 compiled from source (the tests cannot reach
+    /// Cisco), with NASM when `nasm` is on the path. Cisco's own binary is
+    /// built with its assembly, so this is the figure for the shipped
+    /// encoder only when NASM was there; `OPENH264_NO_ASM=1` in the
+    /// environment measures the plain-C build for comparison.
     #[test]
     #[ignore = "a release-build measurement; see the doc comment for the command"]
     fn encoding_fits_the_frame_interval() {
@@ -746,7 +852,7 @@ mod tests {
 
         for (width, height) in [(1920, 1080), (3024, 1964), (3840, 2160)] {
             let size = encoded_size(&profile, width, height);
-            let mut encoder = H264Encoder::new(profile);
+            let mut encoder = bundled(profile);
             let mut picture = I420Picture::new();
             let start = Instant::now();
             let (mut convert_us, mut p_frame_us, mut idr_us) = (Vec::new(), Vec::new(), Vec::new());

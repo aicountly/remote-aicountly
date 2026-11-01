@@ -7,6 +7,7 @@ import { router } from './app/router'
 import SignIn from './pages/SignIn'
 import AicountlyLogo from './components/brand/AicountlyLogo'
 import AnalyticsConsentBanner from './components/AnalyticsConsent'
+import TwoStepPrompt from './features/twoStep/TwoStepPrompt'
 
 /**
  * The application root.
@@ -45,6 +46,8 @@ export default function App() {
 }
 
 function AppContent({ status }: { status: Exclude<AuthStatus, 'loading'> }) {
+  const { signOut } = useAuth()
+
   if (status === 'signed-out') {
     return <SignIn />
   }
@@ -57,9 +60,13 @@ function AppContent({ status }: { status: Exclude<AuthStatus, 'loading'> }) {
     )
   }
 
+  // Remote's own two-step verification prompt sits beside the router, for the
+  // signed-in only: it is what a refused call or a locked bootstrap waits on,
+  // and while it asks, nothing behind it can be used (features/twoStep).
   return (
     <RemoteProvider>
       <RouterProvider router={router} />
+      <TwoStepPrompt onSignOut={signOut} />
     </RemoteProvider>
   )
 }

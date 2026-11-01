@@ -278,6 +278,20 @@ describe('decodeControlEnvelope', () => {
     expect(envelope?.m).toEqual({ type: 'control_ended', reason: 'stopped_locally' })
   })
 
+  it('reads a Secure Desktop notice, carrying both flags', () => {
+    const envelope = decodeControlEnvelope(
+      JSON.stringify({
+        v: 1,
+        s: 'session-1',
+        p: 'device-1',
+        n: 5,
+        m: { type: 'secure_desktop', active: true, reachable: false },
+      }),
+    )
+
+    expect(envelope?.m).toEqual({ type: 'secure_desktop', active: true, reachable: false })
+  })
+
   it('refuses another protocol version rather than guessing at it', () => {
     expect(decodeControlEnvelope(JSON.stringify({ v: 2, s: 'a', p: 'b', n: 1, m: {} }))).toBeNull()
   })

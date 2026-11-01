@@ -126,6 +126,20 @@ const PRESENTATION: Record<string, Presentation> = {
   TIMEOUT: { title: 'That took too long', alternatives: ['Try again'], tone: 'error' },
   UNAUTHENTICATED: { title: 'Your session has expired', alternatives: ['Sign in again'], tone: 'error' },
   SIGN_IN_REQUIRED: { title: 'Sign in to join this session', tone: 'restricted' },
+  // Remote's own two-step verification. The message says what the code is for;
+  // a screen that can link to the setting passes it as the action.
+  TWO_STEP_SETUP_REQUIRED: { title: 'Turn on two-step verification first', tone: 'restricted' },
+  TWO_STEP_REQUIRED: {
+    title: 'A code from your authenticator app is needed',
+    alternatives: ['Try again, and enter the code your app shows'],
+    tone: 'restricted',
+  },
+  TWO_STEP_LOCKED: { title: 'Too many wrong codes', alternatives: ['Wait, then try again'], tone: 'error' },
+  TWO_STEP_UNAVAILABLE: {
+    title: 'Two-step verification is not available on this server yet',
+    alternatives: ['Contact AICOUNTLY support'],
+    tone: 'error',
+  },
 }
 
 interface Props {

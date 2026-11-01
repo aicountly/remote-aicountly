@@ -86,6 +86,10 @@ final class UnattendedAccessTest extends RemoteTestCase
 
         ['device' => $device, 'secretKey' => $secretKey] = $this->enrolDevice($owner, $this->companyId);
 
+        // Switching unattended access on and connecting both need two-step verification
+        // (TwoStepUnattendedAccessTest); here the owner has it, and has just passed it.
+        $this->turnOnTwoStep($owner);
+
         return ['owner' => $owner, 'device' => $device, 'secretKey' => $secretKey];
     }
 

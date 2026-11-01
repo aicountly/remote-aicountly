@@ -186,6 +186,7 @@ type Snapshot = {
   connection: string
   remoteStream: MediaStream | null
   controlPaused: string | null
+  secureDesktop: { active: boolean; reachable: boolean } | null
   peers: Array<{ participantUuid: string }>
 }
 
@@ -389,6 +390,38 @@ describe('control companions in the engine', () => {
 
     engine.sendControlPointer({ x: 0.5, y: 0.5 }, true)
     expect(channel.sent.length).toBe(before + 1)
+
+    engine.dispose()
+  })
+
+  it('shows a Windows administrator prompt, and whether it can be answered here', async () => {
+    const { engine, signal, latest } = await startEngine('b-viewer')
+
+    await signal({ type: 'joined', peers: [companionPeer] })
+    engine.setControlTarget('c-companion', 'GRANTED')
+    await flush()
+
+    const channel = FakePeerConnection.instances[0].channels[0]
+    channel.open()
+    expect(engine.startControlling('c-companion')).toBe(true)
+
+    const deliver = (frame: string) => channel.onmessage?.({ data: frame })
+
+    // A notice claiming to be from somebody we are not controlling is ignored.
+    deliver(envelope({ type: 'secure_desktop', active: true, reachable: true }, 'someone-else'))
+    expect(latest().secureDesktop).toBeNull()
+
+    // A prompt that cannot be answered from here.
+    deliver(envelope({ type: 'secure_desktop', active: true, reachable: false }))
+    expect(latest().secureDesktop).toEqual({ active: true, reachable: false })
+
+    // Then an authorised helper connects: it becomes answerable.
+    deliver(envelope({ type: 'secure_desktop', active: true, reachable: true }))
+    expect(latest().secureDesktop).toEqual({ active: true, reachable: true })
+
+    // The prompt closes.
+    deliver(envelope({ type: 'secure_desktop', active: false, reachable: false }))
+    expect(latest().secureDesktop).toBeNull()
 
     engine.dispose()
   })

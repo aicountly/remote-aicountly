@@ -386,6 +386,50 @@ final class Presenter
     }
 
     /**
+     * Where the caller stands with two-step verification (`GET me/two-step`,
+     * and bootstrap's `twoStep`).
+     *
+     * `available` is false only on a server with no key to seal a secret with,
+     * so the setting can say so instead of offering a button that answers 503.
+     * Nothing here is a secret; the secret and the codes are returned only by
+     * the calls that create them, once.
+     *
+     * @param  array<string, mixed> $status from TwoStepService::status()
+     * @return array<string, mixed>
+     */
+    public static function twoStepStatus(array $status): array
+    {
+        return [
+            'enabled'           => (bool) $status['enabled'],
+            'pending'           => (bool) $status['pending'],
+            'available'         => (bool) $status['available'],
+            'confirmedAt'       => Clock::iso($status['confirmedAt'] ?? null),
+            'recoveryCodesLeft' => (int) $status['recoveryCodesLeft'],
+            'sessionVerified'   => (bool) $status['sessionVerified'],
+            'verifiedAt'        => Clock::iso($status['verifiedAt'] ?? null),
+            'verifiedUntil'     => Clock::iso($status['verifiedUntil'] ?? null),
+            'lockedUntil'       => Clock::iso($status['lockedUntil'] ?? null),
+        ];
+    }
+
+    /**
+     * A browser that has just passed the second step. `verificationToken` is
+     * shown here and nowhere else: the web keeps it and sends it back as
+     * `X-Remote-Two-Step`; the server keeps only its hash.
+     *
+     * @param  array{token: string, verifiedAt: int, verifiedUntil: int} $verification
+     * @return array<string, mixed>
+     */
+    public static function twoStepVerification(array $verification): array
+    {
+        return [
+            'verificationToken' => $verification['token'],
+            'verifiedAt'        => Clock::iso($verification['verifiedAt']),
+            'verifiedUntil'     => Clock::iso($verification['verifiedUntil']),
+        ];
+    }
+
+    /**
      * A registered device (§52).
      *
      * What is deliberately absent: the public key itself. An administrator

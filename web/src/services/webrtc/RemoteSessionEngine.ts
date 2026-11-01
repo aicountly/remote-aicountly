@@ -199,6 +199,13 @@ export interface EngineSnapshot {
    * reason the agent gave. Input sent meanwhile would be dropped, so none is.
    */
   controlPaused: string | null
+  /**
+   * Set while a Windows administrator prompt (the Secure Desktop) is open on the controlled
+   * machine. `active` is whether one is up; `reachable` is whether it can be answered from here —
+   * an authorised helper is forwarding it — or only by the person at the computer. `null` when no
+   * prompt is open, or the host never reported one.
+   */
+  secureDesktop: { active: boolean; reachable: boolean } | null
   network: NetworkStatus
   lastError: string | null
 }
@@ -363,6 +370,7 @@ export class RemoteSessionEngine {
     relayDenied: false,
     controllingPeerId: null,
     controlPaused: null,
+    secureDesktop: null,
     network: {
       path: 'unknown',
       relayNode: null,
@@ -818,7 +826,7 @@ export class RemoteSessionEngine {
     this.heldKeys = []
     this.control = null
 
-    this.patch({ controllingPeerId: null, controlPaused: null })
+    this.patch({ controllingPeerId: null, controlPaused: null, secureDesktop: null })
   }
 
   /**
@@ -942,6 +950,18 @@ export class RemoteSessionEngine {
 
     if (envelope.m.type === 'control_resumed' && this.control?.peerId === peerId) {
       this.patch({ controlPaused: null })
+    }
+
+    // A Windows administrator prompt opened or closed on the machine being controlled (the Secure
+    // Desktop). The agent sends this whenever it changes; the room shows it so the controller is
+    // not left looking at a frozen frame, and is told whether they can answer it or must ask the
+    // person at the computer. Closed (`active: false`) clears it.
+    if (envelope.m.type === 'secure_desktop' && this.control?.peerId === peerId) {
+      this.patch({
+        secureDesktop: envelope.m.active
+          ? { active: true, reachable: Boolean(envelope.m.reachable) }
+          : null,
+      })
     }
 
     if (envelope.m.type === 'monitor_layout') {

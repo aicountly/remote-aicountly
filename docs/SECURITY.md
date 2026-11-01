@@ -38,6 +38,10 @@ not let it do, is [desktop/SECURITY.md](desktop/SECURITY.md).
 * **Unattended access is never a remembered approval.** Its own entitlement,
   policy switch, permission and per-device setting, off by default, audited on
   every connection, and switchable off from the machine itself.
+* **A portal session alone does not reach a computer with nobody at it.**
+  Turning unattended access on needs Remote's own two-step verification passed
+  in the last ten minutes, and connecting needs it passed in that browser
+  within its lifetime — see [Two-step verification](#two-step-verification).
 * **A machine cannot grant itself anything.** A device declares its
   capabilities at enrolment and the server intersects that declaration with the
   plan and the policy on every read. The declaration is an upper bound.
@@ -59,10 +63,15 @@ not let it do, is [desktop/SECURITY.md](desktop/SECURITY.md).
   — on Windows or a Mac, as the *control companion* of the screen its owner
   shares from the browser (desktop/CONTROL_COMPANION.md) — and the interface
   says so rather than offering a button that would be refused.
-* **A UAC prompt cannot be answered remotely**, and no setting is changed to
-  make it possible. The Windows Secure Desktop is a boundary the agent detects
-  and does not cross — see
-  [desktop/WINDOWS_AGENT.md](desktop/WINDOWS_AGENT.md).
+* **A UAC prompt can be answered remotely only with explicit consent, and
+  without weakening UAC.** The Windows Secure Desktop is a boundary the app
+  cannot cross; the per-machine service crosses it the supported way, as a
+  SYSTEM helper process on `winsta0\winlogon`, and only while a session is
+  controlled and either the person at the computer ticked the consent box or
+  the owner enabled it for unattended connections. No UAC or policy setting is
+  changed, the pipe to the helper admits only the installed app in the console
+  session, and when it is not authorised the agent merely says a prompt is open.
+  See [desktop/WINDOWS_AGENT.md](desktop/WINDOWS_AGENT.md).
 * It **does not protect a machine an attacker already runs code on**. The
   device key protects the machine's *identity*; somebody who can read the key
   file can already read the screen.
@@ -74,6 +83,11 @@ not let it do, is [desktop/SECURITY.md](desktop/SECURITY.md).
   nothing on a server to scan. A received file is held as opaque bytes until the
   recipient presses Save, and the record shows who sent it — the controls are
   consent and the audit trail, not inspection.
+* It **cannot see or require the portal's own second factor.** Signing in is
+  the AICOUNTLY portal's (my.aicountly.com), another product: whether it asked
+  for a second factor is invisible to Remote. Remote's own two-step
+  verification is a step *after* that sign-in, for Remote only — it does not
+  protect the portal or any other AICOUNTLY product.
 * There is no "military-grade" anything here, and the interface says nothing of
   the kind.
 
@@ -81,12 +95,15 @@ not let it do, is [desktop/SECURITY.md](desktop/SECURITY.md).
 
 ## Authentication
 
-Remote issues no credential of its own. AICOUNTLY's portal owns identity.
+AICOUNTLY's portal owns identity. The one credential Remote issues to a person
+is its own two-step verification token — proof of a second step, never a
+sign-in on its own ([below](#two-step-verification)).
 
 | Credential | Lifetime | Stored | Purpose |
 |---|---|---|---|
 | `auth_token` | long | `localStorage` (this origin only) | mint a `ses_key` |
 | `ses_key` | ~15 min | **memory only** | `Authorization: Bearer` on the API |
+| Two-step verification token | 12 hours | `localStorage` (this origin only) | `X-Remote-Two-Step`: this browser passed Remote's second step; worthless without a `ses_key` of the same person |
 | Guest token | until the session ends | `sessionStorage` | one participant, one session |
 | Signalling token | 2 minutes | memory only | one room |
 | Device credential | minutes | **memory only, on the machine** | one enrolled device, scoped |
@@ -122,6 +139,136 @@ that accepts it re-checks that the participant belongs to the session being
 acted on. The key is derived from the signalling secret with a distinct label,
 so a guest token can never be presented as a signalling token or the reverse.
 
+### Two-step verification
+
+Remote's own second step: a six-digit code from an authenticator app (TOTP,
+RFC 6238 — HMAC-SHA1, 30-second steps, one step either side), or one of ten
+one-time recovery codes. A person turns it on in **Settings → Two-step
+verification**: scan the QR code or type the key, confirm with a code, save the
+recovery codes. It exists because Remote cannot see into the portal sign-in,
+and since Remote can reach a person's own computers with nobody at them, a
+stolen portal session would otherwise be enough to sit down at those
+computers.
+
+**What it protects.**
+
+* For a person who has it on, **every signed-in API call** is refused with
+  `403 TWO_STEP_REQUIRED` until the browser making it has passed the step. The
+  check is in `ApiAuthFilter`, straight after the portal says who the caller
+  is, so a route added later is covered without anybody remembering to. The
+  exemptions are listed in `Routes.php` (`api-auth:allow-unverified`): the
+  two-step routes themselves; bootstrap, which then carries
+  `twoStep: {enabled, sessionVerified}` and nothing of the person's data, so
+  the web knows to ask; the legacy `GET /api/session` sign-in check; and
+  switching unattended access **off**. Sign-out is the portal relay and never
+  reaches the filter.
+* **Unattended access needs it, whoever calls.** `DeviceService::enableUnattended`
+  and `DeviceSessionService::startUnattended` refuse a person without it with
+  `TWO_STEP_SETUP_REQUIRED` ("turn it on in Settings…"), and refuse one whose
+  verification is not recent enough with `TWO_STEP_REQUIRED`. This is a
+  **step-up**: turning unattended access on needs a code from the last ten
+  minutes (`remote.twoStepStepUpSeconds`); connecting needs a verification
+  within its lifetime. The checks come after "is this computer yours", so a
+  stranger is still told it does not exist. Switching unattended access off
+  never needs it, from the web or from the computer itself. New recovery codes
+  need the same ten-minute step-up.
+* **Guests and devices are unaffected.** A guest has no account; a device is
+  the machine itself, proven by its own key.
+
+**What a verified browser is.** Passing the step mints a random 256-bit token,
+returned once. The web keeps it in `localStorage` and sends it as
+`X-Remote-Two-Step`; the server keeps only its SHA-256
+(`remote_two_step_verifications`) with the person's id, when it was verified
+and when it expires (12 hours, `remote.twoStepSessionLifetime`). It is **not**
+tied to the `ses_key`, deliberately: that key lives about fifteen minutes and
+only in memory, so it changes on every reload and every re-mint, and a
+verification hung on it would ask for a code all day. It is tied to the
+person: with anybody else's session it verifies nothing, and without a valid
+portal session it is never looked at. Signing out removes it from the browser.
+Kept beside the `auth_token`, it shares that token's exposure — script running
+on Remote's own origin could take both — and no other AICOUNTLY product's
+origin can read it.
+
+**What it refuses.** Five wrong codes in a row (`remote.twoStepMaxFailures`)
+lock verification for fifteen minutes (`remote.twoStepLockoutSeconds`) —
+authenticator and recovery codes alike, per person, wherever the guesses come
+from, on top of the per-address rate limits. A code is accepted once: the time
+step of the last accepted code is stored (`last_used_step`) and only a newer
+one passes, by a guarded `UPDATE`, so two requests racing with one code cannot
+both get in, and an older code from the window is refused too. A recovery code
+is spent by the same kind of guarded update. Turning it off needs a code.
+
+**How the secret is kept.** Sealed with XChaCha20-Poly1305 (libsodium, which
+device signatures already need) under a key derived by HKDF-SHA256, label
+`remote-two-step-v1`, from `remote.signallingSecret` — as the guest-token key
+already is, with a label of its own — unless an operator has set
+`remote.twoStepKey`. The signalling secret is the one secret every working
+deployment is guaranteed to hold, and its only other holder is the signalling
+service on the same host and account. The person's id is the associated data,
+so a sealed secret opens only on its own row: a database writer cannot copy
+their own secret onto somebody else's. The secrets considered and not used:
+`remote.contextSecret` and `LIFECYCLE_WEBHOOK_SECRET` are shared with other
+products on other hosts; `encryption.key` is not set in production; a database
+password is not something to hang the database's own encryption on. With no
+usable secret (empty, or under 32 characters), turning it on answers
+`503 TWO_STEP_UNAVAILABLE` — a secret is never stored unsealed instead.
+Recovery codes are `password_hash()` values and do not depend on the key, so a
+lost key still leaves everybody a way in.
+
+**Rotating the key.** Each sealed secret records the id of the key that sealed
+it (a fingerprint, not the key). Before rotating `remote.signallingSecret`, set
+`remote.twoStepKey` (secrets sealed under the signalling secret stay readable
+automatically), or list the old value in `remote.twoStepPreviousKeys`. Secrets
+re-seal under the current key the next time they are used, or all at once with
+`php spark remote:two-step rekey`; `php spark remote:two-step status` says
+whether anything is sealed under a key the server no longer holds. Such a
+secret is answered `503 TWO_STEP_KEY_UNAVAILABLE` ("use a recovery code") and
+never counted as a wrong guess.
+
+**Lost phone and lost codes.** AICOUNTLY support can switch it off for a
+person with `php spark remote:two-step reset <uuid or e-mail> --reason "…"`,
+recorded in the audit trail as the system, with the reason. It is the one way
+round the second step, so confirm who is asking first.
+
+**What it does not protect.**
+
+* The portal sign-in itself, and every other AICOUNTLY product. The portal's
+  own second factor, if it has one, belongs to the portal team (audit P1-9).
+* A person who has **not** turned it on. Somebody holding their portal session
+  can use Remote as them; to reach their computers with nobody at them, that
+  somebody would first have to turn two-step verification on with an
+  authenticator of their own. That is recorded in the audit trail, locks the
+  real person out of Remote (so they notice and can ask support to reset it),
+  and unattended access, once on, shows on the computer itself — but it is a
+  speed bump, not a wall. Remote cannot require everybody to enrol until
+  something other than the portal session can vouch for who is enrolling.
+
+Every step is audited (`TWO_STEP_*` events): enrolment started, turned on,
+each verification and each wrong code, a lockout, a recovery code spent, new
+codes, turned off, reset by support. No code, secret or token reaches the
+trail.
+
+**The routes.** All `api-auth:allow-unverified` (they are how a browser passes),
+all acting on the caller's own account — nothing in a path or a body names a
+person. Responses use the usual `{data: …}` envelope.
+
+| Method and path | Rate limit | What it does |
+|---|---|---|
+| `GET /v1/remote/me/two-step` | — | `{enabled, pending, available, confirmedAt, recoveryCodesLeft, sessionVerified, verifiedAt, verifiedUntil, lockedUntil}` |
+| `POST /v1/remote/me/two-step/enrol` | `two-step-enrol,10,60` | `201 {secret, otpauthUri}` — base32 secret (160 bits) and `otpauth://totp/AICOUNTLY%20Remote:<e-mail>?secret=…&issuer=AICOUNTLY%20Remote&algorithm=SHA1&digits=6&period=30`; pending until confirmed; again replaces a pending one; `409 TWO_STEP_ALREADY_ENABLED` once on; `503 TWO_STEP_UNAVAILABLE` with no key |
+| `POST /v1/remote/me/two-step/confirm` `{code}` | `two-step-verify,10,60` | `{recoveryCodes: [10 × "ABCDE-23456"], verificationToken, verifiedAt, verifiedUntil}` — the codes are shown once; this browser is verified |
+| `POST /v1/remote/me/two-step/verify` `{code}` or `{recoveryCode}` | `two-step-verify,10,60` | `{verificationToken, verifiedAt, verifiedUntil, method: "TOTP" or "RECOVERY_CODE", recoveryCodesLeft}`; refusals `400 TWO_STEP_CODE_INVALID {attemptsLeft}`, `409 TWO_STEP_CODE_USED`, `429 TWO_STEP_LOCKED {lockedUntil, retryAfterSeconds}`, `409 TWO_STEP_NOT_ENABLED` |
+| `POST /v1/remote/me/two-step/recovery-codes` | `two-step-recovery-codes,5,60` | `{recoveryCodes}`; the old ones stop working; `403 TWO_STEP_REQUIRED {reason: "STEP_UP"}` unless verified in the last ten minutes |
+| `POST /v1/remote/me/two-step/disable` `{code}` or `{recoveryCode}` | `two-step-verify,10,60` | the status, now `enabled: false`; every recovery code and verified browser goes with it |
+
+The refusals other routes give: `403 TWO_STEP_REQUIRED {reason: "SESSION"}`
+(this browser has not passed it), `403 TWO_STEP_REQUIRED {reason: "STEP_UP",
+purpose, withinSeconds}` (a fresher code is needed), and
+`403 TWO_STEP_SETUP_REQUIRED {purpose, setupPath: "/settings#two-step"}`
+(unattended access, for a person who has not turned it on). The web answers
+the first two with its one verification prompt and sends the refused request
+again once the code is accepted.
+
 ---
 
 ## Rate limits
@@ -137,6 +284,9 @@ so a guest token can never be presented as a signalling token or the reverse.
 | `POST .../signalling-token` | 60 / minute |
 | `POST .../messages` | 120 / minute |
 | `POST /global/*` (portal relay) | 30 / minute |
+| `POST /me/two-step/confirm`, `/verify`, `/disable` | 10 / minute, shared — and five wrong codes lock the person for 15 minutes |
+| `POST /me/two-step/enrol` | 10 / minute |
+| `POST /me/two-step/recovery-codes` | 5 / minute |
 
 Join codes get the tightest budget: nine digits is a small space, and the code
 is a convenience for people who already have an AICOUNTLY account — never a
@@ -156,7 +306,8 @@ Never in the repository, never in a `VITE_` variable, never in an audit entry.
 
 | Secret | Lives in | Shared with |
 |---|---|---|
-| `remote.signallingSecret` | `backend/.env` | the signalling service, byte-identical |
+| `remote.signallingSecret` | `backend/.env` | the signalling service, byte-identical; the guest-token and two-step keys are derived from it, each with its own label |
+| `remote.twoStepKey` (optional) | `backend/.env` | — (replaces the signalling secret as the two-step key's source) |
 | `remote.contextSecret` | `backend/.env` | products that launch Remote |
 | `remote.turnStaticAuthSecret` | `backend/.env` | coturn |
 | Database password | `backend/.env` | — |
@@ -278,6 +429,9 @@ check-then-act in PHP:
 | Two viewers granted control at once | `UPDATE … WHERE control_state = 'REQUESTED'`, plus a controller check |
 | Two launches with one context token | `UNIQUE (jti)` |
 | Two simultaneous session transitions | `UPDATE … WHERE status = <the one validated>` |
+| One two-step code sent twice at once | `UPDATE … WHERE last_used_step < <its step>`, affected rows checked |
+| One recovery code used twice at once | `UPDATE … WHERE used_at IS NULL`, affected rows checked |
+| A confirmed two-step setting replaced by a racing enrolment | `INSERT … ON CONFLICT DO UPDATE … WHERE confirmed_at IS NULL` |
 
 ---
 

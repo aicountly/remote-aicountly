@@ -20,8 +20,11 @@ declare(strict_types=1);
  *   user_tables     none in the manifest: the person is a remote_identities row (platform_uuid) that the
  *                   company's records point at with ON DELETE NO ACTION, so it cannot be deleted by the
  *                   engine. The account purge is the account hook (App\Libraries\CompanyLifecycle::
- *                   purgeAccount): the person's PERSONAL sessions (no company), personal devices and
- *                   desktop sign-in codes are deleted and the identity projection is anonymised — every
+ *                   purgeAccount): the person's PERSONAL sessions (no company), personal devices,
+ *                   desktop sign-in codes and two-step verification (remote_user_two_step and the
+ *                   recovery-code and verified-browser rows that hang off it — migration
+ *                   2026-11-01-000100; no company_id, so the company scope never sees them) are
+ *                   deleted and the identity projection is anonymised — every
  *                   row it deletes or changes archived first ($ctx->archiveRows, kit 1.1), so
  *                   `--restore` puts them back — docs/COMPANY_LIFECYCLE.md.
  *   ignore          remote_identities (see above) and the migration bookkeeping.

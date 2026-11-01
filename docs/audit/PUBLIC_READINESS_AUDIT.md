@@ -92,7 +92,8 @@ These P0 blockers must be fixed first (§6.1):
 7. **Pricing and free-tier limits are not decided.** TURN admission only observes and refuses nobody. Its capacity
    figures are placeholders, and the relays are shared with Connect.
 
-8. **The H.264 encoder needs a patent licence, or Cisco's own binary** (P0-10), before the app is distributed publicly.
+8. ~~The H.264 encoder needs a patent licence, or Cisco's own binary~~ — done: Cisco's binary (P0-10). Before paid plans,
+   ask counsel whether the pool's content-provider licence applies.
 
 Two more are blockers only in some cases. If you market outside India, you need relays near those users. If you serve
 the EU, analytics must not load before consent.
@@ -125,6 +126,7 @@ match the competitors take a quarter or more.
 | **Unattended access to your own computers**, per computer with a confirmation, owner only. | `CompanyPolicyDefaults::personal()`; migration `EntitleUnattendedAccessByDefault`; `PersonalUnattendedAccessTest` |
 | **Your computers**: how many are registered and online, Connect, and each computer's history (connections and changes), in the web and the app; remove a computer from the web. | `DevicesPage.tsx` `describeCount`, `DeviceHistory.tsx`, `ConnectDevicePage.tsx`; desktop `YourComputers.tsx`, `ComputerHistory.tsx`; `DeviceHistory.php` |
 | A personal computer answers only to its owner (a platform-wide `remote.device.manage` no longer reaches it); renaming or suspending a computer from the web works again. | `DeviceService::findForUser`; `DeviceController::update` |
+| **Remote's own two-step verification** (P1-9): an authenticator app (TOTP) and ten one-time recovery codes, turned on in Settings. With it on, a browser must pass it before any signed-in call but bootstrap and the two-step routes; switching unattended access on needs a code from the last ten minutes, and connecting needs a verified browser. The secret is sealed at rest under a key derived from `remote.signallingSecret`. | `Domain/TwoStep/`; `ApiAuthFilter.php`; migration `AddRemoteTwoStepVerification`; `DeviceService::enableUnattended`; `DeviceSessionService::startUnattended`; web `features/twoStep/`, `TwoStepSettings.tsx`; `docs/SECURITY.md` "Two-step verification" |
 
 Done in `8cefb42` / `7274918`:
 
@@ -202,7 +204,7 @@ advertised. Verify before quoting publicly.**
 |---|---|---|---|---|
 | Connect by ID or code | A 9-digit session code, and the host admits each person (`Remote.php:217`, `JoinService.php:29`). The app's **Get help** gives that code from the computer itself and admits the helper there; **Connect → Help someone** joins by it. Your own computers are connected to from a list, not by an ID (`ConnectScreen.tsx`). | Yes. A permanent ID or alias. | Yes. ID and password. | Yes. ID and password. |
 | Attended control | Yes, on Windows and Mac, two ways: the app hosts and streams its own screen (H.264, `session.rs` `CapturePump`), or the browser shares the whole screen and the app carries the input (companion). Admitting and control are separate consents. | Yes | Yes | Yes |
-| Unattended access | Yes, to **your own** computers: switched on per computer with a confirmation in Remote → Computers, only the owner can connect, every connection is recorded and shown on the machine (`DeviceSessionService::startUnattended`, `PersonalUnattendedAccessTest`). No 2FA step yet (P1-9). On a Mac it needs the app running and Screen Recording allowed. | Yes | Yes | Yes |
+| Unattended access | Yes, to **your own** computers: switched on per computer with a confirmation in Remote → Computers, only the owner can connect, every connection is recorded and shown on the machine (`DeviceSessionService::startUnattended`, `PersonalUnattendedAccessTest`). Needs Remote's own two-step verification: a code from the last ten minutes to switch it on, a verified browser to connect (`TwoStepUnattendedAccessTest`, P1-9). On a Mac it needs the app running and Screen Recording allowed. | Yes | Yes | Yes |
 | UAC and elevated windows | No. The app runs `asInvoker` (`windows-app-manifest.xml:18`), and refused input is dropped without a word (`agent.rs:1017`, `companion.rs:867`). | Yes, when installed | Yes, when installed | Usually yes when installed (verify) |
 | Multi-monitor | One shared screen at a time, picked by the person in the browser. The helper cannot switch screens (`agent.rs:963-966`). | Yes. Switch, or show all. | Yes | Yes. Switch. |
 | File transfer | Browser to browser. The recipient must accept. 25 MB at most (`Remote.php:248`). | Yes, with a file manager | Yes | Yes |
@@ -216,7 +218,7 @@ advertised. Verify before quoting publicly.**
 | Mobile apps | None. A mobile browser can join, watch and chat, but cannot share (`docs/BROWSER_SUPPORT.md:56-64`). | iOS and Android | iOS and Android | Not offered (verify) |
 | Linux | Browser only: it can share and watch but cannot be controlled. There is no app: `desktop/src-tauri/src/platform/` has only `windows/` and `macos/`, and no Linux build is published (`update.rs:147-161`). | Yes | Yes | No |
 | **Access from a browser alone** | **Yes. This is the real advantage. The helper needs only a browser and an AICOUNTLY account. The person being helped needs a browser, and the app only if they want to be controlled.** | The app is normally needed at both ends (web client limited: verify) | Web client for connecting out only; the other end needs the app | No |
-| Two-factor sign-in | Left to the AICOUNTLY sign-in. Not visible in this repository. | Yes | Yes, plus trusted devices | Not advertised (verify) |
+| Two-factor sign-in | Remote's own two-step verification (authenticator app, recovery codes) on top of the AICOUNTLY sign-in, and required for unattended access. Whether the portal sign-in itself has a second factor is not visible in this repository. | Yes | Yes, plus trusted devices | Not advertised (verify) |
 | Audit | Personal accounts get session history and an event timeline. The full audit trail is for companies only (`EffectivePolicyResolver.php:250-258`). | Session logs, on paid plans | Connection reports, on paid plans | Basic history |
 | Pricing and free tier | Not decided. A built-in "Basic" plan applies (`EffectivePolicyResolver.php:525-535`). | Free for personal use; paid tiers | Free for personal use; paid tiers (dearer) | Free; low-cost paid tiers |
 
@@ -373,28 +375,30 @@ Developer ID certificate and notarisation (`docs/desktop/PUBLISHING.md:183-196`)
   (`web/src/components/AnalyticsConsent.tsx:38`).
 * *Fix.* Set `ANALYTICS_BEFORE_CHOICE = 'none'` and soften the banner's wording.
 
-**P0-10. An H.264 patent licence for the encoder we ship.** **S** to decide, with counsel. **M** to switch.
+**P0-10. ~~An H.264 patent licence for the encoder we ship.~~ Done: the app uses Cisco's binary.** Left: counsel's view on paid plans.
 
-* *Why it matters.* The app compiles OpenH264 from source into the installer (`remote-webrtc/src/video/h264.rs`, top of
-  file). Cisco pays the H.264 royalties only for its own binary, downloaded by the user's machine from Cisco; a build of
-  our own is not covered. Distributing it to the public needs an AVC licence from the patent pool (Via LA), or a change.
-* *Fix.* Either take the Via LA AVC licence (its low-volume tier may cost nothing, but it still has to be signed), or
-  switch `openh264` to its `libloading` feature: ship no encoder and download Cisco's binary from Cisco at first run.
-  The office pilot is internal use and is not blocked by this.
+* *What changed.* The app no longer compiles OpenH264. Each computer downloads Cisco's OpenH264 2.6.0 from Cisco's server,
+  checks its SHA-256 on every load and loads it at run time (`remote-webrtc/src/video/cisco.rs`). The four conditions of
+  Cisco's binary licence are met: separate download; a switch in App settings → Video codec; the sentence "OpenH264 Video
+  Codec provided by Cisco Systems, Inc." beside it; the full licence text in About → Third-party licences
+  ([docs/legal/OPENH264.md](../legal/OPENH264.md)). Desktop CI fails if the app's graph ever builds OpenH264 from source.
+* *Still to confirm with counsel.* Cisco's licence covers "uses in which it does not receive remuneration" and says content
+  providers may need their own licence from the pool (Via LA, via-la.com). That matters once plans are paid, not before.
+  It also does not cover patents outside the pool.
 
 ### 6.2 P1: needed to compete credibly (the first quarter after launch)
 
 | # | Finding | Why it matters | Where | Effort |
 |---|---|---|---|---|
-| P1-1 | ~~A video encoder in the app.~~ **Built in this release**: software H.264 (OpenH264, Constrained Baseline) on Windows and Mac, with capture that follows the link, decoded by Chromium in `tests/browser_interop.rs`. Measured on a 4-core 2.1 GHz VM: 1080p 24 ms a frame (fits 30 fps), a Retina or 4K screen scaled to 1080p about 45–50 ms (about 20 fps). The encode holds up the session loop for that long, so control input waits up to one encode. Left: a hardware encoder (Media Foundation, VideoToolbox) or an encode thread of its own, ScreenCaptureKit on macOS 14+, the licence (P0-10), and testing on real machines (§11). | — | `remote-webrtc/src/video/`; `session.rs` `CapturePump`; `platform/macos/capture.rs` | Done (hardware encoder: M) |
+| P1-1 | ~~A video encoder in the app.~~ **Built in this release**: software H.264 (OpenH264, Constrained Baseline) on Windows and Mac, with capture that follows the link, decoded by Chromium in `tests/browser_interop.rs`. Measured on a 4-core 2.1 GHz VM: 1080p 24 ms a frame (fits 30 fps), a Retina or 4K screen scaled to 1080p about 45–50 ms (about 20 fps). The encode holds up the session loop for that long, so control input waits up to one encode. Left: a hardware encoder (Media Foundation, VideoToolbox) or an encode thread of its own, ScreenCaptureKit on macOS 14+, and testing on real machines (§11). | — | `remote-webrtc/src/video/`; `session.rs` `CapturePump`; `platform/macos/capture.rs` | Done (hardware encoder: M) |
 | P1-2 | **UAC, elevated windows and the Secure Desktop.** First, *tell* the helper when the computer is on the Secure Desktop or when input to a window was refused (send `control_paused` with a reason). Then support it properly, through the service on the Secure Desktop or with `uiAccess`. Both need signing. | IT support often means installing software, and installing software means UAC. | `secure_desktop_state()` is never called (`windows/capture.rs:77-89`); `Handled::Failed` is ignored (`companion.rs:865-868`) | S to tell the helper; XL for real support |
-| P1-3 | ~~Unattended access to your own computers.~~ **Built in this release**: off by default, switched on per computer with a confirmation, owner only. Left: the 2FA step (P1-9). | — | `CompanyPolicyDefaults::personal()`; `PermissionCatalog`; migration `EntitleUnattendedAccessByDefault` | Done (2FA: P1-9) |
+| P1-3 | ~~Unattended access to your own computers.~~ **Built in this release**: off by default, switched on per computer with a confirmation, owner only, and behind Remote's own two-step verification (P1-9). | — | `CompanyPolicyDefaults::personal()`; `PermissionCatalog`; migration `EntitleUnattendedAccessByDefault` | Done |
 | P1-4 | **Connect by computer ID, and an address book.** A real ID that a helper can type to *ask* for a session, with the consent still at the computer. The rename to "Key fingerprint" is **fixed in this release**. | People used to other tools expect to read out an ID. | `SignInScreen.tsx`; `agent.rs:313-328` | Rename done; L to build |
 | P1-5 | **Clipboard during companion control**: text, both ways, only when ticked. | Pasting a command or a URL is everyday support work. | `CompanionService.php:771`; `docs/desktop/CONTROL_COMPANION.md:27-28` | M |
 | P1-6 | **Session continuity.** Warn before the time limit and allow extending it. Bring a session back after the helped computer restarts. Add an idle timeout. | Today a session simply ends at 60 minutes, and nothing brings it back after a restart. | `CompanyPolicyDefaults.php:200`; `SessionService.php:391-434`; the app's own reconnect window is 30 seconds (`session.rs:85-86`) | M |
 | P1-7 | **Crash reporting, and "Send logs to support".** | The logs exist only on the computer, at most 2 × 2 MB. A crash only writes a line to the log. The web reports no errors at all. | `logging.rs:19-22`, `:38-47`, `:131-138` | M |
 | P1-8 | ~~The web after a deploy.~~ **Fixed in this release**: the router has an error screen, and a screen whose code a deploy replaced reloads the new build once, by itself. Keeping the previous deploy's files for a day (`rsync --delete`, `deploy-production.yml:345`) would still be kinder to a request in flight. | — | `components/ui/RouteError.tsx`; `router.tsx` | Done (S to keep old files) |
-| P1-9 | **Two-factor sign-in.** Confirm that the AICOUNTLY sign-in offers it, and require it for helpers and before unattended access. | Taking over a helper's account means reaching other people's screens. | Not in this repository | S–M (needs the portal team) |
+| P1-9 | **Two-factor sign-in.** ~~Require it before unattended access.~~ **Remote's own two-step verification is built in this release**: TOTP (RFC 6238) with ten one-time recovery codes, set up in Settings; with it on, every signed-in call but bootstrap and the two-step routes needs a verified browser (12 hours), wrong codes lock it for 15 minutes after five, a code works once; turning unattended access on needs a code from the last ten minutes, connecting needs a verified browser, and a person without it is sent to Settings. **Left:** (a) the AICOUNTLY portal's own second factor belongs to the portal team — Remote cannot see or require it; (b) Remote's step protects only people who turn it on: somebody holding the portal session of a person who has not could enrol their own authenticator first (audited, and it locks the real person out, so it is noticed), so making it compulsory for helpers needs the portal to vouch for who is enrolling. | Taking over a helper's account means reaching other people's screens. | `Domain/TwoStep/TwoStepService.php`; `ApiAuthFilter.php`; `DeviceService::enableUnattended`; `DeviceSessionService::startUnattended`; `docs/SECURITY.md` "Two-step verification"; the portal's: not in this repository | Remote's part done; the portal's: portal team (S–M) |
 | P1-10 | **A security contact.** SECURITY.md points to a contact that is never named. Add `/.well-known/security.txt`, a mailbox and a response time. | Researchers will look for remote-access tools. | `docs/SECURITY.md:305-308` | S |
 | P1-11 | **Rate limiting.** It is counted per IP address, in a file cache. `proxyIPs` is empty. | Offices behind one IP share a budget, and the limit is not shared between servers. Key signed-in calls on the account instead, and use a shared store. | `RateLimitFilter.php:17-24`, `:73-79`; `Cache.php:25`; `App.php:195` | M |
 | P1-12 | ~~Documents that now say the wrong thing.~~ **Fixed in this release** (see the appendix). | — | Appendix | Done |
@@ -441,7 +445,8 @@ Developer ID certificate and notarisation (`docs/desktop/PUBLISHING.md:183-196`)
 * **Not end-to-end against the operator.** Media is encrypted with DTLS-SRTP, but AICOUNTLY runs the signalling, so it
   could in principle insert itself into a connection. SECURITY.md says so (`docs/SECURITY.md:52-55`). Say it publicly too,
   and do not claim "end-to-end" in marketing.
-* **Two-factor sign-in.** Unknown (P1-9).
+* **Two-factor sign-in.** Remote's own two-step verification is built, and unattended access needs it (P1-9). Whether the
+  portal sign-in has a second factor of its own is still unknown, and is the portal team's.
 * **Rate limiting** (P1-11).
 * **The security contact** (P1-10).
 * **The CSP** (P2-8).
@@ -726,7 +731,7 @@ Use this to brief counsel. It is not legal advice.
 | Month | What | Result |
 |---|---|---|
 | 1 | Finish every P0. Measure TURN capacity, then switch admission to `enforce` when the licence source allows it (P0-7). Add a relay outside India if you will market there (P0-8). Warn before the 60-minute limit and allow extending it (P1-6). Rate limiting per account (P1-11). | **Public launch possible**, positioned as attended help in the browser (P0-6). |
-| 1–3 | The video encoder in the Windows app (P1-1). Then UAC and the Secure Desktop through the signed service (P1-2). Then unattended access to your own computers, with 2FA (P1-3, P1-9). | Matches the competitors on the features users look for first. |
+| 1–3 | The video encoder in the Windows app (P1-1). Then UAC and the Secure Desktop through the signed service (P1-2). Unattended access to your own computers, behind Remote's own two-step verification, is done (P1-3, P1-9); the portal's own second factor is the portal team's. | Matches the competitors on the features users look for first. |
 | 2–3 | Connect by ID and an address book (P1-4). Clipboard during companion control (P1-5). Reconnecting after a restart (P1-6). Crash reporting and log upload (P1-7). | Fewer support tickets, and a smoother experience for helpers. |
 | Later | Recording, Wake-on-LAN, restart, mobile apps, Linux, languages, a per-user installer (P2). | — |
 

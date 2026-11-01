@@ -14,7 +14,8 @@
 //! to be a service.
 
 fn main() {
-    let argument = std::env::args().nth(1).unwrap_or_default();
+    let arguments: Vec<String> = std::env::args().collect();
+    let argument = arguments.get(1).cloned().unwrap_or_default();
 
     // Before anything else that might want to say why it failed. A service
     // has no console — the SCM starts it in Session 0 — so without this every
@@ -22,6 +23,22 @@ fn main() {
     // that says why it stopped.
     if argument != "--version" {
         remote_core::logging::init("service");
+    }
+
+    // The hidden Secure Desktop helper mode: this same binary, launched by the
+    // service into the console session on `winsta0\winlogon`, serving the pipe
+    // named as the next argument. It runs nothing else and returns when the
+    // app disconnects, it is told to stop, or its lifetime cap is reached.
+    #[cfg(windows)]
+    if argument == aicountly_remote_service::secure_desktop::HELPER_ARGUMENT {
+        let pipe = arguments.get(2).map(String::as_str).unwrap_or_default();
+
+        if let Err(error) = aicountly_remote_service::secure_desktop::helper::run(pipe) {
+            eprintln!("[aicountly-remote-service] secure desktop helper: {error}");
+            std::process::exit(1);
+        }
+
+        return;
     }
 
     // Before any TLS connection — see `remote_core::tls`.

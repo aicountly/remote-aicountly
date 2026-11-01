@@ -17,10 +17,16 @@
 //!
 //! # What this cannot reach
 //!
-//! Input is not delivered to the Secure Desktop — the UAC prompt,
-//! Ctrl+Alt+Del, the sign-in screen — because Windows isolates it from every
-//! desktop application. Nothing here attempts to work around that. See
-//! `capture::SecureDesktopState`, which is how the viewer is told.
+//! `SendInput` from this user-session process is not delivered to the Secure
+//! Desktop — the UAC prompt, Ctrl+Alt+Del, the sign-in screen — because Windows
+//! isolates it from every medium-integrity application. Nothing here works
+//! around that. When a session is authorised to answer the Secure Desktop, the
+//! input that would come here is instead routed by `Agent::dispatch` to the
+//! service's Secure Desktop helper, which injects with its own `SendInput`
+//! from a SYSTEM process attached to `winsta0\winlogon`. Both paths start at
+//! the one control gate; the helper reuses the coordinate and key-code logic
+//! here (copied, with a note, into the service crate — it cannot depend on
+//! this one). See `crate::secure_desktop` and `capture::SecureDesktopState`.
 
 use std::sync::Mutex;
 

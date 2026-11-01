@@ -135,6 +135,21 @@ remote.signalUrl = wss://remote.aicountly.com/signal
 remote.allowDesktopAgent = true
 ```
 
+**Two-step verification needs no new line.** The key that seals people's
+authenticator secrets is derived from `remote.signallingSecret` (HKDF, label
+`remote-two-step-v1`), so a deployment whose live sessions connect can already
+offer it; with that secret empty or under 32 characters, turning it on answers
+503 until `remote.signallingSecret` or `remote.twoStepKey` is set. Its tables
+come with the ordinary migrations (`2026-11-01-000100_AddRemoteTwoStepVerification`).
+After a deploy, `php spark remote:two-step status` (from `api/`) says whether the
+server can seal secrets and whether any is sealed under a key it no longer holds.
+**Before rotating `remote.signallingSecret`**, set `remote.twoStepKey` first (or
+put the old value in `remote.twoStepPreviousKeys`) — see
+[SECURITY.md](SECURITY.md#two-step-verification). Unattended access needs
+two-step verification from this release on: a person who had it switched on for
+a computer before is asked to turn two-step verification on before they can
+connect to it again.
+
 **Desktop agents are on: AICOUNTLY Remote for Windows is released.** Signed
 builds are offered at https://aicountly.com/remote (read from
 `downloads.aicountly.com/remote/manifest.json` — see

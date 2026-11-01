@@ -252,6 +252,15 @@ const EVENT_LABELS: Record<string, string> = {
   UNATTENDED_ACCESS_DISABLED: 'Unattended access turned off',
   SESSION_FEEDBACK_RECORDED: 'Session feedback left',
   AUDIT_EXPORTED: 'Audit trail exported',
+  TWO_STEP_ENROLMENT_STARTED: 'Started turning on two-step verification',
+  TWO_STEP_ENABLED: 'Two-step verification turned on',
+  TWO_STEP_VERIFIED: 'Passed two-step verification',
+  TWO_STEP_VERIFY_FAILED: 'Wrong two-step code',
+  TWO_STEP_LOCKED: 'Two-step verification locked',
+  TWO_STEP_RECOVERY_CODE_USED: 'Two-step recovery code used',
+  TWO_STEP_RECOVERY_CODES_REGENERATED: 'New two-step recovery codes',
+  TWO_STEP_DISABLED: 'Two-step verification turned off',
+  TWO_STEP_RESET: 'Two-step verification reset by support',
 }
 
 export function describeEvent(eventType: string): string {

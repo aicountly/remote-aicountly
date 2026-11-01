@@ -7,6 +7,7 @@ import { getCapabilities } from '../services/browser/capabilities'
 import type { RemoteBrowserCapabilities } from '../services/browser/capabilities'
 import type { Bootstrap, EffectivePolicy, ScopeType } from '../types/remote'
 import { noteCompanyLifecycle, setActiveCompanyForRestrictions } from '../services/companyRestriction'
+import { requestTwoStep } from '../services/twoStepPrompt'
 import { ORGANISATIONS_ENABLED } from './organisations'
 
 /**
@@ -112,7 +113,21 @@ export function RemoteProvider({ children }: { children: ReactNode }) {
     setError(null)
 
     try {
-      const data = await fetchBootstrap()
+      let data = await fetchBootstrap()
+
+      // Two-step verification is on and this browser has not passed it: the
+      // bootstrap that came back holds nothing of the person's, deliberately.
+      // Ask for the code at once — the prompt covers everything — and fetch it
+      // again once the code is accepted.
+      if (data.twoStep?.enabled && !data.twoStep.sessionVerified) {
+        try {
+          await requestTwoStep('SESSION')
+        } catch {
+          throw new RemoteApiError('TWO_STEP_REQUIRED', 'Enter the code from your authenticator app to continue.', 403)
+        }
+        data = await fetchBootstrap()
+      }
+
       setBootstrap(data)
 
       // A verified launch context decides the scope — a company-scoped workflow

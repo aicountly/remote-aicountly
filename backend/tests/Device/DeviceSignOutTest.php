@@ -57,6 +57,7 @@ final class DeviceSignOutTest extends RemoteTestCase
         $enrolled = $this->enrolDevice($owner, $companyId, ['deviceName' => $deviceName]);
         $uuid     = (string) $enrolled['device']['uuid'];
 
+        $this->turnOnTwoStep($owner);
         $this->assertTrue(Services::deviceService()->enableUnattended($owner, $uuid, true)['unattended_access_enabled']);
         $this->markDeviceOnline($uuid);
 

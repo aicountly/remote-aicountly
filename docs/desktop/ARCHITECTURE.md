@@ -63,7 +63,8 @@ desktop/
     remote-security/    device keys, the canonical signed payload, key storage
     remote-device/      the platform traits every OS implements
     remote-core/        configuration, the API client, signalling, the state machine
-    remote-webrtc/      the peer connection, behind one interface
+    remote-webrtc/      the peer connection, behind one interface, and the screen
+                        encoder: Cisco's OpenH264, downloaded and loaded at run time
   src-tauri/
     src/                the application: tray, commands, the connection loop
     src/session.rs      one session: join, negotiate, pump the control channel
@@ -85,7 +86,9 @@ the lookup tables around them — where a click lands, the virtual-key codes, th
 clipboard bounds — are tested on Linux as well. What only a Windows runner can
 check is `mod imp` itself, and that is what it compiles and clippy-checks.
 
-`cargo test --workspace` runs **417 Rust tests** on any host.
+`cargo test --workspace` runs **614 Rust tests** on any host. The H.264 tests among
+them encode with OpenH264 compiled from source (`remote-webrtc`'s test-only
+`bundled-openh264` feature); the application itself loads Cisco's binary.
 
 ### The platform traits
 
@@ -222,13 +225,25 @@ gap at the wrong moment.
   presence rooms, audit — with 211 backend tests;
 * the browser side — capability-driven control UI, input capture, the
   Computers page — with 104 web tests.
+* the screen encoder: H.264 Constrained Baseline from **Cisco's own OpenH264
+  binary**, which the application downloads from Cisco onto the person's
+  computer, checks against a pinned SHA-256 and the `openh264` crate's list of
+  Cisco builds, keeps in a per-user folder, and loads at run time
+  (`remote-webrtc/src/video/cisco.rs`). The installer contains no encoder:
+  `openh264` is built with `libloading` only, because Cisco's patent licence
+  covers Cisco's binary and not a build of ours. The person can switch it off
+  and on in App settings → Video codec, beside "OpenH264 Video Codec provided
+  by Cisco Systems, Inc."; About shows Cisco's licence text. Without it a
+  session connects but sends no picture, and the window says so. The
+  arrangement and where each licence condition is met:
+  [docs/legal/OPENH264.md](../legal/OPENH264.md).
 
 **Not built**
 
-* **A hardware video encoder.** Frames are encoded in software with OpenH264
-  (`remote-webrtc`'s `video` module), which is fast enough for 1080p at the
-  default profile; Media Foundation or VideoToolbox would take load off the CPU
-  on larger screens.
+* **A hardware video encoder.** Frames are encoded in software with Cisco's
+  OpenH264 (`remote-webrtc`'s `video` module), which is fast enough for 1080p
+  at the default profile; Media Foundation or VideoToolbox would take load off
+  the CPU on larger screens, and need no download.
 * **File transfer in the agent.** The protocol and the browser half exist; the
   agent does not read the collaboration channel, so it neither offers nor
   receives a file.

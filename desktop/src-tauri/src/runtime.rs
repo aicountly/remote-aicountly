@@ -822,7 +822,7 @@ mod tests {
         let task = tokio::spawn(run(
             agent.clone(),
             sink,
-            remote_webrtc::webrtc_rs::WebRtcFactory,
+            remote_webrtc::webrtc_rs::WebRtcFactory::default(),
             stopping.clone(),
         ));
 

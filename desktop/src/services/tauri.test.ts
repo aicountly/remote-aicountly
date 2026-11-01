@@ -11,7 +11,8 @@ const core = vi.hoisted(() => ({ invoke: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => core)
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn() }))
 
-const { checkForUpdate, installUpdate } = await import('./tauri')
+const { checkForUpdate, codecStatus, installCodec, installUpdate, removeCodec, setCodecEnabled } =
+  await import('./tauri')
 
 beforeEach(() => {
   core.invoke.mockReset()
@@ -52,5 +53,28 @@ describe('installUpdate', () => {
     core.invoke.mockRejectedValue('The update could not be downloaded')
 
     await expect(installUpdate()).rejects.toBe('The update could not be downloaded')
+  })
+})
+
+/**
+ * The video codec's commands, by the names `commands::codec` registers. The
+ * switch passes the choice and nothing else: where the codec comes from is
+ * the Rust side's to decide.
+ */
+describe('the video codec', () => {
+  it('calls the commands the Rust side registers', async () => {
+    core.invoke.mockResolvedValue({})
+
+    await codecStatus()
+    expect(core.invoke).toHaveBeenLastCalledWith('codec_status')
+
+    await setCodecEnabled(false)
+    expect(core.invoke).toHaveBeenLastCalledWith('set_codec_enabled', { enabled: false })
+
+    await installCodec()
+    expect(core.invoke).toHaveBeenLastCalledWith('install_codec')
+
+    await removeCodec()
+    expect(core.invoke).toHaveBeenLastCalledWith('remove_codec')
   })
 })

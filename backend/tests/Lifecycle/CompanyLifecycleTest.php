@@ -267,18 +267,24 @@ final class CompanyLifecycleTest extends RemoteTestCase
         $this->grantCompanyAccess($person, $company);
         $this->makeSession($person, 'PERSONAL');
         $this->makeSession($person, 'COMPANY', $company);
+        // Two-step verification is the person's own, never a company's: it goes with the account.
+        $this->turnOnTwoStep($person);
 
         $this->send($this->event('account_purge_requested', ['uuid' => '1001', 'reason' => 'account_closed']))->assertStatus(202);
         $acks    = [];
         $summary = $this->runWorker($acks);
         $this->assertSame(1, $summary['purged']);
         $this->assertSame('1001', $acks[0]['uuid']);
-        $this->assertStringContainsString('1 personal sessions deleted', (string) $acks[0]['detail']);
+        $this->assertStringContainsString('1 personal sessions, ', (string) $acks[0]['detail']);
         $this->assertSame(0, $this->db->table('remote_sessions')->where('scope_type', 'PERSONAL')->where('owner_user_id', $person->id)->countAllResults(), 'personal session gone');
         $this->assertSame(1, $this->db->table('remote_sessions')->where('company_id', $company)->countAllResults(), 'the company session stays');
         $row = $this->db->table('remote_identities')->where('id', $person->id)->get()->getRowArray();
         $this->assertSame('Former AICOUNTLY user', $row['display_name']);
         $this->assertNull($row['email']);
+        foreach (['remote_user_two_step', 'remote_user_recovery_codes', 'remote_two_step_verifications'] as $table) {
+            $this->assertSame(0, $this->db->table($table)->where('user_id', $person->id)->countAllResults(), $table . ' purged with the account');
+        }
+        $this->assertStringContainsString('1 two-step verification settings deleted', (string) $acks[0]['detail']);
 
         // Kit 1.1: everything the hook deleted or changed was archived first, so a restore puts it back.
         $archive = (string) $this->db->query("SELECT archive_name FROM aic_lifecycle_jobs WHERE kind = 'account' ORDER BY id DESC LIMIT 1")->getRow()->archive_name;
@@ -289,5 +295,6 @@ final class CompanyLifecycleTest extends RemoteTestCase
         $this->assertGreaterThan(0, $this->db->query("SELECT COUNT(*) AS n FROM remote_participants p JOIN remote_sessions s ON s.id = p.session_id WHERE s.scope_type = 'PERSONAL' AND s.owner_user_id = ?", [$person->id])->getRow()->n, 'with its participants');
         $row = $this->db->table('remote_identities')->where('id', $person->id)->get()->getRowArray();
         $this->assertSame(['Asha Rao', 'asha@example.test'], [$row['display_name'], $row['email']], 'and the identity as it was');
+        $this->assertSame(10, $this->db->table('remote_user_recovery_codes')->where('user_id', $person->id)->countAllResults(), 'and the two-step settings with their recovery codes');
     }
 }

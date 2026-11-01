@@ -61,6 +61,8 @@ final class DeviceIceTest extends RemoteTestCase
         ['device' => $device, 'secretKey' => $secretKey] = $this->enrolDevice($owner, self::COMPANY);
         $uuid = (string) $device['uuid'];
 
+        // Unattended access needs two-step verification (TwoStepUnattendedAccessTest).
+        $this->turnOnTwoStep($owner);
         Services::deviceService()->enableUnattended($owner, $uuid, true);
         $this->markDeviceOnline($uuid);
         $session = Services::deviceSessionService()->startUnattended($owner, $uuid, 'Long running job')['session'];

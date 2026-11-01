@@ -8,6 +8,7 @@ use App\Domain\Auth\GuestPrincipal;
 use App\Domain\Auth\RemoteIdentity;
 use App\Domain\Auth\SourceContext;
 use App\Domain\Device\DevicePrincipal;
+use App\Domain\TwoStep\TwoStepStanding;
 
 /**
  * Who is making this request.
@@ -32,6 +33,35 @@ final class RequestContext
     private ?SourceContext $sourceContext = null;
     private ?DevicePrincipal $device = null;
     private ?string $sesKey = null;
+    private ?string $twoStepToken = null;
+    private ?TwoStepStanding $twoStep = null;
+
+    /**
+     * The two-step verification token this browser presented
+     * (`X-Remote-Two-Step`), if any. Like the ses_key it is never stored or
+     * logged; only {@see \App\Domain\TwoStep\TwoStepService} reads it, to look
+     * up its hash.
+     */
+    public function setTwoStepToken(?string $token): void
+    {
+        $this->twoStepToken = $token !== null && $token !== '' ? $token : null;
+    }
+
+    public function twoStepToken(): ?string
+    {
+        return $this->twoStepToken;
+    }
+
+    /** Where this signed-in request stood with two-step verification when the auth filter let it in. */
+    public function setTwoStep(?TwoStepStanding $standing): void
+    {
+        $this->twoStep = $standing;
+    }
+
+    public function twoStep(): ?TwoStepStanding
+    {
+        return $this->twoStep;
+    }
 
     /** The caller's own portal session, for asking Aicountly Manage on their behalf (never stored or logged). */
     public function setSesKey(?string $sesKey): void

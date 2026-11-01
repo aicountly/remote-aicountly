@@ -795,3 +795,64 @@ body {
   font-weight: 650;
   color: var(--text-secondary);
 }
+
+/* --- Video codec, third-party licences ---------------------------------- */
+
+.codec__switch {
+  gap: var(--space-4);
+}
+
+.codec__switch input[type='checkbox'] {
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.codec__progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.codec__progress p {
+  margin: 0;
+}
+
+.codec__progress progress {
+  flex: 1 1 12rem;
+}
+
+.licences {
+  margin-top: var(--space-4);
+}
+
+.licences__summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.licences__title {
+  margin: var(--space-3) 0 var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 650;
+}
+
+/* Cisco's text as Cisco publishes it: its line breaks kept, its long lines
+   wrapped, and scrolled within the card rather than stretching it. */
+.licences__text {
+  max-height: 20rem;
+  overflow: auto;
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}

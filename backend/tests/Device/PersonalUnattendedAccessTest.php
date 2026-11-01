@@ -39,6 +39,8 @@ final class PersonalUnattendedAccessTest extends RemoteTestCase
         $enrolled = $this->enrolDevice($owner, null, ['deviceName' => 'Meera home PC']);
         $uuid     = (string) $enrolled['device']['uuid'];
         $this->markDeviceOnline($uuid);
+        // Unattended access needs Remote's own two-step verification (TwoStepUnattendedAccessTest).
+        $this->turnOnTwoStep($owner);
 
         $listing = $this->dataOf($this->getJson($this->asPerson($owner), 'devices'));
         $this->assertTrue($listing['canConnectUnattended'], 'the Computers page may offer it');
@@ -78,6 +80,7 @@ final class PersonalUnattendedAccessTest extends RemoteTestCase
     {
         $owner = $this->makeIdentity('Meera');
         $uuid  = (string) $this->enrolDevice($owner, null)['device']['uuid'];
+        $this->turnOnTwoStep($owner);
 
         $response = $this->postJson($this->asPerson($owner), "devices/{$uuid}/unattended/enable", []);
         $this->assertSame('UNATTENDED_CONFIRMATION_REQUIRED', $this->errorOf($response, 400));
@@ -101,9 +104,12 @@ final class PersonalUnattendedAccessTest extends RemoteTestCase
         $stranger = $this->makeIdentity('Stranger');
         $uuid     = (string) $this->enrolDevice($owner, null)['device']['uuid'];
         $this->markDeviceOnline($uuid);
+        $this->turnOnTwoStep($owner);
 
         $this->errorOf($this->postJson($this->asPerson($stranger), "devices/{$uuid}/unattended/enable", ['confirm' => true]), 404);
 
+        // From the owner's own verified browser, not the stranger's request just made.
+        $this->actAsTwoStepVerified($owner);
         Services::deviceService()->enableUnattended($owner, $uuid, true);
 
         $this->errorOf($this->postJson($this->asPerson($stranger), "devices/{$uuid}/connect"), 404);
@@ -128,6 +134,7 @@ final class PersonalUnattendedAccessTest extends RemoteTestCase
     {
         $owner = $this->makeIdentity('Meera');
         $uuid  = (string) $this->enrolDevice($owner, null)['device']['uuid'];
+        $this->turnOnTwoStep($owner);
         Services::deviceService()->enableUnattended($owner, $uuid, true);
         $this->markDeviceOnline($uuid);
         $session = Services::deviceSessionService()->startUnattended($owner, $uuid)['session'];
@@ -149,6 +156,7 @@ final class PersonalUnattendedAccessTest extends RemoteTestCase
     {
         $owner = $this->makeIdentity('Meera');
         $this->setEntitlement(null, ['plan_code' => 'REMOTE_BASIC', 'desktop_devices' => true, 'unattended_access' => false]);
+        $this->turnOnTwoStep($owner);
 
         // A company that was given its own entitlement keeps it.
         $this->makeCompany(4100, 'Own Plan Co');

@@ -79,7 +79,7 @@ use webrtc::peer_connection::{
 use webrtc::rtp_transceiver::RtpSender;
 
 use crate::video::rtp::H264Packetizer;
-use crate::video::{H264Encoder, H264_FMTP, H264_MIME_TYPE, VIDEO_CLOCK_RATE};
+use crate::video::{CodecSource, H264Encoder, H264_FMTP, H264_MIME_TYPE, VIDEO_CLOCK_RATE};
 use crate::{
     Congestion, IceConfiguration, PeerSession, PeerSessionFactory, PeerState, WebRtcError,
 };
@@ -120,8 +120,24 @@ const FEEDBACK_POLL: Duration = Duration::from_millis(200);
 const MAX_QUEUED_CONTROL_MESSAGES: usize = 1024;
 
 /// Builds webrtc-rs sessions.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct WebRtcFactory;
+///
+/// Every screen track it builds encodes with the codec in one
+/// [`CodecSource`] — the one Cisco's binary is loaded into
+/// (`video::cisco::CodecManager::source`). [`WebRtcFactory::default`] has an
+/// empty one: sessions it builds connect, and their screen tracks report the
+/// codec as not installed.
+#[derive(Debug, Clone, Default)]
+pub struct WebRtcFactory {
+    codec: CodecSource,
+}
+
+impl WebRtcFactory {
+    /// A factory whose sessions encode with whatever `codec` holds.
+    #[must_use]
+    pub fn new(codec: CodecSource) -> Self {
+        Self { codec }
+    }
+}
 
 impl PeerSessionFactory for WebRtcFactory {
     type Session = WebRtcSession;
@@ -131,14 +147,14 @@ impl PeerSessionFactory for WebRtcFactory {
         ice: IceConfiguration,
         profile: CaptureProfile,
     ) -> Result<Self::Session, WebRtcError> {
-        WebRtcSession::new(ice, profile, true).await
+        WebRtcSession::new(ice, profile, Some(self.codec.clone())).await
     }
 
     async fn create_control_only(
         &self,
         ice: IceConfiguration,
     ) -> Result<Self::Session, WebRtcError> {
-        WebRtcSession::new(ice, CaptureProfile::adaptive(), false).await
+        WebRtcSession::new(ice, CaptureProfile::adaptive(), None).await
     }
 
     fn implementation(&self) -> &'static str {
@@ -248,6 +264,8 @@ struct VideoSender {
     /// after a `send_frame` that was cancelled mid-encode, in which case the
     /// next frame builds a new one and starts with an IDR.
     encoder: Option<Box<H264Encoder>>,
+    /// Where every encoder for this track gets OpenH264 from.
+    codec: CodecSource,
     packetizer: H264Packetizer,
     /// The payload type negotiated for H.264, once negotiation has settled
     /// it. Forgotten whenever a new remote description is applied.
@@ -268,10 +286,12 @@ pub struct WebRtcSession {
 }
 
 impl WebRtcSession {
+    /// A session, with a screen track encoded from `video`'s codec, or —
+    /// `None` — a control-only one with no track at all.
     async fn new(
         ice: IceConfiguration,
         profile: CaptureProfile,
-        with_video: bool,
+        video: Option<CodecSource>,
     ) -> Result<Self, WebRtcError> {
         let shared = Arc::new(SharedState::default());
 
@@ -331,10 +351,9 @@ impl WebRtcSession {
 
         let peer: Arc<dyn PeerConnection> = Arc::new(peer);
 
-        let video = if with_video {
-            Some(Self::add_screen_track(&peer, &shared, profile).await?)
-        } else {
-            None
+        let video = match video {
+            Some(codec) => Some(Self::add_screen_track(&peer, &shared, profile, codec).await?),
+            None => None,
         };
 
         Ok(Self {
@@ -353,6 +372,7 @@ impl WebRtcSession {
         peer: &Arc<dyn PeerConnection>,
         shared: &Arc<SharedState>,
         profile: CaptureProfile,
+        codec: CodecSource,
     ) -> Result<VideoSender, WebRtcError> {
         let track = Arc::new(TrackLocalStaticRTP::new(MediaStreamTrack::new(
             "aicountly-remote".to_owned(),
@@ -379,7 +399,8 @@ impl WebRtcSession {
         Ok(VideoSender {
             track,
             sender,
-            encoder: Some(Box::new(H264Encoder::new(profile))),
+            encoder: Some(Box::new(H264Encoder::new(profile, codec.clone()))),
+            codec,
             packetizer: H264Packetizer::new(VIDEO_SSRC),
             payload_type: None,
             feedback,
@@ -944,7 +965,7 @@ impl PeerSession for WebRtcSession {
         let mut encoder = video
             .encoder
             .take()
-            .unwrap_or_else(|| Box::new(H264Encoder::new(self.profile)));
+            .unwrap_or_else(|| Box::new(H264Encoder::new(self.profile, video.codec.clone())));
 
         if self.shared.keyframe_requested.swap(false, Ordering::SeqCst) {
             encoder.request_keyframe();
@@ -1108,9 +1129,15 @@ impl Drop for WebRtcSession {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "bundled-openh264"))]
 mod tests {
     use super::*;
+
+    /// Sessions that encode with OpenH264 compiled from source: these tests
+    /// run where Cisco's server cannot be reached.
+    fn bundled() -> WebRtcFactory {
+        WebRtcFactory::new(CodecSource::bundled())
+    }
 
     #[test]
     fn the_apis_ice_list_translates_into_the_libraries_shape() {
@@ -1172,7 +1199,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_session_offers_video_and_both_data_channels() {
-        let factory = WebRtcFactory;
+        let factory = bundled();
 
         let mut session = factory
             .create(IceConfiguration::default(), CaptureProfile::adaptive())
@@ -1227,7 +1254,7 @@ mod tests {
     /// is refused rather than silently dropped.
     #[tokio::test]
     async fn a_control_only_session_has_data_channels_and_no_video() {
-        let factory = WebRtcFactory;
+        let factory = bundled();
 
         // The controller's side: a browser offering only the data channels.
         let mut controller = factory
@@ -1271,7 +1298,7 @@ mod tests {
 
     #[tokio::test]
     async fn two_sessions_complete_an_offer_answer_exchange() {
-        let factory = WebRtcFactory;
+        let factory = bundled();
 
         let mut host = factory
             .create(IceConfiguration::default(), CaptureProfile::adaptive())
@@ -1301,7 +1328,7 @@ mod tests {
     /// been acknowledged.
     #[tokio::test]
     async fn congestion_is_unknown_before_any_receiver_report() {
-        let factory = WebRtcFactory;
+        let factory = bundled();
 
         let mut session = factory
             .create(IceConfiguration::default(), CaptureProfile::adaptive())
@@ -1315,7 +1342,7 @@ mod tests {
 
     #[tokio::test]
     async fn sending_control_before_the_channel_exists_is_refused_not_dropped() {
-        let factory = WebRtcFactory;
+        let factory = bundled();
 
         let mut session = factory
             .create(IceConfiguration::default(), CaptureProfile::adaptive())
@@ -1332,7 +1359,7 @@ mod tests {
 
     #[test]
     fn the_factory_names_its_implementation_for_the_diagnostics_panel() {
-        assert!(WebRtcFactory.implementation().contains("webrtc-rs"));
+        assert!(bundled().implementation().contains("webrtc-rs"));
     }
 
     fn codec(mime_type: &str, fmtp: &str, payload_type: u8) -> RTCRtpCodecParameters {
@@ -1466,7 +1493,7 @@ mod tests {
     /// dropped — not refused, because the host is doing nothing wrong.
     #[tokio::test]
     async fn a_frame_before_the_connection_is_up_is_dropped_not_refused() {
-        let mut session = WebRtcFactory
+        let mut session = bundled()
             .create(IceConfiguration::default(), CaptureProfile::adaptive())
             .await
             .expect("session");
@@ -1526,7 +1553,8 @@ mod tests {
             max_dimension: 320,
             ..CaptureProfile::adaptive()
         };
-        let mut agent = WebRtcFactory
+        let codec = CodecSource::bundled();
+        let mut agent = WebRtcFactory::new(codec.clone())
             .create(IceConfiguration::default(), profile)
             .await
             .expect("agent");
@@ -1736,6 +1764,31 @@ mod tests {
             "{} ms is not a loopback round trip",
             reading.round_trip_ms
         );
+
+        // --- the codec switched off mid-session, and on again -------------
+        // Off: the next frame is refused with the codec's own error, which
+        // the host recognises and tells the person at the computer about —
+        // not sent as nothing in silence. On again: the session carries on.
+        codec.set(None);
+        let frame = crate::video::testing::pattern(640, 360, 3_000, 3_000 * 33_333);
+        let refused = agent
+            .send_frame(frame)
+            .await
+            .expect_err("no codec, no frame");
+        assert!(refused.is_codec_unavailable(), "{refused:?}");
+        assert_eq!(
+            refused,
+            WebRtcError::Media(crate::video::CODEC_UNAVAILABLE.to_owned())
+        );
+        assert_eq!(
+            agent.state(),
+            PeerState::Connected,
+            "the connection is fine"
+        );
+
+        codec.set(Some(crate::video::codec::Codec::Bundled));
+        let frame = crate::video::testing::pattern(640, 360, 3_100, 3_100 * 33_333);
+        agent.send_frame(frame).await.expect("sends again");
 
         viewer.close().await.expect("viewer closes");
         agent.close().await.expect("agent closes");

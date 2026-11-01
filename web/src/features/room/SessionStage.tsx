@@ -415,6 +415,18 @@ export default function SessionStage({
             </p>
           ) : null}
 
+          {/* A Windows administrator prompt is open on the controlled machine
+              (the Secure Desktop). Say so, and whether it can be answered from
+              here, rather than leaving the controller looking at a frozen frame. */}
+          {controlling && live?.secureDesktop ? (
+            <p className="stage__paused" role="status">
+              A Windows administrator prompt is open on that computer.{' '}
+              {live.secureDesktop.reachable
+                ? 'You can answer it.'
+                : 'Ask the person at the computer to answer it.'}
+            </p>
+          ) : null}
+
           {Object.entries(live?.pointers ?? {}).map(([peerId, pointer]) => (
             <span
               key={peerId}

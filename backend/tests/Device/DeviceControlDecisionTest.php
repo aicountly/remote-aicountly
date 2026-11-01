@@ -55,6 +55,7 @@ final class DeviceControlDecisionTest extends RemoteTestCase
 
         ['device' => $device] = $this->enrolDevice($owner, $this->companyId);
 
+        $this->turnOnTwoStep($owner);
         Services::deviceService()->enableUnattended($owner, (string) $device['uuid'], true);
         $this->markDeviceOnline((string) $device['uuid']);
 

@@ -12,8 +12,10 @@ Mac captures nothing — the picture is the browser's. See
 `.app` and `.dmg` with `npx tauri build --target aarch64-apple-darwin --bundles
 app,dmg`, signed with one stable Apple Development certificate when the
 repository has one, ad hoc (`-`) otherwise. `src-tauri/tauri.macos.conf.json`
-sets macOS 13 as the minimum and the hardened runtime; it needs no
-entitlements, no notarisation and no Developer ID.
+sets macOS 13 as the minimum and the hardened runtime, and one entitlement,
+`com.apple.security.cs.disable-library-validation` (`src-tauri/Entitlements.plist`),
+so the app can load Cisco's OpenH264 dylib, which our team did not sign. It needs
+no notarisation and no Developer ID.
 
 The same build locally, on a Mac with Xcode's command-line tools:
 

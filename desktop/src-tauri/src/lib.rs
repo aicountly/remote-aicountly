@@ -27,6 +27,7 @@ pub mod ipc;
 pub mod platform;
 pub mod portal;
 pub mod runtime;
+pub mod secure_desktop;
 pub mod session;
 pub mod tray;
 
@@ -133,6 +134,10 @@ pub fn run() {
 
     let agent = std::sync::Arc::new(agent::Agent::load());
 
+    // Cisco's OpenH264, which the screen is encoded with: downloaded onto this
+    // computer, not shipped (`commands::codec`, docs/legal/OPENH264.md).
+    let codec = commands::codec::manager(&agent.config());
+
     let builder = tauri::Builder::default();
 
     // Stop control from anywhere. Registered only where there is something to
@@ -182,6 +187,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(agent)
+        .manage(codec)
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
             commands::get_permissions,
@@ -219,6 +225,10 @@ pub fn run() {
             commands::computers::help_participants,
             commands::computers::answer_help_participant,
             commands::computers::end_help_session,
+            commands::codec::codec_status,
+            commands::codec::install_codec,
+            commands::codec::remove_codec,
+            commands::codec::set_codec_enabled,
         ])
         .setup(|app| {
             use tauri::Manager;
@@ -240,6 +250,14 @@ pub fn run() {
             let handle = app.handle().clone();
             let attention = std::sync::Mutex::new(None::<String>);
 
+            // Loaded, or downloaded, a few seconds from now in the background;
+            // every session's screen track encodes from its slot.
+            let codec = app
+                .state::<remote_webrtc::video::CodecManager>()
+                .inner()
+                .clone();
+            commands::codec::start(app.handle(), &codec);
+
             app.manage(runtime::start(
                 agent,
                 std::sync::Arc::new(move |state: remote_core::AgentState| {
@@ -259,7 +277,7 @@ pub fn run() {
                     // the two disagree about whether a session is running.
                     let _ = tauri::Emitter::emit(&handle, "aicountly-remote://state", state);
                 }),
-                remote_webrtc::webrtc_rs::WebRtcFactory,
+                remote_webrtc::webrtc_rs::WebRtcFactory::new(codec.source()),
             ));
 
             Ok(())

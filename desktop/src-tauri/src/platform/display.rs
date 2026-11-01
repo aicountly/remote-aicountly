@@ -27,14 +27,16 @@ const MAX_NAME_CHARS: usize = 120;
 /// Whether the Secure Desktop is in front of the user's own.
 ///
 /// The agent polls this while capturing. When it becomes `Active`, the viewer
-/// is told "the person at this computer is answering a Windows security
-/// prompt" instead of being left looking at a frozen frame and wondering
-/// whether the connection died.
+/// is told a Windows administrator prompt is open instead of being left
+/// looking at a frozen frame and wondering whether the connection died.
 ///
-/// It is deliberately only a *notification*. Nothing anywhere attempts to
-/// capture the Secure Desktop or to inject into it — Windows prevents both by
-/// design, and defeating that protection is not something a remote-assistance
-/// product should be trying to do.
+/// This is only a *detection*: the user-session capture never crosses onto the
+/// Secure Desktop, because Windows does not let a medium-integrity process. It
+/// is what the app uses to say "a prompt is open" when no helper is
+/// running — an unauthorised session, where the honest answer is "ask the
+/// person at the computer". When the session *is* authorised, the service's
+/// Secure Desktop helper reaches `winsta0\winlogon` from a SYSTEM process and
+/// forwards it; that is a separate, privileged path, not this one weakened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecureDesktopState {
     /// The user's own desktop is in front. Capture is showing what they see.

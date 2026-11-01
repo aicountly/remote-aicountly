@@ -34,6 +34,9 @@ describe('ControlRequest', () => {
         clipboardAllowedByPolicy={false}
         shareClipboard={false}
         onShareClipboardChange={vi.fn()}
+        secureDesktopSupported={false}
+        answerSecureDesktop={false}
+        onAnswerSecureDesktopChange={vi.fn()}
         onAllow={vi.fn()}
         onDeny={vi.fn()}
       />,
@@ -54,6 +57,9 @@ describe('ControlRequest', () => {
         clipboardAllowedByPolicy={false}
         shareClipboard={false}
         onShareClipboardChange={vi.fn()}
+        secureDesktopSupported={false}
+        answerSecureDesktop={false}
+        onAnswerSecureDesktopChange={vi.fn()}
         onAllow={vi.fn()}
         onDeny={vi.fn()}
       />,
@@ -70,6 +76,9 @@ describe('ControlRequest', () => {
         clipboardAllowedByPolicy={false}
         shareClipboard={false}
         onShareClipboardChange={vi.fn()}
+        secureDesktopSupported={false}
+        answerSecureDesktop={false}
+        onAnswerSecureDesktopChange={vi.fn()}
         onAllow={vi.fn()}
         onDeny={vi.fn()}
       />,
@@ -84,6 +93,9 @@ describe('ControlRequest', () => {
         clipboardAllowedByPolicy
         shareClipboard={false}
         onShareClipboardChange={vi.fn()}
+        secureDesktopSupported={false}
+        answerSecureDesktop={false}
+        onAnswerSecureDesktopChange={vi.fn()}
         onAllow={vi.fn()}
         onDeny={vi.fn()}
       />,
@@ -102,6 +114,9 @@ describe('ControlRequest', () => {
         clipboardAllowedByPolicy
         shareClipboard={false}
         onShareClipboardChange={onShareClipboardChange}
+        secureDesktopSupported={false}
+        answerSecureDesktop={false}
+        onAnswerSecureDesktopChange={vi.fn()}
         onAllow={vi.fn()}
         onDeny={vi.fn()}
       />,
@@ -123,6 +138,9 @@ describe('ControlRequest', () => {
         clipboardAllowedByPolicy={false}
         shareClipboard={false}
         onShareClipboardChange={vi.fn()}
+        secureDesktopSupported={false}
+        answerSecureDesktop={false}
+        onAnswerSecureDesktopChange={vi.fn()}
         onAllow={onAllow}
         onDeny={onDeny}
       />,
@@ -137,6 +155,49 @@ describe('ControlRequest', () => {
     expect(onAllow).toHaveBeenCalledOnce()
   })
 
+  it('offers the Windows administrator-prompt tick only on a host that can, and it starts off', async () => {
+    const onAnswerSecureDesktopChange = vi.fn()
+
+    const { rerender } = render(
+      <ControlRequest
+        session={session()}
+        requesterName="Sam in support"
+        clipboardAllowedByPolicy={false}
+        shareClipboard={false}
+        onShareClipboardChange={vi.fn()}
+        secureDesktopSupported={false}
+        answerSecureDesktop={false}
+        onAnswerSecureDesktopChange={onAnswerSecureDesktopChange}
+        onAllow={vi.fn()}
+        onDeny={vi.fn()}
+      />,
+    )
+
+    // Not offered when the host cannot reach the Secure Desktop.
+    expect(screen.queryByText(/answer Windows administrator prompts/i)).not.toBeInTheDocument()
+
+    rerender(
+      <ControlRequest
+        session={session()}
+        requesterName="Sam in support"
+        clipboardAllowedByPolicy={false}
+        shareClipboard={false}
+        onShareClipboardChange={vi.fn()}
+        secureDesktopSupported
+        answerSecureDesktop={false}
+        onAnswerSecureDesktopChange={onAnswerSecureDesktopChange}
+        onAllow={vi.fn()}
+        onDeny={vi.fn()}
+      />,
+    )
+
+    const box = screen.getByRole('checkbox', { name: /answer Windows administrator prompts/i })
+    expect(box).not.toBeChecked()
+
+    await userEvent.click(box)
+    expect(onAnswerSecureDesktopChange).toHaveBeenCalledWith(true)
+  })
+
   it('disables both decisions while a previous one is still in flight', () => {
     render(
       <ControlRequest
@@ -145,6 +206,9 @@ describe('ControlRequest', () => {
         clipboardAllowedByPolicy={false}
         shareClipboard={false}
         onShareClipboardChange={vi.fn()}
+        secureDesktopSupported={false}
+        answerSecureDesktop={false}
+        onAnswerSecureDesktopChange={vi.fn()}
         onAllow={vi.fn()}
         onDeny={vi.fn()}
         busy

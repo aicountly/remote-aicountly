@@ -17,6 +17,7 @@ use App\Domain\Session\SessionStatus;
 use App\Domain\Support\ApiException;
 use App\Domain\Support\Clock;
 use App\Domain\Support\Ids;
+use App\Domain\TwoStep\TwoStepService;
 use CodeIgniter\Database\BaseConnection;
 use Config\Remote as RemoteConfig;
 
@@ -31,7 +32,7 @@ use Config\Remote as RemoteConfig;
  * *who consents*, and that consent was given earlier, deliberately, by a person
  * at the machine — and is revocable by them or by an administrator at any time.
  *
- * Six things must all be true before this class will start one, and the order
+ * Seven things must all be true before this class will start one, and the order
  * is deliberate — the cheapest tenant check first, the device's own state last:
  *
  *   1. the caller is a member of the device's company — or, for a personal
@@ -40,7 +41,9 @@ use Config\Remote as RemoteConfig;
  *   3. the caller holds `remote.unattended.access`;
  *   4. the device is ACTIVE — not suspended, not revoked;
  *   5. the device has unattended access enabled, by somebody, on a date;
- *   6. the device is actually reachable.
+ *   6. the person has passed Remote's own two-step verification in this
+ *      browser, and that verification has not expired;
+ *   7. the device is actually reachable.
  *
  * For a personal account the second and third are the platform's own answer
  * and are yes: reaching your own computer is what Basic is for. The first and
@@ -62,6 +65,7 @@ class DeviceSessionService
         private readonly EffectivePolicyResolver $policies,
         private readonly AuditService $audit,
         private readonly RemoteConfig $config,
+        private readonly TwoStepService $twoStep,
     ) {
     }
 
@@ -121,7 +125,7 @@ class DeviceSessionService
             );
         }
 
-        // (4), (5) and (6).
+        // (4) and (5); (6) and (7) follow.
         if ((string) $device['status'] !== DeviceService::STATUS_ACTIVE) {
             throw ApiException::conflict('DEVICE_NOT_ACTIVE', 'That device is not active in AICOUNTLY Remote.');
         }
@@ -132,6 +136,15 @@ class DeviceSessionService
                 'Unattended access has not been switched on for this device. Somebody at the machine has to enable it.',
             );
         }
+
+        // (6) A portal session is the one credential here Remote cannot vouch
+        // for — it cannot see whether the portal asked for a second factor — and
+        // this is the call that puts somebody on a computer nobody is watching.
+        // So it needs Remote's own second step too: any verification still within
+        // its lifetime (switching unattended access on asks for a fresher one).
+        // Ahead of "is it online", so the answer to a person without it is what
+        // to do about it, whatever state the computer is in.
+        $this->twoStep->requireVerified($identity, null, TwoStepService::PURPOSE_UNATTENDED_CONNECT);
 
         if (! $this->devices->isOnline($device)) {
             throw ApiException::conflict(

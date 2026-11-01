@@ -82,6 +82,7 @@ final class DeviceJoinScopeTest extends RemoteTestCase
     public function testADeviceJoinsTheUnattendedSessionThatNamesIt(): void
     {
         ['owner' => $owner, 'device' => $device, 'principal' => $principal] = $this->device('Machine Owner');
+        $this->turnOnTwoStep($owner);
         Services::deviceService()->enableUnattended($owner, (string) $device['uuid'], true);
         $this->markDeviceOnline((string) $device['uuid']);
         $session = Services::deviceSessionService()->startUnattended($owner, (string) $device['uuid'])['session'];
@@ -94,6 +95,7 @@ final class DeviceJoinScopeTest extends RemoteTestCase
     public function testADeviceCannotJoinAnUnattendedSessionMeantForAnotherDevice(): void
     {
         ['owner' => $owner, 'device' => $target] = $this->device('Machine Owner');
+        $this->turnOnTwoStep($owner);
         Services::deviceService()->enableUnattended($owner, (string) $target['uuid'], true);
         $this->markDeviceOnline((string) $target['uuid']);
         $session = Services::deviceSessionService()->startUnattended($owner, (string) $target['uuid'])['session'];

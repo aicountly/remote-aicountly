@@ -306,6 +306,7 @@ final class DeviceEnrolmentTest extends RemoteTestCase
         ['device' => $device] = $this->enrolDevice($user, $company);
         $devices = Services::deviceService();
 
+        $this->turnOnTwoStep($user);
         $enabled = $devices->enableUnattended($user, (string) $device['uuid'], true);
         $this->assertTrue($enabled['unattended_access_enabled']);
 
@@ -350,6 +351,7 @@ final class DeviceEnrolmentTest extends RemoteTestCase
 
         ['device' => $device] = $this->enrolDevice($user, $company);
         $devices = Services::deviceService();
+        $this->turnOnTwoStep($user);
         $devices->enableUnattended($user, (string) $device['uuid'], true);
 
         $suspended = $devices->update($user, (string) $device['uuid'], ['status' => 'SUSPENDED']);

@@ -1,8 +1,11 @@
+import { useEffect } from 'react'
+import { useLocation } from 'react-router-dom'
 import { Check, Minus } from 'lucide-react'
 
 import { useDesktopAgentEnabled, useRemote } from '../../app/RemoteProvider'
 import { APP_ENV, APP_NAME } from '../../config'
 import { describePermission } from '../../utils/format'
+import TwoStepSettings from './TwoStepSettings'
 
 /**
  * Settings (§88).
@@ -14,10 +17,20 @@ import { describePermission } from '../../utils/format'
  *
  * That makes it the first place to look when something is unavailable, which is
  * worth more than a page of switches nobody should be touching.
+ *
+ * The one thing a person does set here is their own two-step verification,
+ * which the Computers page and the connect page send them to
+ * (`/settings#two-step`) when unattended access needs it.
  */
 export default function SettingsPage() {
   const { bootstrap, policy, capabilities } = useRemote()
   const desktopAgent = useDesktopAgentEnabled()
+  const { hash } = useLocation()
+
+  // The router does not scroll to a fragment by itself.
+  useEffect(() => {
+    if (hash === '#two-step') document.getElementById('two-step')?.scrollIntoView?.({ block: 'start' })
+  }, [hash])
 
   const grantedPermissions = Object.entries(policy?.permissions ?? {})
     .filter(([, granted]) => granted)
@@ -28,7 +41,7 @@ export default function SettingsPage() {
       <div className="stack stack--lg">
         <header className="stack stack--sm">
           <h1>Settings</h1>
-          <p className="muted">What this browser supports, and what your account can do in Remote.</p>
+          <p className="muted">Your two-step verification, what this browser supports, and what your account can do in Remote.</p>
         </header>
 
         <section className="card">
@@ -47,6 +60,8 @@ export default function SettingsPage() {
             </dl>
           </div>
         </section>
+
+        <TwoStepSettings />
 
         <section className="card">
           <div className="card__header">

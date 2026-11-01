@@ -192,7 +192,10 @@ Personal scope permits it (`CompanyPolicyDefaults::personal()`), Basic entitles 
 platform-wide row — migration `2026-10-31-000100_EntitleUnattendedAccessByDefault`, `RemotePlatformDefaultsSeeder`), and
 a personal account holds `remote.unattended.access`. That reaches nothing by itself: each computer stays unreachable
 until somebody at it turns its own switch on with `confirm: true` (`POST /devices/{uuid}/unattended/enable`), and only
-its owner can then connect (`POST /devices/{uuid}/connect`; anybody else gets 404). Reboot stays off for personal
+its owner can then connect (`POST /devices/{uuid}/connect`; anybody else gets 404). Both need Remote's own two-step
+verification — a code from the last ten minutes to switch it on, a verified browser to connect, and
+`TWO_STEP_SETUP_REQUIRED` for a person who has not turned it on ([../SECURITY.md](../SECURITY.md#two-step-verification));
+switching it off never does. Reboot stays off for personal
 computers. Unattended sessions keep granting control with the session, as before. Company scope is unchanged: every
 preset still leaves `allow_unattended_access` off and an organisation grants the permission deliberately.
 

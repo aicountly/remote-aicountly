@@ -29,18 +29,25 @@
 //! cannot inject into their session, so it does neither. See
 //! `agents/windows-service` for that half and why the split exists.
 //!
-//! # What this deliberately does not do
+//! # What this deliberately does not do, and the one thing it now does
 //!
-//! * **It does not disable UAC**, weaken any Windows security setting, or
-//!   attempt to defeat the Secure Desktop.
-//! * **It cannot capture or control the Secure Desktop.** Windows isolates it
-//!   from every desktop application by design, and there is no supported way
-//!   for a user-session process to reach it. That means the UAC prompt, the
-//!   Ctrl+Alt+Del screen, and the sign-in screen appear to a remote viewer as a
-//!   frozen or black frame, and input sent during one does nothing. The
-//!   limitation is real, it is documented in
-//!   `docs/desktop/WINDOWS_AGENT.md`, and the agent tells the person watching
-//!   rather than leaving them to wonder — see [`capture::SecureDesktopState`].
+//! * **It does not disable UAC** or weaken any Windows security setting.
+//! * **This user-session process still cannot itself capture or inject into
+//!   the Secure Desktop.** Windows isolates `winsta0\winlogon` from every
+//!   medium-integrity application by design, and nothing here tries to cross
+//!   that from the app. On its own, the UAC prompt, the Ctrl+Alt+Del screen and
+//!   the lock screen appear to the app as a frozen frame, and input does
+//!   nothing — which [`capture::SecureDesktopState`] detects and says out loud.
+//! * **What reaches the Secure Desktop is a separate, privileged helper** the
+//!   per-machine service starts, as a SYSTEM process placed onto
+//!   `winsta0\winlogon` — the same mechanism AnyDesk and TeamViewer use when
+//!   installed. The app connects to it over a dedicated pipe and, while it is
+//!   forwarding, sends its frames to the viewer and routes **gate-admitted**
+//!   input to it instead of `SendInput` (`crate::secure_desktop`,
+//!   `agents/windows-service`'s `secure_desktop` module). It runs only while a
+//!   session is controlled and the person at the machine ticked the consent
+//!   box, or an unattended connection is permitted by the device setting. See
+//!   `docs/desktop/WINDOWS_AGENT.md` and `docs/SECURITY.md`.
 
 use remote_device::{PlatformProviders, PlatformResult};
 

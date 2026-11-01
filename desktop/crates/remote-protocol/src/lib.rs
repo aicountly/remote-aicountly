@@ -152,6 +152,31 @@ pub enum ControlMessage {
     /// The pause is over: the person at the machine has been idle long
     /// enough, and the controller's input is admitted again.
     ControlResumed,
+    /// The agent telling the controller that the Windows Secure Desktop is in
+    /// front — a UAC consent or credential prompt, the Ctrl+Alt+Del screen or
+    /// the lock screen.
+    ///
+    /// Informational, like [`ControlMessage::ControlEnded`]: it changes nothing
+    /// the controller may *do*, it tells them what they are looking at. The
+    /// Secure Desktop lives on its own Windows desktop (`winsta0\Winlogon`)
+    /// that an ordinary application cannot capture or inject into; a helper the
+    /// person authorised, run by the per-machine service, is what reaches it.
+    /// So two independent facts travel here, not one:
+    ///
+    /// * `active` — the Secure Desktop is in front right now, so the ordinary
+    ///   capture is frozen behind it;
+    /// * `reachable` — a Secure Desktop helper is connected and forwarding, so
+    ///   the controller can see and answer the prompt. When it is `false` the
+    ///   prompt can only be answered by the person at the machine.
+    ///
+    /// Sent whenever either changes, so the room can say "a Windows
+    /// administrator prompt is open" and whether it can be answered from here.
+    SecureDesktop {
+        /// Whether the Secure Desktop is in front of the user's own desktop.
+        active: bool,
+        /// Whether an authorised helper is forwarding it to the controller.
+        reachable: bool,
+    },
     /// Keep-alive, so a silent channel can be told from a dead one.
     Ping {
         /// Milliseconds since the controller's epoch; echoed back untouched.
@@ -327,6 +352,7 @@ impl ControlEnvelope {
             | ControlMessage::ControlEnded { .. }
             | ControlMessage::ControlPaused { .. }
             | ControlMessage::ControlResumed
+            | ControlMessage::SecureDesktop { .. }
             | ControlMessage::Ping { .. }
             | ControlMessage::Pong { .. } => Ok(()),
             ControlMessage::Reboot { session_uuid } => {
@@ -436,6 +462,10 @@ mod tests {
                 reason: PauseReason::LocalInput,
             },
             ControlMessage::ControlResumed,
+            ControlMessage::SecureDesktop {
+                active: true,
+                reachable: false,
+            },
         ];
 
         for message in messages {
@@ -445,6 +475,33 @@ mod tests {
 
             assert_eq!(original, decoded);
         }
+    }
+
+    /// What `web/src/services/webrtc/remoteControl.ts` reads: the Secure
+    /// Desktop notice is spelled exactly this way inside the envelope, carries
+    /// both flags, and injects nothing on its own.
+    #[test]
+    fn the_secure_desktop_notice_has_the_wire_shape_the_browser_reads() {
+        let value = serde_json::to_value(envelope(ControlMessage::SecureDesktop {
+            active: true,
+            reachable: true,
+        }))
+        .unwrap();
+
+        assert_eq!(
+            value["m"],
+            serde_json::json!({"type": "secure_desktop", "active": true, "reachable": true})
+        );
+
+        // The browser's spelling decodes back, and a notice is never input.
+        let decoded = ControlEnvelope::decode(
+            br#"{"v":1,"s":"session-uuid","p":"participant-uuid","n":5,"m":{"type":"secure_desktop","active":false,"reachable":false}}"#,
+        )
+        .expect("decodes");
+        assert!(
+            !decoded.is_input(),
+            "a Secure Desktop notice injects nothing"
+        );
     }
 
     /// What `web/src/services/webrtc/remoteControl.ts` reads: the two companion

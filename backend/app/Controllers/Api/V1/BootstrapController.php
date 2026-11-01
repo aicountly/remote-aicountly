@@ -7,7 +7,9 @@ namespace App\Controllers\Api\V1;
 use App\Controllers\BaseApiController;
 use App\Domain\Policy\PermissionCatalog;
 use App\Domain\Support\ApiException;
+use App\Domain\Support\Clock;
 use App\Domain\Support\Presenter;
+use App\Domain\TwoStep\TwoStepStanding;
 use App\Libraries\CompanyLifecycle;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
@@ -24,9 +26,23 @@ use Config\Services;
  */
 class BootstrapController extends BaseApiController
 {
+    /**
+     * Bootstrap is let in before two-step verification (`api-auth:allow-unverified`)
+     * so that the web learns, from its first request, that it has to ask for a
+     * code — `twoStep: {enabled, sessionVerified}`. Until the browser has passed
+     * it the answer says who the person is and what the deployment offers, and
+     * nothing of theirs: no organisations, no counts, no recent sessions. Those
+     * come with the bootstrap the web makes again once the code is accepted.
+     */
     public function index(): ResponseInterface
     {
         $identity  = $this->identity();
+        $twoStep   = $this->context()->twoStep() ?? Services::twoStep()->currentStanding($identity);
+
+        if ($twoStep->blocksRequest()) {
+            return $this->ok($this->lockedBootstrap($twoStep));
+        }
+
         $context   = $this->context()->sourceContext();
         $directory = Services::platformDirectory();
         $sessions  = Services::sessionService();
@@ -104,7 +120,67 @@ class BootstrapController extends BaseApiController
                 'signallingConfigured' => Services::signallingTokenService()->isConfigured(),
                 'relayAvailable'       => Services::iceConfigService()->hasRelay(),
             ],
+            'twoStep' => $this->twoStepSummary($twoStep),
         ]);
+    }
+
+    /**
+     * The same shape, emptied of the person's data, for a browser that has not
+     * passed two-step verification yet. The policy stays: it is what the
+     * platform permits, not something of theirs, and the web's shell is built
+     * from it.
+     *
+     * @return array<string, mixed>
+     */
+    private function lockedBootstrap(TwoStepStanding $twoStep): array
+    {
+        $identity = $this->identity();
+        $config   = Services::remoteConfig();
+
+        return [
+            'user' => [
+                'uuid'           => $identity->uuid,
+                'displayName'    => $identity->displayName,
+                'email'          => $identity->email,
+                'isSupportAgent' => false,
+            ],
+            'companies'      => [],
+            'activeScope'    => ['scopeType' => 'PERSONAL', 'companyId' => null, 'lifecycle' => null],
+            'launchContext'  => null,
+            'policy'         => $this->policyFor('PERSONAL', null)->toArray(),
+            'metrics'        => [
+                'activeSessions'         => 0,
+                'sessionsThisMonth'      => 0,
+                'averageDurationSeconds' => null,
+                'pendingSupportRequests' => 0,
+            ],
+            'recentSessions' => [],
+            'features'       => [
+                'fileTransfer'  => $config->featureFileTransfer,
+                'recording'     => $config->featureRecording,
+                'externalGuest' => $config->featureExternalGuest,
+                'safeShare'     => $config->featureSafeShare,
+                'microphone'    => $config->featureMicrophone,
+                'multiViewer'   => $config->featureMultiViewer,
+                'desktopAgent'  => $config->featureDesktopAgent,
+                'fileTransferMaxBytes' => $config->fileTransferMaxBytes,
+            ],
+            'realtime' => [
+                'signallingConfigured' => Services::signallingTokenService()->isConfigured(),
+                'relayAvailable'       => Services::iceConfigService()->hasRelay(),
+            ],
+            'twoStep' => $this->twoStepSummary($twoStep),
+        ];
+    }
+
+    /** @return array{enabled: bool, sessionVerified: bool, verifiedUntil: ?string} */
+    private function twoStepSummary(TwoStepStanding $twoStep): array
+    {
+        return [
+            'enabled'         => $twoStep->enabled,
+            'sessionVerified' => $twoStep->sessionVerified(),
+            'verifiedUntil'   => $twoStep->sessionVerified() ? Clock::iso($twoStep->verifiedUntil) : null,
+        ];
     }
 
     /**

@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { connectToDevice } from '../../services/api/remote'
 import { RemoteApiError } from '../../services/api/client'
 import RestrictionNotice from '../../components/ui/RestrictionNotice'
+import TwoStepSetupLink from '../twoStep/TwoStepSetupLink'
 
 /**
  * `/connect/:deviceUuid` — connect to one of your own computers with nobody
@@ -14,6 +15,12 @@ import RestrictionNotice from '../../components/ui/RestrictionNotice'
  * here, by the person signed in to the portal, exactly as the Connect button
  * on the Computers page makes it. Once, even under StrictMode: a second
  * request would start a second session.
+ *
+ * Connecting with nobody at the computer needs Remote's own two-step
+ * verification. When this browser's has run out, the API client asks for a
+ * code in the one prompt the whole app shares and sends the request again, so
+ * the person lands in the session as before. When they have never turned it
+ * on, the refusal says so and this page links to the setting.
  */
 export default function ConnectDevicePage() {
   const { deviceUuid = '' } = useParams()
@@ -40,7 +47,10 @@ export default function ConnectDevicePage() {
         <h1>Connecting…</h1>
         {error ? (
           <>
-            <RestrictionNotice error={error} />
+            <RestrictionNotice
+              error={error}
+              action={error.code === 'TWO_STEP_SETUP_REQUIRED' ? <TwoStepSetupLink /> : undefined}
+            />
             <p>
               <Link to="/devices" className="btn btn--secondary">
                 Back to your computers

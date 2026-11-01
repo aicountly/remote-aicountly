@@ -32,6 +32,8 @@ use App\Domain\Signalling\IceConfigService;
 use App\Domain\Signalling\SignallingTokenService;
 use App\Domain\Support\RequestContext;
 use App\Domain\Support\SupportRequestService;
+use App\Domain\TwoStep\SecretCipher;
+use App\Domain\TwoStep\TwoStepService;
 use CodeIgniter\Config\BaseService;
 
 /**
@@ -235,6 +237,28 @@ class Services extends BaseService
         );
     }
 
+    // -------------------------------------------------- two-step verification
+
+    /**
+     * Remote's own second step (TOTP and recovery codes). It reads the request
+     * context for the verification token the browser presented, so it is
+     * shared per request, like the context itself.
+     */
+    public static function twoStep(bool $getShared = true): TwoStepService
+    {
+        if ($getShared) {
+            return static::getSharedInstance('twoStep');
+        }
+
+        return new TwoStepService(
+            db_connect(),
+            static::auditService(),
+            static::remoteConfig(),
+            static::requestContext(),
+            new SecretCipher(static::remoteConfig()),
+        );
+    }
+
     // ----------------------------------------------------------------- devices
 
     public static function deviceService(bool $getShared = true): DeviceService
@@ -248,6 +272,7 @@ class Services extends BaseService
             static::policyResolver(),
             static::auditService(),
             static::remoteConfig(),
+            static::twoStep(),
         );
     }
 
@@ -295,6 +320,7 @@ class Services extends BaseService
             static::policyResolver(),
             static::auditService(),
             static::remoteConfig(),
+            static::twoStep(),
         );
     }
 

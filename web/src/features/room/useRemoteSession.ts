@@ -769,6 +769,8 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     isControlling: live?.controllingPeerId !== null && live?.controllingPeerId !== undefined,
     /** The machine paused remote input because somebody there is using it. */
     controlPaused: live?.controlPaused ?? null,
+    /** A Windows administrator prompt (the Secure Desktop) is open on the controlled machine. */
+    secureDesktop: live?.secureDesktop ?? null,
     actions: {
       reload,
       beginShare,
