@@ -119,8 +119,12 @@ export function disableUnattended(): Promise<AgentState> {
   return invoke<AgentState>('disable_unattended')
 }
 
-export function grantControl(participantUuid: string, clipboard: boolean): Promise<AgentState> {
-  return invoke<AgentState>('grant_control', { participantUuid, clipboard })
+export function grantControl(
+  participantUuid: string,
+  clipboard: boolean,
+  secureDesktop: boolean,
+): Promise<AgentState> {
+  return invoke<AgentState>('grant_control', { participantUuid, clipboard, secureDesktop })
 }
 
 export function denyControl(): Promise<AgentState> {

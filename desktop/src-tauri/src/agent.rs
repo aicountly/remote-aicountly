@@ -30,6 +30,8 @@ use remote_protocol::{
 };
 use remote_security::{DeviceKeypair, EnrolmentRecord, KeyError, StorageScope, DEVICE_KEY_ENTRY};
 
+use aicountly_remote_service::SecureDesktopMode;
+
 use crate::platform;
 
 /// Everything the process holds.
@@ -68,6 +70,16 @@ pub struct Agent {
     /// A help session the person at the machine started from the window
     /// ("give your code"), until the connection loop hosts it.
     help_request: Mutex<Option<String>>,
+    /// The Secure Desktop helper connection, while one is live. `None` when no
+    /// helper is running — which is the usual state, since a helper exists only
+    /// while a Windows administrator prompt may be answered from this session.
+    secure_desktop: Mutex<Option<crate::secure_desktop::SecureDesktopHelper>>,
+    /// Whether the person at the machine ticked "also let them answer Windows
+    /// administrator prompts" when granting control. Set by [`Agent::grant_control`]
+    /// and cleared the moment control stops, so it never outlives the grant it
+    /// belongs to. Unattended connections do not use it — they are governed by
+    /// the device setting instead.
+    secure_desktop_consent: AtomicBool,
 }
 
 /// The companion link this machine has joined.
@@ -104,6 +116,8 @@ impl Agent {
             stop_notice: AtomicBool::new(false),
             last_injection: Mutex::new(None),
             help_request: Mutex::new(None),
+            secure_desktop: Mutex::new(None),
+            secure_desktop_consent: AtomicBool::new(false),
         }
     }
 
@@ -465,6 +479,9 @@ impl Agent {
             *gate = Some(ControlGate::new(summary.session_uuid.clone()));
         }
 
+        // A fresh session grants nothing yet, Secure Desktop included.
+        self.secure_desktop_consent.store(false, Ordering::SeqCst);
+
         self.apply(AgentEvent::SessionStarted(summary))
     }
 
@@ -479,6 +496,7 @@ impl Agent {
         }
 
         self.release_all_input();
+        self.clear_secure_desktop();
 
         self.apply(AgentEvent::SessionEnded)
     }
@@ -504,7 +522,22 @@ impl Agent {
     }
 
     /// The person at the machine said yes.
-    pub fn grant_control(&self, participant_uuid: &str, clipboard: bool) -> AgentState {
+    ///
+    /// `secure_desktop` is the extra box in the consent dialog — "also let them
+    /// answer Windows administrator prompts". It is remembered until control
+    /// stops, and the session loop reads it to decide whether to run a Secure
+    /// Desktop helper. It is separate from `clipboard` for the same reason
+    /// clipboard is separate from control: each is its own exposure and ticking
+    /// one must not start another.
+    pub fn grant_control(
+        &self,
+        participant_uuid: &str,
+        clipboard: bool,
+        secure_desktop: bool,
+    ) -> AgentState {
+        self.secure_desktop_consent
+            .store(secure_desktop, Ordering::SeqCst);
+
         if let Ok(mut gate) = self.gate.lock() {
             if let Some(gate) = gate.as_mut() {
                 gate.grant(participant_uuid, clipboard);
@@ -534,6 +567,8 @@ impl Agent {
     pub fn deny_control(&self) -> AgentState {
         let requester = self.controller_uuid();
 
+        self.secure_desktop_consent.store(false, Ordering::SeqCst);
+
         if let Ok(mut gate) = self.gate.lock() {
             if let Some(gate) = gate.as_mut() {
                 gate.deny();
@@ -561,6 +596,8 @@ impl Agent {
     /// controlled.
     pub fn stop_control(&self) -> AgentState {
         let controller = self.controller_uuid();
+
+        self.secure_desktop_consent.store(false, Ordering::SeqCst);
 
         if let Ok(mut gate) = self.gate.lock() {
             if let Some(gate) = gate.as_mut() {
@@ -1066,6 +1103,130 @@ impl Agent {
             .unwrap_or(false)
     }
 
+    // ------------------------------------------------------- secure desktop
+
+    /// Whether the person at the machine consented, while granting control, to
+    /// this session answering Windows administrator prompts.
+    #[must_use]
+    pub fn secure_desktop_consent(&self) -> bool {
+        self.secure_desktop_consent.load(Ordering::SeqCst)
+    }
+
+    /// Ask the service for a Secure Desktop helper and connect to it.
+    ///
+    /// Blocking — it waits for the service to answer and for the pipe to come
+    /// up — so the session loop calls it off its own task. The service makes
+    /// the real decision; a refusal or a failed connection simply leaves no
+    /// helper, which the viewer sees as the Secure Desktop being unreachable.
+    pub fn start_secure_desktop(&self, session_uuid: &str, mode: SecureDesktopMode) {
+        // Already have a live one — do not ask for a second.
+        if let Ok(held) = self.secure_desktop.lock() {
+            if held.as_ref().is_some_and(|helper| helper.is_connected()) {
+                return;
+            }
+        }
+
+        let pipe = match crate::ipc::start_secure_desktop(session_uuid, mode) {
+            Ok(pipe) => pipe,
+            Err(error) => {
+                tracing::debug!(%error, "the Secure Desktop helper was not started");
+
+                return;
+            }
+        };
+
+        match crate::secure_desktop::SecureDesktopHelper::connect(&pipe) {
+            Ok(helper) => {
+                if let Ok(mut held) = self.secure_desktop.lock() {
+                    *held = Some(helper);
+                }
+                tracing::info!("a Secure Desktop helper is connected");
+            }
+            Err(error) => {
+                tracing::warn!(%error, "the Secure Desktop helper did not connect");
+            }
+        }
+    }
+
+    /// Stop the helper for a session: tell it to stop, drop it here, and tell
+    /// the service to tear its process down.
+    pub fn stop_secure_desktop(&self, session_uuid: &str) {
+        self.clear_secure_desktop();
+
+        if let Err(error) = crate::ipc::stop_secure_desktop(session_uuid) {
+            tracing::debug!(%error, "the service was not told to stop the Secure Desktop helper");
+        }
+    }
+
+    /// Drop the local helper connection, telling it to stop as it goes. The
+    /// service's own process cleanup is a separate call; this is the half that
+    /// stops input reaching it at once.
+    fn clear_secure_desktop(&self) {
+        if let Ok(mut held) = self.secure_desktop.lock() {
+            if let Some(helper) = held.take() {
+                helper.stop();
+            }
+        }
+    }
+
+    /// Whether a helper is connected and reports the Secure Desktop in front.
+    #[must_use]
+    pub fn secure_desktop_active(&self) -> bool {
+        self.secure_desktop
+            .lock()
+            .ok()
+            .and_then(|held| held.as_ref().map(|helper| helper.is_active()))
+            .unwrap_or(false)
+    }
+
+    /// Whether a helper is connected at all — i.e. the Secure Desktop can be
+    /// answered from here, whether or not it is in front this instant.
+    #[must_use]
+    pub fn secure_desktop_reachable(&self) -> bool {
+        self.secure_desktop
+            .lock()
+            .ok()
+            .and_then(|held| held.as_ref().map(|helper| helper.is_connected()))
+            .unwrap_or(false)
+    }
+
+    /// Whether the Secure Desktop is in front, detected without a helper.
+    ///
+    /// Used to tell the viewer "a prompt is open" even when no helper is
+    /// running — an unauthorised session, where the answer is "ask the person
+    /// at the computer" rather than "you can answer it".
+    #[must_use]
+    pub fn secure_desktop_detected(&self) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            crate::platform::windows::capture::secure_desktop_in_front()
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            false
+        }
+    }
+
+    /// The helper's latest frame as an encoder frame, if there is one.
+    #[must_use]
+    pub fn latest_secure_desktop_frame(&self) -> Option<remote_device::Frame> {
+        self.secure_desktop
+            .lock()
+            .ok()
+            .and_then(|held| held.as_ref().and_then(|helper| helper.latest_frame()))
+    }
+
+    /// Forward one gate-admitted input to the helper. `false` if there is none
+    /// or the pipe is gone.
+    fn send_secure_desktop_input(&self, input: aicountly_remote_service::HelperInput) -> bool {
+        self.secure_desktop
+            .lock()
+            .ok()
+            .and_then(|held| held.as_ref().map(|helper| helper.send_input(input)))
+            .unwrap_or(false)
+    }
+
     /// An administrator revoked this device.
     pub fn revoked(&self) -> AgentState {
         if let Ok(mut gate) = self.gate.lock() {
@@ -1073,6 +1234,7 @@ impl Agent {
         }
 
         self.release_all_input();
+        self.clear_secure_desktop();
 
         self.apply(AgentEvent::Revoked)
     }
@@ -1111,6 +1273,22 @@ impl Agent {
         // A ping is answered by whoever owns the channel, with the nonce.
         if let ControlMessage::Ping { nonce } = envelope.message {
             return Ok(Handled::Pinged(nonce));
+        }
+
+        // While the Secure Desktop is in front and a helper is forwarding it,
+        // input goes to the helper rather than to `SendInput` — the app cannot
+        // reach the Secure Desktop, the helper can. This is a change of
+        // destination for an **already gate-admitted** message, not a second
+        // path to input: `handle_control` ran the gate before calling here, so
+        // nothing the gate refused ever gets this far.
+        if self.secure_desktop_active() {
+            if let Some(input) = crate::secure_desktop::helper_input_from(&envelope.message) {
+                return Ok(if self.send_secure_desktop_input(input) {
+                    Handled::Applied
+                } else {
+                    Handled::Failed
+                });
+            }
         }
 
         // A companion's monitor is the one its owner is sharing, chosen at the
@@ -1354,7 +1532,7 @@ mod tests {
         let agent = Agent::new();
         agent.begin_session(summary());
         agent.control_requested(CONTROLLER, "Sam in support");
-        agent.grant_control(CONTROLLER, false);
+        agent.grant_control(CONTROLLER, false, false);
 
         // Past the gate. What the platform does with it depends on the host.
         assert!(agent.handle_control(&pointer(1)).is_ok());
@@ -1372,7 +1550,7 @@ mod tests {
     fn a_second_viewer_on_the_same_channel_cannot_type() {
         let agent = Agent::new();
         agent.begin_session(summary());
-        agent.grant_control(CONTROLLER, false);
+        agent.grant_control(CONTROLLER, false, false);
 
         let impostor = ControlEnvelope::new(
             SESSION,
@@ -1395,7 +1573,7 @@ mod tests {
     fn a_message_for_another_session_is_dropped() {
         let agent = Agent::new();
         agent.begin_session(summary());
-        agent.grant_control(CONTROLLER, false);
+        agent.grant_control(CONTROLLER, false, false);
 
         let elsewhere = ControlEnvelope::new(
             "another-session",
@@ -1418,7 +1596,7 @@ mod tests {
     fn a_replayed_message_is_dropped() {
         let agent = Agent::new();
         agent.begin_session(summary());
-        agent.grant_control(CONTROLLER, false);
+        agent.grant_control(CONTROLLER, false, false);
 
         assert!(agent.handle_control(&pointer(5)).is_ok());
         assert_eq!(
@@ -1432,7 +1610,7 @@ mod tests {
     fn clipboard_needs_its_own_switch_on_top_of_control() {
         let agent = Agent::new();
         agent.begin_session(summary());
-        agent.grant_control(CONTROLLER, false);
+        agent.grant_control(CONTROLLER, false, false);
 
         let clipboard = ControlEnvelope::new(
             SESSION,
@@ -1458,7 +1636,7 @@ mod tests {
     fn a_stale_server_grant_cannot_undo_a_local_stop() {
         let agent = Agent::new();
         agent.begin_session(summary());
-        agent.grant_control(CONTROLLER, true);
+        agent.grant_control(CONTROLLER, true, false);
         agent.stop_control();
 
         agent.sync_control(ControlState::Granted, Some(CONTROLLER.into()), true, None);
@@ -1474,7 +1652,7 @@ mod tests {
     fn ending_a_session_takes_the_gate_with_it() {
         let agent = Agent::new();
         agent.begin_session(summary());
-        agent.grant_control(CONTROLLER, false);
+        agent.grant_control(CONTROLLER, false, false);
 
         let state = agent.end_session();
 
@@ -1490,7 +1668,7 @@ mod tests {
     fn revocation_ends_everything_and_is_terminal() {
         let agent = Agent::new();
         agent.begin_session(summary());
-        agent.grant_control(CONTROLLER, false);
+        agent.grant_control(CONTROLLER, false, false);
 
         let state = agent.revoked();
 
@@ -1505,7 +1683,7 @@ mod tests {
     fn a_malformed_message_never_reaches_the_gate_state() {
         let agent = Agent::new();
         agent.begin_session(summary());
-        agent.grant_control(CONTROLLER, false);
+        agent.grant_control(CONTROLLER, false, false);
 
         assert!(matches!(
             agent.handle_control(b"not a control message"),
@@ -1523,7 +1701,7 @@ mod tests {
     fn rejections_are_counted_and_not_kept() {
         let agent = Agent::new();
         agent.begin_session(summary());
-        agent.grant_control(CONTROLLER, false);
+        agent.grant_control(CONTROLLER, false, false);
 
         let _ = agent.handle_control(&pointer(0));
         let _ = agent.handle_control(&pointer(0));
@@ -1607,7 +1785,7 @@ mod tests {
         assert_eq!(control.requester_uuid.as_deref(), Some(CONTROLLER));
         assert_eq!(control.requester_name.as_deref(), Some("Sam in support"));
 
-        let state = agent.grant_control(CONTROLLER, false);
+        let state = agent.grant_control(CONTROLLER, false, false);
         let control = state.active_session().unwrap().control.clone();
 
         assert!(control.requester_uuid.is_none());

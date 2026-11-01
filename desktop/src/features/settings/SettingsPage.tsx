@@ -96,6 +96,29 @@ export function SettingsPage({
           />
         </label>
 
+        {about?.supportsHosting ? (
+          <label className="field field--inline">
+            <span>
+              <span className="field__label">
+                Let my unattended connections answer administrator prompts and the lock screen
+              </span>
+              <span className="field__hint">
+                When you connect to this computer while nobody is here, this lets you answer the
+                Windows “Do you want to allow this app to make changes?” prompts and the lock
+                screen. Off by default. With somebody here, they are asked each time instead.
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              checked={draft.allowSecureDesktopUnattended}
+              onChange={(event) =>
+                setDraft({ ...draft, allowSecureDesktopUnattended: event.target.checked })
+              }
+              disabled={busy}
+            />
+          </label>
+        ) : null}
+
         <p className="field__hint" style={{ marginBottom: 'var(--space-4)' }}>
           AICOUNTLY Remote starts quietly in the tray when anyone signs in to Windows. To stop that,
           turn it off in Task Manager under Startup apps.

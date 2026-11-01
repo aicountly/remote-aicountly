@@ -30,7 +30,8 @@
 //! got through the ACL can ask for is a restart of a machine it is already
 //! signed in to — not code execution, not a file, not the device key.
 
-use crate::ipc::{IpcRequest, IpcResponse, IPC_PROTOCOL_VERSION};
+use crate::ipc::{IpcRequest, IpcResponse, SecureDesktopMode, IPC_PROTOCOL_VERSION};
+use crate::secure_desktop;
 
 /// How many sessions the service will track at once.
 ///
@@ -71,6 +72,16 @@ pub struct MachineState {
     pub active_sessions: Vec<String>,
     /// Monotonic seconds at the last restart request that was accepted.
     pub last_reboot_at: Option<u64>,
+    /// Whether this device may answer the Secure Desktop on an **unattended**
+    /// connection — the `allow_secure_desktop_unattended` configuration
+    /// setting, as the service last read it. Attended sessions do not depend
+    /// on it; see [`secure_desktop::authorise`].
+    pub allow_secure_desktop_unattended: bool,
+    /// A per-run random salt for Secure Desktop pipe names, so a process in the
+    /// session cannot squat the pipe by guessing its name before the helper
+    /// creates it. Empty until the service sets it once at start-up; see
+    /// [`secure_desktop::dedicated_pipe_name`].
+    pub pipe_salt: String,
 }
 
 /// A connection's own state. One per pipe instance.
@@ -80,6 +91,12 @@ pub struct Connection {
     pub greeted: bool,
     /// What the peer said it was.
     pub peer_version: Option<String>,
+    /// Facts about this pipe client the Windows layer learned when the
+    /// connection was accepted — whether it is the installed app image and
+    /// whether it runs in the console session. Default (all false) refuses a
+    /// Secure Desktop request, which is the right reading when the facts could
+    /// not be gathered.
+    pub client: secure_desktop::ClientFacts,
 }
 
 /// Something the Windows layer has to actually do.
@@ -96,6 +113,25 @@ pub enum Effect {
         session_uuid: String,
         /// The message Windows shows before restarting.
         reason: String,
+    },
+    /// Start a Secure Desktop helper for a session, serving the named pipe.
+    ///
+    /// The widest new thing a peer can cause, and still a bounded one: the
+    /// helper is this binary with a fixed argument, run for a session the
+    /// service was told about, serving a pipe only SYSTEM and this session's
+    /// user can open.
+    StartSecureDesktop {
+        /// The session it is for.
+        session_uuid: String,
+        /// The dedicated pipe the helper serves and the app connects to.
+        pipe_name: String,
+        /// How it was authorised, for the launch and the log.
+        mode: SecureDesktopMode,
+    },
+    /// Stop the Secure Desktop helper for a session.
+    StopSecureDesktop {
+        /// The session whose helper to stop.
+        session_uuid: String,
     },
 }
 
@@ -278,6 +314,61 @@ pub fn handle(
                     session_uuid,
                     reason,
                 }),
+            )
+        }
+
+        IpcRequest::StartSecureDesktop { session_uuid, mode } => {
+            if !is_session_identifier(&session_uuid) {
+                return (rejected("That is not a session identifier."), None);
+            }
+
+            // The decision is pure and lives in `secure_desktop` — the brief's
+            // "validation in machine.rs". The Windows facts it needs (our
+            // image, the console session) were put on the connection when it
+            // was accepted; session knowledge and the unattended setting come
+            // from the machine state.
+            let session_known = state.active_sessions.contains(&session_uuid);
+
+            match secure_desktop::authorise(
+                session_known,
+                mode,
+                state.allow_secure_desktop_unattended,
+                connection.client,
+            ) {
+                Ok(()) => {
+                    let pipe_name =
+                        secure_desktop::dedicated_pipe_name(&state.pipe_salt, &session_uuid);
+
+                    (
+                        IpcResponse::SecureDesktopStarting {
+                            pipe_name: pipe_name.clone(),
+                        },
+                        Some(Effect::StartSecureDesktop {
+                            session_uuid,
+                            pipe_name,
+                            mode,
+                        }),
+                    )
+                }
+                Err(refusal) => (
+                    IpcResponse::Error {
+                        code: "SECURE_DESKTOP_REFUSED".into(),
+                        message: refusal.to_string(),
+                    },
+                    None,
+                ),
+            }
+        }
+
+        IpcRequest::StopSecureDesktop { session_uuid } => {
+            // No authorisation to stop: control stopping, the session ending,
+            // the stop shortcut and a local-input pause all route through here,
+            // and refusing any of them would be the wrong way round. The
+            // service tears the helper down; a bad identifier simply matches
+            // nothing.
+            (
+                IpcResponse::Acknowledged,
+                Some(Effect::StopSecureDesktop { session_uuid }),
             )
         }
 
@@ -652,9 +743,142 @@ mod tests {
         for request in every_request {
             let (_, effect) = handle(&mut state, &mut connection, request, 10_000);
 
+            // Every effect a peer can cause is one it can be trusted with: a
+            // restart or authentication of a machine it is already signed in
+            // to, or starting/stopping a Secure Desktop helper that is this
+            // same binary, for a session it was told about, on a pipe only
+            // SYSTEM and this session's user can open. None is code execution,
+            // a file or the device key.
             match effect {
-                None | Some(Effect::Authenticate) | Some(Effect::Reboot { .. }) => {}
+                None
+                | Some(Effect::Authenticate)
+                | Some(Effect::Reboot { .. })
+                | Some(Effect::StartSecureDesktop { .. })
+                | Some(Effect::StopSecureDesktop { .. }) => {}
             }
         }
+    }
+
+    /// A greeted connection from our app, in the console session.
+    fn live_from_app() -> (MachineState, Connection) {
+        let (mut state, mut connection) = live();
+        connection.client = secure_desktop::ClientFacts {
+            is_installed_image: true,
+            in_console_session: true,
+        };
+        state.pipe_salt = "runsalt".into();
+
+        (state, connection)
+    }
+
+    /// An attended helper request from our app, for a known session, is
+    /// accepted and names the pipe to connect to.
+    #[test]
+    fn a_secure_desktop_helper_is_started_for_a_known_attended_session() {
+        let (mut state, mut connection) = live_from_app();
+
+        let (response, effect) = handle(
+            &mut state,
+            &mut connection,
+            IpcRequest::StartSecureDesktop {
+                session_uuid: "session-1".into(),
+                mode: SecureDesktopMode::Attended,
+            },
+            0,
+        );
+
+        let pipe = match response {
+            IpcResponse::SecureDesktopStarting { pipe_name } => pipe_name,
+            other => panic!("expected a pipe name, got {other:?}"),
+        };
+        assert!(pipe.contains("session-1"));
+        assert!(pipe.contains("runsalt"));
+
+        match effect {
+            Some(Effect::StartSecureDesktop {
+                session_uuid,
+                pipe_name,
+                mode,
+            }) => {
+                assert_eq!(session_uuid, "session-1");
+                assert_eq!(
+                    pipe_name, pipe,
+                    "the effect names the same pipe as the reply"
+                );
+                assert_eq!(mode, SecureDesktopMode::Attended);
+            }
+            other => panic!("expected a start effect, got {other:?}"),
+        }
+    }
+
+    /// A request that did not come from our app image is refused, however the
+    /// session and consent stand — this is the service's independent check.
+    #[test]
+    fn a_secure_desktop_helper_is_refused_for_a_client_that_is_not_our_app() {
+        let (mut state, mut connection) = live_from_app();
+        connection.client.is_installed_image = false;
+
+        let (response, effect) = handle(
+            &mut state,
+            &mut connection,
+            IpcRequest::StartSecureDesktop {
+                session_uuid: "session-1".into(),
+                mode: SecureDesktopMode::Attended,
+            },
+            0,
+        );
+
+        assert_eq!(effect, None);
+        assert!(matches!(
+            response,
+            IpcResponse::Error { ref code, .. } if code == "SECURE_DESKTOP_REFUSED"
+        ));
+    }
+
+    /// Unattended is refused unless the device setting is on; the same request
+    /// is accepted once it is.
+    #[test]
+    fn an_unattended_helper_needs_the_device_setting() {
+        let (mut state, mut connection) = live_from_app();
+
+        let request = || IpcRequest::StartSecureDesktop {
+            session_uuid: "session-1".into(),
+            mode: SecureDesktopMode::Unattended,
+        };
+
+        let (response, effect) = handle(&mut state, &mut connection, request(), 0);
+        assert_eq!(effect, None);
+        assert!(matches!(response, IpcResponse::Error { .. }));
+
+        state.allow_secure_desktop_unattended = true;
+        let (response, effect) = handle(&mut state, &mut connection, request(), 0);
+        assert!(matches!(
+            response,
+            IpcResponse::SecureDesktopStarting { .. }
+        ));
+        assert!(matches!(effect, Some(Effect::StartSecureDesktop { .. })));
+    }
+
+    /// Stopping needs no authorisation and always produces the stop effect.
+    #[test]
+    fn stopping_a_helper_is_always_accepted() {
+        let (mut state, mut connection) = live_from_app();
+
+        let (response, effect) = handle(
+            &mut state,
+            &mut connection,
+            IpcRequest::StopSecureDesktop {
+                session_uuid: "session-1".into(),
+            },
+            0,
+        );
+
+        assert_eq!(response, IpcResponse::Acknowledged);
+        assert_eq!(
+            effect,
+            Some(Effect::StopSecureDesktop {
+                session_uuid: "session-1".into()
+            })
+        );
     }
 }

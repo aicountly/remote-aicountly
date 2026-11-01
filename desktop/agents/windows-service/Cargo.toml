@@ -27,6 +27,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tokio.workspace = true
 time.workspace = true
+# The per-run salt for Secure Desktop pipe names. Already in the workspace
+# graph (remote-security), so this pulls in nothing new.
+rand.workspace = true
 remote-core.workspace = true
 remote-security.workspace = true
 remote-protocol.workspace = true
@@ -48,6 +51,13 @@ windows = { version = "0.62", features = [
     "Win32_System_Shutdown",
     "Win32_System_SystemInformation",
     "Win32_System_Memory",
+    # The Secure Desktop helper (`secure_desktop::helper`): capture the input
+    # desktop with GDI, follow it, and inject into it.
+    "Win32_Graphics_Gdi",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [dev-dependencies]

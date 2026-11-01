@@ -157,41 +157,102 @@ discard.
 > needs a machine that has finished booting and, unless unattended access is
 > enabled, somebody at it.
 
-## The four things Windows will not let this do
+## The Secure Desktop
+
+A UAC consent or credential prompt, the sign-in screen, the lock screen and
+Ctrl+Alt+Del run on a separate desktop, `winsta0\winlogon`, that the
+user-session app cannot capture and cannot inject into. For most of this
+product's life that was a hard limit the app only **detected** —
+`OpenInputDesktop` fails when the Secure Desktop has the input — and reported.
+The owner has now decided the product should do what AnyDesk and TeamViewer do
+when installed: let a helper the person has authorised see and answer those
+prompts. Crucially, **without weakening UAC** — UAC is not disabled,
+`ConsentPromptBehaviorAdmin` and `PromptOnSecureDesktop` are never written, and
+the Secure Desktop is reached the supported way rather than lowered.
+
+### How it works
+
+```text
+  AicountlyRemote.exe (user session, medium)   the app, being controlled
+    │  existing app↔service pipe (ACL'd)
+    │  StartSecureDesktop { session, mode }
+    ▼
+  AicountlyRemoteService.exe (Session 0, SYSTEM)   the service
+    │  authorise(): our image? console session? known session? consent/setting?
+    │  DuplicateTokenEx(SYSTEM) + SetTokenInformation(TokenSessionId = console)
+    │  CreateProcessAsUserW(lpDesktop = "winsta0\\winlogon")
+    ▼
+  AicountlyRemoteService.exe --secure-desktop-helper <pipe>   the helper
+    │  follows the input desktop (OpenInputDesktop + SetThreadDesktop)
+    │  GDI capture of it (≤1280 px, ≤10 fps, BGRA), SendInput into it
+    │  dedicated pipe: DACL = SYSTEM + this session's user, first instance,
+    │                  PIPE_REJECT_REMOTE_CLIENTS, length-prefixed binary
+    ▲
+    │  frames / {active} ▲      input / ping / stop ▼
+  AicountlyRemote.exe                              connects as a client
+```
+
+Nothing new ships: the helper is the service binary with a hidden argument, and
+no IPC message names a program, a path or an argument — the helper's command
+line is built inside the service from a fixed string and a pipe name the
+service itself chose. While the helper reports the Secure Desktop active, the
+app sends its frames to the viewer in place of the ordinary capture and routes
+**gate-admitted** input to it in place of `SendInput`; the control gate stays
+the only path to input, so nothing the gate refused reaches the helper.
+
+### When it is allowed, and the refusals
+
+A helper starts only when **all** of these hold, re-checked by the service and
+not taken on trust from the app:
+
+* the request came from the **installed app image** (`QueryFullProcessImageNameW`
+  of the pipe client, compared with the service's own install directory) —
+  else refused `WRONG_IMAGE`;
+* …in the machine's **console session** (`GetNamedPipeClientSessionId` vs
+  `WTSGetActiveConsoleSessionId`) — else `NOT_CONSOLE_SESSION`;
+* …for a **session the service was told about** (`SessionStarted`) — else
+  `UNKNOWN_SESSION`;
+* and one of the two human decisions: **attended**, the person at the machine
+  ticked "also let them answer Windows administrator prompts" when granting
+  control; or **unattended**, the owner turned on "let my unattended
+  connections answer administrator prompts and the lock screen" in the app's
+  settings (`allowSecureDesktopUnattended`, off by default) — an unattended
+  request without it is refused `UNATTENDED_NOT_ENABLED`.
+
+Stopping control, ending the session, the stop shortcut or the person at the
+machine starting to use it stops input to the helper at once (the gate drops
+it) and tears the helper down; so does a fast-user-switch, the service
+stopping, the app disconnecting the pipe, and a hard 30-minute lifetime cap.
+When a prompt is open but the session is **not** authorised, there is no helper
+and the app tells the viewer "a Windows administrator prompt is open" and to
+ask the person at the computer.
+
+### Ctrl+Alt+Del
+
+The helper's viewer may send Secure Attention. The service raises it with
+`SendSAS`, loaded dynamically from `sas.dll`, which works for a service only
+when the `SoftwareSASGeneration` policy permits services to. The policy is not
+changed; if it forbids it, the request does nothing rather than a setting being
+written to force it.
+
+## The other three things Windows will not let this do
 
 Each is a real limitation. None is worked around, and none is presented as
 working.
 
-### 1. The Secure Desktop
-
-A UAC prompt, the sign-in screen, the lock screen and Ctrl+Alt+Del run on a
-separate desktop that a user-session process cannot capture and cannot inject
-into. The agent **detects** it — `OpenInputDesktop` fails when the Secure
-Desktop has the input — and tells the person what is happening.
-
-The consequence: a remote session goes blank at a UAC prompt, and somebody has
-to be at the machine to answer it. This is Windows working as designed. A
-product that shows you a UAC prompt remotely has installed something that
-lowers a security boundary on your machine, and this one does not:
-
-* **UAC is not disabled**, and the installer does not touch it;
-* `ConsentPromptBehaviorAdmin` and `PromptOnSecureDesktop` are not written;
-* no attempt is made to reach the Secure Desktop or to run in Session 0 with a
-  desktop.
-
-### 2. UIPI
+### UIPI
 
 `SendInput` cannot inject into a window at a higher integrity level. Control of
 an elevated application from a non-elevated agent will not work, and the
 failure says so — "Windows refused the input, usually because the window in
 front runs with higher privileges" — rather than appearing as a dead keyboard.
 
-### 3. Protected content
+### Protected content
 
 Applications that mark their windows with `WDA_EXCLUDEFROMCAPTURE`, and DRM
 video paths, produce black in the capture. That is the point of the flag.
 
-### 4. Nobody is signed in
+### Nobody is signed in
 
 The service keeps the machine reachable, but there is no desktop to capture
 until somebody signs in. An unattended connection to a machine sitting at the

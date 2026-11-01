@@ -26,10 +26,18 @@
 //!
 //! Windows isolates the Secure Desktop — the UAC prompt, Ctrl+Alt+Del, and the
 //! sign-in screen — from every desktop application. `Windows.Graphics.Capture`
-//! keeps delivering frames of the *user's* desktop underneath it, so a remote
-//! viewer sees the last ordinary frame while the person at the machine sees a
-//! prompt. That is confusing rather than dangerous, and it is confusing in a
-//! way the agent can detect and say out loud: see [`SecureDesktopState`].
+//! keeps delivering frames of the *user's* desktop underneath it, so this
+//! capture alone would show a remote viewer the last ordinary frame while the
+//! person at the machine sees a prompt.
+//!
+//! This module still cannot capture the Secure Desktop — nothing a
+//! user-session process does can. What it does is **notice** it
+//! ([`SecureDesktopState`], [`secure_desktop_in_front`]), so the app can tell
+//! the viewer a prompt is open. When the session is authorised to answer it,
+//! the picture is taken over by the service's Secure Desktop helper, which
+//! captures `winsta0\winlogon` with GDI from a SYSTEM process and sends its
+//! frames through `crate::secure_desktop`; this WGC capture resumes the moment
+//! the Secure Desktop closes.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -45,6 +53,26 @@ pub use crate::platform::display::{
     describe_monitor, friendly_display_name, orientation_from_windows, scale_from_dpi,
     SecureDesktopState,
 };
+
+/// Whether the Secure Desktop is in front of the user's own, right now.
+///
+/// The free-function form of [`WindowsCapture::secure_desktop_state`], for the
+/// agent to tell a viewer "a Windows administrator prompt is open" even when no
+/// Secure Desktop helper is running — an unauthorised session, where the prompt
+/// can only be answered by the person at the machine. When a helper *is*
+/// running its own state report is authoritative and this is not consulted.
+#[must_use]
+pub fn secure_desktop_in_front() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        matches!(imp::secure_desktop_state(), SecureDesktopState::Active)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
 
 /// Capture, through `Windows.Graphics.Capture`.
 pub struct WindowsCapture {

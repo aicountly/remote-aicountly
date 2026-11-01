@@ -19,6 +19,9 @@ export function ControlRequest({
   clipboardAllowedByPolicy,
   shareClipboard,
   onShareClipboardChange,
+  secureDesktopSupported,
+  answerSecureDesktop,
+  onAnswerSecureDesktopChange,
   onAllow,
   onDeny,
   busy,
@@ -28,6 +31,10 @@ export function ControlRequest({
   clipboardAllowedByPolicy: boolean
   shareClipboard: boolean
   onShareClipboardChange: (value: boolean) => void
+  /** Whether this computer can answer the Secure Desktop at all (Windows). */
+  secureDesktopSupported: boolean
+  answerSecureDesktop: boolean
+  onAnswerSecureDesktopChange: (value: boolean) => void
   onAllow: () => void
   onDeny: () => void
   busy?: boolean
@@ -67,6 +74,24 @@ export function ControlRequest({
             type="checkbox"
             checked={shareClipboard}
             onChange={(event) => onShareClipboardChange(event.target.checked)}
+          />
+        </label>
+      ) : null}
+
+      {secureDesktopSupported ? (
+        <label className="field field--inline">
+          <span>
+            <span className="field__label">Also let them answer Windows administrator prompts</span>
+            <span className="field__hint">
+              Lets {requesterName} see and answer the Windows prompts that normally only you can —
+              the “Do you want to allow this app to make changes?” box, and the lock screen. Off
+              unless you tick it, and it stops the moment you stop control.
+            </span>
+          </span>
+          <input
+            type="checkbox"
+            checked={answerSecureDesktop}
+            onChange={(event) => onAnswerSecureDesktopChange(event.target.checked)}
           />
         </label>
       ) : null}

@@ -28,11 +28,13 @@
 //! * **It runs nothing it was asked to run.** [`crate::IpcRequest`] has no
 //!   variant naming a program, and the widest effect a peer can produce is
 //!   [`crate::machine::Effect::Reboot`].
-//! * **It does not weaken the machine.** No UAC setting is touched, no
-//!   security policy is written, and no attempt is made to reach the Secure
-//!   Desktop — see `docs/desktop/WINDOWS_AGENT.md` for what that costs and
-//!   why it is the right trade.
+//! * **It does not weaken the machine.** No UAC setting is touched and no
+//!   security policy is written. When a controlled session is authorised to,
+//!   it starts a Secure Desktop helper ([`crate::secure_desktop`]) — a SYSTEM
+//!   process placed on `winsta0\winlogon`, which is the supported way onto the
+//!   Secure Desktop, not a lowering of it. See `docs/desktop/WINDOWS_AGENT.md`.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -217,9 +219,26 @@ fn serve() -> Result<(), ServiceError> {
     // the next interval.
     let nudge = Arc::new(AtomicBool::new(false));
 
+    // Secure Desktop helpers currently running, keyed by session. The registry
+    // is what lets the service tear one down when the console switches, the
+    // session ends or the service stops, as a backstop to the helper exiting
+    // on its own when the app disconnects.
+    let helpers: SecureDesktopHelpers = Arc::new(Mutex::new(HashMap::new()));
+
+    // A per-run random salt for the Secure Desktop pipe names, so a process in
+    // the session cannot guess and squat one before its helper creates it.
+    if let Ok(mut held) = state.lock() {
+        held.pipe_salt = random_salt();
+        // The device setting, as it is on disk now; the presence loop keeps it
+        // fresh so toggling it in the app takes effect without a restart.
+        held.allow_secure_desktop_unattended =
+            remote_core::AgentConfig::load().allow_secure_desktop_unattended;
+    }
+
     let handler = {
         let stopping = Arc::clone(&stopping);
         let state = Arc::clone(&state);
+        let helpers = Arc::clone(&helpers);
 
         move |control| -> ServiceControlHandlerResult {
             match control {
@@ -227,6 +246,8 @@ fn serve() -> Result<(), ServiceError> {
 
                 ServiceControl::Stop | ServiceControl::Shutdown => {
                     stopping.store(true, Ordering::SeqCst);
+                    // Any Secure Desktop helper goes with the service.
+                    stop_all_helpers(&helpers);
                     // The accept loop is blocked in `ConnectNamedPipe`. Opening
                     // our own pipe as a client completes it, so the loop wakes,
                     // sees the flag and returns — rather than being killed
@@ -244,6 +265,11 @@ fn serve() -> Result<(), ServiceError> {
                     if let Ok(mut held) = state.lock() {
                         held.active_sessions.clear();
                     }
+
+                    // The desktop that was being helped is gone with the
+                    // switch; any helper for it must stop at once rather than
+                    // keep a window onto whatever is in front now.
+                    stop_all_helpers(&helpers);
 
                     ServiceControlHandlerResult::NoError
                 }
@@ -270,14 +296,48 @@ fn serve() -> Result<(), ServiceError> {
         std::thread::spawn(move || presence_loop(&stopping, &state, &nudge))
     };
 
-    let result = accept_loop(&stopping, &state, &nudge);
+    let result = accept_loop(&stopping, &state, &nudge, &helpers);
 
     stopping.store(true, Ordering::SeqCst);
     let _ = presence.join();
 
+    // Nothing the service started outlives the service.
+    stop_all_helpers(&helpers);
+
     handle.set_service_status(status(ServiceState::Stopped, ServiceControlAccept::empty()))?;
 
     result
+}
+
+/// The Secure Desktop helpers the service has running, keyed by session.
+type SecureDesktopHelpers =
+    Arc<Mutex<HashMap<String, crate::secure_desktop::launch::HelperProcess>>>;
+
+/// Terminate and forget every running helper.
+fn stop_all_helpers(helpers: &SecureDesktopHelpers) {
+    if let Ok(mut held) = helpers.lock() {
+        for (_, helper) in held.drain() {
+            helper.terminate();
+        }
+    }
+}
+
+/// Terminate and forget the helper for one session, if there is one.
+fn stop_helper(helpers: &SecureDesktopHelpers, session_uuid: &str) {
+    if let Ok(mut held) = helpers.lock() {
+        if let Some(helper) = held.remove(session_uuid) {
+            helper.terminate();
+        }
+    }
+}
+
+/// A per-run random salt for Secure Desktop pipe names.
+fn random_salt() -> String {
+    format!(
+        "{:016x}{:016x}",
+        rand::random::<u64>(),
+        rand::random::<u64>()
+    )
 }
 
 // ---------------------------------------------------------------- the pipe
@@ -300,8 +360,8 @@ mod win {
         FILE_GENERIC_WRITE, FILE_SHARE_NONE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
     };
     pub use windows::Win32::System::Pipes::{
-        ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PeekNamedPipe, PIPE_READMODE_BYTE,
-        PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
+        ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeClientSessionId,
+        PeekNamedPipe, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
     };
     pub use windows::Win32::System::Shutdown::{
         InitiateSystemShutdownExW, SHTDN_REASON_FLAG_PLANNED, SHTDN_REASON_MAJOR_APPLICATION,
@@ -399,10 +459,21 @@ fn accept_loop(
     stopping: &Arc<AtomicBool>,
     state: &Arc<Mutex<MachineState>>,
     nudge: &Arc<AtomicBool>,
+    helpers: &SecureDesktopHelpers,
 ) -> Result<(), ServiceError> {
     let security = PipeSecurityDescriptor::build()?;
     let name = wide(&pipe_name());
     let live = Arc::new(AtomicUsize::new(0));
+
+    // The directory this service runs from, which the installed app shares. A
+    // Secure Desktop request is refused unless the pipe client's image lives
+    // here — computed once, so every connection compares against the same path.
+    let install_dir = Arc::new(
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
+            .unwrap_or_default(),
+    );
 
     while !stopping.load(Ordering::SeqCst) {
         // A new instance per accept: the previous one is being served on its
@@ -485,10 +556,12 @@ fn accept_loop(
         let state = Arc::clone(state);
         let stopping = Arc::clone(stopping);
         let nudge = Arc::clone(nudge);
+        let helpers = Arc::clone(helpers);
+        let install_dir = Arc::clone(&install_dir);
         let live_for_thread = Arc::clone(&live);
 
         std::thread::spawn(move || {
-            serve_connection(instance, &stopping, &state, &nudge);
+            serve_connection(instance, &stopping, &state, &nudge, &helpers, &install_dir);
             live_for_thread.fetch_sub(1, Ordering::SeqCst);
         });
     }
@@ -523,8 +596,17 @@ fn serve_connection(
     stopping: &Arc<AtomicBool>,
     state: &Arc<Mutex<MachineState>>,
     nudge: &Arc<AtomicBool>,
+    helpers: &SecureDesktopHelpers,
+    install_dir: &std::path::Path,
 ) {
     let mut connection = Connection::default();
+
+    // Who is on the other end — our installed app, in the console session? —
+    // learned once from the pipe itself and carried on the connection, so the
+    // Secure Desktop decision in `machine::handle` stays pure. The kernel knows
+    // the client's identity; the protocol never has to ask.
+    connection.client = crate::secure_desktop::launch::client_facts(instance.0, install_dir);
+
     let mut last_heard = Instant::now();
 
     while !stopping.load(Ordering::SeqCst) {
@@ -599,7 +681,71 @@ fn serve_connection(
             Some(Effect::Authenticate) => {
                 nudge.store(true, Ordering::SeqCst);
             }
+            // The decision — our image, the console session, a known session,
+            // the unattended setting — was already made in `machine::handle`;
+            // by here it is authorised. Launch the helper into the client's
+            // session on the Secure Desktop, remembering it so it can be torn
+            // down. Any previous helper for the session goes first.
+            Some(Effect::StartSecureDesktop {
+                session_uuid,
+                pipe_name,
+                mode,
+            }) => {
+                stop_helper(helpers, &session_uuid);
+                start_secure_desktop_helper(helpers, instance.0, &session_uuid, &pipe_name, mode);
+            }
+            Some(Effect::StopSecureDesktop { session_uuid }) => {
+                stop_helper(helpers, &session_uuid);
+            }
             None => {}
+        }
+    }
+}
+
+/// Launch a Secure Desktop helper for a session and register it.
+///
+/// The app has already been answered with the pipe name and will be connecting
+/// to it; a failure here leaves that connection unanswered, which the app sees
+/// as the Secure Desktop being unreachable rather than as an error. So a
+/// failure is logged, not propagated — the session carries on without the
+/// helper, exactly as it did before this feature existed.
+fn start_secure_desktop_helper(
+    helpers: &SecureDesktopHelpers,
+    pipe: win::HANDLE,
+    session_uuid: &str,
+    pipe_name: &str,
+    mode: crate::ipc::SecureDesktopMode,
+) {
+    use crate::secure_desktop::launch;
+
+    // The session to run it in is the client's own — the console session,
+    // which the authorisation already required. Read from the pipe rather than
+    // assumed, so a mismatch is a refusal to launch rather than a helper in the
+    // wrong session.
+    let mut client_session = 0_u32;
+    // SAFETY: `pipe` is the connected server handle owned by the caller.
+    if unsafe { win::GetNamedPipeClientSessionId(pipe, &mut client_session) }.is_err() {
+        tracing::warn!("the Secure Desktop helper could not learn the session to run in");
+
+        return;
+    }
+
+    let Ok(exe) = std::env::current_exe() else {
+        tracing::warn!("the Secure Desktop helper could not find this service's own path");
+
+        return;
+    };
+
+    match launch::launch(&exe, client_session, pipe_name) {
+        Ok(child) => {
+            tracing::info!(session = %session_uuid, ?mode, "a Secure Desktop helper was started");
+
+            if let Ok(mut held) = helpers.lock() {
+                held.insert(session_uuid.to_owned(), child);
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, session = %session_uuid, "a Secure Desktop helper could not be started");
         }
     }
 }
@@ -820,6 +966,15 @@ fn presence_loop(
     let mut refused: Option<(String, String)> = None;
 
     while !stopping.load(Ordering::SeqCst) {
+        // The Secure Desktop unattended setting, re-read each pass so the owner
+        // toggling it in the app takes effect without restarting the service.
+        // Cheap — a small JSON file — and the only setting the service enforces
+        // that a person changes while it runs.
+        if let Ok(mut held) = state.lock() {
+            held.allow_secure_desktop_unattended =
+                remote_core::AgentConfig::load().allow_secure_desktop_unattended;
+        }
+
         // What this machine is, as of now. Written by the other process, so
         // it is read again every pass.
         let identity = match machine_identity() {

@@ -159,6 +159,12 @@ export interface AgentConfig {
    * side keeps the saved value when the rest of the form is saved.
    */
   openh264Enabled: boolean
+  /**
+   * Whether an unattended connection to this computer may answer Windows
+   * administrator prompts and the lock screen — the Secure Desktop. Off by
+   * default; attended sessions ask the person at the machine instead.
+   */
+  allowSecureDesktopUnattended: boolean
 }
 
 // ------------------------------------------------------------- video codec

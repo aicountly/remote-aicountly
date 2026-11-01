@@ -39,23 +39,35 @@
 //! * **It opens no TCP port.** A localhost admin API is reachable by every
 //!   process on the machine and by anything that can make the browser issue a
 //!   request; a named pipe with an explicit ACL is not.
-//! * **It weakens nothing.** It does not disable UAC, does not turn off
-//!   Windows security settings, and does not attempt to defeat the Secure
-//!   Desktop — see the limitation documented in `docs/desktop/WINDOWS_AGENT.md`.
+//! * **It weakens nothing.** It does not disable UAC and does not turn off any
+//!   Windows security setting. It *can*, when a session is being controlled and
+//!   the person at the machine (or the device's unattended setting) has agreed,
+//!   start a **Secure Desktop helper** so an authorised controller can answer a
+//!   UAC prompt — which is reaching the Secure Desktop the supported way, as a
+//!   SYSTEM process on `winsta0\winlogon`, not defeating it. The gate on that is
+//!   [`secure_desktop::authorise`], and the whole design is in that module and
+//!   in `docs/desktop/WINDOWS_AGENT.md`.
 
 #![deny(missing_docs)]
 
 pub mod ipc;
 pub mod machine;
 pub mod pipe;
+pub mod secure_desktop;
 pub mod storage;
 
 #[cfg(windows)]
 pub mod service;
 
-pub use ipc::{IpcError, IpcFrame, IpcRequest, IpcResponse, IPC_PROTOCOL_VERSION};
+pub use ipc::{
+    IpcError, IpcFrame, IpcRequest, IpcResponse, SecureDesktopMode, IPC_PROTOCOL_VERSION,
+};
 pub use machine::{handle, Connection, Effect, MachineState};
 pub use pipe::{pipe_name, PipeSecurity};
+pub use secure_desktop::{
+    authorise as authorise_secure_desktop, HelperFrame, HelperInput, HelperMessage,
+    SecureDesktopRefusal,
+};
 
 /// The display name Windows shows in `services.msc`.
 pub const SERVICE_DISPLAY_NAME: &str = "AICOUNTLY Remote Service";

@@ -47,10 +47,17 @@ control UI appears when a participant's *negotiated capabilities* say a machine
 can be controlled and the organisation's policy allows it, never because of
 what kind of client something is.
 
-**A UAC prompt cannot be answered remotely.** It runs on the Windows Secure
-Desktop, which a user-session process cannot capture or inject into. The agent
-notices and says so; it does not disable UAC, and it does not ask you to. See
-[docs/desktop/WINDOWS_AGENT.md](docs/desktop/WINDOWS_AGENT.md).
+**A UAC prompt can be answered remotely — but only with consent, and never by
+weakening UAC.** It runs on the Windows Secure Desktop, which the app itself
+cannot capture or inject into. So, the way AnyDesk and TeamViewer do when
+installed, the per-machine service starts a small helper as a SYSTEM process on
+the Secure Desktop and forwards it to the helper. That happens only while a
+session is being controlled and the person at the computer ticked "also let
+them answer Windows administrator prompts" — or, for an unattended connection,
+the computer's owner turned the matching setting on in the app. UAC is not
+disabled, no security setting is changed, and when none of that holds the agent
+simply tells the viewer a prompt is open and to ask the person at the computer.
+See [docs/desktop/WINDOWS_AGENT.md](docs/desktop/WINDOWS_AGENT.md).
 
 **The desktop app hosts on Windows and macOS.** It captures the screen,
 encodes it as H.264 with Cisco's OpenH264 binary (downloaded on each computer, see

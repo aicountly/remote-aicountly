@@ -59,10 +59,15 @@ not let it do, is [desktop/SECURITY.md](desktop/SECURITY.md).
   — on Windows or a Mac, as the *control companion* of the screen its owner
   shares from the browser (desktop/CONTROL_COMPANION.md) — and the interface
   says so rather than offering a button that would be refused.
-* **A UAC prompt cannot be answered remotely**, and no setting is changed to
-  make it possible. The Windows Secure Desktop is a boundary the agent detects
-  and does not cross — see
-  [desktop/WINDOWS_AGENT.md](desktop/WINDOWS_AGENT.md).
+* **A UAC prompt can be answered remotely only with explicit consent, and
+  without weakening UAC.** The Windows Secure Desktop is a boundary the app
+  cannot cross; the per-machine service crosses it the supported way, as a
+  SYSTEM helper process on `winsta0\winlogon`, and only while a session is
+  controlled and either the person at the computer ticked the consent box or
+  the owner enabled it for unattended connections. No UAC or policy setting is
+  changed, the pipe to the helper admits only the installed app in the console
+  session, and when it is not authorised the agent merely says a prompt is open.
+  See [desktop/WINDOWS_AGENT.md](desktop/WINDOWS_AGENT.md).
 * It **does not protect a machine an attacker already runs code on**. The
   device key protects the machine's *identity*; somebody who can read the key
   file can already read the screen.

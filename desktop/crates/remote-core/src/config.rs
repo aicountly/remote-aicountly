@@ -61,6 +61,25 @@ pub struct AgentConfig {
     /// back to its defaults.
     #[serde(default = "default_openh264_enabled")]
     pub openh264_enabled: bool,
+
+    /// Whether an **unattended** connection to this machine may answer Windows
+    /// administrator prompts and the lock screen — the Secure Desktop.
+    ///
+    /// A device-level setting the owner turns on in the app's settings, off by
+    /// default. An attended session instead asks the person at the machine to
+    /// tick a box in the consent dialog, so this governs only the case where
+    /// nobody is there to tick it. `serde(default)` so a configuration written
+    /// by an older build (which had no such field) reads as "off" rather than
+    /// failing to parse — the safe reading, and the one that matches a machine
+    /// whose owner never opted in.
+    ///
+    /// It is not a secret and changes nothing about how the agent connects, so
+    /// it belongs in this ordinary file beside the other booleans. The service
+    /// still refuses the helper unless the request came from the installed app
+    /// image in the console session, so a flipped bit in this file reaches
+    /// nothing on its own.
+    #[serde(default)]
+    pub allow_secure_desktop_unattended: bool,
 }
 
 /// [`AgentConfig::openh264_enabled`] for a file that does not mention it.
@@ -78,6 +97,7 @@ impl Default for AgentConfig {
             start_at_login: true,
             capture_quality: "adaptive".into(),
             openh264_enabled: default_openh264_enabled(),
+            allow_secure_desktop_unattended: false,
         }
     }
 }
@@ -667,6 +687,39 @@ mod tests {
 
         assert!(message.contains("could not be saved"));
         assert!(!message.contains("could not be read"));
+    }
+
+    /// Off by default, and a configuration written before the field existed
+    /// reads as off rather than failing to parse — the safe reading for a
+    /// machine whose owner never opted in to answering the Secure Desktop
+    /// unattended.
+    #[test]
+    fn answering_the_secure_desktop_unattended_is_off_by_default_and_absent_reads_off() {
+        assert!(!AgentConfig::default().allow_secure_desktop_unattended);
+
+        let older = r#"{
+            "apiBaseUrl": "https://remote.aicountly.com/api",
+            "portalUrl": "https://my.aicountly.com",
+            "presenceIntervalSeconds": 60,
+            "runInBackground": true,
+            "startAtLogin": true,
+            "captureQuality": "adaptive"
+        }"#;
+
+        let config = AgentConfig::from_json(older).expect("an older configuration still parses");
+        assert!(
+            !config.allow_secure_desktop_unattended,
+            "a missing field reads as off"
+        );
+
+        let on = AgentConfig {
+            allow_secure_desktop_unattended: true,
+            ..AgentConfig::default()
+        };
+        assert_eq!(
+            AgentConfig::from_json(&on.to_json()).expect("round trips"),
+            on
+        );
     }
 
     #[test]

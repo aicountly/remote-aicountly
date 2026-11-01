@@ -217,12 +217,21 @@ Read this part twice. Everything here is a real limit, and none of it is
 worked around by a setting.
 
 * **The Secure Desktop.** A UAC prompt, the sign-in screen and Ctrl+Alt+Del
-  run on a separate desktop that a user-session process cannot capture and
-  cannot inject into. The agent **notices** this — `OpenInputDesktop` fails —
-  and says so, and it does nothing to defeat it. The consequence is real: a
-  remote session goes blank at a UAC prompt and somebody has to be at the
-  machine. That is the correct behaviour, and any product that tells you
-  otherwise has disabled something on your machine.
+  run on a separate desktop (`winsta0\winlogon`) that the user-session app
+  cannot capture and cannot inject into. The app **notices** this —
+  `OpenInputDesktop` fails — and, when the session is not authorised to answer
+  it, says so and does nothing more. When it **is** authorised — a controlled
+  session where the person at the machine ticked the consent box, or an
+  unattended connection the owner enabled the device setting for — the
+  per-machine service starts a **Secure Desktop helper**: a second copy of the
+  service binary, run as SYSTEM in the console session with a desktop of
+  `winsta0\winlogon`, which captures the prompt with GDI and injects into it.
+  Nothing about UAC is weakened to do this: the helper is reached the supported
+  way (a SYSTEM process on the Secure Desktop), over a dedicated pipe whose DACL
+  admits only SYSTEM and the session's user, started only for the installed app
+  image in the console session, and torn down the moment control stops. The
+  full design is in [WINDOWS_AGENT.md](WINDOWS_AGENT.md); why it is safe only
+  with consent is in [the root SECURITY.md](../SECURITY.md).
 * **UIPI.** `SendInput` cannot inject into a window running at a higher
   integrity level than the agent. The failure is reported as what it is rather
   than as a mysterious refusal.

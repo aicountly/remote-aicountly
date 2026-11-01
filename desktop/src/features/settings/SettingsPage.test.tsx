@@ -39,6 +39,7 @@ const CONFIG: AgentConfig = {
   startAtLogin: true,
   captureQuality: 'adaptive',
   openh264Enabled: true,
+  allowSecureDesktopUnattended: false,
 }
 
 const READY: CodecStatus = {

@@ -9,7 +9,7 @@
 //! where somebody stopped it — and the window has to render something useful
 //! in it rather than an error dialog.
 
-use aicountly_remote_service::{IpcError, IpcRequest, IpcResponse};
+use aicountly_remote_service::{IpcError, IpcRequest, IpcResponse, SecureDesktopMode};
 
 #[cfg(target_os = "windows")]
 use crate::platform;
@@ -143,6 +143,33 @@ pub fn reboot(session_uuid: &str, reason: &str) -> Result<(), IpcError> {
     expect_acknowledged(platform_service().request(&IpcRequest::Reboot {
         session_uuid: session_uuid.to_owned(),
         reason: reason.to_owned(),
+    }))
+}
+
+/// Ask the service to start a Secure Desktop helper for a session.
+///
+/// Returns the dedicated pipe the app then connects to. The service makes the
+/// real decision — our image, the console session, a known session, and for
+/// unattended the device setting — so a refusal here is one of those checks,
+/// not a transport fault.
+pub fn start_secure_desktop(
+    session_uuid: &str,
+    mode: SecureDesktopMode,
+) -> Result<String, IpcError> {
+    match platform_service().request(&IpcRequest::StartSecureDesktop {
+        session_uuid: session_uuid.to_owned(),
+        mode,
+    })? {
+        IpcResponse::SecureDesktopStarting { pipe_name } => Ok(pipe_name),
+        IpcResponse::Error { message, .. } => Err(IpcError::Transport(message)),
+        _ => Err(IpcError::Malformed),
+    }
+}
+
+/// Tell the service to stop the Secure Desktop helper for a session.
+pub fn stop_secure_desktop(session_uuid: &str) -> Result<(), IpcError> {
+    expect_acknowledged(platform_service().request(&IpcRequest::StopSecureDesktop {
+        session_uuid: session_uuid.to_owned(),
     }))
 }
 

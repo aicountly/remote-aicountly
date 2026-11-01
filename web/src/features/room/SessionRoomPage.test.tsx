@@ -84,6 +84,7 @@ vi.mock('./useRemoteSession', () => ({
     controllableHost: room.controllableHost,
     isControlling: room.isControlling,
     controlPaused: null,
+    secureDesktop: null,
     actions,
   }),
 }))
@@ -237,6 +238,7 @@ describe('full screen in the room', () => {
     relayDenied: false,
     controllingPeerId: null,
     controlPaused: null,
+    secureDesktop: null,
     network: {
       path: 'direct',
       relayNode: null,

@@ -88,6 +88,7 @@ dependencies = [
 name = "aicountly-remote-service"
 version = "1.0.0"
 dependencies = [
+ "rand 0.10.2",
  "remote-core",
  "remote-protocol",
  "remote-security",

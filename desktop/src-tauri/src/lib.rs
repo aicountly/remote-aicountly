@@ -27,6 +27,7 @@ pub mod ipc;
 pub mod platform;
 pub mod portal;
 pub mod runtime;
+pub mod secure_desktop;
 pub mod session;
 pub mod tray;
 

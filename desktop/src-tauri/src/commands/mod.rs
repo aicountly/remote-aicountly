@@ -431,13 +431,19 @@ pub async fn disable_unattended(
 }
 
 /// The person at the machine says yes to control.
+///
+/// `secure_desktop` is the extra consent box — "also let them answer Windows
+/// administrator prompts". It is carried the same way as `clipboard`, and the
+/// front end passes `false` whenever the box is absent or unticked, so
+/// ordinary control never drags the Secure Desktop in with it.
 #[tauri::command]
 pub fn grant_control(
     agent: tauri::State<'_, Arc<Agent>>,
     participant_uuid: String,
     clipboard: bool,
+    secure_desktop: bool,
 ) -> remote_core::AgentState {
-    agent.grant_control(&participant_uuid, clipboard)
+    agent.grant_control(&participant_uuid, clipboard, secure_desktop)
 }
 
 /// The person at the machine says no.

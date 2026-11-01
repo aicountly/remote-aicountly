@@ -117,8 +117,54 @@ pub enum IpcRequest {
         reason: String,
     },
 
+    /// Start a **Secure Desktop helper** for a hosted session.
+    ///
+    /// The helper is a second copy of this service binary, run by the service
+    /// (LocalSystem) inside the requesting app's session, with a desktop of
+    /// `winsta0\winlogon`. It is the one thing in the product that can see and
+    /// answer a Windows administrator prompt, the Ctrl+Alt+Del screen or the
+    /// lock screen, so starting it is gated hard — see
+    /// [`crate::secure_desktop::authorise`]. Nothing here names a program: the
+    /// helper is always this binary with a fixed hidden argument, and the
+    /// widest thing this request can do is show a prompt the person is already
+    /// looking at to a controller they have authorised.
+    StartSecureDesktop {
+        /// The session it is for; must be one the service was told about.
+        session_uuid: String,
+        /// How the app says the request was authorised — see
+        /// [`SecureDesktopMode`]. The service re-checks what it can of this.
+        mode: SecureDesktopMode,
+    },
+
+    /// Stop the Secure Desktop helper for a session.
+    ///
+    /// Sent when control stops, the session ends, the stop shortcut is pressed
+    /// or the person at the machine starts using it. The helper also exits on
+    /// its own when the app disconnects from its pipe; this is the belt to
+    /// that braces.
+    StopSecureDesktop {
+        /// The session whose helper to stop.
+        session_uuid: String,
+    },
+
     /// A heartbeat, so each side can tell a quiet pipe from a dead one.
     Ping,
+}
+
+/// How the app says a Secure Desktop helper was authorised.
+///
+/// Neither value is *taken on trust*: the service re-checks that the request
+/// came from the installed app image in the console session and names a known
+/// session, and for [`Self::Unattended`] it re-reads the device setting. The
+/// mode says which of the two human decisions the app is acting on, so a
+/// refusal can say which one is missing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SecureDesktopMode {
+    /// A person is at the machine and ticked the consent box for this session.
+    Attended,
+    /// Nobody is at the machine; the device-level setting permits it.
+    Unattended,
 }
 
 /// What the service answers.
@@ -161,6 +207,18 @@ pub enum IpcResponse {
 
     /// The request was accepted and nothing more needs saying.
     Acknowledged,
+
+    /// A Secure Desktop helper is starting; connect to its dedicated pipe.
+    ///
+    /// The name is per-run and unpredictable (a random salt the service picks
+    /// at start-up), so a process that guessed the pattern cannot squat the
+    /// pipe before the helper creates it. The helper creates the first
+    /// instance with a DACL granting only SYSTEM and this session's user, and
+    /// the app connects as a client; see [`crate::secure_desktop`].
+    SecureDesktopStarting {
+        /// The full `\\.\pipe\…` path the app connects to.
+        pipe_name: String,
+    },
 
     /// The heartbeat.
     Pong,
@@ -331,6 +389,13 @@ mod tests {
                 session_uuid: "s".into(),
                 reason: "update".into(),
             },
+            IpcRequest::StartSecureDesktop {
+                session_uuid: "s".into(),
+                mode: SecureDesktopMode::Attended,
+            },
+            IpcRequest::StopSecureDesktop {
+                session_uuid: "s".into(),
+            },
             IpcRequest::Ping,
         ];
 
@@ -358,6 +423,9 @@ mod tests {
                 last_reported_at: None,
             },
             IpcResponse::Acknowledged,
+            IpcResponse::SecureDesktopStarting {
+                pipe_name: r"\\.\pipe\AicountlyRemote.SecureDesktop.abcd.session-1".into(),
+            },
             IpcResponse::Pong,
             IpcResponse::Error {
                 code: "X".into(),
@@ -469,6 +537,13 @@ mod tests {
             IpcRequest::Reboot {
                 session_uuid: "s".into(),
                 reason: "r".into(),
+            },
+            IpcRequest::StartSecureDesktop {
+                session_uuid: "s".into(),
+                mode: SecureDesktopMode::Unattended,
+            },
+            IpcRequest::StopSecureDesktop {
+                session_uuid: "s".into(),
             },
             IpcRequest::Ping,
         ];

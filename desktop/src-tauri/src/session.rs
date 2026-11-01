@@ -54,6 +54,8 @@ use remote_device::frame::{CaptureProfile, CaptureQuality};
 use remote_protocol::ControlState;
 use remote_webrtc::{IceConfiguration, PeerSession, PeerSessionFactory, PeerState};
 
+use aicountly_remote_service::SecureDesktopMode;
+
 use crate::runtime::StateSink;
 use crate::Agent;
 
@@ -250,11 +252,23 @@ where
         } else {
             HELP_PEER_TIMEOUT
         },
+        unattended,
     )
     .await;
 
     // Nothing is captured for a session that has ended, on any path out.
     agent.stop_capture();
+
+    // And no Secure Desktop helper outlives it. Off the async loop, because
+    // telling the service is a blocking pipe round trip; the handle is dropped
+    // on purpose — the blocking task detaches and runs to completion.
+    {
+        let agent = Arc::clone(&agent);
+        let session = session_uuid.clone();
+        drop(tokio::task::spawn_blocking(move || {
+            agent.stop_secure_desktop(&session)
+        }));
+    }
 
     let _ = crate::ipc::session_ended(&session_uuid);
 
@@ -279,6 +293,7 @@ async fn run<F>(
     session_uuid: &str,
     stopping: &Arc<AtomicBool>,
     peer_timeout: Duration,
+    unattended: bool,
 ) -> Ended
 where
     F: PeerSessionFactory,
@@ -312,6 +327,9 @@ where
     let mut last_control_poll = Instant::now() - CONTROL_POLL;
     let joined_at = Instant::now();
     let mut renew_after = renew_at(joined.signalling_expires_at);
+    // Whether a Secure Desktop helper has been asked for, so it is started once
+    // control is granted with consent and stopped the moment control stops.
+    let mut helper_requested = false;
 
     tracing::info!(
         session = %session_uuid,
@@ -469,6 +487,41 @@ where
             }
         }
 
+        // --- the Secure Desktop helper ------------------------------------
+        //
+        // Wanted while control is granted and the Secure Desktop may be
+        // answered — the person ticked the box (attended) or the device
+        // setting allows it (unattended). Started off the loop because asking
+        // the service and connecting the pipe both block; stopped at once when
+        // control stops, which the stop shortcut, a revoke and a denied grant
+        // all reach by leaving the gate's state no longer Granted.
+        let want_helper = agent.control_state() == ControlState::Granted
+            && if unattended {
+                agent.config().allow_secure_desktop_unattended
+            } else {
+                agent.secure_desktop_consent()
+            };
+
+        if want_helper && !helper_requested {
+            helper_requested = true;
+
+            let agent = Arc::clone(agent);
+            let session = session_uuid.to_owned();
+            let mode = if unattended {
+                SecureDesktopMode::Unattended
+            } else {
+                SecureDesktopMode::Attended
+            };
+
+            tokio::task::spawn_blocking(move || agent.start_secure_desktop(&session, mode));
+        } else if !want_helper && helper_requested {
+            helper_requested = false;
+
+            let agent = Arc::clone(agent);
+            let session = session_uuid.to_owned();
+            tokio::task::spawn_blocking(move || agent.stop_secure_desktop(&session));
+        }
+
         // --- the picture -------------------------------------------------
         pump.turn(agent, &mut peer, session_uuid, &joined.participant_uuid)
             .await;
@@ -511,6 +564,12 @@ struct CapturePump {
     /// Whether "the H.264 codec is not installed" has been logged for this
     /// session. Once: every frame says it again.
     codec_missing_logged: bool,
+    /// Whether the helper's frames were the source last turn, so a switch to
+    /// or from them asks the encoder for a keyframe.
+    secure_desktop_was_active: bool,
+    /// The last `secure_desktop { active, reachable }` told to the controller,
+    /// so the message goes out only when it changes.
+    secure_desktop_told: Option<(bool, bool)>,
 }
 
 impl CapturePump {
@@ -527,6 +586,8 @@ impl CapturePump {
             next_congestion_at: now + CONGESTION_INTERVAL,
             refusal_logged: false,
             codec_missing_logged: false,
+            secure_desktop_was_active: false,
+            secure_desktop_told: None,
         }
     }
 
@@ -623,41 +684,127 @@ impl CapturePump {
             }
         }
 
+        // Tell the controller what the Secure Desktop is doing, and switch the
+        // picture to the helper while one is forwarding it. `active` is true
+        // whenever a prompt is in front — from the helper when one is
+        // connected, otherwise from the app's own detection — and `reachable`
+        // says whether it can be answered from the browser.
+        self.follow_secure_desktop(agent, peer, session_uuid, participant_uuid)
+            .await;
+        let secure_active = agent.secure_desktop_active();
+
         if now < self.next_frame_at || !peer.state().is_live() {
             return;
         }
 
         self.next_frame_at = now + Duration::from_millis(self.profile.frame_interval_ms());
 
-        match agent.next_frame() {
-            Ok(Some(frame)) => match peer.send_frame(frame).await {
-                Ok(()) => {}
-                // The connection is over: nothing more is captured for it.
-                // A new connection in the same session starts it again.
-                Err(remote_webrtc::WebRtcError::WrongState(state)) => {
-                    tracing::info!(?state, "the connection ended; the capture stops");
-                    agent.stop_capture();
-                    self.layout = None;
-                    self.layout_sent = false;
-                    self.next_attempt_at = now + CAPTURE_RETRY;
+        // While the Secure Desktop is reachable, its helper's frames are the
+        // picture; otherwise the ordinary capture is, exactly as before.
+        let frame = if secure_active {
+            match agent.latest_secure_desktop_frame() {
+                Some(frame) => Some(frame),
+                // No frame yet (the helper has not sent one since the switch):
+                // nothing to send this turn, try again next.
+                None => return,
+            }
+        } else {
+            match agent.next_frame() {
+                Ok(frame) => frame,
+                Err(error) => {
+                    tracing::debug!(%error, "no frame was captured");
+
+                    return;
                 }
-                // No codec on this computer: the person helping sees no
-                // picture. Said once here; the window says it to the person
-                // at the computer, naming the setting, from the codec's own
-                // status (`commands::codec`), and the session carries on so
-                // the picture starts the moment the codec arrives.
-                Err(error) if error.is_codec_unavailable() => {
-                    if !self.codec_missing_logged {
-                        self.codec_missing_logged = true;
-                        tracing::warn!(%error, "this computer's screen cannot be sent");
-                    }
+            }
+        };
+
+        let Some(frame) = frame else {
+            return;
+        };
+
+        match peer.send_frame(frame).await {
+            Ok(()) => {}
+            // The connection is over: nothing more is captured for it.
+            // A new connection in the same session starts it again.
+            Err(remote_webrtc::WebRtcError::WrongState(state)) => {
+                tracing::info!(?state, "the connection ended; the capture stops");
+                agent.stop_capture();
+                self.layout = None;
+                self.layout_sent = false;
+                self.next_attempt_at = now + CAPTURE_RETRY;
+            }
+            // No codec on this computer: the person helping sees no
+            // picture. Said once here; the window says it to the person at the
+            // computer, naming the setting, from the codec's own status
+            // (`commands::codec`), and the session carries on so the picture
+            // starts the moment the codec arrives.
+            Err(error) if error.is_codec_unavailable() => {
+                if !self.codec_missing_logged {
+                    self.codec_missing_logged = true;
+                    tracing::warn!(%error, "this computer's screen cannot be sent");
                 }
-                Err(error) => tracing::debug!(%error, "a frame was not sent"),
-            },
-            Ok(None) => {}
-            Err(error) => tracing::debug!(%error, "no frame was captured"),
+            }
+            Err(error) => tracing::debug!(%error, "a frame was not sent"),
         }
     }
+
+    /// Send a `secure_desktop` notice when the state changes, and ask the
+    /// encoder for a keyframe when the picture switches between the ordinary
+    /// capture and the helper's frames (the two are different sizes and the
+    /// decoder cannot start from a mid-stream frame).
+    async fn follow_secure_desktop<P: PeerSession>(
+        &mut self,
+        agent: &Arc<Agent>,
+        peer: &mut P,
+        session_uuid: &str,
+        participant_uuid: &str,
+    ) {
+        let helper_active = agent.secure_desktop_active();
+        let active = helper_active || agent.secure_desktop_detected();
+        let reachable = agent.secure_desktop_reachable();
+
+        if self.secure_desktop_was_active != helper_active {
+            self.secure_desktop_was_active = helper_active;
+            self.next_frame_at = Instant::now();
+            peer.request_keyframe();
+        }
+
+        if self.secure_desktop_told != Some((active, reachable)) {
+            self.secure_desktop_told = Some((active, reachable));
+
+            if let Some(bytes) =
+                secure_desktop_bytes(session_uuid, participant_uuid, active, reachable)
+            {
+                let _ = peer.send_control(&bytes).await;
+            }
+        }
+    }
+}
+
+/// `secure_desktop { active, reachable }`, in the same envelope as every other
+/// control message.
+fn secure_desktop_bytes(
+    session_uuid: &str,
+    participant_uuid: &str,
+    active: bool,
+    reachable: bool,
+) -> Option<Vec<u8>> {
+    let sequence = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(1);
+
+    let envelope = remote_protocol::ControlEnvelope::new(
+        session_uuid,
+        participant_uuid,
+        sequence,
+        remote_protocol::ControlMessage::SecureDesktop { active, reachable },
+    );
+
+    envelope.validate().ok()?;
+
+    serde_json::to_vec(&envelope).ok()
 }
 
 /// `monitor_layout`, telling the controller which display it is looking at.

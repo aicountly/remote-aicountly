@@ -109,6 +109,11 @@ export type ControlMessage =
   // its own mouse or keyboard, and resumed after they stop (docs/desktop/CONTROL_COMPANION.md).
   | { type: 'control_paused'; reason: string }
   | { type: 'control_resumed' }
+  // Agent → browser, additive within protocol version 1: the Windows Secure Desktop (a UAC
+  // administrator prompt, Ctrl+Alt+Del, or the lock screen) is in front. `active` is whether one
+  // is up; `reachable` is whether an authorised helper is forwarding it, so the controller can
+  // answer it rather than only being told to ask the person at the computer.
+  | { type: 'secure_desktop'; active: boolean; reachable: boolean }
   | { type: 'reboot'; session_uuid: string }
   | { type: 'ping'; nonce: number }
   | { type: 'pong'; nonce: number }

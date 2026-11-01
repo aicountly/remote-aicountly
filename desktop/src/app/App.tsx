@@ -66,6 +66,9 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [shareClipboard, setShareClipboard] = useState(false)
+  // The "also let them answer Windows administrator prompts" box in the consent
+  // dialog. Off by default, reset after every decision, the same as clipboard.
+  const [answerSecureDesktop, setAnswerSecureDesktop] = useState(false)
   // Bumped to send the portal back to its dashboard (choosing "Remote" again),
   // or to a page this window chose: a computer to connect to, a code to join.
   const [portalHome, setPortalHome] = useState(0)
@@ -378,10 +381,11 @@ export default function App() {
         // already answered elsewhere while this was on screen.
         if (!requesterUuid) throw new Error('That request is no longer waiting.')
 
-        setState(await bridge.grantControl(requesterUuid, shareClipboard))
+        setState(await bridge.grantControl(requesterUuid, shareClipboard, answerSecureDesktop))
         setShareClipboard(false)
+        setAnswerSecureDesktop(false)
       }),
-    [run, session, shareClipboard],
+    [run, session, shareClipboard, answerSecureDesktop],
   )
 
   const denyControl = useCallback(
@@ -389,6 +393,7 @@ export default function App() {
       run(async () => {
         setState(await bridge.denyControl())
         setShareClipboard(false)
+        setAnswerSecureDesktop(false)
       }),
     [run],
   )
@@ -681,6 +686,9 @@ export default function App() {
             clipboardAllowedByPolicy={allowed?.clipboard_sync ?? false}
             shareClipboard={shareClipboard}
             onShareClipboardChange={setShareClipboard}
+            secureDesktopSupported={about?.supportsHosting ?? false}
+            answerSecureDesktop={answerSecureDesktop}
+            onAnswerSecureDesktopChange={setAnswerSecureDesktop}
             onAllow={grantControl}
             onDeny={denyControl}
             busy={busy}
