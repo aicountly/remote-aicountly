@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| Date | 30 October 2026 |
+| Date | 30 October 2026, brought up to date on 1 November 2026 |
 | Written for | The owner |
-| Code audited | Release branch `claude/clever-dirac-x9bs7d`, first at `7274918` (line numbers refer to it), then brought up to date for everything the same release fixed afterwards: those items are marked **Fixed in this release** and listed in §2. |
+| Code audited | Release branch `claude/clever-dirac-x9bs7d`, first at `7274918` (line numbers refer to it), then brought up to date for everything the same release fixed afterwards: those items are marked **Fixed in this release** and listed in §2. Updated on 1 November 2026 for PRs #92 and #93 (`main` at `4e0d7e2`, live in production, desktop build `202611010121` on the downloads page): §0 is the summary of what is done and what remains. |
 | Scope | Personal AICOUNTLY accounts only. By the owner's decision, Remote has no link to companies or organisations for now. Windows code signing is left out, except where something depends on it (the OV certificate from SSL.com is in validation). |
 | Effort | **S** = up to 2 days · **M** = up to 2 weeks · **L** = up to 6 weeks · **XL** = longer, or a dependency decision is needed first |
 | Competitors | The AnyDesk, TeamViewer and UltraViewer columns come from general knowledge, **as commonly advertised. Verify before quoting publicly.** |
@@ -31,29 +31,79 @@ the name is given. The folders are:
 
 ---
 
+## 0. Status at a glance (1 November 2026)
+
+**Live now** — production runs `4e0d7e2` (both migrations applied: `EntitleUnattendedAccessByDefault`,
+`AddRemoteTwoStepVerification`), and the downloads page serves Windows and Mac build `202611010121` (unsigned).
+`php spark remote:two-step status` on the server reports the key derived from `remote.signallingSecret` and "can seal
+new secrets: yes".
+
+| Done | Since | Was |
+|---|---|---|
+| The app sends its own picture (H.264) on Windows and Mac, and a Mac can host | PR #92 | P1-1 |
+| **Get help** ("give your code") from the app; **Connect → Help someone** by code | PR #92 | — |
+| Unattended access to your own computers, per computer, owner only | PR #92 | P1-3 |
+| Your computers: count registered/online, Connect, history of connections and changes, remove | PR #92 | — |
+| The H.264 encoder is Cisco's own OpenH264 binary, downloaded on each computer, under Cisco's licence conditions | PR #93 | P0-10 |
+| Windows administrator prompts (UAC), the Ctrl+Alt+Del screen and the lock screen can be seen and answered, with the person's consent | PR #93 | P1-2 (Secure Desktop part) |
+| Remote's own two-step verification, required for unattended access | PR #93 | P1-9 (Remote's part) |
+| A personal computer answers only to its owner; rename/suspend from the web works again | PR #92 | — |
+
+**Remaining before a public launch (P0, §6.1):** a signed update path (P0-1); Terms, a Remote privacy notice and an
+EULA, which must also carry Cisco's licence text (P0-2); a retention schedule (P0-3); scam and abuse handling (P0-4);
+operations — CI on pull requests, monitoring, backups, a second signalling process (P0-5); positioning (P0-6); pricing
+and TURN admission (P0-7); and, where they apply, relays outside India (P0-8) and analytics consent (P0-9). Before paid
+plans, counsel's view on whether the H.264 pool's content-provider licence applies (P0-10).
+
+**Remaining to verify on real machines** — none of these has run outside CI:
+
+* the Secure Desktop helper on Windows 10 and 11 (§11, steps 40–45);
+* the Cisco codec download: Cisco's HTTPS certificate, a corporate proxy (the app honours only `HTTP(S)_PROXY`, not the
+  WinHTTP setting), Defender and Smart App Control, and the notarised Mac build loading Cisco's dylib (§11, step 46);
+* hosting, Get help and unattended access on Windows and a Mac (§11, steps 33–39);
+* macOS 15: `CGDisplayCreateImage` is deprecated and Sequoia re-asks about screen recording.
+* two-step verification with a real authenticator app, sign-in and unattended step-up (§11, step 47).
+
+**Remaining features (P1/P2):** elevated windows on the ordinary desktop (Task Manager, an installer's own window)
+still refuse input — that needs `uiAccess` and a signed build (P1-2); connect by computer ID (P1-4); clipboard during
+control (P1-5); warning before the 60-minute limit (P1-6); crash reporting (P1-7); a security contact (P1-10); rate
+limits per account (P1-11); a hardware encoder or an encode thread of its own (P1-1); ScreenCaptureKit on macOS 14+;
+a special-keys menu that also sends Ctrl+Alt+Del to the helper (P2-13); and the portal's own second factor, which belongs
+to the portal team (P1-9).
+
+**What people must do after this deploy:** anyone who had already switched unattended access on must turn on two-step
+verification before connecting again (the Computers page says how). A lost phone with lost recovery codes is reset by
+support with `php spark remote:two-step reset <uuid|email> --reason "…"`, after confirming who it is.
+
+---
+
 ## 1. Verdict
 
 ### Office pilot: go, with conditions
 
-Remote is ready for a supervised office pilot of **attended help between personal accounts**. It works like this. The
-person being helped shares their entire screen from Chrome or Edge, or from the app's Remote tab. They link their own
-computer, which then carries the input. They approve every request. The helper needs only a browser. The flow is built end
-to end, on the server and on both desktop platforms. This release removed the bug that stopped personal accounts using it.
+Remote is ready for a supervised office pilot of **help between personal accounts**, in two ways. **From the app:**
+the person chooses **Get help**, reads out a code, lets the helper in and grants control; the app streams its own screen.
+Or, to their own computer, **unattended**. **From the browser:** the person shares their entire screen and links their
+own computer as the control companion, which carries the input. Either way the helper needs only a browser, and the
+person approves every request.
 
-Start the pilot when these two things are true:
+Both conditions for starting are met:
 
-1. **Production runs this release's backend and web.** The fixes for personal accounts are on the server
-   (`CompanionService.php:958-974`, `EffectivePolicyResolver.php:335-338`, `DeviceSessionService.php:470-476`). Merging
-   is not deploying. Until the deploy, "Enable control from this computer" will still be refused in a personal session.
-2. **Every pilot computer runs a numbered build from this release.** App settings → About shows a 12-digit Build, not
-   "Local build" (desktop `SettingsPage.tsx:118-122`).
+1. ~~Production runs this release's backend and web.~~ **Done**: `4e0d7e2` is live, with both migrations applied.
+2. **Every pilot computer runs build `202611010121` or later.** App settings → About shows the 12-digit Build, not
+   "Local build" (desktop `SettingsPage.tsx`).
 
 The parallel fixes this list used to wait on — signing a computer out revokes it on the server, uninstall cleans up,
 the whole web is personal-only — are all in this release (§2).
 
 Tell the pilot group these limits before they start (details in §5.2):
 
-* The helper cannot click on UAC prompts or administrator windows, and the app does not tell them why.
+* A UAC prompt, the Ctrl+Alt+Del screen or the lock screen can be answered only if the person ticked **Also let them
+  answer Windows administrator prompts** (for unattended connections, the switch in App settings), and only with the
+  background service installed. Otherwise the room says "Ask the person at the computer to answer it". Elevated windows
+  on the ordinary desktop (Task Manager, an installer's own window) still refuse the helper's input.
+* Unattended access needs two-step verification on the account.
+* The app downloads Cisco's video codec a few seconds after its first start; without it the helper sees no picture.
 * Control works only while the whole screen is shared and the app is open on that computer. Inside the app, Start
   session and the room's Share button both propose Entire screen; in a plain browser, choose **Entire screen** on Start
   session.
@@ -61,18 +111,19 @@ Tell the pilot group these limits before they start (details in §5.2):
 * A session stops at 60 minutes, with no warning.
 * Files can be at most 25 MB.
 * Only one screen is shared at a time.
-* The Windows key, Alt+Tab and Ctrl+Alt+Del cannot be sent.
+* The Windows key and Alt+Tab cannot be sent, nor Ctrl+Alt+Del from the browser.
 * The installers are unsigned, so Windows and macOS will warn about them.
 
 ### Public launch: not yet
 
-People who compare AICOUNTLY Remote with AnyDesk, TeamViewer or UltraViewer expect three things. Two of them are built
-in this release and still need testing on real machines (§11, steps 33–39):
+People who compare AICOUNTLY Remote with AnyDesk, TeamViewer or UltraViewer expect three things. All three are now
+built; none has yet been tested on real machines (§11, steps 33–47):
 
 * ~~a desktop app that sends its own picture~~ — built: H.264 from the app on Windows and Mac, and **Get help** ("give
   your code") hosted by the app itself;
 * ~~unattended access to their own computers~~ — built: per computer, owner only, recorded;
-* a way through UAC prompts (`windows-app-manifest.xml:18`) — still missing (P1-2).
+* ~~a way through UAC prompts~~ — built for the Secure Desktop (UAC, Ctrl+Alt+Del, the lock screen), with consent, through
+  the background service; elevated windows on the ordinary desktop still need `uiAccess` and signing (P1-2).
 
 These P0 blockers must be fixed first (§6.1):
 
@@ -87,8 +138,9 @@ These P0 blockers must be fixed first (§6.1):
    * CI no longer runs on pull requests.
    * This repository shows no monitoring or alerting.
    * Everything runs on one server, and signalling is a single process that keeps all its state in memory.
-6. **Positioning needs a decision.** Native video and unattended access now exist; UAC support does not. Either launch
-   saying plainly that administrator prompts cannot be answered remotely, or wait for the signed service (P1-2).
+6. **Positioning needs a decision.** Native video, unattended access and UAC prompts now exist, but are untested on
+   real machines and the builds are unsigned. Launch only after the pilot has run steps 33–47, and say plainly that
+   elevated windows on the ordinary desktop are not yet reachable (P1-2).
 7. **Pricing and free-tier limits are not decided.** TURN admission only observes and refuses nobody. Its capacity
    figures are placeholders, and the relays are shared with Connect.
 
@@ -116,7 +168,15 @@ match the competitors take a quarter or more.
 
 ## 2. What this release changed
 
-**Hosting, unattended access, your computers** (the release after the office-test build):
+**Cisco's codec, administrator prompts, two-step verification** (PR #93, `4e0d7e2`, build `202611010121`):
+
+| Change | Where |
+|---|---|
+| **Cisco's own OpenH264 binary**, loaded at run time with `libloading`: each computer downloads OpenH264 2.6.0 from Cisco's server, checks its SHA-256 on every load, and keeps it in a per-user folder. App settings → Video codec switches it off and on beside "OpenH264 Video Codec provided by Cisco Systems, Inc."; About → Third-party licences shows Cisco's licence text. The app ships no encoder of its own; Desktop CI fails if one ever reaches it. NASM is no longer installed on the build machines. | `remote-webrtc/src/video/cisco.rs`, `codec.rs`; `commands/codec.rs`; `VideoCodec.tsx`; `desktop/legal/OPENH264_BINARY_LICENSE.txt`; `docs/legal/OPENH264.md`; `desktop-ci.yml` |
+| **The Secure Desktop**: with consent, the service starts a SYSTEM helper on `winsta0\winlogon` in the console session, which captures it with GDI and injects with `SendInput`; the app sends its frames while a prompt is in front and routes gate-admitted input to it. The service refuses a requester that is not the installed app, not in the console session, or not in a session it knows; unattended use needs its own switch. The room is told with `secure_desktop {active, reachable}`. | `agents/windows-service/src/secure_desktop/`; `src-tauri/src/secure_desktop.rs`; `session.rs`; `agent.rs`; `ControlRequest.tsx`; `remote-protocol`; web `SessionStage` |
+| (The two-step row below also landed in this PR.) | — |
+
+**Hosting, unattended access, your computers** (PR #92, `ded84f1`, build `202610311052`):
 
 | Change | Where |
 |---|---|
@@ -186,12 +246,13 @@ Done in `8cefb42` / `7274918`:
 * **Stopping.** The control gate is local. It can be closed with the shortcut (Ctrl+Alt+Shift+S on Windows, ⌘⌥⇧S on
   a Mac: `src-tauri/src/lib.rs:47-58`), the banner or the tray icon. Any real mouse or keyboard use at the computer pauses
   the helper. Their input resumes after 1.5 seconds without local input (`companion.rs:63`).
-* **The Windows app never sends a picture of its own.** No frame is encoded (`session.rs:34-39`). The app hosts a session
-  only when an unattended session is waiting for it (`runtime.rs:387-400`), and a personal account cannot turn unattended
-  access on (`CompanyPolicyDefaults.php:197`). So for personal accounts, the companion is the only way to control a
-  computer.
-* **On a Mac, the app is a companion and nothing more.** Accessibility is checked live. Screen Recording is never asked
-  for (`macos/permissions.rs:3-13`). The clipboard, a background service and restarts are not supported (`:34-40`).
+* **The app now hosts too** (since PR #92). It captures the screen (Windows.Graphics.Capture; Core Graphics on a Mac),
+  encodes it with Cisco's OpenH264 and streams it, for a help session started in the app (**Get help**) or an unattended
+  connection to the owner's own computer (`session.rs` `CapturePump`, `runtime.rs`). Input goes through the same local
+  gate as the companion's. On a Mac, hosting needs Screen Recording and Accessibility; the clipboard, a background service
+  and restarts are still not supported there.
+* **The Secure Desktop** (since PR #93): while a UAC prompt, Ctrl+Alt+Del or the lock screen is in front and the person
+  consented, the picture and the input go through the service's helper (`secure_desktop.rs`).
 
 ---
 
@@ -205,7 +266,7 @@ advertised. Verify before quoting publicly.**
 | Connect by ID or code | A 9-digit session code, and the host admits each person (`Remote.php:217`, `JoinService.php:29`). The app's **Get help** gives that code from the computer itself and admits the helper there; **Connect → Help someone** joins by it. Your own computers are connected to from a list, not by an ID (`ConnectScreen.tsx`). | Yes. A permanent ID or alias. | Yes. ID and password. | Yes. ID and password. |
 | Attended control | Yes, on Windows and Mac, two ways: the app hosts and streams its own screen (H.264, `session.rs` `CapturePump`), or the browser shares the whole screen and the app carries the input (companion). Admitting and control are separate consents. | Yes | Yes | Yes |
 | Unattended access | Yes, to **your own** computers: switched on per computer with a confirmation in Remote → Computers, only the owner can connect, every connection is recorded and shown on the machine (`DeviceSessionService::startUnattended`, `PersonalUnattendedAccessTest`). Needs Remote's own two-step verification: a code from the last ten minutes to switch it on, a verified browser to connect (`TwoStepUnattendedAccessTest`, P1-9). On a Mac it needs the app running and Screen Recording allowed. | Yes | Yes | Yes |
-| UAC and elevated windows | No. The app runs `asInvoker` (`windows-app-manifest.xml:18`), and refused input is dropped without a word (`agent.rs:1017`, `companion.rs:867`). | Yes, when installed | Yes, when installed | Usually yes when installed (verify) |
+| UAC and elevated windows | **UAC prompts, Ctrl+Alt+Del and the lock screen: yes, with consent** (a box in the control dialog; a separate switch for unattended), through the background service's helper on the Secure Desktop (PR #93; untested on a real PC). **Elevated windows on the ordinary desktop: no** — the app runs `asInvoker` and Windows refuses its input (UIPI); that needs `uiAccess` and a signed build (P1-2). | Yes, when installed | Yes, when installed | Usually yes when installed (verify) |
 | Multi-monitor | One shared screen at a time, picked by the person in the browser. The helper cannot switch screens (`agent.rs:963-966`). | Yes. Switch, or show all. | Yes | Yes. Switch. |
 | File transfer | Browser to browser. The recipient must accept. 25 MB at most (`Remote.php:248`). | Yes, with a file manager | Yes | Yes |
 | Clipboard | No, not during companion control (`CompanionService.php:771`). | Text and files, both ways | Text and files | Text (files: verify) |
@@ -230,8 +291,8 @@ advertised. Verify before quoting publicly.**
 
 | # | Blocker | Why it matters | Where | Effort |
 |---|---|---|---|---|
-| PB-1 | Deploy this release's backend and web to production, with your go-ahead. | Without it, linking a personal computer is refused (`COMPANION_SCOPE`), and personal devices are "not found" in personal sessions. | `CompanionService.php:139-144`, `:958-974`; `DeviceSessionService.php:470-476` | S |
-| PB-2 | Publish numbered Windows and macOS builds. Testers install only those. | Without a number, nobody can tell which build was tested. That was the old 1.0.0 cache problem. | `release-windows.yml:156-185`; desktop `SettingsPage.tsx:118-122` | S |
+| PB-1 | ~~Deploy this release's backend and web to production.~~ **Done** (`4e0d7e2`). | Without it, linking a personal computer is refused (`COMPANION_SCOPE`), and personal devices are "not found" in personal sessions. | `CompanionService.php:139-144`, `:958-974`; `DeviceSessionService.php:470-476` | S |
+| PB-2 | ~~Publish numbered Windows and macOS builds.~~ **Done** (`202611010121`). Testers install only those. | Without a number, nobody can tell which build was tested. That was the old 1.0.0 cache problem. | `release-windows.yml:156-185`; desktop `SettingsPage.tsx:118-122` | S |
 | PB-3 | ~~The parallel fixes have landed.~~ **Fixed in this release** (§2). | — | — | Done |
 | PB-4 | Each tester has a personal AICOUNTLY account and has signed in. | Joining with a code needs a signed-in account (`Routes.php:278-279`). | — | S |
 | PB-5 | Check which guest-link entitlement production uses. | The built-in Basic plan says external guests are off (`EffectivePolicyResolver.php:529`). The platform-defaults seeder that `docs/DEPLOYMENT.md:278-282` tells you to run says they are on, with a 120-minute cap (`RemotePlatformDefaultsSeeder.php:29`). Whether guest links work depends on which row exists. | `remote_entitlements` row with `company_id IS NULL` | S |
@@ -241,7 +302,7 @@ advertised. Verify before quoting publicly.**
 
 | # | Caveat | What testers will see | Where |
 |---|---|---|---|
-| C-1 | **No UAC and no administrator windows.** The app runs at the user's own level, so Windows refuses input sent to higher-privileged windows (Task Manager, installers, admin consoles). The UAC prompt runs on the Secure Desktop. | The helper's clicks do nothing in those windows, and nothing says why. During a UAC prompt the picture freezes or goes black. The person at the computer has to answer it. | `windows-app-manifest.xml:18`; `windows/input.rs:424-431`; `agent.rs:1014-1018`; `companion.rs:865-868`; `secure_desktop_state()` is defined at `windows/capture.rs:77-89` and never called |
+| C-1 | **UAC prompts only with the box ticked; elevated windows not at all.** The UAC prompt, Ctrl+Alt+Del and the lock screen run on the Secure Desktop: the helper reaches them only if the person ticked **Also let them answer Windows administrator prompts** (unattended: the App settings switch) and the background service is installed. Elevated windows on the ordinary desktop (Task Manager, installers, admin consoles) still refuse input. | With the box ticked, the picture switches to the prompt and the room says "You can answer it". Without it, "Ask the person at the computer to answer it". In an elevated window, the helper's clicks do nothing. | `secure_desktop.rs`; `agents/windows-service/src/secure_desktop/`; `windows-app-manifest.xml:18`; `windows/input.rs` |
 | C-2 | **Control needs the entire screen.** In the app, Start session chooses "Entire screen" for you, and the room's **Share** button proposes what Start session chose. In Chrome or Edge, Start session begins on Safe Share (a browser tab): choose **Entire screen** there, or in the share dialog. | "Control works only when you share your entire screen". | `StartSessionPage.tsx:35-37`; `proposedShareMode.ts`; `CompanionPanel.tsx:49-57` |
 | C-3 | **No clipboard during control** (owner decision 3). | To pass text across, put it in the chat. The person at the computer can copy it from there. | `CompanionService.php:771`, `:805-820`; `docs/desktop/CONTROL_COMPANION.md:27-28` |
 | C-4 | **Sessions end 60 minutes after they start, with no warning and no way to extend.** | The room just ends. Start a new session. | `CompanyPolicyDefaults.php:200`; `SessionService.php:391-434` |
@@ -343,11 +404,11 @@ Developer ID certificate and notarisation (`docs/desktop/PUBLISHING.md:183-196`)
 
 **P0-6. Positioning: say what it does and does not do.** **S** (a decision and the wording)
 
-* *Why it matters.* There is no unattended access, no UAC support, no picture from the app, no control of Linux and no
-  mobile app (§4). Marketing that implies it matches AnyDesk or TeamViewer would mislead people, and they would find out in
-  their first support call.
-* *Fix.* Either launch as "help in the browser, no install for the helper", with a fair comparison, or wait until P1-1 to
-  P1-3 are built.
+* *Why it matters.* The app now hosts, reaches your own computers unattended and answers UAC prompts, but none of that
+  has run on a real machine yet, the builds are unsigned, elevated windows are not reachable, and there is no Linux control
+  and no mobile app (§4). Marketing that implies it matches AnyDesk or TeamViewer before the pilot proves it would mislead
+  people.
+* *Fix.* Run the pilot (§11, all steps), then launch with a fair comparison that names what is not there yet.
 
 **P0-7. Pricing and free-tier limits are not decided, and TURN admission only observes.** **M** for the decision and the limits. **L** with billing.
 
@@ -390,8 +451,8 @@ Developer ID certificate and notarisation (`docs/desktop/PUBLISHING.md:183-196`)
 
 | # | Finding | Why it matters | Where | Effort |
 |---|---|---|---|---|
-| P1-1 | ~~A video encoder in the app.~~ **Built in this release**: software H.264 (OpenH264, Constrained Baseline) on Windows and Mac, with capture that follows the link, decoded by Chromium in `tests/browser_interop.rs`. Measured on a 4-core 2.1 GHz VM: 1080p 24 ms a frame (fits 30 fps), a Retina or 4K screen scaled to 1080p about 45–50 ms (about 20 fps). The encode holds up the session loop for that long, so control input waits up to one encode. Left: a hardware encoder (Media Foundation, VideoToolbox) or an encode thread of its own, ScreenCaptureKit on macOS 14+, and testing on real machines (§11). | — | `remote-webrtc/src/video/`; `session.rs` `CapturePump`; `platform/macos/capture.rs` | Done (hardware encoder: M) |
-| P1-2 | **UAC, elevated windows and the Secure Desktop.** First, *tell* the helper when the computer is on the Secure Desktop or when input to a window was refused (send `control_paused` with a reason). Then support it properly, through the service on the Secure Desktop or with `uiAccess`. Both need signing. | IT support often means installing software, and installing software means UAC. | `secure_desktop_state()` is never called (`windows/capture.rs:77-89`); `Handled::Failed` is ignored (`companion.rs:865-868`) | S to tell the helper; XL for real support |
+| P1-1 | ~~A video encoder in the app.~~ **Built in this release**: software H.264 (Cisco's OpenH264 binary since PR #93, Constrained Baseline) on Windows and Mac, with capture that follows the link, decoded by Chromium in `tests/browser_interop.rs`. Measured on a 4-core 2.1 GHz VM: 1080p 24 ms a frame (fits 30 fps), a Retina or 4K screen scaled to 1080p about 45–50 ms (about 20 fps). The encode holds up the session loop for that long, so control input waits up to one encode. Left: a hardware encoder (Media Foundation, VideoToolbox) or an encode thread of its own, ScreenCaptureKit on macOS 14+, and testing on real machines (§11). | — | `remote-webrtc/src/video/`; `session.rs` `CapturePump`; `platform/macos/capture.rs` | Done (hardware encoder: M) |
+| P1-2 | **UAC, elevated windows and the Secure Desktop.** ~~Tell the helper when the Secure Desktop is showing~~ and ~~reach it through the service~~: **built in PR #93** — the SYSTEM helper captures and injects on the Secure Desktop with the person's consent, and the room says whether the prompt can be answered. **Left:** (a) test it on Windows 10 and 11 (§11, steps 40–45); (b) elevated windows on the ordinary desktop, through `uiAccess="true"`, which Windows honours only for a signed binary installed under Program Files — so after the certificate; (c) tell the helper when an elevated window refused input (`Handled::Failed` is still not reported); (d) a browser button for Ctrl+Alt+Del — the helper already accepts it (P2-13). | IT support often means installing software, and installing software means UAC. | `agents/windows-service/src/secure_desktop/`; `secure_desktop.rs`; `windows-app-manifest.xml:18` | Secure Desktop done; `uiAccess` M after signing |
 | P1-3 | ~~Unattended access to your own computers.~~ **Built in this release**: off by default, switched on per computer with a confirmation, owner only, and behind Remote's own two-step verification (P1-9). | — | `CompanyPolicyDefaults::personal()`; `PermissionCatalog`; migration `EntitleUnattendedAccessByDefault` | Done |
 | P1-4 | **Connect by computer ID, and an address book.** A real ID that a helper can type to *ask* for a session, with the consent still at the computer. The rename to "Key fingerprint" is **fixed in this release**. | People used to other tools expect to read out an ID. | `SignInScreen.tsx`; `agent.rs:313-328` | Rename done; L to build |
 | P1-5 | **Clipboard during companion control**: text, both ways, only when ticked. | Pasting a command or a URL is everyday support work. | `CompanionService.php:771`; `docs/desktop/CONTROL_COMPANION.md:27-28` | M |
@@ -420,7 +481,7 @@ Developer ID certificate and notarisation (`docs/desktop/PUBLISHING.md:183-196`)
 | P2-10 | ~~The false message "The clipboard is shared in both directions".~~ **Fixed in this release.** | `ControlPanel.tsx` | Done |
 | P2-11 | Shared PCs. Every Windows account on a PC acts as the person who registered it. Document this, or register per user for personal accounts. | `service/storage.rs:14-33`; `hooks.nsh:119-125` | M |
 | P2-12 | Make "personal only" true on the server too. The API still accepts company scope, the Manage relay and the lifecycle receivers. Put them behind a switch, or refuse them. | `Routes.php:57`, `:66`, `:298-306` | S–M |
-| P2-13 | A special-keys menu (Ctrl+Alt+Del, the Windows key, Alt+Tab) and keyboard lock in full screen. | `web/src` | S–M |
+| P2-13 | A special-keys menu (Ctrl+Alt+Del, the Windows key, Alt+Tab) and keyboard lock in full screen. The Secure Desktop helper already accepts Ctrl+Alt+Del (`SendSAS`, where the `SoftwareSASGeneration` policy allows services); only the button is missing. | `web/src`; `secure_desktop/protocol.rs` | S–M |
 | P2-14 | Decide whether analytics should run inside the desktop app's portal. Today it does, banner included. | `analytics.ts` (no check for the app) | S |
 
 ---
@@ -451,6 +512,12 @@ Developer ID certificate and notarisation (`docs/desktop/PUBLISHING.md:183-196`)
 * **The security contact** (P1-10).
 * **The CSP** (P2-8).
 * **Shared PCs** (P2-11).
+* **The Secure Desktop helper runs as SYSTEM.** It starts only for a session the service knows, at the installed app's
+  request, in the console session, after the person's consent (or the owner's unattended switch); it talks only over a
+  pipe whose DACL admits SYSTEM and the session's user, and stops when control stops. What remains: a process already
+  running as the same user could inject into the app during a granted session and so reach the helper (`docs/SECURITY.md`).
+  Review it again once the builds are signed.
+* **The video codec** is Cisco's binary, downloaded at run time and loaded only when its SHA-256 matches, on every load.
 * **A controller can click on Remote's own screens**: admitting someone to the session, accepting a file on the person's
   behalf, linking a device. The person can always take over, because local input pauses the helper and the shortcut is
   local. Still, consider ignoring remote input over Remote's own approval controls (P2).
@@ -505,8 +572,8 @@ Retention and deletion: P0-3. Consent for analytics: P0-9.
 * **Defaults.** The app's Start page starts on "Entire screen", and the room's Share button now follows the Start page
   (P1-13, fixed). A plain browser still starts on Safe Share (`StartSessionPage.tsx:35-37`): start on "Entire screen"
   whenever the person has the app signed in (S).
-* **Failures that say nothing.** Input refused by an elevated window, and the Secure Desktop (C-1, P1-2). This is the
-  likeliest "it's broken" report in the pilot.
+* **Failures that say nothing.** Input refused by an elevated window still says nothing (P1-2). The Secure Desktop is now
+  explained in the room. A computer without the codec shows no picture; the app says so and names the setting.
 * **The things a helper misses most:** the clipboard (P1-5), special keys (P2-13), switching screens (P2-2), and a
   session that stops at 60 minutes (P1-6). Full screen is in this release.
 * **Misleading wording:** the analytics banner's "nothing that identifies you" (P0-9). "This computer's ID" (P1-4) and
@@ -526,7 +593,8 @@ Use this to brief counsel. It is not legal advice.
 |---|---|---|
 | Terms of Service | None anywhere: web, app or installer | Terms covering acceptable use, the ban on unauthorised access and scams, suspension and liability. Accept them at the first session (P0-2). |
 | Privacy notice | Only the general `aicountly.com/privacy-policy`, linked from the analytics banner (`AnalyticsConsent.tsx:11`) | A section for Remote: each kind of data in §7, why it is kept, for how long, who processes it (Google Analytics, the hosting provider, the TURN hosts), and the person's rights. Link it from the web, the app and the installer. |
-| EULA | No licence page in the NSIS installer (`tauri.conf.json:60-67`) and nothing in the app | A licence for the desktop app, shown in the installer and in About. |
+| EULA | No licence page in the NSIS installer (`tauri.conf.json:60-67`). About shows Cisco's OpenH264 licence text (PR #93). | A licence for the desktop app, shown in the installer and in About. **It must reproduce Cisco's OpenH264 binary licence text and its fourth condition** (`desktop/legal/OPENH264_BINARY_LICENSE.txt`, `docs/legal/OPENH264.md`). |
+| H.264 patents | Cisco's binary, under Cisco's AVC/H.264 pool licence (PR #93) | Nothing to buy while Cisco's four conditions are met. Before paid plans, ask counsel whether the pool's content-provider ("(b) sublicence") terms apply; if so, the licence is from Via Licensing Alliance (via-la.com). |
 | DPDP Act 2023 (India) | Analytics consent only. No grievance contact. No retention. Erasure only when the account closes, and only partly (P0-3). | A notice and consent that list each kind of data and its purpose. A way to withdraw consent. A grievance contact. Erasure once the purpose is served. Reasonable security safeguards. Telling the Data Protection Board and the people affected about a breach. Verifiable parental consent for anyone under 18 (check with the portal team how sign-up handles age). Processor contracts. The DPDP Rules 2025 bring in most obligations in stages; confirm the dates with counsel. |
 | IT Act 2000 and IT Rules 2021 | Remote passes chat between users, so it is probably an intermediary (counsel to confirm). | Published terms and privacy policy, and a named grievance officer. Acknowledge a complaint within 24 hours and resolve it within 15 days. |
 | CERT-In Directions (28 April 2022) | No incident process or log policy in this repository | Report a cyber incident within 6 hours. Keep ICT logs for 180 days in India. Synchronise clocks to NTP. Fit this with DPDP deletion (P0-3), and confirm where the hosts are. |
@@ -625,12 +693,9 @@ Use this to brief counsel. It is not legal advice.
 18. **PC-1: take over.** Move your own mouse while B is moving theirs.
     *Pass:* PC-2 shows "Paused: someone is using that computer", and the app on PC-1 says "Paused while you use this
     computer". B's control comes back about 2 seconds after A stops.
-19. **Known limit: check it, do not try to fix it.**
-    * From PC-2, open Task Manager on PC-1 and click in it.
-    * Then start something that brings up a UAC prompt, for example **Run as administrator** on Windows Terminal.
-
-    *Pass (meaning "behaves as expected"):* B's clicks do nothing in Task Manager. During the UAC prompt, PC-2's picture
-    freezes or goes dark. A has to answer the prompt on PC-1. Write down what B saw.
+19. **Known limit: check it, do not try to fix it.** From PC-2, open Task Manager on PC-1 and click in it.
+    *Pass (meaning "behaves as expected"):* B's clicks do nothing in Task Manager (an elevated window). Write down what B
+    saw. (UAC prompts are steps 40–45.)
 20. **Scaling and second screens** (if you have them). On the scaled laptop, and on a computer with two screens sharing the
     second one, repeat the corner test from step 17.
     *Pass:* clicks land where B points.
@@ -708,6 +773,33 @@ Use this to brief counsel. It is not legal advice.
     Settings and reopen the app.
     *Pass:* the same as on PC-1. On a Retina Mac a click lands where it was pointed.
 
+**Administrator prompts, the codec and two-step verification** (PR #93):
+
+40. **UAC consent prompt, box ticked.** In a Get help session (steps 33–35), when B asks for control, A ticks **Also let
+    them answer Windows administrator prompts** and allows. On PC-1 start something that needs a "Yes/No" UAC prompt.
+    *Pass:* PC-2's picture switches to the prompt, the room says "A Windows administrator prompt is open on that computer.
+    You can answer it.", and B's click on **Yes** works. The picture returns to the desktop afterwards.
+41. **UAC credential prompt.** As step 40, but a prompt that asks for an administrator's password.
+    *Pass:* B can type into the user name and password fields.
+42. **Box not ticked.** Repeat step 40 without ticking the box.
+    *Pass:* the room says "Ask the person at the computer to answer it", and B's input does nothing on the prompt.
+43. **Stop during a prompt.** With a prompt open and B answering it, press Ctrl+Alt+Shift+S on PC-1.
+    *Pass:* B's input stops at once and the room says control ended. Ending the session also stops it.
+44. **Lock screen, unattended.** On PC-1 turn on **Let my unattended connections answer administrator prompts and the
+    lock screen** in App settings, connect unattended from PC-2 (step 37), then lock PC-1 (Win+L).
+    *Pass:* PC-2 sees the lock screen and can type the password. Turn the switch off and repeat: "Ask the person at the
+    computer to answer it".
+45. **Ctrl+Alt+Del.** Note whether anything in the room can send it (expected: not yet, P2-13).
+46. **The codec, on every computer.** After installing, open App settings → Video codec.
+    *Pass:* within a minute it shows "Installed · OpenH264 2.6.0", beside "OpenH264 Video Codec provided by Cisco Systems,
+    Inc.". Turn it off: a Get help session shows the warning and B sees no picture; turn it back on and the picture
+    returns. On an office network behind a proxy, write down whether the download worked. About → Third-party licences
+    shows Cisco's licence text.
+47. **Two-step verification.** On PC-2 (account A) open Settings → Two-step verification, scan the QR code with an
+    authenticator app, confirm, and save the recovery codes. Sign out and in again.
+    *Pass:* Remote asks for a code before anything else. Turning unattended access on asks for a fresh code; an account
+    without two-step is sent to Settings when it tries. A recovery code works once.
+
 **Results sheet.** Copy this table and fill in one row for each step:
 
 | Step | PC-1 | Mac | Network | Build | Pass or fail | What you saw |
@@ -721,9 +813,9 @@ Use this to brief counsel. It is not legal advice.
 
 | When | What |
 |---|---|
-| Days 1–2 | Get your go-ahead and deploy this release's backend and web (PB-1). Publish numbered Windows and Mac builds (PB-2). Check the guest-link entitlement row (PB-5). (The Share button, P1-13, and the parallel fixes, PB-3, are done.) |
-| Days 2–5 | Run the pilot script (§11) with 2 PCs and a Mac. Then run it with 5–10 people doing real help sessions for a week. Fix what they find. |
-| Week 1 (S items) | Turn CI back on for pull requests and make the deploy gate default to on (P0-5). Load no analytics before consent (P0-9). Keep the previous deploy's files for a day (the rest of P1-8). Tell the helper when input was refused or the Secure Desktop is showing (P1-2, first step). Publish a security contact (P1-10). (The error screen, the rename, the clipboard message and the documents are done.) |
+| Days 1–2 | ~~Deploy (PB-1) and publish numbered builds (PB-2)~~ — done (`4e0d7e2`, `202611010121`). Check the guest-link entitlement row (PB-5). |
+| Days 2–5 | Run the whole pilot script (§11, steps 1–47) with 2 PCs and a Mac — the first run of hosting, the Secure Desktop helper and the Cisco download on real machines. Then 5–10 people doing real help sessions for a week. Fix what they find. |
+| Week 1 (S items) | Turn CI back on for pull requests and make the deploy gate default to on (P0-5). Load no analytics before consent (P0-9). Keep the previous deploy's files for a day (the rest of P1-8). Tell the helper when an elevated window refused input (P1-2c), and add a Ctrl+Alt+Del button (P2-13). Publish a security contact (P1-10). (The error screen, the rename, the clipboard message and the documents are done.) |
 | Week 2 | Start the Terms, privacy notice and EULA with counsel (P0-2). Write the retention schedule and the purge job (P0-3). Design the scam warning and reporting (P0-4). Set up uptime monitoring, alerts and a backup restore test (P0-5). Decide pricing and the free tier (P0-7). Write the update signature check, ready to switch on when the certificate arrives (P0-1). |
 
 ### The next quarter
@@ -731,7 +823,7 @@ Use this to brief counsel. It is not legal advice.
 | Month | What | Result |
 |---|---|---|
 | 1 | Finish every P0. Measure TURN capacity, then switch admission to `enforce` when the licence source allows it (P0-7). Add a relay outside India if you will market there (P0-8). Warn before the 60-minute limit and allow extending it (P1-6). Rate limiting per account (P1-11). | **Public launch possible**, positioned as attended help in the browser (P0-6). |
-| 1–3 | The video encoder in the Windows app (P1-1). Then UAC and the Secure Desktop through the signed service (P1-2). Unattended access to your own computers, behind Remote's own two-step verification, is done (P1-3, P1-9); the portal's own second factor is the portal team's. | Matches the competitors on the features users look for first. |
+| 1–3 | ~~The video encoder (P1-1), the Secure Desktop (P1-2), unattended access with two-step (P1-3, P1-9)~~ — built. Left: once the certificate is in, sign the builds and add `uiAccess` for elevated windows (P1-2b); a hardware encoder or an encode thread (P1-1); ScreenCaptureKit on macOS 14+; the portal's own second factor (portal team). | Matches the competitors on the features users look for first. |
 | 2–3 | Connect by ID and an address book (P1-4). Clipboard during companion control (P1-5). Reconnecting after a restart (P1-6). Crash reporting and log upload (P1-7). | Fewer support tickets, and a smoother experience for helpers. |
 | Later | Recording, Wake-on-LAN, restart, mobile apps, Linux, languages, a per-user installer (P2). | — |
 
