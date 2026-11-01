@@ -94,6 +94,26 @@ jobs:
         working-directory: desktop
         run: cargo test --workspace
 
+      # The shipped app must never compile OpenH264 itself: Cisco pays the
+      # H.264 royalties only for its own binary, downloaded on the person's
+      # computer (docs/legal/OPENH264.md). The from-source encoder exists for
+      # the tests alone; this fails the build if it ever reaches the app.
+      - name: The app ships no H.264 encoder of its own
+        working-directory: desktop
+        run: |
+          set -euo pipefail
+          for target in x86_64-pc-windows-msvc aarch64-apple-darwin x86_64-apple-darwin; do
+            tree="$(cargo tree -p aicountly-remote-desktop -e features -i openh264-sys2 --target "$target")"
+            if grep -q 'feature "source"' <<<"$tree"; then
+              echo "::error::openh264 is built from source for $target"; echo "$tree"; exit 1
+            fi
+            grep -q 'feature "libloading"' <<<"$tree" || { echo "::error::openh264 is not loaded at run time for $target"; exit 1; }
+          done
+          if cargo tree -p aicountly-remote-desktop --target all -i nasm-rs >/dev/null 2>&1; then
+            echo "::error::nasm-rs is in the app's dependency graph"; exit 1
+          fi
+          echo "OpenH264 is loaded from Cisco's binary on every shipped target."
+
   # -------------------------------------------------------------------------
   # The Windows half.
   #
@@ -109,15 +129,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      # NASM, so CI compiles OpenH264's x86 assembly exactly as the release does.
-      - name: Install NASM
-        shell: pwsh
-        run: |
-          choco install nasm -y --no-progress
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          & "C:\Program Files\NASM\nasm.exe" -v
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable

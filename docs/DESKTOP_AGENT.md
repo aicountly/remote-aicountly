@@ -146,7 +146,7 @@ policy, consent, session transport and lifecycle.** 653 automated tests across
 the five parts of the product.
 
 **And the picture.** The agent captures the screen (Windows.Graphics.Capture on
-Windows, Core Graphics on a Mac), encodes it as H.264 with OpenH264, and streams
+Windows, Core Graphics on a Mac), encodes it as H.264 with Cisco's OpenH264 binary (downloaded on the computer), and streams
 it to the browser on the negotiated track. It hosts an unattended session on
 your own computer, and an attended one started at the machine ("Get help":
 read out a code, let the helper in, grant control when asked).

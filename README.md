@@ -53,7 +53,8 @@ notices and says so; it does not disable UAC, and it does not ask you to. See
 [docs/desktop/WINDOWS_AGENT.md](docs/desktop/WINDOWS_AGENT.md).
 
 **The desktop app hosts on Windows and macOS.** It captures the screen,
-encodes it as H.264 (OpenH264) and streams it to the browser, attended ("give
+encodes it as H.264 with Cisco's OpenH264 binary (downloaded on each computer, see
+[docs/legal/OPENH264.md](docs/legal/OPENH264.md)) and streams it to the browser, attended ("give
 your code": the person at the machine admits the helper and grants control)
 or unattended (your own computers, switched on per computer). A Mac uses Core
 Graphics capture and asks for Screen Recording. See
