@@ -2,7 +2,10 @@ import { useState } from 'react'
 
 import * as bridge from '../../services/tauri'
 import type { About, AgentConfig } from '../../types/agent'
+import { OPENH264_ATTRIBUTION } from '../../types/agent'
 import { StatusPill } from '../../components/StatusPill'
+import { OPENH264_LICENCE } from './licences'
+import { VideoCodecSettings } from './VideoCodec'
 
 /**
  * Settings, and the diagnostics a support engineer asks for.
@@ -16,12 +19,15 @@ export function SettingsPage({
   config,
   about,
   onSave,
+  onConfigChange,
   busy,
   error,
 }: {
   config: AgentConfig
   about: About | null
   onSave: (config: AgentConfig) => void
+  /** The configuration changed outside the form — the codec's switch. */
+  onConfigChange?: (config: AgentConfig) => void
   busy?: boolean
   error?: string | null
 }) {
@@ -100,6 +106,8 @@ export function SettingsPage({
         </button>
       </section>
 
+      <VideoCodecSettings onConfigChange={onConfigChange} />
+
       {about ? <Diagnostics about={about} /> : null}
     </>
   )
@@ -169,6 +177,31 @@ function Diagnostics({ about }: { about: About }) {
           {about.service.detail}
         </div>
       ) : null}
+
+      <ThirdPartyLicences />
     </section>
+  )
+}
+
+/**
+ * Licences of software this application uses that is not AICOUNTLY's — where
+ * "licensing information is presented to the end user". Cisco's licence for
+ * its OpenH264 binary asks for its whole text to be reproduced here, the
+ * condition that asks for that included, so it is shown in full, as Cisco
+ * publishes it, and not summarised.
+ */
+function ThirdPartyLicences() {
+  return (
+    <details className="licences">
+      <summary className="licences__summary">Third-party licences</summary>
+      <h3 className="licences__title">{OPENH264_ATTRIBUTION}</h3>
+      <p className="field__hint">
+        Cisco&rsquo;s OpenH264 binary is downloaded from Cisco onto this computer, not supplied with AICOUNTLY Remote,
+        and Cisco licenses it on these terms.
+      </p>
+      <pre className="licences__text" aria-label="OpenH264 binary licence">
+        {OPENH264_LICENCE}
+      </pre>
+    </details>
   )
 }

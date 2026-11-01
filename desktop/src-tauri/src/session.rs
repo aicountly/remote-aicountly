@@ -508,6 +508,9 @@ struct CapturePump {
     next_attempt_at: Instant,
     next_congestion_at: Instant,
     refusal_logged: bool,
+    /// Whether "the H.264 codec is not installed" has been logged for this
+    /// session. Once: every frame says it again.
+    codec_missing_logged: bool,
 }
 
 impl CapturePump {
@@ -523,6 +526,7 @@ impl CapturePump {
             next_attempt_at: now,
             next_congestion_at: now + CONGESTION_INTERVAL,
             refusal_logged: false,
+            codec_missing_logged: false,
         }
     }
 
@@ -636,6 +640,17 @@ impl CapturePump {
                     self.layout = None;
                     self.layout_sent = false;
                     self.next_attempt_at = now + CAPTURE_RETRY;
+                }
+                // No codec on this computer: the person helping sees no
+                // picture. Said once here; the window says it to the person
+                // at the computer, naming the setting, from the codec's own
+                // status (`commands::codec`), and the session carries on so
+                // the picture starts the moment the codec arrives.
+                Err(error) if error.is_codec_unavailable() => {
+                    if !self.codec_missing_logged {
+                        self.codec_missing_logged = true;
+                        tracing::warn!(%error, "this computer's screen cannot be sent");
+                    }
                 }
                 Err(error) => tracing::debug!(%error, "a frame was not sent"),
             },

@@ -1,6 +1,8 @@
-import type { HelpSession, HostedParticipant, HostedParticipants } from '../../types/agent'
+import type { CodecView, HelpSession, HostedParticipant, HostedParticipants } from '../../types/agent'
+import { codecReady } from '../../types/agent'
 import { ScreenRecordingNotice } from '../permissions/ScreenRecordingNotice'
 import { formatSessionCode } from '../connect/ConnectScreen'
+import { CodecNotice } from '../session/CodecNotice'
 
 /**
  * Get help: the person at this computer gives somebody a code, lets them in,
@@ -24,6 +26,8 @@ export function GetHelp({
   onStart,
   onAnswer,
   onEnd,
+  codec = null,
+  onOpenSettings,
   busy,
 }: {
   computerName: string
@@ -37,6 +41,13 @@ export function GetHelp({
   onStart: () => void
   onAnswer: (participant: HostedParticipant, admit: boolean) => void
   onEnd: () => void
+  /**
+   * Cisco's OpenH264 codec, which the screen is encoded with. Not ready means
+   * the helper would see no picture, which is said before anybody is given a
+   * code rather than discovered on the phone afterwards.
+   */
+  codec?: CodecView | null
+  onOpenSettings?: () => void
   busy?: boolean
 }) {
   if (!canHost) {
@@ -59,6 +70,10 @@ export function GetHelp({
 
       {needsScreenRecording ? (
         <ScreenRecordingNotice computerName={computerName} onOpen={onOpenScreenRecording} busy={busy} />
+      ) : null}
+
+      {codec && !codecReady(codec) ? (
+        <CodecNotice codec={codec} context="help" onOpenSettings={onOpenSettings} />
       ) : null}
 
       {!help ? (

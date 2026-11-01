@@ -21,8 +21,10 @@
 //! passes. Each case prints the script's report — `getStats()` for the inbound
 //! video, the `<video>` element's size, and sampled colours.
 
-// The session is the webrtc-rs one; without it there is nothing to test.
-#![cfg(feature = "webrtc-rs")]
+// The session is the webrtc-rs one, encoding with OpenH264 compiled from
+// source — Cisco cannot be reached from where this runs. Without both there is
+// nothing to test.
+#![cfg(all(feature = "webrtc-rs", feature = "bundled-openh264"))]
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
@@ -30,6 +32,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use remote_device::{CaptureProfile, Frame, PixelFormat};
+use remote_webrtc::video::CodecSource;
 use remote_webrtc::webrtc_rs::{WebRtcFactory, WebRtcSession};
 use remote_webrtc::{IceConfiguration, PeerSession, PeerSessionFactory, PeerState};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -92,7 +95,7 @@ async fn run(mode: Mode, source: (u32, u32), expected: (u32, u32)) {
         "the expected size is the encoder's own"
     );
 
-    let mut session = WebRtcFactory
+    let mut session = WebRtcFactory::new(CodecSource::bundled())
         .create(IceConfiguration::default(), profile)
         .await
         .expect("a session");

@@ -253,7 +253,7 @@ worked around by a setting.
 | 6 | No TURN credentials in the app | ICE comes from `GET /devices/me`, per session |
 | 7 | No auth token in logs | `DeviceCredential` has no `Debug`; the runtime logs a summary |
 | 8 | No clipboard content stored | `CLIPBOARD_SYNCED` records the capability, not the text |
-| 9 | No screen pixels stored | Frames go to the encoder; nothing writes one anywhere |
+| 9 | No screen pixels stored | Frames go to the encoder; nothing writes one anywhere. The encoder is Cisco's OpenH264, loaded only from a per-user folder and only when its SHA-256 matches the pinned 2.6.0 build and the `openh264` crate's list, on every load (`remote-webrtc/src/video/cisco.rs`, [docs/legal/OPENH264.md](../legal/OPENH264.md)) |
 | 10 | No file bytes on the server | Transfers are peer to peer; the API sees the ledger |
 | 11 | No arbitrary execution | `IpcRequest` has no such variant; there is no shell path |
 | 12 | No hidden control | `is_session_active()` derived from status |

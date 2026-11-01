@@ -311,11 +311,13 @@ Genuinely blocking, and none of it is something code can decide:
       compiled for Windows and checked by a Windows CI runner; the native
       Windows calls have not been *executed* on a Windows machine. See
       [TESTING.md](TESTING.md) and `desktop/tests/MANUAL.md`.
-- [ ] **The remaining runtime work** — the encoder. Until it exists the agent
-      enrols, stays reachable, joins sessions over the same signalling socket
-      the browser uses and carries control messages through its gate, but does
-      not send a picture. See
-      [ARCHITECTURE.md](ARCHITECTURE.md#what-is-built-and-what-is-not).
+- [ ] **Cisco's codec on a real PC.** The installer carries no H.264 encoder;
+      the application downloads Cisco's `openh264-2.6.0-win64.dll` on first
+      start ([docs/legal/OPENH264.md](../legal/OPENH264.md)). On a clean
+      Windows 10 and 11 machine, behind the customer's kind of proxy if there
+      is one: the download completes, App settings shows OpenH264 2.6.0, a
+      session shows a picture, switching it off deletes the DLL (or at the
+      next start, if a session held it), and switching it on fetches it again.
 
 ## Checklist for a release that is ready
 

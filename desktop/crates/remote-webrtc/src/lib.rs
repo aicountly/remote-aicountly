@@ -242,8 +242,12 @@ pub trait PeerSession: Send {
     /// [`WebRtcError::Media`] for a frame that does not describe its own
     /// bytes, a layout the encoder does not take (`Nv12`), a session with no
     /// video track (a control-only session), or a viewer whose browser did
-    /// not accept H.264. [`WebRtcError::WrongState`] once the connection has
-    /// failed or been closed.
+    /// not accept H.264 — and [`video::CODEC_UNAVAILABLE`] when this computer
+    /// has no H.264 codec to encode with (Cisco's has not been downloaded, or
+    /// was switched off), which [`WebRtcError::is_codec_unavailable`]
+    /// recognises: the connection is fine, and the host should say so rather
+    /// than send nothing in silence. [`WebRtcError::WrongState`] once the
+    /// connection has failed or been closed.
     async fn send_frame(&mut self, frame: Frame) -> Result<(), WebRtcError>;
 
     /// Make the next frame sent an IDR — a keyframe a decoder can start from
@@ -357,6 +361,17 @@ pub enum WebRtcError {
     NotCompiledIn,
 }
 
+impl WebRtcError {
+    /// Whether this is a frame that could not be sent because there is no
+    /// H.264 codec on this computer — [`video::CODEC_UNAVAILABLE`]. Not a
+    /// broken connection and not a bad frame: the host carries on, and says
+    /// so to the person at the computer, who can switch the codec on.
+    #[must_use]
+    pub fn is_codec_unavailable(&self) -> bool {
+        matches!(self, Self::Media(message) if message == video::CODEC_UNAVAILABLE)
+    }
+}
+
 /// A session identifier and the participant it belongs to.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionIdentity {
@@ -401,6 +416,25 @@ mod tests {
 
         let slow = reading(0.0, 900.0).adjust(profile);
         assert!(slow.max_dimension < profile.max_dimension);
+    }
+
+    /// The host tells a missing codec from every other media failure, and the
+    /// message says what to switch on.
+    #[test]
+    fn a_missing_codec_is_recognised_and_names_the_setting() {
+        let missing = WebRtcError::Media(video::CODEC_UNAVAILABLE.to_owned());
+
+        assert!(missing.is_codec_unavailable());
+        assert!(video::CODEC_UNAVAILABLE.starts_with("the H.264 codec is not installed"));
+        assert!(video::CODEC_UNAVAILABLE
+            .contains("OpenH264 Video Codec provided by Cisco Systems, Inc."));
+        assert!(video::CODEC_UNAVAILABLE.contains("App settings"));
+
+        assert!(
+            !WebRtcError::Media("the viewer's browser did not accept H.264 video".into())
+                .is_codec_unavailable()
+        );
+        assert!(!WebRtcError::WrongState(PeerState::Closed).is_codec_unavailable());
     }
 
     #[test]

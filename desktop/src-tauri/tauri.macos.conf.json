@@ -7,7 +7,7 @@
       "hardenedRuntime": true,
       "signingIdentity": null,
       "providerShortName": null,
-      "entitlements": null
+      "entitlements": "./Entitlements.plist"
     }
   }
 }

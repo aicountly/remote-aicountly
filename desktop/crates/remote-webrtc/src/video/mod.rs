@@ -8,7 +8,9 @@
 //!     │  pacing    media time from the capture clock, the frame-rate gate,
 //!     │            and when the next IDR is due
 //!     │  h264      OpenH264, Constrained Baseline, screen-content tuning,
-//!     │            bitrate rate control that skips rather than queues
+//!     │            bitrate rate control that skips rather than queues —
+//!     │            Cisco's own binary, which `cisco` downloads from Cisco,
+//!     │            checks and loads, and `codec` hands to every encoder
 //!     ▼
 //!   Annex-B access unit (SPS + PPS + IDR, or one P slice)
 //!     │  rtp       webrtc-rs's own H.264 payloader (STAP-A, FU-A) with an
@@ -38,18 +40,39 @@ pub mod convert;
 pub mod pacing;
 
 #[cfg(feature = "openh264")]
+pub mod cisco;
+
+#[cfg(feature = "openh264")]
+pub mod codec;
+
+#[cfg(feature = "openh264")]
 pub mod h264;
 
 #[cfg(feature = "webrtc-rs")]
 pub(crate) mod rtp;
 
-#[cfg(all(test, feature = "openh264"))]
+#[cfg(all(test, feature = "bundled-openh264"))]
 pub(crate) mod testing;
 
 pub use convert::{encoded_size, ConvertError, I420Picture};
 
 #[cfg(feature = "openh264")]
+pub use cisco::{CodecManager, CodecOptions, CodecStatus, ATTRIBUTION, OPENH264_VERSION};
+
+#[cfg(feature = "openh264")]
+pub use codec::CodecSource;
+
+#[cfg(feature = "openh264")]
 pub use h264::{EncodedFrame, EncoderStats, H264Encoder, VideoError};
+
+/// What a session says when it has a frame to send and no encoder to send it
+/// with: Cisco's codec has not been downloaded yet, could not be, or was
+/// switched off. `PeerSession::send_frame` returns it as
+/// `WebRtcError::Media`, and [`crate::WebRtcError::is_codec_unavailable`]
+/// recognises it, so the host can say so rather than send nothing in silence.
+pub const CODEC_UNAVAILABLE: &str = "the H.264 codec is not installed, so this computer's screen \
+     cannot be sent: turn on \"OpenH264 Video Codec provided by Cisco Systems, Inc.\" in App \
+     settings, under Video codec";
 
 /// The SDP `fmtp` line the screen track is offered and answered with.
 ///

@@ -1,0 +1,4 @@
+# Licence texts are kept byte for byte as their authors publish them —
+# OPENH264_BINARY_LICENSE.txt is Cisco's, with Cisco's CRLF line endings — so
+# no checkout or commit may convert them.
+*.txt -text

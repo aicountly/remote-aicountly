@@ -153,6 +153,57 @@ export interface AgentConfig {
   runInBackground: boolean
   startAtLogin: boolean
   captureQuality: 'adaptive' | 'low_bandwidth' | 'high_quality'
+  /**
+   * Whether Cisco's OpenH264 codec is used to show this computer's screen.
+   * Switched with `setCodecEnabled`, never through Save settings — the Rust
+   * side keeps the saved value when the rest of the form is saved.
+   */
+  openh264Enabled: boolean
+}
+
+// ------------------------------------------------------------- video codec
+
+/**
+ * The sentence Cisco's licence requires wherever the person can switch its
+ * codec on and off — exactly this, and next to the switch
+ * (docs/legal/OPENH264.md, condition 3).
+ */
+export const OPENH264_ATTRIBUTION = 'OpenH264 Video Codec provided by Cisco Systems, Inc.'
+
+/**
+ * Where Cisco's OpenH264 binary stands on this computer. Mirrors
+ * `remote_webrtc::video::cisco::CodecStatus`.
+ */
+export type CodecStatus =
+  | { state: 'disabled' }
+  | { state: 'not_installed' }
+  | { state: 'downloading'; receivedBytes: number; totalBytes: number | null }
+  | { state: 'ready'; version: string; path: string; sizeBytes: number }
+  | { state: 'failed'; reason: string }
+  | { state: 'unsupported'; platform: string }
+
+/** The codec as App settings shows it (`commands::codec::CodecView`). */
+export interface CodecView {
+  /** Whether the person has it switched on. */
+  enabled: boolean
+  status: CodecStatus
+  /** The sentence above, from the Rust side. */
+  attribution: string
+  /** The OpenH264 release this build loads. */
+  version: string
+  /** Cisco's file for this computer, when it publishes one. */
+  file: string | null
+}
+
+/** What switching the codec returns: the saved configuration, and the codec. */
+export interface CodecChoice {
+  config: AgentConfig
+  codec: CodecView
+}
+
+/** Whether this computer's screen can be encoded now. Unknown is not "no". */
+export function codecReady(codec: CodecView | null): boolean {
+  return codec === null || codec.status.state === 'ready'
 }
 
 export interface ServiceStatus {

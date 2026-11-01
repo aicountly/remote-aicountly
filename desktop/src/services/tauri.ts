@@ -16,6 +16,8 @@ import type {
   About,
   AgentConfig,
   AgentState,
+  CodecChoice,
+  CodecView,
   DesktopSignInOutcome,
   DesktopSignInStart,
   DeviceHistory,
@@ -268,6 +270,37 @@ export function portalAction(action: 'back' | 'reload' | 'open_in_browser' | 'si
 
 export function about(): Promise<About> {
   return invoke<About>('about')
+}
+
+/**
+ * Cisco's OpenH264 codec on this computer: switched on or off, and whether it
+ * is downloaded, downloading, ready or failed (`commands::codec`).
+ */
+export function codecStatus(): Promise<CodecView> {
+  return invoke<CodecView>('codec_status')
+}
+
+/**
+ * Switch the codec on or off. Saved, and acted on at once: off stops its use
+ * and deletes it; on downloads it again from Cisco, in the background.
+ */
+export function setCodecEnabled(enabled: boolean): Promise<CodecChoice> {
+  return invoke<CodecChoice>('set_codec_enabled', { enabled })
+}
+
+/** Download it again now — "Download now" and "Retry". Returns at once. */
+export function installCodec(): Promise<CodecView> {
+  return invoke<CodecView>('install_codec')
+}
+
+/** Stop using the codec and delete it, leaving the switch as it is. */
+export function removeCodec(): Promise<CodecView> {
+  return invoke<CodecView>('remove_codec')
+}
+
+/** Every change of the codec's status — a download's progress included. */
+export function onCodecChange(handler: (codec: CodecView) => void): Promise<() => void> {
+  return listen<CodecView>('aicountly-remote://codec', (event) => handler(event.payload))
 }
 
 /** The Rust side pushing a new state — a tray action, a session starting. */

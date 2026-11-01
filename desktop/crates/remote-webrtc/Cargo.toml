@@ -13,12 +13,22 @@ publish.workspace = true
 # keeps a Linux type-check to seconds rather than minutes.
 default = ["webrtc-rs"]
 webrtc-rs = ["dep:webrtc", "dep:rtc", "dep:async-trait", "dep:bytes", "openh264"]
-# The software H.264 encoder on its own. Implied by `webrtc-rs`, because a
-# session that negotiates a video track it cannot fill is the bug this crate
-# used to have; separate so the encoder can be built and measured without the
-# network stack. The colour conversion, scaling and keyframe scheduling it
-# relies on are plain Rust and compile without either feature.
-openh264 = ["dep:openh264"]
+# The software H.264 encoder on its own, and the manager that downloads,
+# verifies and loads Cisco's OpenH264 binary for it (`video::cisco`). Implied
+# by `webrtc-rs`, because a session that negotiates a video track it cannot
+# fill is the bug this crate used to have; separate so the encoder can be
+# built and measured without the network stack. The colour conversion,
+# scaling and keyframe scheduling it relies on are plain Rust and compile
+# without either feature.
+openh264 = ["dep:openh264", "dep:reqwest", "dep:bzip2", "dep:sha2", "dep:hex"]
+# OpenH264 compiled from the C++ in the crate, for the tests, the loopback and
+# browser interop tests and the benchmark — which run where Cisco's server
+# cannot be reached. **Never for a build that ships**: Cisco's patent licence
+# covers Cisco's own binary, downloaded by the person's computer, and not a
+# build of ours (docs/legal/OPENH264.md). Nothing but this crate's
+# dev-dependencies turns it on, and resolver 2 does not carry a
+# dev-dependency's features into a normal build.
+bundled-openh264 = ["openh264", "openh264/source"]
 
 [dependencies]
 serde.workspace = true
@@ -53,9 +63,23 @@ async-trait = { version = "0.1", optional = true }
 # The data channel's send API takes a `BytesMut`; the same version webrtc-rs
 # itself resolves, so the two are the same type rather than two of them.
 bytes = { version = "1", optional = true }
-# The screen encoder. See the workspace manifest and `src/video/h264.rs` for
-# why it is built from source and what that means for licensing.
+# The screen encoder's bindings, loading Cisco's binary at run time. See the
+# workspace manifest, `src/video/h264.rs` and `src/video/cisco.rs`.
 openh264 = { workspace = true, optional = true }
+# Fetching Cisco's binary: the same client, TLS and proxy behaviour as every
+# other request the application makes (`remote-core`'s `api` and `update`).
+reqwest = { workspace = true, optional = true }
+# Cisco's binaries are served as `.bz2`.
+bzip2 = { workspace = true, optional = true }
+# The pinned SHA-256 of each binary, checked after every download and before
+# every load.
+sha2 = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
+# This crate, with the encoder compiled from source, for its own tests: they
+# run where Cisco's server cannot be reached. A dev-dependency's features
+# reach only test, example and benchmark builds (resolver 2), never the
+# application's.
+remote-webrtc = { path = ".", features = ["bundled-openh264"] }

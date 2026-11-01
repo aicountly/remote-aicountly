@@ -28,7 +28,7 @@ pub use api::{
     PendingCompanion, PendingControlRequest, SessionControlView, SharedSurface, SurfaceKind,
 };
 pub use backoff::Backoff;
-pub use config::{config_path, macos_support_directory, AgentConfig, ConfigError};
+pub use config::{codec_directory, config_path, macos_support_directory, AgentConfig, ConfigError};
 pub use logging::{log_directory, log_path};
 pub use signalling::{Outbound, Peer, Signal, SignallingError, SignallingSocket};
 pub use state::{

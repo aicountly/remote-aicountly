@@ -84,6 +84,33 @@ it as H.264 Constrained Baseline with OpenH264. The profile follows the link
 and never rises above the configured quality; capture stops on every exit
 from the session.
 
+### The encoder is Cisco's, downloaded on this computer
+
+The installer contains no H.264 encoder. A few seconds after the application
+starts it downloads Cisco's `openh264-2.6.0-win64.dll` from
+`ciscobinary.openh264.org` into `%LOCALAPPDATA%\AICOUNTLY\Remote\codecs\` —
+per user, never the machine-wide data folder the Users group can write to —
+checks its SHA-256, and loads it; every session's encoder uses that one copy,
+checking the file again as it loads it. That is what Cisco's patent licence
+for its binary requires (the binary downloaded to the end user's device, not
+shipped by us), and the person can switch it off and on again in App settings
+→ Video codec, beside "OpenH264 Video Codec provided by Cisco Systems, Inc.".
+Switching it off deletes the DLL; the setting is `openh264Enabled` in
+`config.json`, so it is one switch for the whole machine, and each person's
+copy follows it.
+
+A session without the codec still connects, but sends no picture:
+`send_frame` returns `the H.264 codec is not installed …`, `CapturePump` logs
+it once, the window shows a notice naming the setting, and a download starts
+by itself if the codec is switched on. If Cisco's server cannot be reached
+(a proxy that blocks it, an offline machine), App settings says so and offers
+Retry. The arrangement, and where each of Cisco's four conditions is met:
+[docs/legal/OPENH264.md](../legal/OPENH264.md).
+
+The build machines no longer compile OpenH264, so NASM is not needed for a
+release build; the tests still compile it from source (the `bundled-openh264`
+feature of `remote-webrtc`), in plain C where NASM is absent.
+
 ## Input injection
 
 `SendInput`, with `MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK` and

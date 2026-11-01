@@ -46,6 +46,26 @@ pub struct AgentConfig {
 
     /// Which capture profile to prefer.
     pub capture_quality: String,
+
+    /// Whether to use Cisco's OpenH264 binary to encode this computer's
+    /// screen — "OpenH264 Video Codec provided by Cisco Systems, Inc." in
+    /// App settings.
+    ///
+    /// On by default: without it a session shows the person helping nothing
+    /// at all. But Cisco's patent licence for its binary asks that the person
+    /// at the computer can switch its use off and on again, so it is a
+    /// setting, and turning it off deletes the downloaded file
+    /// (docs/legal/OPENH264.md). `serde(default)`, so a configuration file
+    /// written before the setting existed reads as on rather than as
+    /// malformed — and a malformed file would put the whole configuration
+    /// back to its defaults.
+    #[serde(default = "default_openh264_enabled")]
+    pub openh264_enabled: bool,
+}
+
+/// [`AgentConfig::openh264_enabled`] for a file that does not mention it.
+fn default_openh264_enabled() -> bool {
+    true
 }
 
 impl Default for AgentConfig {
@@ -57,6 +77,7 @@ impl Default for AgentConfig {
             run_in_background: true,
             start_at_login: true,
             capture_quality: "adaptive".into(),
+            openh264_enabled: default_openh264_enabled(),
         }
     }
 }
@@ -258,6 +279,61 @@ pub fn macos_support_directory(home: &std::ffi::OsStr) -> std::path::PathBuf {
         .join("Remote")
 }
 
+/// Where Cisco's OpenH264 binary is kept on this computer, for the person
+/// signed in (`remote-webrtc`'s `video::cisco`).
+///
+/// Per user, and deliberately not beside `config.json`. The file is a library
+/// this process loads and runs, so it must live where nobody but this person
+/// (and the machine's administrators) can write: a directory other accounts
+/// could replace it in would be a way to run code as whoever opens the
+/// application next. On Windows `%ProgramData%` is writable by the Users
+/// group — that is what lets anybody at the machine press Save — so the codec
+/// goes in `%LOCALAPPDATA%` instead, whose ACL is the person's own. And Cisco's
+/// licence asks for the binary to be downloaded to the end user's device by
+/// the end user's software, which a per-user download is, exactly.
+///
+/// * Windows: `%LOCALAPPDATA%\AICOUNTLY\Remote\codecs`
+/// * macOS: `~/Library/Application Support/AICOUNTLY/Remote/codecs` — the
+///   same Application Support folder as the configuration
+///   ([`macos_support_directory`]), which is already per user there
+/// * elsewhere (a developer's workstation only): `$XDG_DATA_HOME` or
+///   `~/.local/share`, then `aicountly-remote/codecs`
+#[must_use]
+pub fn codec_directory() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(|root| windows_codec_directory(std::path::Path::new(&root)))
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var_os("HOME").map(|home| macos_support_directory(&home).join("codecs"))
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|home| std::path::PathBuf::from(home).join(".local").join("share"))
+            })
+            .map(|root| root.join("aicountly-remote").join("codecs"))
+    }
+}
+
+/// `<LOCALAPPDATA>\AICOUNTLY\Remote\codecs`, under a given root. Written out
+/// here rather than only inside the Windows branch so the path is tested on
+/// every host.
+#[must_use]
+pub fn windows_codec_directory(local_app_data: &std::path::Path) -> std::path::PathBuf {
+    local_app_data
+        .join("AICOUNTLY")
+        .join("Remote")
+        .join("codecs")
+}
+
 /// HTTPS, or `http://localhost` in a debug build and nowhere else.
 fn validate_endpoint(url: &str, what: &'static str) -> Result<(), ConfigError> {
     if url.starts_with("https://") {
@@ -373,6 +449,75 @@ mod tests {
         let config = AgentConfig::from_json(shipped).expect("valid");
         assert_eq!(config.api_base_url, "https://remote.gh.aicountly.com/api");
         assert!(!config.start_at_login);
+        // Written before the codec setting existed: it reads as on.
+        assert!(config.openh264_enabled);
+    }
+
+    /// Cisco's codec is used unless the person turned it off.
+    #[test]
+    fn the_codec_is_on_by_default() {
+        assert!(AgentConfig::default().openh264_enabled);
+        assert!(AgentConfig::default()
+            .to_json()
+            .contains("\"openh264Enabled\": true"));
+    }
+
+    /// A configuration file from before the setting existed is not
+    /// malformed — which would reset the whole file to its defaults — and
+    /// reads as on; one that turned it off stays off.
+    #[test]
+    fn an_old_configuration_file_keeps_working_and_a_choice_is_kept() {
+        let old = r#"{
+            "apiBaseUrl": "https://remote.aicountly.com/api",
+            "portalUrl": "https://my.aicountly.com",
+            "presenceIntervalSeconds": 45,
+            "runInBackground": false,
+            "startAtLogin": true,
+            "captureQuality": "low_bandwidth"
+        }"#;
+
+        let config = AgentConfig::from_json(old).expect("an old file is still valid");
+        assert!(config.openh264_enabled);
+        assert_eq!(config.presence_interval_seconds, 45, "nothing else reset");
+        assert!(!config.run_in_background);
+
+        let off = AgentConfig {
+            openh264_enabled: false,
+            ..AgentConfig::default()
+        };
+        let parsed = AgentConfig::from_json(&off.to_json()).expect("parses");
+        assert!(!parsed.openh264_enabled);
+    }
+
+    /// Per user, and never beside `config.json` in the machine-wide folder
+    /// the Users group may write to.
+    #[test]
+    fn the_codec_lives_in_a_per_user_folder() {
+        assert_eq!(
+            windows_codec_directory(std::path::Path::new(r"C:\Users\rahul\AppData\Local")),
+            std::path::Path::new(r"C:\Users\rahul\AppData\Local")
+                .join("AICOUNTLY")
+                .join("Remote")
+                .join("codecs")
+        );
+
+        assert_eq!(
+            macos_support_directory(std::ffi::OsStr::new("/Users/rahul")).join("codecs"),
+            std::path::PathBuf::from(
+                "/Users/rahul/Library/Application Support/AICOUNTLY/Remote/codecs"
+            )
+        );
+
+        if let (Some(codecs), Some(config)) = (codec_directory(), config_path()) {
+            assert!(codecs.ends_with("codecs"));
+            if cfg!(windows) {
+                assert!(
+                    !codecs.starts_with(config.parent().unwrap_or(&config)),
+                    "{} is inside the machine-wide data folder",
+                    codecs.display()
+                );
+            }
+        }
     }
 
     #[test]

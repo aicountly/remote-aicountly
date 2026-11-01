@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ipc, platform, Agent};
 
+pub mod codec;
 pub mod computers;
 
 /// What the About panel shows.
@@ -82,6 +83,14 @@ pub fn save_configuration(
     agent: tauri::State<'_, Arc<Agent>>,
     config: AgentConfig,
 ) -> Result<AgentConfig, String> {
+    // The video codec's switch is saved by `codec::set_codec_enabled`, which
+    // also acts on it. A form saved with an older copy of the setting must
+    // not quietly switch it back.
+    let config = AgentConfig {
+        openh264_enabled: agent.config().openh264_enabled,
+        ..config
+    };
+
     agent
         .set_config(config)
         .map_err(|error| error.to_string())?;
