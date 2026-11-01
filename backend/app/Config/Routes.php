@@ -74,6 +74,12 @@ $routes->match(['get', 'post', 'put', 'patch', 'delete'], 'manage/v1/(:any)', 'M
 // ---------------------------------------------------------------------------
 
 $routes->post('internal/manage/company-lifecycle', 'Api\CompanyLifecycleController::receive');
+// --- estate maintenance endpoint: Console switches this site into or out of maintenance (estate kit).
+// Written relative to the default controller namespace (App\Controllers), like every other handler here.
+// Its only credential is CONSOLE_CONTROL_KEY, checked inside the handler itself — no
+// session and no capability, because it has to answer while the site is in maintenance.
+$routes->post('internal/maintenance', 'Internal\MaintenanceController::index');
+$routes->get('internal/maintenance', 'Internal\MaintenanceController::index');
 
 // ---------------------------------------------------------------------------
 // Remote API v1
