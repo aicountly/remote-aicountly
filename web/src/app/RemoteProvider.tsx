@@ -66,6 +66,23 @@ function writeStoredScope(scope: StoredScope): void {
 }
 
 /**
+ * Forget the remembered organisation.
+ *
+ * For switching to another AICOUNTLY account (`auth/accounts.ts`): the
+ * selection belongs to the account that made it, and this provider reads it
+ * before `/bootstrap` has answered, so carrying it across would open the next
+ * account on an organisation that is not theirs. Not a sign-out — the tokens
+ * are untouched.
+ */
+export function clearStoredScope(): void {
+  try {
+    localStorage.removeItem(SCOPE_STORAGE_KEY)
+  } catch {
+    /* nothing was stored, then */
+  }
+}
+
+/**
  * Take the signed launch context out of the URL before anything else runs.
  *
  * It is removed from the address bar immediately: it is single-use, and leaving

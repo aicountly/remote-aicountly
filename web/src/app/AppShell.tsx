@@ -5,12 +5,10 @@ import {
   ChevronDown,
   ClipboardList,
   Check,
-  ExternalLink,
   History,
   LayoutDashboard,
   LifeBuoy,
   Link2,
-  LogOut,
   Menu,
   MonitorSmartphone,
   MonitorUp,
@@ -25,6 +23,7 @@ import {
 } from 'lucide-react'
 
 import { useAuth } from '../auth/AuthProvider'
+import AccountMenu from './AccountMenu'
 import { useRemote } from './RemoteProvider'
 import { PERMISSIONS } from '../types/remote'
 import AicountlyLogo, { RemoteMark } from '../components/brand/AicountlyLogo'
@@ -37,7 +36,6 @@ import Modal from '../components/ui/Modal'
 import { CompanyDirectoryPicker } from '../company-access/index.ts'
 import { REGISTRY_APP_NAME, getCompanyRegistry } from '../services/companyRegistry'
 import { CompanyRestrictedBanner } from '../components/CompanyRestrictedBanner'
-import { manageProfilePath, openManagePortal } from '../services/appLauncher'
 import CompanyIdTag from '../components/ui/CompanyIdTag'
 import { AnalyticsPreferencesButton } from '../components/AnalyticsConsent'
 
@@ -84,7 +82,6 @@ function GuestOutsideSession() {
 }
 
 function SignedInShell() {
-  const { signOut } = useAuth()
   const { bootstrap, policy, scopeType, companyId, switchScope, can } = useRemote()
   const navigate = useNavigate()
 
@@ -138,8 +135,6 @@ function SignedInShell() {
     (can(PERMISSIONS.POLICY_VIEW) || can(PERMISSIONS.POLICY_MANAGE) || can(PERMISSIONS.AUDIT_VIEW))
 
   const isSupportAgent = bootstrap?.user.isSupportAgent ?? false
-  // The portal (my.aicountly) user id — what support asks for as the "Cust ID".
-  const custId = bootstrap?.user.uuid || null
 
   const navItems = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -311,31 +306,14 @@ function SignedInShell() {
             <span className="badge badge--danger">Remote disabled</span>
           ) : null}
 
-          <div className="shell__user">
-            <span className="shell__user-id">
-              <span className="shell__user-name truncate">{bootstrap?.user.displayName ?? '—'}</span>
-              {custId ? (
-                <span className="shell__cust-id truncate" title="Your AICOUNTLY customer ID">
-                  Cust ID: <span className="shell__cust-id-value">{custId}</span>
-                </span>
-              ) : null}
-            </span>
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              onClick={() => openManagePortal(manageProfilePath())}
-              title="Opens your profile in Manage in a new tab"
-              aria-label="Manage profile (opens in a new tab)"
-            >
-              <UserCog size={15} aria-hidden="true" />
-              <span className="shell__logout-label">Manage profile</span>
-              <ExternalLink size={13} aria-hidden="true" className="shell__logout-label" />
-            </button>
-            <button type="button" className="btn btn--ghost btn--sm" onClick={signOut}>
-              <LogOut size={15} aria-hidden="true" />
-              <span className="shell__logout-label">Log out</span>
-            </button>
-          </div>
+          {/*
+            The name and Cust ID, the Manage-profile button and the log-out
+            button used to sit here side by side. They are now the suite-wide
+            account menu (AICOUNTLY_ACCOUNT_MENU.md), which shows the same
+            identity and also lists the other AICOUNTLY accounts signed in on
+            this browser.
+          */}
+          <AccountMenu />
         </div>
       </header>
 
