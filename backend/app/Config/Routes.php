@@ -95,6 +95,18 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
     ]);
     $routes->get('policy/effective', 'BootstrapController::effectivePolicy', ['filter' => 'api-auth']);
 
+    // --- estate analytics: the browser's only destination (analytics-aicountly sdk/php).
+    // `remote-context` as well as `api-auth`, because a company is only ever taken from the
+    // VERIFIED launch context here — never from the client (§6C, §12) — so the filter that
+    // verifies that signature has to have run. Remote is a support tool, so this route's
+    // user_kind is genuinely variable: a support agent's or platform admin's page views are
+    // marked 'staff' and excluded from adoption reporting, exactly as remote_session.started is.
+    // Answers 204 on every path by design, so nothing about its status says whether a session
+    // was real.
+    $routes->post('analytics/collect', 'AnalyticsCollectController::collect', [
+        'filter' => ['api-auth', 'remote-context'],
+    ]);
+
     // --- Two-step verification (docs/SECURITY.md) ---------------------------
     //
     // Remote's own second step, on top of the portal sign-in. Each route acts on
