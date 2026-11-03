@@ -7,7 +7,7 @@
  *
  *   1. who you are      photo, name, e-mail, masked mobile, Cust ID
  *   2. your accounts    the others signed in on this browser, and "Use another"
- *   3. company          the header's own organisation switcher, to the left
+ *   3. company          only once Remote has organisations at all — see below
  *   4. appearance       Remote has no in-menu theme switch
  *   5. links            Manage profile, Manage Account
  *   6. sign out
@@ -15,20 +15,43 @@
  * The name, the full e-mail and the Cust ID come from `/bootstrap`, which is
  * what this product knows about the signed-in person. The masked mobile comes
  * from the roster cookie — the only place a product has it, and masked is the
- * only form that belongs in a menu.
+ * only form that belongs in a menu. The photo comes from the portal through
+ * Remote's own relay (`services/userLogo.ts` → `/api/global/user/logo`), with
+ * initials as the fallback whenever there is none to be had.
  *
- * There is no photo: Remote has no authenticated user-logo route to fetch one
- * from, so the avatar is initials, which the contract allows as the fallback.
+ * ## Why there is no Company block today
+ *
+ * Not because the header has a switcher — that reasoning is exactly what the
+ * contract's §3 forbids, and the header's switcher is not even drawn. It is
+ * because Remote has **no company concept at all** right now: `organisations.ts`
+ * has `ORGANISATIONS_ENABLED = false`, every session is Personal, and
+ * `personalOnly.test.tsx` holds that line even against a server that answers
+ * with a company scope. §3's one exemption is a product that scopes per person,
+ * and that is this one.
+ *
+ * So the block is written out below in Books' order and gated on the same flag
+ * as every other organisation-dependent surface in this app (the switcher, the
+ * administration routes, the session-context choice). The day organisations come
+ * back, the menu gets its Company block in the same commit that turns them on,
+ * rather than someone having to remember this file.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ExternalLink, LogOut, User, UserCog, UserPlus, Users } from 'lucide-react'
+import { Building2, ChevronDown, ExternalLink, GitBranch, LogOut, Pencil, User, UserCog, UserPlus, Users } from 'lucide-react'
 
 import { useAuth } from '../auth/AuthProvider'
 import { buildChooseAccountUrl, canAddAccount, performAccountSwitch, readAccountRoster } from '../auth/accounts'
 import type { RosterAccount } from '../auth/accounts'
 import { stopConnect } from '../connect/connect'
-import { manageAccountPath, manageProfilePath, openManagePortal } from '../services/appLauncher'
+import {
+  manageAccountPath,
+  manageBranchListPath,
+  manageCompanyEditPath,
+  manageProfilePath,
+  openManagePortal,
+} from '../services/appLauncher'
+import { fetchUserLogoObjectUrl } from '../services/userLogo'
+import { OPEN_COMPANY_SWITCHER_EVENT, ORGANISATIONS_ENABLED } from './organisations'
 import { useRemote } from './RemoteProvider'
 
 /**
@@ -50,10 +73,46 @@ function accountLabel(account: RosterAccount): string {
   return account.name || account.maskedEmail || `Account ${account.uuid}`
 }
 
+/**
+ * The profile photo as an object URL, or null while there is none.
+ *
+ * Fetched once per mount and revoked on unmount, so a blob never outlives the menu that showed
+ * it. It never throws and never reports a failure: the caller draws initials when this is null.
+ */
+function useUserLogo(): string | null {
+  const [src, setSrc] = useState<string | null>(null)
+
+  useEffect(() => {
+    let objectUrl: string | null = null
+    let cancelled = false
+
+    void fetchUserLogoObjectUrl().then((url) => {
+      if (url === null) return
+      if (cancelled) {
+        // Unmounted while the photo was in flight: nothing will show it, so let it go.
+        URL.revokeObjectURL(url)
+        return
+      }
+      objectUrl = url
+      setSrc(url)
+    })
+
+    return () => {
+      cancelled = true
+      if (objectUrl !== null) URL.revokeObjectURL(objectUrl)
+      setSrc(null)
+    }
+  }, [])
+
+  return src
+}
+
 export default function AccountMenu() {
   const { signOut } = useAuth()
-  const { bootstrap } = useRemote()
+  const { bootstrap, scopeType, companyId } = useRemote()
   const [open, setOpen] = useState(false)
+  // Null until the photo arrives, and null for good when there is none: the menu draws initials.
+  const photo = useUserLogo()
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
 
@@ -145,7 +204,9 @@ export default function AccountMenu() {
         onClick={() => setOpen((value) => !value)}
       >
         <span className="account-avatar" aria-hidden="true">
-          {initials || <User size={15} />}
+          {photo !== null
+            ? <img src={photo} alt="" className="account-avatar__photo" />
+            : initials || <User size={15} />}
         </span>
         {name ? <span className="account-button__name truncate">{name}</span> : null}
         <ChevronDown size={14} aria-hidden="true" />
@@ -153,10 +214,13 @@ export default function AccountMenu() {
 
       {open ? (
         <div className="account-menu__panel" role="menu" aria-label="Account menu">
+          {/* 1. Who you are — with the photo, which this menu used to leave out. */}
           {name || email || custId ? (
             <div className="account-menu__identity">
               <span className="account-avatar account-avatar--lg" aria-hidden="true">
-                {initials || <User size={18} />}
+                {photo !== null
+                  ? <img src={photo} alt="" className="account-avatar__photo" />
+                  : initials || <User size={18} />}
               </span>
               <span className="account-menu__identity-text">
                 <span className="account-menu__name truncate">{name || 'Signed in'}</span>
@@ -219,6 +283,57 @@ export default function AccountMenu() {
               </button>
             ) : null}
           </div>
+
+          {/* 3. Company — in Books' order, and behind the same flag as every other
+              organisation-dependent surface in this app. See the note at the top
+              of this file: with organisations off, Remote scopes per person and
+              §3's one exemption applies, so nothing is shown here. */}
+          {ORGANISATIONS_ENABLED ? (
+            <div className="account-menu__section">
+              <p className="account-menu__heading">Company</p>
+              <button
+                type="button"
+                role="menuitem"
+                className="account-menu__item"
+                title="Choose another organisation"
+                onClick={() => {
+                  setOpen(false)
+                  window.dispatchEvent(new CustomEvent(OPEN_COMPANY_SWITCHER_EVENT))
+                }}
+              >
+                <Building2 size={16} aria-hidden="true" />
+                <span className="account-menu__item-text">Switch company</span>
+              </button>
+              {scopeType === 'COMPANY' && companyId !== null ? (
+                <>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="account-menu__item"
+                    title="Opens this organisation in Manage in a new tab"
+                    onClick={() => openManage(manageCompanyEditPath(companyId))}
+                  >
+                    <Pencil size={16} aria-hidden="true" />
+                    <span className="account-menu__item-text">Edit company</span>
+                    <ExternalLink size={13} aria-hidden="true" />
+                    <span className="sr-only"> (opens in a new tab)</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="account-menu__item"
+                    title="Opens this organisation's branches in Manage in a new tab"
+                    onClick={() => openManage(manageBranchListPath(companyId))}
+                  >
+                    <GitBranch size={16} aria-hidden="true" />
+                    <span className="account-menu__item-text">Manage branches</span>
+                    <ExternalLink size={13} aria-hidden="true" />
+                    <span className="sr-only"> (opens in a new tab)</span>
+                  </button>
+                </>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="account-menu__section">
             <button

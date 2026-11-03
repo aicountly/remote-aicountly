@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getCompanyRegistry } from './companyRegistry'
 import { performLogout } from '../auth/portal'
 import { clearAllTokens, saveSession, setAuthToken } from '../auth/tokens'
+import { fetchUserLogoObjectUrl } from './userLogo'
 
 /**
  * The browser reaches Manage's company registry and the portal's sign-out only through Remote's
@@ -43,6 +44,26 @@ describe('same-origin relays', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0].url).toBe(`${window.location.origin}/api/manage/v1/workspaces`)
     expect((calls[0].init.headers as Record<string, string>).Authorization).toBe('Bearer ses-1')
+  })
+
+  it("the account menu's photo comes through /api/global/user/logo, never from the portal", async () => {
+    const calls: Call[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        calls.push({ url: String(input), init })
+        return new Response(Uint8Array.from([137, 80, 78, 71]), { status: 200, headers: { 'Content-Type': 'image/png' } })
+      }),
+    )
+    URL.createObjectURL = () => 'blob:remote/photo'
+    saveSession('ses-2', 900)
+
+    await expect(fetchUserLogoObjectUrl()).resolves.toBe('blob:remote/photo')
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toBe(`${window.location.origin}/api/global/user/logo`)
+    expect((calls[0].init.headers as Record<string, string>).Authorization).toBe('Bearer ses-2')
+    expect(calls[0].url).not.toContain('my.aicountly.com')
   })
 
   it('sign-out revokes the token through /api/global/logout without waiting for it', () => {

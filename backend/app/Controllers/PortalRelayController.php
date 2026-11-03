@@ -48,6 +48,23 @@ class PortalRelayController extends Controller
         'logout',
     ];
 
+    /**
+     * Portal paths relayed on GET only — read-only, one path each, nothing inferred.
+     *
+     * `user/logo` is the signed-in person's profile photo (an image body). The browser cannot ask
+     * `my.aicountly.com` for it directly: the portal's CORS allowlist does not name product
+     * domains, so the account menu would have no photo at all
+     * (`AICOUNTLY_ACCOUNT_MENU.md` §6).
+     *
+     * It is deliberately a second, smaller list rather than another entry in RELAYED_PATHS: a path
+     * listed there accepts GET and POST both, and nothing about a profile photo should be writable
+     * through this host. Adding a path here is adding a GET onto someone else's portal account
+     * with their own token, so it stays one path at a time — never a prefix, never a wildcard.
+     */
+    private const RELAYED_READ_PATHS = [
+        'user/logo',
+    ];
+
     public function relay(string ...$segments): ResponseInterface
     {
         $path = strtolower(implode('/', array_map(
@@ -59,7 +76,11 @@ class PortalRelayController extends Controller
         // segment past the allowlist; exact matching does the rest.
         $path = trim(str_replace('\\', '/', $path), '/');
 
-        if (! in_array($path, self::RELAYED_PATHS, true)) {
+        // A read path answers an image, not JSON, and only on GET.
+        $isRead = strtoupper($this->request->getMethod()) === 'GET'
+            && in_array($path, self::RELAYED_READ_PATHS, true);
+
+        if (! $isRead && ! in_array($path, self::RELAYED_PATHS, true)) {
             return $this->response
                 ->setStatusCode(404)
                 ->setHeader('Cache-Control', 'no-store')
@@ -88,7 +109,11 @@ class PortalRelayController extends Controller
         // being unavailable, which is true but unactionable. Say so properly
         // instead: the portal never saw the request, so a one-time code is
         // unspent and the same call may be made again.
-        if (self::isNotJson($result['contentType'])) {
+        // The interceptor guard below is about the portal's JSON surface, and a read path is not
+        // one: `user/logo` answers image bytes. A WAF page would arrive as a non-image instead,
+        // and the menu treats anything that is not an image as "no photo" — which is the right
+        // outcome, and nothing is spent either way.
+        if (! $isRead && self::isNotJson($result['contentType'])) {
             log_message('error', 'portal relay: ' . $path . ' was answered by an interceptor, not the portal ('
                 . $result['contentType'] . ', HTTP ' . $result['status'] . ')');
 

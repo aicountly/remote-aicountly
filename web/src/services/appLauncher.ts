@@ -45,6 +45,23 @@ export function manageAccountPath(): string {
 }
 
 /**
+ * Manage pages for an organisation itself, for the account menu's Company block
+ * (`AICOUNTLY_ACCOUNT_MENU.md` §3).
+ *
+ * Remote does not own companies or branches — they belong to Aicountly Manage. Same paths as
+ * Books', because Books is the menu's reference product. Only reachable while Remote has
+ * organisations at all (`app/organisations.ts`).
+ */
+export function manageCompanyEditPath(cmpId: number | string): string {
+  return `/company/${encodeURIComponent(String(cmpId))}/edit`
+}
+
+/** Manage's branch list for one organisation. */
+export function manageBranchListPath(cmpId: number | string): string {
+  return `/branch/${encodeURIComponent(String(cmpId))}`
+}
+
+/**
  * A page in the Manage portal (hash-routed SPA), e.g. `manageProfilePath()`.
  * Manage signs the person in through its own portal round trip, exactly as a
  * launcher tile does, so no credential is put in the address.

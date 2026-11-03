@@ -914,6 +914,75 @@ final class RemoteApiTest extends RemoteTestCase
         $this->assertSame('origin_timeout', json_decode((string) $cdn->response()->getBody(), true)['error']);
     }
 
+    public function testTheRelayHandsBackTheProfilePhotoOnGetAndRefusesEveryWrite(): void
+    {
+        // The account menu's photo (AICOUNTLY_ACCOUNT_MENU.md §6). The portal answers image bytes,
+        // not JSON, so the interceptor guard that protects the portal's JSON surface must not turn
+        // this into a 503 — and the path must be readable only, never writable, because this host
+        // forwards somebody else's token.
+        $portal = new class (Services::remoteConfig()) extends PortalClient {
+            /** @var list<array{method: string, path: string, headers: array<int, string>, body: string}> */
+            public array $calls = [];
+            /** @var array{status: int, body: string, contentType: string, retryAfter: string} */
+            public array $answer = ['status' => 200, 'body' => "\x89PNG-bytes", 'contentType' => 'image/png', 'retryAfter' => ''];
+
+            public function forward(string $method, string $path, array $headers, string $body): array
+            {
+                $this->calls[] = ['method' => $method, 'path' => $path, 'headers' => $headers, 'body' => $body];
+
+                return $this->answer;
+            }
+        };
+        Services::injectMock('portalClient', $portal);
+
+        $result = $this->withHeaders(['Authorization' => 'Bearer person-ses-key'])->get('global/user/logo');
+
+        $result->assertStatus(200);
+        $this->assertSame("\x89PNG-bytes", (string) $result->response()->getBody(), 'the image bytes come back unchanged');
+        $this->assertStringContainsString('image/png', $result->response()->getHeaderLine('Content-Type'));
+        $this->assertCount(1, $portal->calls);
+        $this->assertSame('user/logo', $portal->calls[0]['path']);
+        $this->assertContains('Authorization: Bearer person-ses-key', $portal->calls[0]['headers'], "the person's own token is what is forwarded");
+
+        // Nothing about a profile photo is writable through this host.
+        foreach (['post'] as $method) {
+            $portal->calls = [];
+            $refused = $this->withBodyFormat('json')->{$method}('global/user/logo', []);
+            $refused->assertStatus(404);
+            $this->assertStringContainsString('not relayed', $refused->getJSON());
+            $this->assertSame([], $portal->calls, 'a write never reaches the portal');
+        }
+
+        // And the allowlist stays an allowlist: one readable path is not the rest of the account.
+        foreach (['global/user', 'global/userprofile', 'global/user/sessions'] as $unlisted) {
+            $portal->calls = [];
+            $this->get($unlisted)->assertStatus(404);
+            $this->assertSame([], $portal->calls, $unlisted . ' never reaches the portal');
+        }
+    }
+
+    public function testAPhotoAnsweredByAnInterceptorIsNotTurnedIntoAnAuthOutage(): void
+    {
+        // A WAF's HTML page where an image was expected reaches the browser as a non-image, which
+        // the menu reads as "no photo" and draws initials for. It must not become the 503
+        // auth_unavailable the JSON relay answers, which would be a sign-in outage that is not one.
+        $portal = new class (Services::remoteConfig()) extends PortalClient {
+            /** @var array{status: int, body: string, contentType: string, retryAfter: string} */
+            public array $answer = ['status' => 200, 'body' => '<html>checking your browser</html>', 'contentType' => 'text/html', 'retryAfter' => ''];
+
+            public function forward(string $method, string $path, array $headers, string $body): array
+            {
+                return $this->answer;
+            }
+        };
+        Services::injectMock('portalClient', $portal);
+
+        $result = $this->withHeaders(['Authorization' => 'Bearer person-ses-key'])->get('global/user/logo');
+
+        $result->assertStatus(200);
+        $this->assertStringContainsString('text/html', $result->response()->getHeaderLine('Content-Type'));
+    }
+
     // ------------------------------------------------------- rate limiting
 
     public function testTheJoinCodeEndpointIsRateLimited(): void

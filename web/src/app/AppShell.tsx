@@ -29,7 +29,7 @@ import { PERMISSIONS } from '../types/remote'
 import AicountlyLogo, { RemoteMark } from '../components/brand/AicountlyLogo'
 import { AppLauncher } from '../components/AppLauncher'
 import { isDesktopApp } from '../features/desktop/embedding'
-import { ORGANISATIONS_ENABLED } from './organisations'
+import { OPEN_COMPANY_SWITCHER_EVENT, ORGANISATIONS_ENABLED } from './organisations'
 import { consumeDesktopSignInReturnPath } from '../features/desktop/returnPath'
 import { ConnectMount } from '../connect/ConnectMount'
 import Modal from '../components/ui/Modal'
@@ -103,6 +103,17 @@ function SignedInShell() {
     }
     // Intentionally once: this consumes a value written before this component
     // ever mounted, not one that changes across the component's lifetime.
+  }, [])
+
+  // "Switch company" in the account menu opens this switcher: same action, second door
+  // (AICOUNTLY_ACCOUNT_MENU.md §3). Both ends are behind ORGANISATIONS_ENABLED.
+  useEffect(() => {
+    if (!ORGANISATIONS_ENABLED) return
+
+    const onOpen = () => setScopeMenuOpen(true)
+    window.addEventListener(OPEN_COMPANY_SWITCHER_EVENT, onOpen)
+
+    return () => window.removeEventListener(OPEN_COMPANY_SWITCHER_EVENT, onOpen)
   }, [])
 
   // Close the organisation menu on an outside click or Escape — a dropdown that
