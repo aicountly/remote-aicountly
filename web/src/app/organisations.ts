@@ -16,3 +16,13 @@
  * organisation filters and columns — is behind this.
  */
 export const ORGANISATIONS_ENABLED: boolean = false
+
+/**
+ * The account menu's "Switch company" asks the header's scope switcher to open.
+ *
+ * An event rather than lifted state: the two sit side by side in the header, and the switcher
+ * already owns the organisation list, the outside-click handling and the workspace-companies
+ * modal. Books does the same thing (`books:open-company-switcher`). Both ends are behind
+ * ORGANISATIONS_ENABLED, so with organisations off nothing dispatches it and nothing listens.
+ */
+export const OPEN_COMPANY_SWITCHER_EVENT = 'remote:open-company-switcher'
