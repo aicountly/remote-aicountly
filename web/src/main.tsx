@@ -6,6 +6,7 @@ import { AuthProvider } from './auth/AuthProvider.tsx'
 import { purgeLegacySharedAuthToken } from './auth/sharedAuthCookie'
 import { router } from './app/router'
 import { initAnalytics, trackRouterPageViews } from './utils/analytics'
+import { initEstateAnalytics, recordEstateRouterPageViews } from './analytics/estateAnalytics'
 import { stashDesktopSignInReturnPath } from './features/desktop/returnPath'
 import { captureDesktopHandoff } from './auth/desktopHandoff'
 
@@ -31,6 +32,11 @@ stashDesktopSignInReturnPath(window.location)
 // too, which the subscription alone never reports.
 initAnalytics()
 trackRouterPageViews(router)
+// Estate analytics (analytics.aicountly.org): the same router subscription, so the two pipelines
+// report the same navigations. Every subject is a customer and no company is recorded, both of
+// which are the backend's call, not this file's — see analytics/estateAnalytics.ts.
+initEstateAnalytics()
+recordEstateRouterPageViews(router)
 
 // Remove the retired shared auth_token cookie an older release may have left.
 purgeLegacySharedAuthToken()

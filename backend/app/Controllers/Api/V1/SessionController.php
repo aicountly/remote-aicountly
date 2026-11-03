@@ -57,16 +57,23 @@ class SessionController extends BaseApiController
 
         // Estate analytics: Remote's activation and recurring outcome.
         //
-        // Remote is a SUPPORT tool, which makes the staff rule load-bearing here rather than
-        // theoretical: an AICOUNTLY support agent screen-sharing into a customer's workspace is
-        // AICOUNTLY working, not that customer adopting Remote. Marked 'staff' so every report
-        // excludes it — otherwise Remote's adoption figures would be our own support desk.
-        $isStaff = $identity->isSupportAgent || $identity->isPlatformAdmin
-            || $scopeType === 'AICOUNTLY_SUPPORT';
+        // EVERY SUBJECT IS A CUSTOMER HERE, AND NO COMPANY IS RECORDED. Remote is still used as a
+        // support tool, but for estate analytics the business has settled that there is no
+        // staff/customer distinction left to draw — every end user, and every user, counts as a
+        // customer — so the old staff rule is gone: no isSupportAgent, no isPlatformAdmin, no
+        // AICOUNTLY_SUPPORT scope test. The identity's flags are not consulted for analytics at
+        // all, and nothing is excluded from adoption reporting any more.
+        //
+        // user_kind is stated rather than omitted. The vendored SDK does default an absent
+        // user_kind to 'customer' (ThirdParty/AicountlyAnalytics/AicountlyAnalytics.php::track),
+        // so omitting it would record the same value, but stating it keeps the decision readable
+        // at the call site and independent of a re-vendor that changed that default.
+        //
+        // No company_id: organisations have been wiped from Remote, so attribution is always
+        // user-wise. The $companyId resolved above belongs to the session, not to this event.
         \App\Services\EstateAnalytics::track('remote_session.started', [
-            'company_id' => $companyId,
             'user_uuid'  => $identity->uuid,
-            'user_kind'  => $isStaff ? 'staff' : 'customer',
+            'user_kind'  => 'customer',
             'properties' => ['scope_type' => $scopeType],
         ]);
 
