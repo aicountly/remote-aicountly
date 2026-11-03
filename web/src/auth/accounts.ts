@@ -26,6 +26,7 @@
  * drifts from it is a product whose menu lies about who is signed in.
  */
 
+import { issueState } from './callbackState'
 import { resolveLoginPortalOrigin, resolveProductKeyFromHost } from './hostnames'
 import { clearSession } from './tokens'
 import { clearStoredScope } from '../app/RemoteProvider'
@@ -114,9 +115,27 @@ export function canAddAccount(roster: RosterAccount[] = readAccountRoster()): bo
   return roster.length < MAX_ACCOUNTS
 }
 
+/**
+ * A portal account screen, carrying a fresh sign-in nonce as `state`.
+ *
+ * Every one of these screens ends in a hand-off back to this app, and this app
+ * only accepts a hand-off whose nonce it issued (`verifyCallback()` /
+ * `consumeState()` in `callbackState.ts`). Without a `state` the portal's answer
+ * reads as unsolicited and is thrown away: the switch silently does nothing, or
+ * restarts sign-in. So the nonce is issued HERE, at navigation time, by the same
+ * `issueState()` the authentication_jump round trip uses — it stores the pending
+ * sign-in for this tab, so it must not be hoisted to module load or reused
+ * across navigations.
+ *
+ * `switch_account` gets it for free (it continues into authentication_jump,
+ * which reads `state` off this request); `add_account` and `select_account`
+ * stash it across the login form. Portal side: my-aicountly-com
+ * `Login::accountScreenState()`.
+ */
 function portalUrl(path: string, query: Record<string, string> = {}): string {
   const url = new URL(`${path}/${resolveProductKeyFromHost()}`, resolveLoginPortalOrigin())
   for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value)
+  url.searchParams.set('state', issueState())
   return url.toString()
 }
 

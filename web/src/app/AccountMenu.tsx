@@ -119,6 +119,19 @@ export default function AccountMenu() {
     performAccountSwitch(uuid)
   }
 
+  /**
+   * The portal chooser, for a browser with no readable roster.
+   *
+   * Built on the click rather than in the markup: the URL carries a single-use
+   * sign-in nonce that `buildChooseAccountUrl()` stores for this tab, and the
+   * one that travels has to be the one still pending when we leave.
+   */
+  function chooseAccount() {
+    stopConnect()
+    setOpen(false)
+    window.location.assign(buildChooseAccountUrl())
+  }
+
   return (
     <div className="account-menu" ref={rootRef}>
       <button
@@ -192,10 +205,10 @@ export default function AccountMenu() {
                 own web view, or a browser signed in before the roster shipped.
                 The portal chooser always knows the truth. */}
             {roster.length === 0 ? (
-              <a role="menuitem" className="account-menu__item" href={buildChooseAccountUrl()}>
+              <button type="button" role="menuitem" className="account-menu__item" onClick={chooseAccount}>
                 <Users size={16} aria-hidden="true" />
                 <span className="account-menu__item-text">Switch account</span>
-              </a>
+              </button>
             ) : null}
 
             {/* Hidden once this browser holds five — the portal refuses a sixth. */}

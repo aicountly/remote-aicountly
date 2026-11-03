@@ -24,7 +24,20 @@ import {
   performAccountSwitch,
   readAccountRoster,
 } from './accounts'
+import { STATE_KEY, consumeState } from './callbackState'
 import { clearAllTokens, getAuthToken, getSesKey, saveSession, setAuthToken } from './tokens'
+
+/** The URL without its `state`, so the rest of it can be compared literally. */
+function withoutState(raw: string): string {
+  const url = new URL(raw)
+  url.searchParams.delete('state')
+  const query = url.searchParams.toString()
+  return `${url.origin}${url.pathname}${query ? `?${query}` : ''}`
+}
+
+function stateOf(raw: string): string {
+  return new URL(raw).searchParams.get('state') || ''
+}
 
 /** Encode a roster the way the portal's AccountRoster::summaryCookieValue does. */
 function viewCookie(list: Array<Record<string, unknown> | null>): string {
@@ -50,6 +63,7 @@ function at(hostname: string) {
 beforeEach(() => {
   assigned = []
   localStorage.clear()
+  sessionStorage.clear()
   at('remote.aicountly.com')
 })
 
@@ -57,6 +71,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   clearAllTokens()
   localStorage.clear()
+  sessionStorage.clear()
 })
 
 describe('reading the roster of accounts signed in on this browser', () => {
@@ -149,23 +164,23 @@ describe('whether another account may be added', () => {
 describe('the portal URLs the menu navigates to', () => {
   it('names this product in production so the portal hands the user back here', () => {
     at('remote.aicountly.com')
-    expect(buildSwitchAccountUrl(88)).toBe('https://my.aicountly.com/login/switch_account/remote?uuid=88')
-    expect(buildAddAccountUrl()).toBe('https://my.aicountly.com/login/add_account/remote')
-    expect(buildChooseAccountUrl()).toBe('https://my.aicountly.com/login/select_account/remote')
+    expect(withoutState(buildSwitchAccountUrl(88))).toBe('https://my.aicountly.com/login/switch_account/remote?uuid=88')
+    expect(withoutState(buildAddAccountUrl())).toBe('https://my.aicountly.com/login/add_account/remote')
+    expect(withoutState(buildChooseAccountUrl())).toBe('https://my.aicountly.com/login/select_account/remote')
   })
 
   it('uses the sandbox portal on a sandbox host, and still the `remote` product key', () => {
     // A sandbox build pointed at my.aicountly.com is the classic way to break
     // sandbox sign-in; the product key must not pick up the `gh` label either.
     at('remote.gh.aicountly.com')
-    expect(buildSwitchAccountUrl(88)).toBe('https://sandbox.aicountly.com/login/switch_account/remote?uuid=88')
-    expect(buildAddAccountUrl()).toBe('https://sandbox.aicountly.com/login/add_account/remote')
-    expect(buildChooseAccountUrl()).toBe('https://sandbox.aicountly.com/login/select_account/remote')
+    expect(withoutState(buildSwitchAccountUrl(88))).toBe('https://sandbox.aicountly.com/login/switch_account/remote?uuid=88')
+    expect(withoutState(buildAddAccountUrl())).toBe('https://sandbox.aicountly.com/login/add_account/remote')
+    expect(withoutState(buildChooseAccountUrl())).toBe('https://sandbox.aicountly.com/login/select_account/remote')
   })
 
   it('treats localhost as sandbox and falls back to the configured product key', () => {
     at('localhost')
-    expect(buildChooseAccountUrl()).toBe('https://sandbox.aicountly.com/login/select_account/remote')
+    expect(withoutState(buildChooseAccountUrl())).toBe('https://sandbox.aicountly.com/login/select_account/remote')
   })
 
   it('never puts a token or a ses_key in a portal URL', () => {
@@ -175,15 +190,62 @@ describe('the portal URLs the menu navigates to', () => {
   })
 })
 
+/**
+ * The whole point of the account menu is the hand-off that comes back, and this
+ * app refuses a hand-off it did not ask for (`verifyCallback()`). A screen
+ * reached without a `state` therefore ends in a switch that silently does
+ * nothing — so each of these URLs has to carry a nonce this tab will accept.
+ */
+describe('the sign-in nonce the account screens carry', () => {
+  it('sends a non-empty `state` on the switch, add and choose URLs', () => {
+    for (const url of [buildSwitchAccountUrl(88), buildAddAccountUrl(), buildChooseAccountUrl()]) {
+      expect(stateOf(url), url).not.toBe('')
+      expect(stateOf(url).length, url).toBeGreaterThanOrEqual(16)
+    }
+  })
+
+  it('sends the very nonce this app’s own callback check would accept', () => {
+    // consumeState() is what verifyCallback() calls on the portal's echo. It
+    // reads the pending sign-in issueState() stored for this tab, so a URL
+    // whose `state` it accepts is a URL whose answer will be used.
+    for (const build of [() => buildSwitchAccountUrl(88), buildAddAccountUrl, buildChooseAccountUrl]) {
+      sessionStorage.clear()
+      const state = stateOf(build())
+      expect(consumeState([null, state])).toBe(true)
+    }
+  })
+
+  it('stores the pending sign-in at navigation time, not at module load', () => {
+    // Issuing once and reusing it would leave the nonce spent (consumeState()
+    // removes it) and every later switch unsolicited again.
+    sessionStorage.clear()
+    expect(sessionStorage.getItem(STATE_KEY)).toBeNull()
+
+    const first = stateOf(buildSwitchAccountUrl(88))
+    expect(sessionStorage.getItem(STATE_KEY)).toContain(first)
+
+    const second = stateOf(buildSwitchAccountUrl(88))
+    expect(second).not.toBe(first)
+    // The freshest one is the one pending, and it verifies.
+    expect(consumeState([second])).toBe(true)
+  })
+
+  it('carries one on the navigation the menu actually performs', () => {
+    performAccountSwitch(77)
+    expect(assigned).toHaveLength(1)
+    expect(consumeState([stateOf(assigned[0])])).toBe(true)
+  })
+})
+
 describe('leaving for another account', () => {
   it('navigates to the portal with the account asked for', () => {
     performAccountSwitch(77)
-    expect(assigned).toEqual(['https://my.aicountly.com/login/switch_account/remote?uuid=77'])
+    expect(assigned.map(withoutState)).toEqual(['https://my.aicountly.com/login/switch_account/remote?uuid=77'])
   })
 
   it('goes to the add-account screen when no account is named', () => {
     performAccountSwitch(undefined)
-    expect(assigned).toEqual(['https://my.aicountly.com/login/add_account/remote'])
+    expect(assigned.map(withoutState)).toEqual(['https://my.aicountly.com/login/add_account/remote'])
   })
 
   it('drops the remembered organisation, which belongs to the account being left', () => {
