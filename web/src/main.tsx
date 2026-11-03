@@ -33,8 +33,8 @@ stashDesktopSignInReturnPath(window.location)
 initAnalytics()
 trackRouterPageViews(router)
 // Estate analytics (analytics.aicountly.org): the same router subscription, so the two pipelines
-// report the same navigations. Whether a page view is staff or customer is the backend's call,
-// from the identity's own flags — see analytics/estateAnalytics.ts.
+// report the same navigations. Every subject is a customer and no company is recorded, both of
+// which are the backend's call, not this file's — see analytics/estateAnalytics.ts.
 initEstateAnalytics()
 recordEstateRouterPageViews(router)
 

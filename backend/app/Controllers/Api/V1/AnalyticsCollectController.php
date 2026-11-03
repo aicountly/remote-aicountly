@@ -13,28 +13,26 @@ use Throwable;
  * POST v1/remote/analytics/collect — the browser's only destination for estate analytics.
  *
  * Adapted from app/ThirdParty/AicountlyAnalytics/AnalyticsCollectController.php.reference
- * (analytics-aicountly sdk/php/). Three things are Remote's own, and the first is the one that
- * matters most:
+ * (analytics-aicountly sdk/php/). Three things are Remote's own:
  *
- *  1. THE STAFF RULE IS LOAD-BEARING HERE, not theoretical. Remote is a SUPPORT tool: an
- *     AICOUNTLY support agent working in it is AICOUNTLY working, not a customer adopting Remote.
- *     SessionController says the same where it records remote_session.started — "otherwise
- *     Remote's adoption figures would be our own support desk" — and this route has to make the
- *     same distinction, because its page views are mostly OURS. user_kind is 'staff' for a support
- *     agent or platform admin and 'customer' otherwise, and every report excludes 'staff' by
- *     default. This is the one product in the estate where that field is genuinely variable; in
- *     every other collect controller it is the constant 'customer'.
+ *  1. EVERY SUBJECT IS A CUSTOMER. Remote is still used as a support tool, but for estate
+ *     analytics the business has settled that there is no staff/customer distinction left to
+ *     draw — every end user, and every user, counts as a customer. So user_kind is the constant
+ *     'customer' here, exactly as it is in every other collect controller in the estate, and the
+ *     identity's isSupportAgent / isPlatformAdmin flags are not consulted for analytics at all.
+ *     No page view is excluded from adoption reporting any more.
  *
- *     The scope-type half of SessionController's test (AICOUNTLY_SUPPORT) has no meaning here: a
- *     page view belongs to no session, so there is no scope to read. The identity's own two flags
- *     are the whole of it.
+ *     It is stated rather than omitted: the SDK does default an absent user_kind to 'customer'
+ *     (AicountlyAnalytics.php::track), so omitting it would record the same value, but stating it
+ *     keeps the decision readable where it is made and independent of a re-vendor that changed
+ *     that default. SessionController states it the same way for remote_session.started.
  *
- *  2. NO COMPANY COMES FROM THE BROWSER, and none is asked for. Remote takes a company from the
- *     VERIFIED LAUNCH CONTEXT only — "the company comes from the signature, never from the
- *     client (§6C, §12)" — so a beacon that named one would be asserting exactly what this
- *     product refuses to accept from a client. When the person reached Remote through a signed
- *     launch its company is recorded; when they signed in directly there is none, and the event
- *     is recorded against the subject alone rather than against a company nobody verified.
+ *  2. NO COMPANY IS RECORDED AT ALL, by anyone. Organisations have been wiped from Remote, so
+ *     attribution is always user-wise: the event carries the subject and nothing else about who
+ *     they belong to. Nothing here reads a company from the browser, and nothing reads one from
+ *     the verified launch context either — there is no company to record, not a company this
+ *     route declines to believe. The SDK's trackMany() strips company_id from every event in the
+ *     batch unconditionally (see below), so leaving it out cannot be read as leaving it open.
  *
  *  3. identityOrNull(), not identity(). identity() throws ApiException::unauthenticated for a
  *     guest, a device credential or no session at all, and a beacon must not turn any of those
@@ -72,20 +70,19 @@ final class AnalyticsCollectController extends BaseApiController
                 return $this->noContent();
             }
 
-            $isStaff = $identity->isSupportAgent || $identity->isPlatformAdmin;
-
-            $verified = array_filter([
-                // From the signature or not at all — see (2).
-                'company_id' => $this->context()->sourceContext()?->companyId,
-                'user_uuid'  => $identity->uuid,
-                'user_kind'  => $isStaff ? 'staff' : 'customer',
+            $verified = [
+                // The subject, and nothing about any organisation — see (1) and (2).
+                'user_uuid'      => $identity->uuid,
+                'user_kind'      => 'customer',
                 'origin_surface' => 'web',
-            ], static fn ($v) => $v !== null);
+            ];
 
             // $verified is the COMMON set, applied OVER each event's own fields; since SDK 1.4.0
-            // trackMany also strips those keys from the batch, so a support agent's browser
-            // cannot relabel itself 'customer' and walk into the adoption figures, and a direct
-            // sign-in cannot supply a company the launch context did not verify.
+            // trackMany also strips the caller-owned keys from every event in the batch whether
+            // or not $verified supplies them. That unconditional strip is what makes the two
+            // decisions above hold from the browser's side: a beacon cannot label itself anything
+            // other than 'customer', and it cannot fill in the company_id we deliberately no
+            // longer send.
             require_once APPPATH . 'ThirdParty/AicountlyAnalytics/AicountlyAnalytics.php';
             Analytics::shared(
                 static fn (string $key): ?string => ($v = env($key)) === false || $v === null || $v === ''

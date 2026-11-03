@@ -7,19 +7,20 @@ namespace Tests;
 use PHPUnit\Framework\TestCase;
 
 /**
- * The estate analytics collect route, and the two decisions in it that matter most for a SUPPORT
- * tool. Pinned in source because the route answers 204 on every path and the browser SDK swallows
- * every non-2xx, so neither decision can be checked by its response — and the same invisibility
- * already shipped a dead route in valuations-aicountly, green, recording nothing.
+ * The estate analytics collect route, and the two decisions in it that matter most. Pinned in
+ * source because the route answers 204 on every path and the browser SDK swallows every non-2xx,
+ * so neither decision can be checked by its response — and the same invisibility already shipped
+ * a dead route in valuations-aicountly, green, recording nothing.
  *
- *   * STAFF. An AICOUNTLY support agent working in Remote is AICOUNTLY working, not a customer
- *     adopting Remote. remote_session.started marks those events 'staff' so reports exclude them —
- *     "otherwise Remote's adoption figures would be our own support desk" — and page views, which
- *     are mostly ours, must do the same. This is the only product in the estate where user_kind
- *     is genuinely variable rather than the constant 'customer'.
- *   * COMPANY. Remote takes a company from the verified launch context only; "the company comes
- *     from the signature, never from the client" (§6C, §12). A collect route that read one from
- *     the body would accept exactly what the product refuses.
+ *   * EVERY SUBJECT IS A CUSTOMER. Remote is still used as a support tool, but estate analytics
+ *     draws no staff/customer line: every end user, and every user, is a customer. user_kind is
+ *     the constant 'customer', and the identity's isSupportAgent / isPlatformAdmin flags are not
+ *     consulted for analytics at all. (This reverses an earlier staff rule that marked a support
+ *     agent's events 'staff' so adoption reporting excluded them; a regression would reintroduce
+ *     it invisibly, which is what these assertions are for.)
+ *   * NO COMPANY IS RECORDED, from any source. Organisations have been wiped from Remote, so
+ *     attribution is always user-wise: not from the body, not from a query, and not from the
+ *     verified launch context either — the route no longer reads one.
  */
 final class EstateAnalyticsCollectRouteTest extends TestCase
 {
@@ -45,7 +46,7 @@ final class EstateAnalyticsCollectRouteTest extends TestCase
         return $out;
     }
 
-    public function testTheRouteRunsBehindBothTheAuthAndTheLaunchContextFilters(): void
+    public function testTheRouteRunsBehindTheAuthFilterAndNoLaunchContextFilter(): void
     {
         $routes = self::read('backend/app/Config/Routes.php');
 
@@ -53,12 +54,13 @@ final class EstateAnalyticsCollectRouteTest extends TestCase
             "\$routes->post('analytics/collect', 'AnalyticsCollectController::collect', [",
             $routes,
         );
-        // remote-context as well as api-auth: without the filter that verifies the launch
-        // signature there is no verified company to record, and the route would silently
-        // attribute every beacon to nobody.
         $block = substr($routes, (int) strpos($routes, "'analytics/collect'"), 220);
         $this->assertStringContainsString("'api-auth'", $block);
-        $this->assertStringContainsString("'remote-context'", $block);
+        // And NOT remote-context. It was there only so the controller could read a company from
+        // the verified launch context, and no company is recorded any more. It is also the only
+        // thing that could make this route answer something other than 204 — SourceContextFilter
+        // fails a malformed or replayed X-Remote-Context — which a beacon must never see.
+        $this->assertStringNotContainsString("'remote-context'", $block);
 
         // Inside the v1/remote group, so the served path is v1/remote/analytics/collect — which is
         // what the SPA posts to.
@@ -79,33 +81,73 @@ final class EstateAnalyticsCollectRouteTest extends TestCase
         $this->assertStringContainsString("app: 'remote'", $adapter);
     }
 
-    public function testStaffIsDecidedFromTheIdentityAndNotFromTheBrowser(): void
+    public function testEverySubjectIsRecordedAsACustomerAndNothingIsMarkedStaff(): void
     {
         $code = self::code('backend/app/Controllers/Api/V1/AnalyticsCollectController.php');
 
-        $this->assertStringContainsString('$identity->isSupportAgent', $code);
-        $this->assertStringContainsString('$identity->isPlatformAdmin', $code);
-        $this->assertStringContainsString("'user_kind'  => \$isStaff ? 'staff' : 'customer'", $code);
+        $this->assertStringContainsString("'user_kind'      => 'customer'", $code);
 
-        // And the browser must have no say in it: no user_kind is read from the payload.
+        // No staff rule survives anywhere in the controller's code: not the literal, not the
+        // identity flags it used to be computed from, not the variable it was held in.
+        $this->assertStringNotContainsStringIgnoringCase('staff', $code, 'no event is marked staff');
+        $this->assertStringNotContainsString('isSupportAgent', $code, 'not consulted for analytics');
+        $this->assertStringNotContainsString('isPlatformAdmin', $code, 'nor this');
+
+        // And the browser has no say either way: it sends no user_kind and knows nothing of the
+        // flags. trackMany() strips user_kind from every event in the batch regardless.
         $this->assertStringNotContainsString("\$body['user_kind']", $code);
 
         $adapter = self::read('web/src/analytics/estateAnalytics.ts');
-        $this->assertStringNotContainsString('user_kind', $adapter, 'the browser cannot label itself');
+        $this->assertStringNotContainsString('user_kind:', $adapter, 'the browser cannot label itself');
         $this->assertStringNotContainsString('isSupportAgent', $adapter, 'nor does it need to know');
     }
 
-    public function testTheCompanyComesFromTheSignatureAndNeverFromTheClient(): void
+    public function testNoCompanyIsRecordedFromAnySource(): void
     {
         $code = self::code('backend/app/Controllers/Api/V1/AnalyticsCollectController.php');
 
-        $this->assertStringContainsString("\$this->context()->sourceContext()?->companyId", $code);
+        // Not from the launch context: the route no longer reads one, which is also why
+        // remote-context came off its filter list.
+        $this->assertStringNotContainsString('sourceContext()', $code);
+        // Not under any name at all — company_id is simply never stated here.
+        $this->assertStringNotContainsStringIgnoringCase('company', $code, 'attribution is user-wise');
+
+        // Nor from the client, which is where it would creep back in.
         foreach (["\$body['cmp_id']", "\$body['companyId']", "getGet('cmp_id')"] as $fromClient) {
             $this->assertStringNotContainsString($fromClient, $code, 'a company may not come from the client');
         }
 
         $adapter = self::read('web/src/analytics/estateAnalytics.ts');
         $this->assertStringNotContainsString('cmp_id', $adapter, 'so the SPA sends none');
+    }
+
+    /**
+     * The session event makes the same two decisions, and for the same reason. Kept here because
+     * the two call sites are the whole of Remote's estate analytics: one of them drifting back to
+     * a staff rule or a company id would be as invisible as it would be in the collect route.
+     */
+    public function testTheSessionStartedEventMakesTheSameTwoDecisions(): void
+    {
+        $code = self::code('backend/app/Controllers/Api/V1/SessionController.php');
+
+        $this->assertStringNotContainsString('$isStaff', $code, 'the staff rule is gone from here too');
+
+        $this->assertSame(
+            1,
+            preg_match(
+                '/EstateAnalytics::track\(\'remote_session\.started\',\s*\[(.*?)\]\);/s',
+                $code,
+                $m,
+            ),
+            'the session-started event should still be recorded',
+        );
+        $statement = $m[1];
+
+        $this->assertStringContainsString("'user_kind'  => 'customer'", $statement);
+        $this->assertStringNotContainsStringIgnoringCase('staff', $statement);
+        // The session itself still resolves a company — it is scoped to one — but the event is
+        // attributed to the subject alone.
+        $this->assertStringNotContainsStringIgnoringCase('company', $statement, 'attribution is user-wise');
     }
 
     public function testAGuestOrADeviceRecordsNothingRatherThanErroring(): void

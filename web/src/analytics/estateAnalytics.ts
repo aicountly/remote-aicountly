@@ -5,17 +5,16 @@
  * Not the Manage usage metering the backend reports to. This is first-party service telemetry
  * about a signed-in session (analytics-aicountly docs/05_dpdp_and_privacy.md).
  *
- * THE STAFF RULE IS DECIDED SERVER-SIDE, and that is the point. Remote is a support tool, so most
- * of its page views are AICOUNTLY's own staff working, not customers adopting Remote. The backend
- * marks an event 'staff' from the identity's own support-agent and platform-admin flags, which a
- * browser cannot set or see — exactly as remote_session.started does, "otherwise Remote's adoption
- * figures would be our own support desk". Nothing here needs to know; nothing here could be
- * trusted to.
+ * EVERY SUBJECT IS A CUSTOMER, and the backend says so, not this file. Remote is still used as a
+ * support tool, but estate analytics draws no staff/customer line any more: every end user, and
+ * every user, counts as a customer. The backend records user_kind as the constant 'customer' and
+ * no longer looks at the identity's support-agent or platform-admin flags at all. Nothing here
+ * needs to know; nothing here could be trusted to say.
  *
- * NO COMPANY TRAVELS FROM HERE, and the backend would refuse one if it did. Remote takes a
- * company from the verified launch context only — "the company comes from the signature, never
- * from the client" (§6C, §12) — so there is no context hook at all, rather than one that sends a
- * claim the product does not accept.
+ * NO COMPANY TRAVELS FROM HERE, because there is no company to record. Organisations have been
+ * wiped from Remote, so estate analytics is always user-wise — the backend attaches no company_id
+ * to these events from any source, verified launch context included. So there is no context hook
+ * here, and a beacon that invented one would be stripped on the server before it was recorded.
  *
  * Two product-specific details:
  *

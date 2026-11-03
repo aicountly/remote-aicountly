@@ -96,15 +96,17 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
     $routes->get('policy/effective', 'BootstrapController::effectivePolicy', ['filter' => 'api-auth']);
 
     // --- estate analytics: the browser's only destination (analytics-aicountly sdk/php).
-    // `remote-context` as well as `api-auth`, because a company is only ever taken from the
-    // VERIFIED launch context here — never from the client (§6C, §12) — so the filter that
-    // verifies that signature has to have run. Remote is a support tool, so this route's
-    // user_kind is genuinely variable: a support agent's or platform admin's page views are
-    // marked 'staff' and excluded from adoption reporting, exactly as remote_session.started is.
+    // `api-auth` alone. `remote-context` used to be here so the controller could read a company
+    // from the verified launch context, and no company is recorded any more — organisations have
+    // been wiped from Remote, so estate analytics is always user-wise — which leaves the filter
+    // nothing to contribute here. It would also be the only thing on this route able to answer
+    // something other than 204: a malformed or replayed X-Remote-Context fails the request in
+    // SourceContextFilter, and a beacon must never see that. The controller's events are all
+    // 'customer': Remote is still a support tool, but analytics draws no staff/customer line.
     // Answers 204 on every path by design, so nothing about its status says whether a session
     // was real.
     $routes->post('analytics/collect', 'AnalyticsCollectController::collect', [
-        'filter' => ['api-auth', 'remote-context'],
+        'filter' => ['api-auth'],
     ]);
 
     // --- Two-step verification (docs/SECURITY.md) ---------------------------
