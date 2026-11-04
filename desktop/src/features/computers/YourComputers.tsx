@@ -18,11 +18,26 @@ export function describeComputers(list: OwnComputers): string {
   return `${count} ${count === 1 ? 'computer' : 'computers'} registered · ${online} online`
 }
 
-/** What a computer row can offer: connect, or why not. */
+/**
+ * What a computer row can offer: connect, or why not.
+ *
+ * The reason for a computer with unattended access off used to read "Turn it
+ * on at that computer, or in Remote → Computers" — and the first half of that
+ * is somewhere that does not exist. No AICOUNTLY Remote window can switch
+ * unattended access on, at that machine or any other: the app holds no
+ * credential of a person's, so the decision is deliberately kept in Remote,
+ * signed in as the person whose computer it is (`UnattendedCard`, whose own
+ * button is labelled "Turn on in Remote → Computers" for the same reason).
+ * Somebody following the old sentence went looking at the machine for a switch
+ * that was never there.
+ */
 export function connectability(computer: OwnComputer): { canConnect: boolean; reason: string | null } {
   if (computer.isThisComputer) return { canConnect: false, reason: null }
   if (!computer.unattendedAccessEnabled) {
-    return { canConnect: false, reason: 'Unattended access is off. Turn it on at that computer, or in Remote → Computers.' }
+    return {
+      canConnect: false,
+      reason: 'Unattended access is off. Turn it on in Remote → Computers, signed in as yourself.',
+    }
   }
   if (!computer.online) {
     return {
