@@ -19,7 +19,7 @@ on:
       run_ci_gate:
         description: Run the GitHub test gate before deploying (off = the suite was run locally before merge)
         type: boolean
-        default: false
+        default: true
       migrate:
         description: apply = apply the pending database migrations during the deploy (php spark migrate; it has no dry run, a failure stops the deploy) · skip = leave the database alone (first deploy, before api/.env exists)
         type: choice
@@ -51,8 +51,11 @@ jobs:
   # Gate: the full test-and-lint suite runs first, on this exact commit, by calling
   # ci.yml as a reusable workflow. The deploy job `needs:` it, so a red suite
   # blocks the deploy. The suite only tests and lints; it never deploys or reaches a live host.
-  # Off by default since 2026-10-08 (tests run locally before merge, to save Actions
-  # minutes): tick the run_ci_gate input when starting the deploy to run it here first.
+  # On by default since 2026-11-04: a production deploy runs the suite here first. It was off
+  # from 2026-10-08 to save Actions minutes, with the suite run locally before merge instead,
+  # which left a deploy unable to tell a verified commit from an unverified one — several
+  # products turned out to have been shipping red for weeks. Untick it only to re-deploy a
+  # commit whose suite has already passed here.
   verify:
     if: ${{ inputs.run_ci_gate }}
     name: Verify (full CI suite)
