@@ -70,6 +70,12 @@ function outcomeNote(link: CompanionLink | null): string | null {
 
 /** `desktopAgent`: the Windows app is offered (remote.allowDesktopAgent), so the panel links to it rather than saying it is coming soon. */
 function restrictionMessage(restrictions: string[], desktopAgent: boolean): string {
+  // What is being shared comes first: it is the one reason on this list the person can fix in the next
+  // five seconds, and the server now refuses the link for it rather than making a companion nobody can use.
+  if (restrictions.includes('NOT_SHARING')) return 'Share your entire screen to allow control.'
+  if (restrictions.includes('SURFACE_NOT_MONITOR')) {
+    return 'Control works only when you share your entire screen, not a window or tab.'
+  }
   if (restrictions.includes('CONTROL_ACCEPT_DENIED')) return 'You do not have permission to hand over control.'
   if (restrictions.some((r) => r.startsWith('REMOTE_CONTROL'))) return 'Remote control is not enabled for this organisation.'
   if (restrictions.includes('COMPANION_SCOPE')) return 'Control from your own computer is not available in this kind of session.'
@@ -163,11 +169,15 @@ export default function CompanionPanel({
           {blocked ? <p className="control__hint">{blocked}</p> : null}
 
           {devices === null ? (
+            // Offered only while the share can actually carry control. It used to be offered whenever
+            // anything at all was being shared: pressing it during a tab or window share linked a
+            // computer, asked whoever was at it to confirm, and then left the link stuck short of ready
+            // for ever, because control needs an entire screen. `blocked` says which, and why.
             <button
               type="button"
               className="btn btn--primary btn--sm"
               onClick={() => void showDevices()}
-              disabled={busy || loading || !isSharing}
+              disabled={busy || loading || !isSharing || blocked !== null}
             >
               Enable control from this computer
             </button>
@@ -181,7 +191,7 @@ export default function CompanionPanel({
                     type="button"
                     className="btn btn--primary btn--sm"
                     onClick={() => onLink(device.uuid)}
-                    disabled={busy}
+                    disabled={busy || blocked !== null}
                   >
                     Use {device.deviceName}
                   </button>

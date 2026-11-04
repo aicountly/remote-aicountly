@@ -12,6 +12,7 @@ use App\Domain\Session\ParticipantService;
 use App\Domain\Support\ApiException;
 use CodeIgniter\Database\Exceptions\DatabaseException;
 use CodeIgniter\Test\FeatureTestTrait;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Config\Services;
 use Tests\Support\CompanionScenario;
 use Tests\Support\FakeIdentityResolver;
@@ -214,6 +215,90 @@ final class ControlCompanionTest extends RemoteTestCase
         ['device' => $viewersOwn] = $this->enrolDevice($fixture['viewer'], $this->companyId);
         $this->markDeviceOnline((string) $viewersOwn['uuid']);
         $this->expectApiError('NOT_SESSION_HOST', fn () => $this->link($fixture, $fixture['viewer'], (string) $viewersOwn['uuid']), 403);
+    }
+
+    /**
+     * The share has to be one a companion can serve, and that is checked when the link is made — not
+     * only when control is asked for.
+     *
+     * The bug: everything else was checked here, so a browser sharing a tab or a window got a PENDING
+     * link. Somebody at the machine was interrupted to confirm it, the companion joined and matched a
+     * monitor, and the link then sat at ACTIVE-but-never-ready for ever, because `isReady()` and
+     * `ControlService::controllableHost()` both insist on `actual_display_surface = 'monitor'`. The
+     * viewer was never offered a Request control button, and nothing said why.
+     */
+    #[DataProvider('sharesThatCannotCarryControl')]
+    public function testAShareThatCannotCarryControlIsRefusedWhenTheLinkIsMade(string $surface): void
+    {
+        // The organisation permits every one of these shares — this is not a policy refusal.
+        $fixture = $this->companionScenario(['allow_browser_tab' => true, 'allow_safe_share' => true], null);
+        $this->setUserPermission($fixture['sharer'], $this->companyId, PermissionCatalog::BROWSER_TAB_SHARE, 'ALLOW');
+        $this->share($fixture['session'], $fixture['sharer'], $surface);
+        $fixture['session'] = $this->reload($fixture['session']);
+
+        $error = $this->expectApiError('HOST_NOT_CONTROLLABLE', fn () => $this->link($fixture), 409);
+        $this->assertSame('SURFACE_NOT_MONITOR', $error->details()['controlBlockedReason'] ?? null);
+
+        // Nothing was written, so nobody at the machine was asked to confirm something useless.
+        $this->assertSame(0, $this->db->table('remote_control_companions')->countAllResults());
+        $this->assertSame([], Services::companionService()->pendingFor($fixture['principal']));
+
+        // ...and the panel is told why, in the same word, before anybody picks a computer.
+        $eligible = Services::companionService()->eligibleDevices(
+            $this->reload($fixture['session']),
+            $fixture['sharer'],
+            $this->policyOf($fixture['sharer']),
+        );
+        $this->assertContains('SURFACE_NOT_MONITOR', $eligible['restrictions']);
+    }
+
+    /**
+     * A window, a tab, and a browser that will not say (Firefox, Safari — recorded as `unknown`, and
+     * never verifiable, so never controllable).
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function sharesThatCannotCarryControl(): iterable
+    {
+        yield 'an application window' => ['window'];
+
+        yield 'a browser tab' => ['browser'];
+
+        yield 'a browser that does not say' => ['unknown'];
+    }
+
+    /** Switching to an entire screen is all it takes: the same session links straight afterwards. */
+    public function testTheSameSessionLinksOnceAnEntireScreenIsShared(): void
+    {
+        $fixture = $this->companionScenario([], 'window');
+
+        $this->expectApiError('HOST_NOT_CONTROLLABLE', fn () => $this->link($fixture), 409);
+
+        $this->share($fixture['session'], $fixture['sharer'], 'monitor');
+        $fixture['session'] = $this->reload($fixture['session']);
+
+        $eligible = Services::companionService()->eligibleDevices($fixture['session'], $fixture['sharer'], $this->policyOf($fixture['sharer']));
+        $this->assertSame([], $eligible['restrictions']);
+
+        $link = $this->link($fixture);
+        $this->assertSame(CompanionLinks::STATUS_PENDING, (string) $link['status']);
+
+        // And it goes all the way: confirmed at the machine, matched to a monitor, granted.
+        Services::companionService()->join($fixture['principal'], (string) $link['uuid']);
+        Services::companionService()->selectMonitor($fixture['principal'], (string) $link['uuid'], $this->monitor(), 'AUTO_SINGLE');
+
+        $this->assertSame('GRANTED', (string) $this->grantViewer($fixture)['control_state']);
+    }
+
+    /** A share that stopped altogether is refused in the sharer's own terms, before anything is written. */
+    public function testAShareThatStoppedIsRefusedWithItsOwnReason(): void
+    {
+        $fixture = $this->companionScenario();
+
+        Services::sessionService()->recordShareStopped($this->reload($fixture['session']), $fixture['sharer'], 'ENDED_BY_USER');
+
+        // `is_sharing` goes with the share, so this is the host check's refusal, not the surface one.
+        $this->expectApiError('NOT_SESSION_HOST', fn () => $this->link($fixture), 403);
     }
 
     // ------------------------------------------------------- tenant isolation
