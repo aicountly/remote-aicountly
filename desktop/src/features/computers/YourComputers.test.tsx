@@ -47,6 +47,20 @@ describe('connectability', () => {
     expect(connectability(computer({ unattendedAccessEnabled: false })).reason).toMatch(/unattended access is off/i)
     expect(connectability(computer({ online: false })).reason).toMatch(/offline · last seen/i)
   })
+
+  /**
+   * It used to say "Turn it on at that computer, or in Remote → Computers",
+   * and no AICOUNTLY Remote window can turn it on — at that machine or any
+   * other. The app holds no credential of a person's, so the switch lives in
+   * Remote and nowhere else. Somebody following that sentence went hunting at
+   * the machine for a control that was never there.
+   */
+  it('sends somebody to the one place unattended access can be switched on', () => {
+    const reason = connectability(computer({ unattendedAccessEnabled: false })).reason ?? ''
+
+    expect(reason).toBe('Unattended access is off. Turn it on in Remote → Computers, signed in as yourself.')
+    expect(reason).not.toMatch(/at that computer/i)
+  })
 })
 
 describe('YourComputers', () => {
