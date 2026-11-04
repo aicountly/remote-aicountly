@@ -313,10 +313,35 @@ interface PeerEntry {
   reportedConnected: boolean
   /** When this connection was set up (Date.now()), so a session record read before it cannot end it. */
   createdAt: number
+  /**
+   * The peer's connection epoch this RTCPeerConnection was built for, or null
+   * from a peer that sends none (a desktop agent, an older web build).
+   *
+   * A participant uuid outlives a page, so it cannot be the whole identity of
+   * a peer connection. See `registerPeer`.
+   */
+  epoch: string | null
+}
+
+/**
+ * This page's connection epoch: made once, here, and repeated on every
+ * reconnect so a peer can tell "the same page came back" from "a new page
+ * replaced it". `crypto.randomUUID` where it exists, which is every browser
+ * this app supports on a secure origin; the fallback keeps tests and insecure
+ * origins working. Opaque and non-secret — it only has to be unlikely to
+ * repeat.
+ */
+function newConnectionEpoch(): string {
+  const uuid = globalThis.crypto?.randomUUID?.()
+  if (typeof uuid === 'string') return uuid.replace(/-/g, '')
+
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`
 }
 
 export class RemoteSessionEngine {
   private signalling: RemoteSignallingClient | null = null
+  /** One per engine instance, which is one per page load. */
+  private readonly epoch = newConnectionEpoch()
   private peers = new Map<string, PeerEntry>()
   private localStream: MediaStream | null = null
   private microphoneStream: MediaStream | null = null
@@ -442,6 +467,7 @@ export class RemoteSessionEngine {
       },
       onMessage: (message) => void this.handleSignal(message),
       onStatus: (status) => this.handleSignallingStatus(status),
+      epoch: this.epoch,
     })
 
     this.signalling.connect()
@@ -1222,8 +1248,46 @@ export class RemoteSessionEngine {
     }
   }
 
+  /**
+   * Take a peer descriptor from signalling and return the peer it describes,
+   * building the connection to it if there is not one already.
+   *
+   * **A peer whose epoch changed is a different page, and gets a new
+   * RTCPeerConnection.** A participant uuid belongs to the person, not to the
+   * page: a signed-in participant who reloads comes back on the same uuid
+   * (`ParticipantService::requestJoin` returns their existing row). The relay
+   * replaces their socket and deliberately announces no `peer-left`, because
+   * that is also what a re-minted token looks like and tearing a live
+   * connection down for one would be wrong.
+   *
+   * So before the epoch, a reload arrived here as a bare `peer-joined` for a
+   * uuid we already had, `ensurePeer` handed back the entry built for the page
+   * that had just died, and the offer that followed went onto an
+   * RTCPeerConnection whose ICE transport had nowhere left to go. Nothing
+   * recovered it: no `iceRestart` is asked for on a plain `peer-joined`, and
+   * the stale `remoteStream` stayed on screen. The sharer reloaded, shared
+   * again, and the other person watched a blank video element.
+   *
+   * Dropping the old peer first is what makes the reload a clean reconnect. A
+   * peer that merely re-minted its token repeats its epoch and keeps its
+   * connection, as before.
+   */
   private registerPeer(peer: SignallingPeer): EnginePeer {
+    const epoch = peer.epoch ?? null
+    const known = this.peers.get(peer.participantUuid)
+
+    // Only a *changed* epoch rebuilds. An entry that has none yet is adopted
+    // rather than torn down: a connection can be opened by an offer arriving
+    // before the descriptor that names its sender, and that one is mid
+    // negotiation, not dead. A peer that sends no epoch at all (a desktop
+    // agent, an older web build) keeps null on both sides and behaves exactly
+    // as it did.
+    if (known && known.epoch !== null && known.epoch !== epoch) {
+      this.removePeer(peer.participantUuid)
+    }
+
     const entry = this.ensurePeer(peer.participantUuid)
+    entry.epoch = epoch
 
     entry.info = {
       ...entry.info,
@@ -1348,6 +1412,10 @@ export class RemoteSessionEngine {
       lastRestartAt: 0,
       reportedConnected: false,
       createdAt: Date.now(),
+      // Set by registerPeer from the descriptor; a connection opened before
+      // one arrives (an offer from a peer we have not been told about yet)
+      // carries none until it does.
+      epoch: null,
     }
 
     this.peers.set(peerId, entry)

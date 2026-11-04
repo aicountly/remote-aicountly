@@ -37,6 +37,15 @@ export interface SignallingPeer {
   role: string
   name: string
   capabilities: Record<string, boolean>
+  /**
+   * The peer's connection epoch: one value per page load, repeated on every
+   * reconnect of that page. A *different* epoch for a participant uuid already
+   * known means that page is gone and a new one took its place — its
+   * RTCPeerConnection went with it. Absent from a desktop agent and from an
+   * older web build, and two absent epochs compare equal, so neither changes
+   * behaviour.
+   */
+  epoch?: string
 }
 
 export interface SignallingMessage {
@@ -62,6 +71,13 @@ interface Options {
   refreshToken: () => Promise<{ url: string; token: string }>
   onMessage: (message: SignallingMessage) => void
   onStatus: (status: SignallingStatus) => void
+  /**
+   * This page's connection epoch, sent to the relay so the other participants
+   * can tell a reconnect of this page from a page that was reloaded. One value
+   * for the life of this client, including across re-minted tokens — a new one
+   * per reconnect would make every peer rebuild for nothing.
+   */
+  epoch?: string
 }
 
 const MAX_RECONNECT_ATTEMPTS = 8
@@ -88,6 +104,30 @@ export class RemoteSignallingClient {
     return this.status
   }
 
+  /**
+   * The current url with this page's epoch on it.
+   *
+   * Applied here rather than once in the constructor because a re-minted token
+   * brings a fresh url with it, and the epoch has to survive that. Carrying it
+   * in the query is safe where the token is not: it is opaque, authorises
+   * nothing, and the relay reads no meaning into it.
+   */
+  private endpoint(): string {
+    if (this.options.epoch === undefined) return this.url
+
+    try {
+      const url = new URL(this.url)
+      url.searchParams.set('epoch', this.options.epoch)
+
+      return url.toString()
+    } catch {
+      // A url this environment will not parse is used exactly as it was given:
+      // losing the epoch costs a rebuilt peer connection, a broken url costs
+      // the session.
+      return this.url
+    }
+  }
+
   connect(): void {
     if (this.disposed) return
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
@@ -100,7 +140,7 @@ export class RemoteSignallingClient {
     // token travels as the subprotocol (./protocol.ts), never in the URL. It is
     // short-lived (two minutes) and the connection is wss in every deployed
     // environment.
-    const socket = new WebSocket(this.url, signallingProtocols(this.token))
+    const socket = new WebSocket(this.endpoint(), signallingProtocols(this.token))
     this.socket = socket
 
     socket.onopen = () => {

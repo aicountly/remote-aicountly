@@ -100,13 +100,33 @@ class ParticipantService
                     throw ApiException::forbidden('JOIN_DENIED', 'The host declined your request to join this session.');
                 }
 
-                // Someone who left may come back; an approval already granted
-                // stands, so a reconnect does not need a second approval.
+                // Someone who left may come back; an approval already granted stands, so a reconnect does
+                // not need a second approval.
+                //
+                // `joined_at` is what proves one was given: nothing sets it but `markJoined()`, which
+                // refuses anybody not already APPROVED, and `createHost()`, whose row is the session's
+                // owner. Somebody who only ever sat in the waiting room has none, and asking again is
+                // exactly what they should do.
+                //
+                // Without this a **page refresh** cost the person their seat. `pagehide` calls leave (it
+                // has to — a closed tab must not leave a capture running, and the browser cannot tell a
+                // reload from a close), so the reloaded page came back to REQUESTED. For a viewer that
+                // meant being admitted twice; for the host, who is the only one who can admit anybody, it
+                // meant waiting in their own session for an approval that was never going to come, with
+                // the share stopped and the room gone.
                 if (in_array($existing['status'], ['LEFT', 'REMOVED'], true)) {
+                    // REMOVED is not somebody leaving: `MembershipVerifier::forget()` writes it when the
+                    // person loses access to the company, and a seat taken away is never given back here.
+                    // (`assertMayJoin()` refuses them before this in a company session; this is the rule
+                    // standing on its own rather than relying on that.)
+                    $readmit = (string) $existing['status'] === 'LEFT' && ($existing['joined_at'] ?? null) !== null;
+
                     $this->db->table('remote_participants')->where('id', $existing['id'])->update([
-                        'status'       => 'REQUESTED',
+                        'status'       => $readmit ? 'APPROVED' : 'REQUESTED',
                         'left_at'      => null,
-                        'requested_at' => Clock::now(),
+                        // Only somebody who is actually waiting is waiting *since* now; rewriting it for
+                        // a returning participant would reorder a queue they are not in.
+                        'requested_at' => $readmit ? $existing['requested_at'] : Clock::now(),
                         'updated_at'   => Clock::now(),
                     ]);
 
