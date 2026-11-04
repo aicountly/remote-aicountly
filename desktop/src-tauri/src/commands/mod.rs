@@ -100,15 +100,17 @@ pub fn save_configuration(
 
 /// Register this machine.
 ///
-/// The keypair is generated here and the private half goes straight into the
-/// operating system's key store. What crosses back into the web layer is the
-/// **public** key, which is what the enrolment call sends — there is no
-/// command that returns a private key, and adding one would be the only way to
-/// get it out of this process.
+/// The key is this machine's own — the one already in the operating system's
+/// key store, or a new one on first use. Reusing it is what makes the server
+/// recognise a computer that registers again as the same computer rather than
+/// a new one ([`Agent::enrolment_public_key`]). What crosses back into the web
+/// layer is the **public** half, which is what the enrolment call sends —
+/// there is no command that returns a private key, and adding one would be the
+/// only way to get it out of this process.
 #[tauri::command]
 pub fn enrol_device(agent: tauri::State<'_, Arc<Agent>>) -> Result<EnrolmentMaterial, String> {
     let public_key = agent
-        .create_device_key()
+        .enrolment_public_key()
         .map_err(|error| error.to_string())?;
     let description = agent.describe().map_err(|error| error.to_string())?;
 
