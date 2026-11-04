@@ -28,15 +28,22 @@ minting a step 5 credential for itself out of anything it was handed earlier.
 
 ### 1. The keypair
 
-`enrol_device` (a Tauri command) calls `Agent::create_device_key()`:
+`enrol_device` (a Tauri command) calls `Agent::enrolment_public_key()`, which
+returns **this machine's own key** — the one already in the key store, and a
+new one only when there is none:
 
 ```rust
-let keypair = DeviceKeypair::generate();
-let public_key = keypair.public_key_base64();
+// device_key_or_create(): reuse what is there, create only when there is nothing
+let keypair = match secure_storage().load(DEVICE_KEY_ENTRY, StorageScope::LocalMachine)? {
+    Some(bytes) => DeviceKeypair::from_secret_bytes(&bytes)?,
+    None => {
+        let fresh = DeviceKeypair::generate();
+        secure_storage().store(DEVICE_KEY_ENTRY, fresh.secret_bytes(), StorageScope::LocalMachine)?;
+        fresh
+    }
+};
 
-secure_storage().store(DEVICE_KEY_ENTRY, keypair.secret_bytes(), StorageScope::LocalMachine)?;
-
-Ok(public_key)          // the PUBLIC half, and only that
+Ok(keypair.public_key_base64())   // the PUBLIC half, and only that
 ```
 
 The private half goes straight to the platform's key store — DPAPI on Windows,
@@ -44,6 +51,26 @@ machine scope, with additional entropy — and is never returned to the window,
 never logged, and never crosses the IPC channel. `DeviceKeypair`'s `Debug`
 implementation prints the fingerprint and nothing else, so a stray `{:?}`
 cannot become a leak.
+
+**Why the key is reused.** The server identifies a machine by its key
+fingerprint, so the same key enrolling again is recognised as the same computer
+and refreshes the row it already has (`DeviceService::refreshEnrolment()`,
+which leaves `unattended_access_enabled` alone). This step used to generate a
+fresh keypair on every registration and overwrite the stored one, so every
+sign-in reached the server as a machine it had never seen and was given a
+**new row**: one computer listed in "Your computers" over and over, all but the
+newest permanently offline, and unattended access reading "off" on the live one
+because the switch the person had turned on belonged to a row that no longer
+held the key. It also meant the fingerprint the sign-in screen shows
+(`Agent::device_identity`, created once and kept) was not the key that then
+enrolled. Both now come from the same place and cannot disagree.
+
+A key is retired by signing out: `unregister_device` revokes the row on the
+server and then calls `Agent::forget_device_key()`, so the next registration
+finds nothing and makes a fresh key. An administrator's revocation also sticks
+now — re-registering answers `DEVICE_REVOKED` rather than quietly minting a new
+identity for the same machine, which is what "Reinstall the agent to register
+it again" always said happened.
 
 ### 2. Signing in, and enrolling — device-code sign-in
 

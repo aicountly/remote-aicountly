@@ -305,24 +305,44 @@ impl Agent {
 
     // ----------------------------------------------------------- enrolment
 
-    /// Generate a keypair and store the private half.
+    /// This machine's public key, for the enrolment call.
     ///
-    /// The public half is returned for the enrolment call. The private half
-    /// goes straight into the platform's key store and is never returned,
-    /// logged, or held anywhere a caller could reach it.
-    pub fn create_device_key(&self) -> Result<String, AgentError> {
-        let keypair = DeviceKeypair::generate();
-        let public_key = keypair.public_key_base64();
+    /// **The key this machine already has**, and a new one only when it has
+    /// none. The private half stays in the platform's key store and is never
+    /// returned, logged, or held anywhere a caller could reach it.
+    ///
+    /// Reuse is the whole point. The server identifies a machine by its key
+    /// fingerprint: the same key enrolling again is recognised as the same
+    /// computer and refreshes the row it already has
+    /// (`DeviceService::refreshEnrolment()`, which deliberately leaves
+    /// `unattended_access_enabled` alone). This used to generate a fresh
+    /// keypair on every registration and overwrite the stored one, so every
+    /// sign-in arrived at the server as a machine it had never seen and got a
+    /// **new row** — one computer listed over and over, all but the newest of
+    /// them permanently offline, and unattended access reading "off" on the
+    /// live one because the switch the person had turned on belonged to a row
+    /// that no longer had the key. It also meant the fingerprint shown on the
+    /// sign-in screen, which [`Agent::device_identity`] has always kept, was
+    /// not the one that then enrolled.
+    ///
+    /// Signing out is what retires a key: `unregister_device` revokes the row
+    /// on the server and calls [`Agent::forget_device_key`], so the next
+    /// registration finds no key and makes one. An administrator's revocation
+    /// now also sticks — re-registering returns `DEVICE_REVOKED` rather than
+    /// quietly minting a new identity for the same machine, which is what the
+    /// server's own "Reinstall the agent to register it again" already said
+    /// happened.
+    pub fn enrolment_public_key(&self) -> Result<String, AgentError> {
+        Ok(self.device_key_or_create()?.public_key_base64())
+    }
 
-        platform::secure_storage()
-            .store(
-                DEVICE_KEY_ENTRY,
-                keypair.secret_bytes().as_ref(),
-                StorageScope::LocalMachine,
-            )
-            .map_err(|error| AgentError::Key(KeyError::Storage(error)))?;
-
-        Ok(public_key)
+    /// This machine's keypair, creating and storing one on first use.
+    ///
+    /// The one place a device key is made. Both the fingerprint shown before
+    /// anybody signs in and the key sent at enrolment come through here, so
+    /// they cannot disagree.
+    fn device_key_or_create(&self) -> Result<DeviceKeypair, AgentError> {
+        device_key_or_create(platform::secure_storage().as_ref())
     }
 
     /// This machine's identity as a person reads it, creating it if this is
@@ -339,21 +359,7 @@ impl Agent {
     /// because every connection still needs a credential this machine only
     /// gets by signing in.
     pub fn device_identity(&self) -> Result<String, AgentError> {
-        if let Ok(keypair) = self.device_key() {
-            return Ok(keypair.display_fingerprint());
-        }
-
-        let keypair = DeviceKeypair::generate();
-
-        platform::secure_storage()
-            .store(
-                DEVICE_KEY_ENTRY,
-                keypair.secret_bytes().as_ref(),
-                StorageScope::LocalMachine,
-            )
-            .map_err(|error| AgentError::Key(KeyError::Storage(error)))?;
-
-        Ok(keypair.display_fingerprint())
+        Ok(self.device_key_or_create()?.display_fingerprint())
     }
 
     /// The device key, if this machine has one.
@@ -1427,11 +1433,48 @@ pub enum AgentError {
     Api(String),
 }
 
+/// Read this machine's device key, or make and store one.
+///
+/// Written against the trait rather than `platform::secure_storage()` so the
+/// rule it encodes — **reuse what is there, create only when there is
+/// nothing** — is tested on every host, including a Linux CI runner that has
+/// no key store at all.
+fn device_key_or_create(
+    storage: &dyn remote_security::SecureStorageProvider,
+) -> Result<DeviceKeypair, AgentError> {
+    let stored = storage
+        .load(DEVICE_KEY_ENTRY, StorageScope::LocalMachine)
+        .map_err(|error| AgentError::Key(KeyError::Storage(error)))?;
+
+    if let Some(bytes) = stored {
+        // Bytes that will not parse are not a key. Replacing them is the only
+        // way forward, and it is the same position as having none.
+        if let Ok(keypair) = DeviceKeypair::from_secret_bytes(&bytes) {
+            return Ok(keypair);
+        }
+
+        tracing::warn!("the stored device key could not be read; making a new one");
+    }
+
+    let keypair = DeviceKeypair::generate();
+
+    storage
+        .store(
+            DEVICE_KEY_ENTRY,
+            keypair.secret_bytes().as_ref(),
+            StorageScope::LocalMachine,
+        )
+        .map_err(|error| AgentError::Key(KeyError::Storage(error)))?;
+
+    Ok(keypair)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use remote_core::SessionSummary;
     use remote_protocol::{ControlEnvelope, ControlMessage, PointerPosition};
+    use remote_security::SecureStorageProvider;
 
     const SESSION: &str = "session-uuid";
     const CONTROLLER: &str = "participant-uuid";
@@ -1472,6 +1515,95 @@ mod tests {
         agent.apply(AgentEvent::Authenticated);
 
         agent
+    }
+
+    // ------------------------------------------------- the device key
+
+    /// Registering again must not make this machine a *different* machine.
+    ///
+    /// The bug: enrolment generated a fresh keypair every time and overwrote
+    /// the stored one, so the server — which identifies a computer by its key
+    /// fingerprint — saw somebody it had never met and inserted a new row.
+    /// One machine appeared in "Your computers" over and over, all but the
+    /// newest permanently offline, and unattended access read "off" on the
+    /// live one because the switch the person turned on belonged to a row
+    /// that no longer held the key.
+    #[test]
+    fn registering_again_reuses_the_key_this_machine_already_has() {
+        let storage = remote_security::storage::InMemoryStorage::new();
+
+        let first = device_key_or_create(&storage).expect("a key on first use");
+        let again = device_key_or_create(&storage).expect("the same key after that");
+
+        assert_eq!(
+            first.public_key_base64(),
+            again.public_key_base64(),
+            "the server must see the same computer, not a new one",
+        );
+        assert_eq!(first.display_fingerprint(), again.display_fingerprint());
+    }
+
+    /// The fingerprint shown before anybody signs in is the one that enrols.
+    /// They are read at different moments and used to be made separately.
+    #[test]
+    fn the_fingerprint_shown_on_the_sign_in_screen_is_the_one_that_enrols() {
+        let storage = remote_security::storage::InMemoryStorage::new();
+
+        let shown = device_key_or_create(&storage)
+            .expect("the identity the sign-in screen reads")
+            .display_fingerprint();
+        let enrolled = device_key_or_create(&storage).expect("the key enrolment sends");
+
+        assert_eq!(shown, enrolled.display_fingerprint());
+    }
+
+    /// Signing out forgets the key, and only then is a new identity right.
+    #[test]
+    fn a_key_that_was_forgotten_is_replaced_rather_than_missed() {
+        let storage = remote_security::storage::InMemoryStorage::new();
+
+        let before = device_key_or_create(&storage)
+            .expect("a key")
+            .public_key_base64();
+        storage
+            .delete(DEVICE_KEY_ENTRY, StorageScope::LocalMachine)
+            .expect("signing out removes it");
+
+        let after = device_key_or_create(&storage)
+            .expect("a fresh key")
+            .public_key_base64();
+
+        assert_ne!(before, after, "a forgotten key is not quietly resurrected");
+    }
+
+    /// Bytes that are not a key leave the machine unable to prove anything, so
+    /// they are replaced — the same position as having none at all.
+    #[test]
+    fn unreadable_stored_bytes_are_replaced() {
+        let storage = remote_security::storage::InMemoryStorage::new();
+        storage
+            .store(DEVICE_KEY_ENTRY, b"not a key", StorageScope::LocalMachine)
+            .expect("stored");
+
+        let keypair = device_key_or_create(&storage).expect("a usable key");
+
+        assert_eq!(
+            device_key_or_create(&storage)
+                .expect("kept")
+                .public_key_base64(),
+            keypair.public_key_base64(),
+            "and the replacement is then kept like any other",
+        );
+    }
+
+    /// A platform with no key store refuses rather than inventing one that
+    /// cannot be stored — a key that vanishes on restart is the duplicate-row
+    /// bug again, one registration at a time.
+    #[test]
+    fn a_machine_with_no_key_store_refuses() {
+        let storage = remote_security::storage::UnsupportedStorage;
+
+        assert!(device_key_or_create(&storage).is_err());
     }
 
     fn pointer(sequence: u64) -> Vec<u8> {
