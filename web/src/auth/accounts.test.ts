@@ -88,11 +88,29 @@ describe('reading the roster of accounts signed in on this browser', () => {
     expect(roster[0]).toEqual({
       uuid: 88,
       name: 'Rahul Gupta',
+      fullName: 'Rahul Gupta',
       maskedEmail: 'ra•••@cagupta.in',
       maskedMobile: '+91••••••••78',
       active: true,
     })
     expect(roster[1].active).toBe(false)
+  })
+
+  it('shows the first name when the portal sends one', () => {
+    // The same person must read the same name in every product. `f` is the first
+    // name, `n` the whole one, and the menu line is the first name.
+    withCookie(viewCookie([{ u: 88, n: 'Rahul Gupta', f: 'Rahul', a: 1 }]))
+    const [account] = readAccountRoster()
+    expect(account.name).toBe('Rahul')
+    expect(account.fullName).toBe('Rahul Gupta')
+  })
+
+  it('falls back to the whole name when no first name was sent', () => {
+    // A product deployed ahead of the portal still shows a name rather than a blank.
+    withCookie(viewCookie([{ u: 88, n: 'Rahul Gupta', a: 1 }]))
+    const [account] = readAccountRoster()
+    expect(account.name).toBe('Rahul Gupta')
+    expect(account.fullName).toBe('Rahul Gupta')
   })
 
   it('puts the active account first however the cookie ordered them', () => {
