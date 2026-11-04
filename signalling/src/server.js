@@ -182,10 +182,39 @@ server.on('upgrade', (request, socket, head) => {
     return refuseUpgrade(socket, 401, 'Unauthorized');
   }
 
+  // One connection's epoch: an opaque id the client makes once per page load
+  // and repeats on every reconnect of that same page. It authorises nothing —
+  // it is not in the token and this service never reads meaning into it — so
+  // unlike the token it is safe in a URL a proxy logs.
+  //
+  // It exists because a participant uuid outlives a page. A participant who
+  // reconnects replaces their socket and no `peer-left` is announced, which is
+  // what lets a re-minted token continue a live RTCPeerConnection. A participant
+  // who *reloaded* looks identical from here, and their peers would go on
+  // offering to an RTCPeerConnection that died with the old page. The epoch is
+  // what tells those two apart, at the only end that can act on it.
+  const epoch = connectionEpoch(url);
+
   wss.handleUpgrade(request, socket, head, (ws) => {
-    wss.emit('connection', ws, request, participant);
+    wss.emit('connection', ws, request, epoch === null ? participant : { ...participant, epoch });
   });
 });
+
+/**
+ * The `epoch` query parameter, or null.
+ *
+ * Bounded and restricted to url-safe characters: it is echoed to every other
+ * participant in the room, so it is treated as untrusted input even though it
+ * decides nothing here.
+ *
+ * @param {URL} url
+ * @returns {string|null}
+ */
+function connectionEpoch(url) {
+  const raw = url.searchParams.get('epoch');
+
+  return typeof raw === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(raw) ? raw : null;
+}
 
 function subprotocolToken(request) {
   const protocols = (request.headers['sec-websocket-protocol'] ?? '')
@@ -376,6 +405,9 @@ function describe({ participant }) {
     name: participant.name,
     capabilities: participant.capabilities,
     kind: participant.kind ?? 'session',
+    // Absent for a client that sends none (the desktop agent, an older web
+    // build): peers then behave exactly as they did before.
+    ...(participant.epoch ? { epoch: participant.epoch } : {}),
   };
 }
 

@@ -212,6 +212,23 @@ presence, inside one room, and drops everything else.
 arrived. There is no tie to break, so both sides never offer at once and no
 perfect-negotiation rollback is needed.
 
+**Connection epoch:** a participant uuid belongs to the person, not to the page
+— somebody signed in who reloads comes back on the same uuid. One participant
+holds one live socket, so a second connection replaces the first and *no*
+`peer-left` is announced: that is what lets a re-minted token continue a live
+`RTCPeerConnection` instead of tearing it down every two minutes. A reloaded
+page is indistinguishable from that at the relay, and its `RTCPeerConnection`
+is gone.
+
+So each page makes one opaque id at load, repeats it on every reconnect, and
+sends it as `?epoch=` (read at the upgrade and echoed in `peers` and
+`peer-joined`). A peer whose epoch *changed* is a new page: the browser drops
+that peer connection and the stale picture with it, and builds a fresh one.
+An unchanged — or absent — epoch changes nothing, so the desktop agent and an
+older build behave exactly as before. The epoch is not in the token, authorises
+nothing and is never read for meaning by the relay, which is why it is safe in
+a URL where the token is not.
+
 ### File transfer
 
 Files move on the same `RTCDataChannel` as chat and annotation, and on the same

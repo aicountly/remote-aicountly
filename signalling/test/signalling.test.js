@@ -294,13 +294,17 @@ describe('signalling server', () => {
    * delivered before a listener attached after `open` would see it. Buffering
    * from creation removes that race from the tests entirely.
    */
-  function connect(token, { subprotocol = false } = {}) {
+  function connect(token, { subprotocol = false, epoch = null } = {}) {
     return new Promise((resolve, reject) => {
+      // The epoch rides in the query whichever way the token travels: the relay
+      // reads it at the upgrade, before any message is exchanged.
+      const query = epoch === null ? '' : `${subprotocol ? '?' : '&'}epoch=${encodeURIComponent(epoch)}`;
+
       // The browser presents its token as the subprotocol; the desktop agent
       // still sends `?token=`. Both must work.
       const ws = subprotocol
-        ? new WebSocket(`ws://127.0.0.1:${port}/signal`, [`aicountly-remote.${token}`])
-        : new WebSocket(`ws://127.0.0.1:${port}/signal?token=${encodeURIComponent(token)}`);
+        ? new WebSocket(`ws://127.0.0.1:${port}/signal${query}`, [`aicountly-remote.${token}`])
+        : new WebSocket(`ws://127.0.0.1:${port}/signal?token=${encodeURIComponent(token)}${query}`);
 
       ws.received = [];
       ws.waiters = [];
@@ -601,5 +605,61 @@ describe('signalling server', () => {
     assert.equal((await left).from, 'moves-uuid-00001', 'the live connection closing still is');
 
     first.close();
+  });
+
+  /**
+   * The connection epoch, which is what lets the test above stay true without costing anybody a working
+   * session. No `peer-left` on a replacement is right for a re-minted token and wrong for a reloaded
+   * page, and this service cannot tell them apart — so it carries the client's own word for which it is
+   * and lets the peers decide.
+   */
+  it('carries each page’s epoch to the room, so a reload can be told from a reconnect', async () => {
+    const room = 'room-ffff-1111-2222-3333';
+
+    const watcher = await connect(mintToken({ room, sub: 'watch-uuid-00001' }));
+    await nextMessage(watcher, (m) => m.type === 'joined');
+
+    const firstPage = await connect(mintToken({ room, sub: 'tabby-uuid-00001' }), { epoch: 'pageone' });
+    await nextMessage(firstPage, (m) => m.type === 'joined');
+
+    // A message delivered to a waiter stays in `received`, so each read names the epoch it is waiting
+    // for rather than reading "the next peer-joined" three times.
+    const joinedWith = (epoch) =>
+      nextMessage(watcher, (m) => m.type === 'peer-joined' && m.from === 'tabby-uuid-00001' && m.peer.epoch === epoch);
+
+    assert.equal((await joinedWith('pageone')).peer.epoch, 'pageone');
+
+    // The same socket coming back on the same page repeats it: nothing for a peer to rebuild.
+    const sameAgain = await connect(mintToken({ room, sub: 'tabby-uuid-00001' }), { epoch: 'pageone' });
+    await nextMessage(sameAgain, (m) => m.type === 'joined');
+    assert.equal((await joinedWith('pageone')).peer.epoch, 'pageone');
+
+    // A reload: same participant, same room, new page — and the room is told so.
+    const reloaded = await connect(mintToken({ room, sub: 'tabby-uuid-00001' }), { epoch: 'pagetwo' });
+    const welcome = await nextMessage(reloaded, (m) => m.type === 'joined');
+    assert.equal((await joinedWith('pagetwo')).peer.epoch, 'pagetwo');
+
+    // ...and the newcomer is told everyone else's in the same shape, so it works from either side.
+    assert.ok(welcome.peers.some((peer) => peer.participantUuid === 'watch-uuid-00001'));
+
+    reloaded.close();
+    watcher.close();
+  });
+
+  it('drops an epoch that is not one rather than passing it on', async () => {
+    const room = 'room-ffff-4444-5555-6666';
+
+    const watcher = await connect(mintToken({ room, sub: 'watch-uuid-00002' }));
+    await nextMessage(watcher, (m) => m.type === 'joined');
+
+    // Echoed to every participant in the room, so it is treated as untrusted input.
+    const shouty = await connect(mintToken({ room, sub: 'shout-uuid-00001' }), { epoch: '<script>/../' });
+    await nextMessage(shouty, (m) => m.type === 'joined');
+
+    const arrived = await nextMessage(watcher, (m) => m.type === 'peer-joined' && m.from === 'shout-uuid-00001');
+    assert.equal(arrived.peer.epoch, undefined, 'absent, exactly as from a client that sends none');
+
+    shouty.close();
+    watcher.close();
   });
 });

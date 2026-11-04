@@ -6,6 +6,7 @@ namespace Tests\Session;
 
 use App\Domain\Auth\GuestPrincipal;
 use App\Domain\Support\ApiException;
+use App\Domain\Support\Clock;
 use App\Domain\Support\Ids;
 use Config\Services;
 use Tests\Support\RemoteTestCase;
@@ -253,6 +254,138 @@ final class InvitationAndJoinTest extends RemoteTestCase
             ->countAllResults();
 
         $this->assertSame(1, $count, 'Reloading the join page must not queue the same person twice.');
+    }
+
+    // ------------------------------------------------------- coming back
+
+    /**
+     * A page refresh must not cost the host their own session.
+     *
+     * `pagehide` calls leave — it has to, because a closed tab must not leave a screen capture running
+     * and the browser cannot tell a reload from a close. The reloaded page then asks to join again, and
+     * it used to land in REQUESTED: the host waiting in their own session for an approval only they
+     * could give.
+     */
+    public function testTheHostRefreshingComesBackIntoTheirOwnSession(): void
+    {
+        $host   = $this->makeIdentity('Asha host');
+        $viewer = $this->makeIdentity('Bala viewer');
+
+        $session      = $this->makeSession($host);
+        $participants = Services::participantService();
+
+        $joining = $participants->requestJoin($session, $viewer, $viewer->displayName, 'VIEWER');
+        $participants->approve($session, (string) $joining['uuid'], $host);
+        $participants->markJoined($session, (string) $joining['uuid']);
+
+        $policy = Services::policyResolver()->resolve($host, 'PERSONAL', null);
+        Services::sessionService()->recordShareStarted($this->reload($session), $host, 'monitor', $policy, 1920, 1080);
+
+        $before = $participants->findByUser((int) $session['id'], $host->id);
+
+        // The refresh: the old page goes away, the new one asks to join.
+        $participants->leave($this->reload($session), (string) $before['uuid']);
+        $back = Services::joinService()->joinAuthenticated($this->reload($session), $host)['participant'];
+
+        $this->assertSame('APPROVED', (string) $back['status'], 'the host does not queue for their own session');
+        $this->assertSame((string) $before['uuid'], (string) $back['uuid'], 'the same seat, not a second one');
+        $this->assertTrue($back['is_host']);
+
+        // And the room is theirs again: they join and share, and the viewer is still in it.
+        $participants->markJoined($this->reload($session), (string) $back['uuid']);
+        $shared = Services::sessionService()->recordShareStarted($this->reload($session), $host, 'monitor', $policy, 1920, 1080);
+
+        $this->assertSame('monitor', (string) $shared['actual_display_surface']);
+        $this->assertTrue($participants->findByUser((int) $session['id'], $host->id)['is_sharing']);
+        $this->assertSame('JOINED', (string) $participants->findByUuidOrFail((string) $joining['uuid'])['status']);
+    }
+
+    /** A viewer who refreshes is not admitted twice: the approval they were given still stands. */
+    public function testAViewerRefreshingIsNotAdmittedTwice(): void
+    {
+        $host   = $this->makeIdentity('Host');
+        $viewer = $this->makeIdentity('Viewer');
+
+        $session      = $this->makeSession($host);
+        $participants = Services::participantService();
+
+        $joined = Services::joinService()->joinByCode((string) $session['session_code'], $viewer, null, null)['participant'];
+        $participants->approve($this->reload($session), (string) $joined['uuid'], $host);
+        $participants->markJoined($this->reload($session), (string) $joined['uuid']);
+
+        $participants->leave($this->reload($session), (string) $joined['uuid']);
+        $back = Services::joinService()->joinByCode((string) $session['session_code'], $viewer, null, null)['participant'];
+
+        $this->assertSame('APPROVED', (string) $back['status']);
+        $this->assertSame([], $this->waitingIn($session), 'nobody is queued: they were already let in');
+    }
+
+    /**
+     * Somebody who only ever sat in the waiting room cannot let themselves in by leaving and asking
+     * again. Being *in* the room is what an approval leaves behind, and they were never in it.
+     */
+    public function testSomebodyWhoNeverGotInStillHasToAsk(): void
+    {
+        $host    = $this->makeIdentity('Host');
+        $knocker = $this->makeIdentity('Never admitted');
+
+        $session      = $this->makeSession($host);
+        $participants = Services::participantService();
+
+        $waiting = Services::joinService()->joinByCode((string) $session['session_code'], $knocker, null, null)['participant'];
+        $this->assertSame('REQUESTED', (string) $waiting['status']);
+
+        $participants->leave($this->reload($session), (string) $waiting['uuid']);
+        $back = Services::joinService()->joinByCode((string) $session['session_code'], $knocker, null, null)['participant'];
+
+        $this->assertSame('REQUESTED', (string) $back['status'], 'leaving the queue is not a way into the room');
+        $this->assertSame([(string) $waiting['uuid']], $this->waitingIn($session));
+    }
+
+    /**
+     * REMOVED is never given back by coming back.
+     *
+     * It is what `MembershipVerifier::forget()` writes when somebody loses access to the company, so
+     * unlike LEFT it is a seat taken away rather than one given up — and the person had been in the
+     * room, so `joined_at` alone would have let them straight back in.
+     */
+    public function testASeatTakenAwayIsNotGivenBackByAskingAgain(): void
+    {
+        $host    = $this->makeIdentity('Host');
+        $removed = $this->makeIdentity('Access revoked');
+
+        $session      = $this->makeSession($host);
+        $participants = Services::participantService();
+
+        $joined = Services::joinService()->joinByCode((string) $session['session_code'], $removed, null, null)['participant'];
+        $participants->approve($this->reload($session), (string) $joined['uuid'], $host);
+        $participants->markJoined($this->reload($session), (string) $joined['uuid']);
+        $this->assertNotNull($participants->findByUuidOrFail((string) $joined['uuid'])['joined_at']);
+
+        $this->db->table('remote_participants')
+            ->where('uuid', (string) $joined['uuid'])
+            ->update(['status' => 'REMOVED', 'left_at' => Clock::now(), 'updated_at' => Clock::now()]);
+
+        $back = Services::joinService()->joinByCode((string) $session['session_code'], $removed, null, null)['participant'];
+
+        $this->assertSame('REQUESTED', (string) $back['status'], 'they ask again, however long they were in before');
+    }
+
+    /**
+     * The uuids waiting for the host, in the order the room shows them.
+     *
+     * @param  array<string, mixed> $session
+     * @return list<string>
+     */
+    private function waitingIn(array $session): array
+    {
+        return array_values(array_map(
+            static fn (array $row) => (string) $row['uuid'],
+            array_filter(
+                Services::participantService()->forSession((int) $session['id']),
+                static fn (array $row) => (string) $row['status'] === 'REQUESTED',
+            ),
+        ));
     }
 
     public function testADeniedParticipantCannotSimplyAskAgain(): void
