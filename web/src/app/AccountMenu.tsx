@@ -40,7 +40,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Building2, ChevronDown, ExternalLink, GitBranch, LogOut, Pencil, User, UserCog, UserPlus, Users } from 'lucide-react'
 
 import { useAuth } from '../auth/AuthProvider'
-import { buildChooseAccountUrl, canAddAccount, performAccountSwitch, readAccountRoster } from '../auth/accounts'
+import { activeAccountFirstName, buildChooseAccountUrl, canAddAccount, performAccountSwitch, readAccountRoster } from '../auth/accounts'
 import type { RosterAccount } from '../auth/accounts'
 import { stopConnect } from '../connect/connect'
 import {
@@ -147,7 +147,8 @@ export default function AccountMenu() {
     }
   }, [open])
 
-  const name = bootstrap?.user.displayName ?? ''
+  const name = activeAccountFirstName() ||
+      (bootstrap?.user.displayName ?? '')
   const email = bootstrap?.user.email ?? ''
   // The portal (my.aicountly) user id — what support asks for as the "Cust ID".
   const custId = bootstrap?.user.uuid || null
