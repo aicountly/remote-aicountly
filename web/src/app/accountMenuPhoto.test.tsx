@@ -36,6 +36,9 @@ const remote = vi.hoisted(() => ({
 vi.mock('./RemoteProvider', () => ({ useRemote: () => remote.state }))
 
 vi.mock('../auth/accounts', () => ({
+  // The real module reads the portal's label from a cookie; this fixture has none,
+  // so the menu falls through to the product's own name, as these tests expect.
+  activeAccountFirstName: () => '',
   readAccountRoster: () => [],
   canAddAccount: () => true,
   performAccountSwitch: vi.fn(),
