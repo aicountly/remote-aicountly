@@ -185,6 +185,81 @@ describe('CompanionPanel', () => {
     expect(screen.getByText(/share your entire screen to allow control/i)).toBeInTheDocument()
   })
 
+  /**
+   * The bug this covers: a tab or window share used to offer an enabled button. Pressing it linked a
+   * computer, interrupted whoever was at it for a confirmation, and left the link short of ready for
+   * ever — control needs an entire screen. The reason was already on screen; the button ignored it.
+   */
+  it('cannot be enabled while a tab or a window is shared, and says why', async () => {
+    const loadDevices = vi.fn(async () => ({ devices: [device], restrictions: [] }))
+
+    render(
+      <CompanionPanel
+        sessionUuid="s-1"
+        control={control({
+          controlBlockedReason: 'SURFACE_NOT_MONITOR',
+          sharedSurface: { displaySurface: 'browser', width: 1280, height: 720, verified: true },
+        })}
+        isSharing
+        busy={false}
+        onLink={() => {}}
+        onUnlink={() => {}}
+        loadDevices={loadDevices}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: /enable control from this computer/i })).toBeDisabled()
+    expect(screen.getByText(/entire screen, not a window or tab/i)).toBeInTheDocument()
+    expect(loadDevices).not.toHaveBeenCalled()
+  })
+
+  /** The share can change after the list is on screen, so the per-computer buttons are gated too. */
+  it('stops a listed computer being linked once the share stops being an entire screen', async () => {
+    const onLink = vi.fn()
+    const loadDevices = vi.fn(async () => ({ devices: [device], restrictions: [] }))
+    const props = {
+      sessionUuid: 's-1',
+      isSharing: true,
+      busy: false,
+      onLink,
+      onUnlink: () => {},
+      loadDevices,
+    }
+
+    const { rerender } = render(<CompanionPanel {...props} control={control()} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /enable control from this computer/i }))
+    expect(await screen.findByRole('button', { name: 'Use Asha MacBook' })).toBeEnabled()
+
+    rerender(
+      <CompanionPanel
+        {...props}
+        control={control({
+          controlBlockedReason: 'SURFACE_NOT_MONITOR',
+          sharedSurface: { displaySurface: 'window', width: 800, height: 600, verified: true },
+        })}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Use Asha MacBook' })).toBeDisabled()
+    expect(onLink).not.toHaveBeenCalled()
+  })
+
+  /** The server's own refusal, relayed: the restriction the devices call now carries. */
+  it('explains a wrong share rather than blaming the desktop app', async () => {
+    desktop.agent = true
+    const loadDevices = vi.fn(async () => ({ devices: [], restrictions: ['SURFACE_NOT_MONITOR'] }))
+
+    render(
+      <CompanionPanel sessionUuid="s-1" control={control()} isSharing busy={false} onLink={() => {}} onUnlink={() => {}} loadDevices={loadDevices} />,
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: /enable control from this computer/i }))
+
+    expect(await screen.findByText(/entire screen, not a window or tab/i)).toBeInTheDocument()
+    expect(screen.queryByText(/No AICOUNTLY Remote desktop app is signed in/i)).not.toBeInTheDocument()
+  })
+
   it('waits for confirmation on the computer, and can be cancelled', async () => {
     const onUnlink = vi.fn()
 

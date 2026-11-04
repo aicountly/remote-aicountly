@@ -44,9 +44,9 @@ use CodeIgniter\Database\Exceptions\DatabaseException;
  *   1. the session is A's personal session, or a COMPANY session, and its scope permits remote control
  *      (policy ∧ the `desktop_devices` entitlement ∧ the desktop feature) — never a support session,
  *      never a guest;
- *   2. A holds `remote.control.accept` and is the joined, sharing host; the device is A's own, in the
- *      session's scope (a personal device for a personal session, the session's company's otherwise),
- *      ACTIVE, online and declares remote control;
+ *   2. A holds `remote.control.accept` and is the joined, sharing host, sharing an *entire screen* at the
+ *      moment of linking; the device is A's own, in the session's scope (a personal device for a personal
+ *      session, the session's company's otherwise), ACTIVE, online and declares remote control;
  *   3. somebody at that machine confirmed the link there (decision 2), within five minutes;
  *   4. the link is ACTIVE (it knows the monitor), A is still sharing, and A shares an entire screen;
  *   5. A granted B's request in the browser — the companion can stop control but never grant it.
@@ -80,6 +80,10 @@ class CompanionService
      * Never another person's machine, never another company's: the list is the caller's own enrolled
      * devices in the session's scope — their personal ones for a personal session, the session's
      * company's otherwise — and only those that are ACTIVE, online and declare remote control.
+     *
+     * The restrictions also carry what the *share* makes impossible right now (`NOT_SHARING`,
+     * `SURFACE_NOT_MONITOR`), so a browser can explain before somebody picks a computer rather than
+     * after `link()` has refused.
      *
      * @param  array<string, mixed> $session
      * @return array{devices: list<array<string, mixed>>, restrictions: list<string>}
@@ -165,6 +169,25 @@ class CompanionService
             throw ApiException::forbidden(
                 'NOT_SESSION_HOST',
                 'Only the person sharing their screen in this session can enable control from their computer.',
+            );
+        }
+
+        // ...and sharing something a companion can actually serve. Every other precondition for control
+        // was already checked here; this one was not, so a browser sharing a tab or a window could create
+        // a link that interrupted somebody at the machine to confirm it, joined, matched a monitor — and
+        // then sat at JOINED/ACTIVE-but-not-ready for ever, because `isReady()` and `controllableHost()`
+        // both require `actual_display_surface = 'monitor'`. The viewer never got a Request control button
+        // and nobody was told why. Refuse at the point of linking instead, in the same vocabulary the
+        // control routes already use.
+        $surfaceReason = $this->linkableSurfaceReason($session);
+
+        if ($surfaceReason !== null) {
+            throw ApiException::conflict(
+                'HOST_NOT_CONTROLLABLE',
+                $surfaceReason === 'NOT_SHARING'
+                    ? 'Control from your computer works only while you are sharing your screen.'
+                    : 'Control from your computer works only while you share an entire screen, not a window or a tab.',
+                ['controlBlockedReason' => $surfaceReason],
             );
         }
 
@@ -899,7 +922,41 @@ class CompanionService
             $restrictions[] = 'CONTROL_ACCEPT_DENIED';
         }
 
+        // What is being shared right now, in the same words `link()` would refuse with, so the browser
+        // can say "share your entire screen" before anybody picks a computer rather than after.
+        $surfaceReason = $this->linkableSurfaceReason($session);
+
+        if ($surfaceReason !== null) {
+            $restrictions[] = $surfaceReason;
+        }
+
         return array_values(array_unique($restrictions));
+    }
+
+    /**
+     * Why the share cannot carry control right now, or null when it can.
+     *
+     * Read fresh from the row rather than from the `$session` array the caller holds: what somebody
+     * shares changes under a request, and a companion that cannot be controlled is worse than no
+     * companion — it asks the person at the machine for a confirmation that buys them nothing.
+     *
+     * The vocabulary is `ControlService`'s, so the browser reads one set of reasons everywhere.
+     *
+     * @param  array<string, mixed> $session
+     * @return 'NOT_SHARING'|'SURFACE_NOT_MONITOR'|null
+     */
+    private function linkableSurfaceReason(array $session): ?string
+    {
+        $surface = $this->links->surfaceOf((int) $session['id'])['displaySurface'];
+
+        if ($surface === null) {
+            return 'NOT_SHARING';
+        }
+
+        // 'unknown' is a browser that does not report `displaySurface` at all (Firefox, Safari): it may
+        // well be an entire screen, but nothing here can tell, and control onto a window or a tab lands
+        // on whatever is beside it on the monitor — which the viewer cannot see.
+        return $surface === 'monitor' ? null : 'SURFACE_NOT_MONITOR';
     }
 
     /** @param array<string, mixed> $link */

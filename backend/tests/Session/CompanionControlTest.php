@@ -80,10 +80,18 @@ final class CompanionControlTest extends RemoteTestCase
         $this->assertSame(1512, $state['companion']['monitor']['width']);
     }
 
+    /**
+     * A window share is never controllable — reached the only way it can be reached now that a link is
+     * refused outright while a window or a tab is shared (`ControlCompanionTest`): link on an entire
+     * screen, then change what is shared underneath a ready companion.
+     */
     public function testAWindowShareIsNeverControllable(): void
     {
-        $fixture = $this->companionScenario([], 'window');
+        $fixture = $this->companionScenario();
         $this->activeCompanion($fixture);
+        $this->assertNotNull($this->state($fixture['session'])['controllableHostUuid'], 'ready on an entire screen');
+
+        $this->share($fixture['session'], $fixture['sharer'], 'window', 800, 600);
 
         $state = $this->state($fixture['session']);
         $this->assertNull($state['controllableHostUuid']);
@@ -93,10 +101,13 @@ final class CompanionControlTest extends RemoteTestCase
     public function testABrowserThatDoesNotReportItsSurfaceIsNeverControllable(): void
     {
         // Firefox and Safari report no displaySurface: recorded as 'unknown', and never verified (decision 6).
-        $fixture = $this->companionScenario([], 'unknown');
+        $fixture = $this->companionScenario();
         $this->activeCompanion($fixture);
 
+        $this->share($fixture['session'], $fixture['sharer'], 'unknown');
+
         $state = $this->state($fixture['session']);
+        $this->assertNull($state['controllableHostUuid']);
         $this->assertSame(ControlService::BLOCKED_SURFACE_NOT_MONITOR, $state['controlBlockedReason']);
         $this->assertFalse($state['sharedSurface']['verified']);
     }
