@@ -65,6 +65,24 @@ class DesktopSignInController extends BaseApiController
     }
 
     /** `POST /desktop-signin/confirm` */
+    /**
+     * `GET /desktop-signin/pending?userCode=XXXX-XXXX`
+     *
+     * What the confirmation screen must show before it offers a button: which machine is
+     * asking, what it runs, and the address it asked from. The agent's own self-reported
+     * description plus the request IP — nothing about the account, because nothing is
+     * attached to the code until someone confirms it.
+     */
+    public function pending(): ResponseInterface
+    {
+        $userCode = $this->request->getGet('userCode');
+
+        return $this->ok(Services::desktopSignInService()->pendingByUserCode(
+            $this->identity(),
+            is_string($userCode) ? $userCode : '',
+        ))->setHeader('Cache-Control', 'no-store');
+    }
+
     public function confirm(): ResponseInterface
     {
         $body      = $this->body();

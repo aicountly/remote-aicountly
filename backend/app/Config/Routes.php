@@ -331,6 +331,14 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
     $routes->post('desktop-signin/poll', 'DesktopSignInController::poll', [
         'filter' => 'rate-limit:desktop-signin-poll,90,60',
     ]);
+    // Read before approving. The flow's one human check is "is this request mine?", and
+    // until this route existed the screen could not answer it: the agent's details were
+    // stored by `start` and shown only AFTER confirming, while verificationUriComplete
+    // arrived with the code pre-filled. The only thing on screen before the decision was
+    // a code the link itself supplied — which whoever called `start` could supply too.
+    $routes->get('desktop-signin/pending', 'DesktopSignInController::pending', [
+        'filter' => ['api-auth', 'rate-limit:desktop-signin-confirm,20,60'],
+    ]);
     $routes->post('desktop-signin/confirm', 'DesktopSignInController::confirm', [
         'filter' => ['api-auth', 'rate-limit:desktop-signin-confirm,20,60'],
     ]);

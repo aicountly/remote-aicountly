@@ -25,6 +25,10 @@ use Config\Remote as RemoteConfig;
  *
  *   agent opens verificationUriComplete in the system browser
  *
+ *   GET  /desktop-signin/pending  ?userCode=                       browser, api-auth
+ *        → { deviceLabel, operatingSystem, architecture, requestedIp, requestedAt }
+ *        so the person sees WHICH machine is asking before they approve it
+ *
  *   POST /desktop-signin/confirm  { userCode, companyId? }         browser, api-auth
  *   POST /desktop-signin/deny     { userCode }                     browser, api-auth
  *
@@ -257,6 +261,50 @@ class DesktopSignInService
      * A person, signed in through the browser's own working portal session,
      * confirming that the code on their screen matches the one on the machine.
      */
+    /**
+     * What a person is about to approve — read before approving, never as part of approving.
+     *
+     * The device-code flow leans on one human check: "is this request mine?". Until this
+     * endpoint existed the confirmation screen could not answer it. The agent's details —
+     * the machine's name, its operating system, the address the request came from — were
+     * written to the row by {@see start()} and then shown to nobody until *after* the
+     * person had already confirmed, while `verificationUriComplete` arrived with the code
+     * already filled in. So the only thing on screen before the decision was a code the
+     * link itself had supplied, which an attacker who called `start()` could supply just
+     * as easily. "Does this code match?" was satisfied by the attacker's own URL.
+     *
+     * Everything here is the agent's own self-reported description plus the IP the request
+     * arrived from. Nothing about the account or the organisation is returned, because
+     * nothing is attached yet: confirming is what attaches a person to a code, and the
+     * table's own constraint says nothing before that point may claim to know either.
+     */
+    public function pendingByUserCode(RemoteIdentity $identity, string $userCode): array
+    {
+        $row     = $this->liveRowByUserCode($this->normaliseUserCode($userCode), ['PENDING']);
+        $payload = json_decode((string) ($row['device_payload'] ?? '{}'), true);
+        $payload = is_array($payload) ? $payload : [];
+
+        $str = static function (array $a, string $k): ?string {
+            $v = $a[$k] ?? null;
+
+            return is_string($v) && trim($v) !== '' ? trim($v) : null;
+        };
+
+        $os      = $str($payload, 'operatingSystem');
+        $version = $str($payload, 'osVersion');
+
+        return [
+            'deviceLabel'     => (string) ($row['device_label'] ?? '') !== ''
+                ? (string) $row['device_label']
+                : $str($payload, 'deviceName'),
+            'operatingSystem' => $os === null ? null : ($version === null ? $os : $os . ' ' . $version),
+            'architecture'    => $str($payload, 'architecture'),
+            'requestedIp'     => $row['requested_ip'] ?? null,
+            'requestedAt'     => isset($row['created_at']) ? (string) Clock::iso($row['created_at']) : null,
+            'expiresAt'       => isset($row['expires_at']) ? (string) Clock::iso($row['expires_at']) : null,
+        ];
+    }
+
     public function confirmByUserCode(
         RemoteIdentity $identity,
         string $userCode,

@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Laptop, ShieldCheck } from 'lucide-react'
+import { Cpu, Globe, Laptop, ShieldCheck } from 'lucide-react'
 
-import { confirmDesktopSignIn, denyDesktopSignIn } from '../../services/api/remote'
+import { confirmDesktopSignIn, denyDesktopSignIn, fetchPendingDesktopSignIn } from '../../services/api/remote'
+import type { PendingDesktopSignIn } from '../../services/api/remote'
 import { RemoteApiError } from '../../services/api/client'
 import { getAuthToken } from '../../auth/tokens'
 import { isDesktopApp } from './embedding'
@@ -14,9 +15,16 @@ import { isDesktopApp } from './embedding'
  * loopback pattern that used to stand in for one turned out to depend on the
  * portal accepting a `returnUrl` on a loopback address, which it does not for
  * its own silent sign-in. This page is what replaced it: the agent shows a
- * short code, this tab is already signed in the ordinary way, and a person
- * matching the two is the whole of the security model — nobody who only saw
- * the code over someone's shoulder can reach this page signed in as them.
+ * short code and this tab is already signed in the ordinary way.
+ *
+ * Matching the code is NOT the whole of the security model, and treating it as
+ * though it were is what made this page phishable. The agent opens
+ * `verificationUriComplete`, which carries the code already filled in — so
+ * whoever called `start` chose the code this page displays, and "does it match"
+ * is answered by their own link. A stranger's link looks exactly like the
+ * agent's. So the page now asks the server WHICH MACHINE is requesting and
+ * shows it — name, operating system, and the address the request came from —
+ * because those are what differ when the request is not yours.
  *
  * Reached at `/desktop-signin?code=XXXX-XXXX`, opened by the agent in the
  * system browser. If this tab was not already signed in, `AuthProvider` sends
@@ -37,6 +45,32 @@ export default function DesktopSignInPage() {
   const [phase, setPhase] = useState<'idle' | 'busy' | 'confirmed' | 'denied'>('idle')
   const [deviceLabel, setDeviceLabel] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // What is actually being approved. Until this is loaded there is nothing on screen a
+  // person could use to tell their own computer's request from somebody else's, so the
+  // confirm button stays disabled rather than inviting a decision with no information.
+  const [pending, setPending] = useState<PendingDesktopSignIn | null>(null)
+  const [lookup, setLookup] = useState<'loading' | 'ready' | 'unavailable'>('loading')
+
+  useEffect(() => {
+    if (!userCode) return
+    let live = true
+    setLookup('loading')
+    fetchPendingDesktopSignIn(userCode)
+      .then((p) => {
+        if (!live) return
+        setPending(p)
+        setLookup('ready')
+      })
+      .catch((err) => {
+        if (!live) return
+        setLookup('unavailable')
+        setError(err instanceof RemoteApiError ? err.message : 'That code could not be checked.')
+      })
+
+    return () => {
+      live = false
+    }
+  }, [userCode])
 
   if (!userCode) {
     return (
@@ -130,8 +164,8 @@ export default function DesktopSignInPage() {
         <header className="stack stack--sm">
           <h1>Sign in a computer</h1>
           <p className="muted">
-            Check that this code matches what AICOUNTLY Remote is showing on the computer you are setting up, then
-            confirm.
+            Only confirm this if you are setting up the computer described below, right now. If you did not start
+            this, decline — someone who sent you this link cannot continue without you.
           </p>
         </header>
 
@@ -146,6 +180,36 @@ export default function DesktopSignInPage() {
               </p>
             </div>
 
+            <div className="stack stack--sm">
+              <div className="field__label">The computer asking to sign in</div>
+              {lookup === 'loading' ? (
+                <p className="muted">Checking…</p>
+              ) : lookup === 'unavailable' ? (
+                <p className="muted">
+                  This request could not be found. It may have expired, or already been used. Start again from the
+                  computer.
+                </p>
+              ) : (
+                <ul className="stack stack--sm tiny" aria-live="polite">
+                  <li>
+                    <Laptop size={14} aria-hidden="true" />{' '}
+                    <strong>{pending?.deviceLabel ?? 'an unnamed computer'}</strong>
+                  </li>
+                  {pending?.operatingSystem ? (
+                    <li>
+                      <Cpu size={14} aria-hidden="true" /> {pending.operatingSystem}
+                      {pending.architecture ? ` · ${pending.architecture}` : ''}
+                    </li>
+                  ) : null}
+                  {pending?.requestedIp ? (
+                    <li>
+                      <Globe size={14} aria-hidden="true" /> Requested from {pending.requestedIp}
+                    </li>
+                  ) : null}
+                </ul>
+              )}
+            </div>
+
             {error ? (
               <p className="field__error" role="alert">
                 {error}
@@ -156,10 +220,10 @@ export default function DesktopSignInPage() {
               <button
                 type="button"
                 className="btn btn--primary btn--lg btn--block"
-                disabled={phase === 'busy'}
+                disabled={phase === 'busy' || lookup !== 'ready'}
                 onClick={() => void confirm()}
               >
-                {phase === 'busy' ? 'Confirming…' : 'Confirm and sign in'}
+                {phase === 'busy' ? 'Confirming…' : 'Yes, this is my computer — sign it in'}
               </button>
               <button
                 type="button"
