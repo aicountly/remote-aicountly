@@ -99,6 +99,22 @@ pub struct Agent {
     /// out the context that makes the refusal worth having.
     refused_injections: AtomicU64,
     last_injection_refusal_log: Mutex<Option<Instant>>,
+    /// How many admitted-or-refused control messages never reached the
+    /// operating system for a reason that is not the platform refusing: the
+    /// gate turned them away, or there was nowhere to put them.
+    ///
+    /// The receiving end of the control path was silent at the shipped log
+    /// level. Both callers of [`Agent::handle_control`] — the companion loop
+    /// and the hosted session loop — logged a refusal at `debug` and dropped
+    /// the `Handled` outcome entirely, while the default filter is `info`. So
+    /// a gate refusing every message, or a companion discarding every message
+    /// because it has not matched the shared monitor yet, produced no line in
+    /// the log, no count anybody reads, and nothing at either end of the
+    /// session: the controller's room says "You are controlling this
+    /// computer", the banner at the machine names them, and the pointer does
+    /// not move.
+    discarded_input: AtomicU64,
+    last_discarded_input_log: Mutex<Option<Instant>>,
 }
 
 /// How often a refused injection is written to the log. The count is exact;
@@ -143,6 +159,8 @@ impl Agent {
             secure_desktop_consent: AtomicBool::new(false),
             refused_injections: AtomicU64::new(0),
             last_injection_refusal_log: Mutex::new(None),
+            discarded_input: AtomicU64::new(0),
+            last_discarded_input_log: Mutex::new(None),
         }
     }
 
@@ -1284,12 +1302,35 @@ impl Agent {
             .lock()
             .map_err(|_| GateError::Invalid(ProtocolError::Malformed))?;
 
-        let gate = gate.as_mut().ok_or(GateError::NotGranted)?;
+        let Some(gate) = gate.as_mut() else {
+            self.note_discarded_input("no control is granted on this machine");
 
-        gate.admit(&envelope)?;
+            return Err(GateError::NotGranted);
+        };
+
+        if let Err(error) = gate.admit(&envelope) {
+            // Reported here rather than left to the callers. Both of them —
+            // the companion loop and the hosted session loop — logged this at
+            // `debug` while the shipped filter is `info`, so a gate refusing
+            // every message said nothing at all.
+            self.note_discarded_input(&format!("the gate refused it: {error}"));
+
+            return Err(error);
+        }
 
         // Past the gate. From here the message is acted on.
         let handled = self.dispatch(&envelope)?;
+
+        // An input event that got this far and still did not reach the
+        // machine is the failure nobody could see: both ends say control is
+        // live and the pointer does not move.
+        //
+        // `Handled::Ignored` is *not* reported here. `dispatch` names the
+        // reason where it knows one — and it always does — so reporting it
+        // again here would count the same discarded event twice.
+        if envelope.is_input() && handled == Handled::Unsupported {
+            self.note_discarded_input("this platform cannot apply input");
+        }
 
         if handled == Handled::Applied && envelope.is_input() {
             if let Ok(mut last) = self.last_injection.lock() {
@@ -1333,10 +1374,22 @@ impl Agent {
             .and_then(|companion| companion.as_ref().map(|companion| companion.monitor_id));
 
         if matches!(companion_monitor, Some(None)) {
+            // The companion has joined but has not matched the shared monitor
+            // yet, so there is no screen to land a click on. Named here
+            // because it is indistinguishable from everything working at both
+            // ends of the session, and because it is the one dead end a
+            // person can act on: pick the screen at the machine.
+            self.note_discarded_input(
+                "this computer has not matched the screen being shared yet, so there is no \
+                 display to apply input to — choose the shared screen in AICOUNTLY Remote",
+            );
+
             return Ok(Handled::Ignored);
         }
 
         let Ok(providers) = self.providers.lock() else {
+            self.note_discarded_input("the platform layer was busy");
+
             return Ok(Handled::Ignored);
         };
 
@@ -1430,6 +1483,41 @@ impl Agent {
     #[must_use]
     pub fn refused_injections(&self) -> u64 {
         self.refused_injections.load(Ordering::Relaxed)
+    }
+
+    /// A control message never reached the machine, and not because the
+    /// platform refused it: count it, and say why.
+    ///
+    /// Rate-limited like [`Agent::note_refused_injection`] and for the same
+    /// reason — a controller sends input many times a second, and a fault
+    /// here affects every one of them, so a line per event would fill the
+    /// capped log with the same sentence and roll away the context.
+    fn note_discarded_input(&self, reason: &str) {
+        let total = self.discarded_input.fetch_add(1, Ordering::Relaxed) + 1;
+
+        let Ok(mut last) = self.last_discarded_input_log.lock() else {
+            return;
+        };
+
+        let now = Instant::now();
+        if !last.is_none_or(|at| now.duration_since(at) >= INJECTION_REFUSAL_LOG_INTERVAL) {
+            return;
+        }
+
+        *last = Some(now);
+
+        tracing::warn!(
+            reason,
+            discarded_this_session = total,
+            "a control message did not reach this computer; control looks live at both ends and \
+             nothing moves",
+        );
+    }
+
+    /// How many control messages were discarded before the platform saw them.
+    #[must_use]
+    pub fn discarded_input(&self) -> u64 {
+        self.discarded_input.load(Ordering::Relaxed)
     }
 
     /// Release every key this agent is holding.
@@ -2007,6 +2095,88 @@ mod tests {
 
         assert_eq!(agent.rejected_control_messages(), 1);
         assert_eq!(agent.refused_injections(), 1);
+    }
+
+    /// The gate turning every message away used to be invisible.
+    ///
+    /// Both callers of `handle_control` logged a refusal at `debug` and threw
+    /// the `Handled` outcome away, while the shipped filter is `info`. So a
+    /// controller whose messages were all refused saw "You are controlling
+    /// this computer", the machine's banner named them, and nothing moved —
+    /// with no line in the log to say otherwise.
+    #[test]
+    fn a_message_the_gate_refuses_is_reported_not_just_counted() {
+        let agent = Agent::new();
+        agent.begin_session(summary());
+        agent.grant_control(CONTROLLER, false, false);
+        assert_eq!(agent.discarded_input(), 0);
+
+        // Admitted once. (On a host with no input provider — Linux CI — that
+        // one is itself discarded as unsupported, so the gate's contribution
+        // is measured as a delta rather than an absolute.)
+        assert!(agent.handle_control(&pointer(1)).is_ok());
+        let before = agent.discarded_input();
+
+        // Replayed sequence: refused by the gate.
+        assert!(agent.handle_control(&pointer(1)).is_err());
+
+        assert_eq!(
+            agent.discarded_input(),
+            before + 1,
+            "a message the gate refuses is reported once",
+        );
+        assert_eq!(agent.rejected_control_messages(), 1);
+    }
+
+    /// Input arriving with no grant at all is the other half of the same
+    /// silence: `gate.as_mut().ok_or(NotGranted)?` returned early and said
+    /// nothing.
+    #[test]
+    fn input_with_no_grant_at_all_is_reported() {
+        let agent = Agent::new();
+        agent.begin_session(summary());
+
+        assert_eq!(
+            agent.handle_control(&pointer(1)),
+            Err(GateError::NotGranted)
+        );
+        assert_eq!(agent.discarded_input(), 1);
+    }
+
+    /// A companion that has joined but not yet matched the screen being
+    /// shared discards every event — the dead end that looks most exactly
+    /// like everything working, and the one a person can act on.
+    #[test]
+    fn a_companion_with_no_screen_matched_yet_says_so() {
+        let agent = Agent::new();
+        agent.begin_companion(remote_core::CompanionSummary {
+            companion_uuid: "companion-1".into(),
+            session_uuid: SESSION.into(),
+            display_id: "AR-10036".into(),
+            company_name: None,
+            requested_by_name: Some("Rahul".into()),
+            expires_at: None,
+            started_at: Some("2026-11-05T09:00:00Z".into()),
+            phase: remote_core::CompanionPhase::ChoosingMonitor,
+            monitors: Vec::new(),
+            monitor: None,
+            controller_name: None,
+        });
+        agent.grant_control(CONTROLLER, false, false);
+
+        // Admitted by the gate, and then discarded for want of a screen.
+        assert_eq!(agent.handle_control(&pointer(1)), Ok(Handled::Ignored));
+
+        assert_eq!(
+            agent.rejected_control_messages(),
+            0,
+            "the gate admitted it; this is not a gate refusal",
+        );
+        assert_eq!(
+            agent.discarded_input(),
+            1,
+            "and it is still reported, because nothing else would say so",
+        );
     }
 
     /// A setting the agent would refuse must never reach the file the service

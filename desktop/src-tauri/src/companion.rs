@@ -865,11 +865,16 @@ impl<A: CompanionApi, F: PeerSessionFactory> Companion<'_, A, F> {
                     match self.agent.handle_control(&bytes) {
                         Ok(Handled::Pinged(nonce)) => replies.push(ControlMessage::Pong { nonce }),
                         Ok(_) => {}
+                        // `Agent::handle_control` reports the refusal itself, rate-limited
+                        // and at a level the shipped build writes; this stays `debug` for the
+                        // per-message detail somebody turns the level up to read.
                         Err(error) => tracing::debug!(?error, "a control message was refused"),
                     }
                 }
             }
-            Err(error) => tracing::debug!(%error, "the control channel could not be read"),
+            // Not `debug`: a control channel that cannot be read is why input stops, and
+            // the shipped log level is `info`, so this used to be written nowhere.
+            Err(error) => tracing::warn!(%error, "the control channel could not be read"),
         }
 
         if self.agent.take_stop_notice() {
