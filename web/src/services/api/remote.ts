@@ -807,6 +807,28 @@ export function confirmDesktopSignIn(
   return apiFetch('/desktop-signin/confirm', { method: 'POST', body })
 }
 
+/** What a pending desktop sign-in request says about itself, for the person deciding. */
+export type PendingDesktopSignIn = {
+  deviceLabel: string | null
+  operatingSystem: string | null
+  architecture: string | null
+  requestedIp: string | null
+  requestedAt: string | null
+  expiresAt: string | null
+}
+
+/**
+ * Read a pending request before approving it.
+ *
+ * The flow rests on one human check — "is this request mine?" — and a code that arrives
+ * pre-filled in the link cannot answer it, because whoever called `start` chose it. These
+ * are the agent's own self-reported details plus the address the request came from, which
+ * is the signal that differs when the request is somebody else's.
+ */
+export function fetchPendingDesktopSignIn(userCode: string): Promise<PendingDesktopSignIn> {
+  return apiFetch(`/desktop-signin/pending?userCode=${encodeURIComponent(userCode)}`)
+}
+
 export function denyDesktopSignIn(userCode: string): Promise<{ status: 'denied' }> {
   return apiFetch('/desktop-signin/deny', { method: 'POST', body: { userCode } })
 }
