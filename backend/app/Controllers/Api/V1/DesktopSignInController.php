@@ -111,16 +111,29 @@ class DesktopSignInController extends BaseApiController
     /**
      * `POST /desktop-signin/handoff`
      *
-     * The desktop application's embedded portal redeeming the one-time code
-     * its agent was given, for the sign-in the confirming page handed over.
-     * Unauthenticated by design — the 64-hex code is the proof — and answered
-     * with `Cache-Control: no-store`, since the answer is a credential.
+     * The desktop agent redeeming the one-time code its poll was given, for the
+     * sign-in the confirming page handed over. The answer is the confirming
+     * person's estate-wide `auth_token`, so it is answered with
+     * `Cache-Control: no-store` and the code is not accepted as sufficient
+     * proof on its own: the caller presents its device credential and the
+     * hand-off is opened only for the machine it was issued to.
+     *
+     * The credential is optional at the filter, not in the service — an agent
+     * installed before this release redeems with the code alone, which
+     * {@see \App\Domain\Device\DesktopSignInService::assertMayRedeem()} allows,
+     * logs, and stops allowing on a dated sunset.
      */
     public function handoff(): ResponseInterface
     {
         $code = $this->requiredString($this->body(), 'code', 64);
 
-        return $this->ok(['authToken' => Services::desktopSignInService()->redeemHandoff($code)])
+        return $this
+            ->ok([
+                'authToken' => Services::desktopSignInService()->redeemHandoff(
+                    $code,
+                    $this->context()->device(),
+                ),
+            ])
             ->setHeader('Cache-Control', 'no-store');
     }
 

@@ -61,22 +61,43 @@ the sign-in expires, or the computer is signed out.
 1. The confirmation page sends its own AICOUNTLY `auth_token` with the
    confirmation (`POST /desktop-signin/confirm`, `portalToken`).
 2. The agent's next poll claims the sign-in. In the same statement the server
-   seals the token with a key derived from a fresh 32-byte code, keeps only that
-   code's hash, and returns the code to the agent (`portalHandoff`) — once.
-   The plain token is in the database only between confirm and that poll.
-3. The Rust side keeps the code (the window never sees it) and opens the portal
-   at `/auth/desktop#desktop_handoff=<code>&n=<nonce>`. The fragment is never
-   sent to a server.
-4. The web application takes the code out of the address before anything else
-   reads it, redeems it once (`POST /desktop-signin/handoff`), and stages,
-   checks and stores the token exactly like any other sign-in.
+   seals the token with a key derived from a fresh 32-byte code **and the
+   fingerprint of the key this machine is enrolling with**, keeps only that
+   code's hash and that fingerprint, and returns the code to the agent
+   (`portalHandoff`) — once. The plain token is in the database only between
+   confirm and that poll.
+3. The agent redeems the code itself (`POST /desktop-signin/handoff`) **with its
+   own device credential**, and opens the portal at
+   `/auth/desktop#desktop_token=<auth_token>&n=<nonce>`. The fragment is never
+   sent to a server, so unlike a query string it is not written to an access
+   log.
+4. The web application takes the token out of the address before anything else
+   reads it, and stages, checks and stores it exactly like any other sign-in.
+
+The device credential in step 3 is the part that matters. Until it was required,
+the code was redeemable by any unauthenticated caller that came by it — so the
+code *was* the person's estate-wide `auth_token`, to anything holding it. Now
+opening the hand-off needs the private key in this machine's key store, which is
+also mixed into the sealing key, so neither the code nor the row is enough on its
+own.
+
+An agent built before that change opens the portal at
+`#desktop_handoff=<code>` instead and the page redeems the code, unauthenticated,
+as it always did. The web application still accepts that form. The server allows
+it, logs every such redemption, and refuses it from
+`DesktopSignInService::HANDOFF_UNAUTHENTICATED_SUNSET`, after which those
+machines need an updated agent to sign their portal in. **What this does not
+reach:** the `auth_token` is the portal's own long-lived estate-wide credential,
+so while it is in flight the hand-off is worth as much as the account. A
+desktop-scoped credential would fix that and does not exist yet.
 
 `n` is a random value created each time the application starts and given to
 the portal page — on the portal's own origin only — as
-`__AICOUNTLY_REMOTE_DESKTOP__`. A hand-off is accepted only when the two match,
-so a link cannot sign the portal in as somebody else. The same marker hides the
-web portal's "AICOUNTLY apps" launcher and its download prompts inside the
-application.
+`__AICOUNTLY_REMOTE_DESKTOP__`. The page accepts a hand-off only when the two
+match, so a link cannot sign the portal in as somebody else. That check is the
+page's, not the server's: it is what stops a *link*, and it is not what stops a
+caller — the device credential is. The same marker hides the web portal's
+"AICOUNTLY apps" launcher and its download prompts inside the application.
 
 **Sign this computer out** clears the portal's cookies and storage too, so the
 next person to use the computer is not signed in as the last one.

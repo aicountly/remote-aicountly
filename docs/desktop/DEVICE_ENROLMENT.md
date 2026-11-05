@@ -143,15 +143,46 @@ their own audit events too — `DESKTOP_SIGNIN_CONFIRMED`,
 `DESKTOP_SIGNIN_DENIED` — recorded against the person in the browser, since
 that is where the human decision was actually made.
 
-**No portal credential ever reaches this window.** Not the long-lived
-`auth_token`, not a `ses_key` — `poll`'s successful answer is an already-
-enrolled device, not a credential to enrol one with. That closes off more than
-the loopback failure: it also means an action that genuinely needs a person's
-own credential — turning unattended access *on*, today — cannot be
-self-served from this window at all any more, only from the web console.
-Turning it *off*, and unregistering, each have a path through the machine's
-own device credential instead of a person's — `POST /devices/me/unattended/disable`
-and `POST /devices/me/revoke`; see `services/api.ts`'s header comment.
+**`poll`'s answer carries no credential.** Its successful answer is an
+already-enrolled device, not a credential to enrol one with, and never a
+`ses_key`. That closes off more than the loopback failure: it also means an
+action that genuinely needs a person's own credential — turning unattended
+access *on*, today — cannot be self-served from this window at all any more,
+only from the web console. Turning it *off*, and unregistering, each have a
+path through the machine's own device credential instead of a person's —
+`POST /devices/me/unattended/disable` and `POST /devices/me/revoke`; see
+`services/api.ts`'s header comment.
+
+**One portal credential does cross, and it is worth being exact about it.**
+This page used to say that none ever did, which was wrong once the portal
+hand-off was added: if the confirming person's page sent its `auth_token`
+along, the agent's claiming `poll` is handed a one-time code, and redeeming
+that code returns that `auth_token` — the estate-wide credential that mints a
+`ses_key` for every AICOUNTLY product (`docs/desktop/PORTAL.md`, "Signing the
+portal in"). It exists so that somebody who just confirmed in their browser is
+not asked to sign in a second time inside the application.
+
+What bounds it:
+
+* the code is 32 random bytes, returned exactly once, to the poll that claimed
+  the row, and only its SHA-256 is stored;
+* the token is sealed under a key derived from that code **and the fingerprint
+  of the key the machine is enrolling with**, so the row alone opens nothing
+  and the code alone opens nothing;
+* redemption requires the machine's own **device credential** — the private
+  key in its key store — so the code is not a bearer credential anybody who
+  comes by it can cash in. The agent redeems it and passes the token to its
+  embedded portal in a URL fragment, which no server sees;
+* ten minutes, and once;
+* an agent built before this binding redeems with the code alone. The server
+  allows that, logs it, and refuses it from
+  `DesktopSignInService::HANDOFF_UNAUTHENTICATED_SUNSET`.
+
+What is **not** bounded, and is tracked as open: the person's `auth_token`
+itself is long-lived and estate-wide, so for the moments it is in flight the
+hand-off is as valuable as the account. Narrowing that means a
+desktop-scoped credential rather than the portal's own, which does not exist
+yet.
 
 ### 4. Proving possession
 

@@ -192,3 +192,52 @@ describe('signing the desktop application’s portal in', () => {
     expect(getAuthToken()).toBeNull()
   })
 })
+
+describe('a sign-in the agent redeemed itself', () => {
+  const TOKEN = 'e'.repeat(64)
+
+  it('is read from the fragment, with no code and nothing asked of the server', async () => {
+    const parsed = parseDesktopHandoff(`#desktop_token=${TOKEN}&n=${NONCE}`)
+    expect(parsed).toEqual({ code: '', authToken: TOKEN, nonce: NONCE })
+
+    window.__AICOUNTLY_REMOTE_DESKTOP__ = { nonce: NONCE }
+    await expect(redeemDesktopHandoff(parsed!)).resolves.toBe(TOKEN)
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/desktop-signin/handoff'))).toBe(false)
+  })
+
+  it('is taken out of the address like a code is', () => {
+    go(`/auth/desktop#desktop_token=${TOKEN}&n=${NONCE}`)
+    captureDesktopHandoff()
+
+    expect(`${window.location.pathname}${window.location.search}${window.location.hash}`).toBe('/')
+    expect(takeDesktopHandoff()).toEqual({ code: '', authToken: TOKEN, nonce: NONCE })
+    expect(takeDesktopHandoff()).toBeNull()
+  })
+
+  it('still answers to another launch’s nonce with nothing', async () => {
+    window.__AICOUNTLY_REMOTE_DESKTOP__ = { nonce: NONCE }
+    const parsed = parseDesktopHandoff(`#desktop_token=${TOKEN}&n=${'b2'.repeat(16)}`)
+
+    await expect(redeemDesktopHandoff(parsed!)).resolves.toBeNull()
+  })
+
+  it('ignores a token that is not 64 hex, rather than putting it in a header', () => {
+    expect(parseDesktopHandoff(`#desktop_token=not-a-token&n=${NONCE}`)).toBeNull()
+    expect(parseDesktopHandoff(`#desktop_token=${'Z'.repeat(64)}&n=${NONCE}`)).toBeNull()
+  })
+
+  it('signs the embedded portal in without a login form', async () => {
+    window.__AICOUNTLY_REMOTE_DESKTOP__ = { nonce: NONCE }
+    go(`/auth/desktop#desktop_token=${TOKEN}&n=${NONCE}`)
+    captureDesktopHandoff()
+
+    const { getByTestId } = render(
+      <AuthProvider>
+        <Status />
+      </AuthProvider>,
+    )
+
+    await waitFor(() => expect(getByTestId('status').textContent).toBe('authenticated'))
+    expect(localStorage.getItem('auth_token')).toBe(TOKEN)
+  })
+})

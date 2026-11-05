@@ -391,4 +391,76 @@ final class DesktopSignInTest extends RemoteTestCase
             }
         }
     }
+
+    /**
+     * The hand-off is sealed under the fingerprint of the key the machine is
+     * enrolling with, so the code on its own does not open it even for someone
+     * who can also read the row.
+     */
+    public function testTheSealedHandoffIsBoundToTheEnrollingKey(): void
+    {
+        $started = $this->start();
+        Services::desktopSignInService()->confirmByUserCode($this->makeIdentity('Rahul'), $started['userCode'], null, null, self::PORTAL_TOKEN);
+        $outcome = Services::desktopSignInService()->poll($started['deviceCode']);
+
+        $row = $this->db->table('remote_desktop_signin_codes')->where('device_code', $started['deviceCode'])->get()->getRowArray();
+
+        $this->assertSame(
+            DeviceSignature::fingerprint(DeviceSignature::normalisePublicKey($started['publicKey'])),
+            $row['handoff_device_fp'],
+            'the hand-off records the key it was issued for',
+        );
+
+        // The code alone, against the pre-binding key derivation: no plaintext.
+        $raw   = (string) base64_decode((string) $row['handoff_ciphertext'], true);
+        $opened = sodium_crypto_secretbox_open(
+            substr($raw, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES),
+            substr($raw, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES),
+            hash_hmac('sha256', 'aicountly-remote/desktop-signin/portal-handoff', $outcome['portalHandoff'], true),
+        );
+        $this->assertFalse($opened, 'the code alone must not open a bound hand-off');
+    }
+
+    /**
+     * After the sunset, redeeming with no device credential at all is refused.
+     *
+     * Allowed until then only for agents already installed in the field, which
+     * redeem with the one-time code alone. The date is overridden here rather
+     * than waited for, so this asserts the behaviour and not the calendar.
+     */
+    public function testAfterTheSunsetAHandoffCannotBeRedeemedWithoutADeviceCredential(): void
+    {
+        $started = $this->start();
+        Services::desktopSignInService()->confirmByUserCode($this->makeIdentity('Rahul'), $started['userCode'], null, null, self::PORTAL_TOKEN);
+        $code = Services::desktopSignInService()->poll($started['deviceCode'])['portalHandoff'];
+
+        try {
+            $this->serviceAfterSunset()->redeemHandoff($code);
+            $this->fail('an unauthenticated redemption after the sunset should have been refused');
+        } catch (ApiException $error) {
+            $this->assertSame(403, $error->status());
+            $this->assertStringContainsString('computer it was issued to', $error->getMessage());
+        }
+
+        // Refused, not spent: the machine it belongs to can still redeem it.
+        $row = $this->db->table('remote_desktop_signin_codes')->where('device_code', $started['deviceCode'])->get()->getRowArray();
+        $this->assertSame(hash('sha256', $code), $row['handoff_hash']);
+    }
+
+    /** The real service with the legacy window already closed. */
+    private function serviceAfterSunset(): \App\Domain\Device\DesktopSignInService
+    {
+        return new class (
+            db_connect(),
+            Services::deviceService(),
+            Services::policyResolver(),
+            Services::auditService(),
+            Services::remoteConfig(),
+        ) extends \App\Domain\Device\DesktopSignInService {
+            protected function unauthenticatedHandoffSunset(): string
+            {
+                return '2020-01-01';
+            }
+        };
+    }
 }

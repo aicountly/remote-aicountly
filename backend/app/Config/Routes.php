@@ -348,7 +348,13 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
     // The desktop's embedded portal redeeming its one-time sign-in hand-off.
     // Unauthenticated: the 64-hex code is the proof, like a poll's deviceCode.
     $routes->post('desktop-signin/handoff', 'DesktopSignInController::handoff', [
-        'filter' => 'rate-limit:desktop-signin-handoff,20,60',
+        'filter' => [
+            // Optional only until DesktopSignInService::HANDOFF_UNAUTHENTICATED_SUNSET,
+            // for agents in the field that redeem with the code alone. The
+            // service refuses an unauthenticated redemption after that date.
+            'device-auth-optional:device.self',
+            'rate-limit:desktop-signin-handoff,20,60',
+        ],
     ]);
 
     $routes->get('devices/(:segment)', 'DeviceController::show/$1', ['filter' => 'api-auth']);

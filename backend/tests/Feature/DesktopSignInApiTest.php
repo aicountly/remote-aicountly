@@ -176,4 +176,128 @@ final class DesktopSignInApiTest extends RemoteTestCase
             ->post('v1/remote/desktop-signin/handoff', ['code' => $poll['portalHandoff']])
             ->assertStatus(404);
     }
+
+    /**
+     * The hand-off is redeemed by the machine it was issued to.
+     *
+     * Until this binding existed the 64-hex code was the whole proof, and the
+     * answer is the confirming person's estate-wide `auth_token` — so anyone
+     * who came by the code could `curl` it from anywhere and hold a credential
+     * that mints a `ses_key` for every AICOUNTLY product. Now the caller also
+     * presents a credential for the enrolled device, which needs the private
+     * key in that machine's keystore.
+     */
+    public function testTheEmbeddedPortalSignInIsRedeemedByTheMachineItWasIssuedTo(): void
+    {
+        $keys = $this->makeDeviceKeypair();
+        $user = $this->makeIdentity('Rahul');
+
+        $poll = $this->signInAndClaim($keys, $user, 'PC-30', 'aic.portal-auth-token.bound');
+
+        $redeem = $this->withHeaders($this->asEnrolledDevice($poll['device']['uuid'], $keys['secretKey']))
+            ->withBodyFormat('json')
+            ->post('v1/remote/desktop-signin/handoff', ['code' => $poll['portalHandoff']]);
+
+        $redeem->assertStatus(200);
+        $this->assertSame('aic.portal-auth-token.bound', $this->data($redeem)['authToken']);
+        $this->assertStringContainsString('no-store', $redeem->response()->getHeaderLine('Cache-Control'));
+    }
+
+    /**
+     * Another machine's credential redeems nothing — and, just as important,
+     * does not spend the hand-off on its way to being refused. A refusal that
+     * destroyed the row would let anyone holding the code stop the real
+     * computer from ever signing in.
+     */
+    public function testAnotherMachinesCredentialNeitherRedeemsNorSpendsTheHandoff(): void
+    {
+        $mine = $this->makeDeviceKeypair();
+        $user = $this->makeIdentity('Rahul');
+        $poll = $this->signInAndClaim($mine, $user, 'PC-31', 'aic.portal-auth-token.mine');
+
+        $theirs = $this->enrolDevice($this->makeIdentity('Someone Else'), null, ['deviceName' => 'ATTACKER-1']);
+
+        $this->withHeaders($this->asEnrolledDevice((string) $theirs['device']['uuid'], $theirs['secretKey']))
+            ->withBodyFormat('json')
+            ->post('v1/remote/desktop-signin/handoff', ['code' => $poll['portalHandoff']])
+            ->assertStatus(404);
+
+        // Still there for the machine it belongs to.
+        $redeem = $this->withHeaders($this->asEnrolledDevice($poll['device']['uuid'], $mine['secretKey']))
+            ->withBodyFormat('json')
+            ->post('v1/remote/desktop-signin/handoff', ['code' => $poll['portalHandoff']]);
+
+        $redeem->assertStatus(200);
+        $this->assertSame('aic.portal-auth-token.mine', $this->data($redeem)['authToken']);
+    }
+
+    /**
+     * A credential that does not verify is a refusal, not a quiet fall-back to
+     * the unauthenticated path — otherwise presenting rubbish would be the way
+     * to avoid being checked.
+     */
+    public function testARubbishDeviceCredentialIsRefusedRatherThanIgnored(): void
+    {
+        $keys = $this->makeDeviceKeypair();
+        $user = $this->makeIdentity('Rahul');
+        $poll = $this->signInAndClaim($keys, $user, 'PC-32', 'aic.portal-auth-token.rubbish');
+
+        $this->withHeaders(['Authorization' => 'Bearer device.not-a-real-credential'])
+            ->withBodyFormat('json')
+            ->post('v1/remote/desktop-signin/handoff', ['code' => $poll['portalHandoff']])
+            ->assertStatus(401);
+    }
+
+    /**
+     * Start, confirm and claim a desktop sign-in, leaving a hand-off to redeem.
+     *
+     * @param  array{publicKey: string, secretKey: string} $keys
+     * @return array<string, mixed> the claiming poll's answer
+     */
+    private function signInAndClaim(array $keys, RemoteIdentity $user, string $deviceName, string $portalToken): array
+    {
+        $start = $this->data($this->withBodyFormat('json')->post('v1/remote/desktop-signin/start', [
+            'deviceName' => $deviceName,
+            'publicKey'  => $keys['publicKey'],
+        ]));
+
+        $this->withHeaders($this->asUser($user))
+            ->withBodyFormat('json')
+            ->post('v1/remote/desktop-signin/confirm', [
+                'userCode'    => $start['userCode'],
+                'portalToken' => $portalToken,
+            ])
+            ->assertStatus(200);
+
+        $poll = $this->data($this->withBodyFormat('json')
+            ->post('v1/remote/desktop-signin/poll', ['deviceCode' => $start['deviceCode']]));
+
+        $this->assertSame('confirmed', $poll['status']);
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{64}$/', $poll['portalHandoff']);
+
+        return $poll;
+    }
+
+    /**
+     * The `Authorization` header the agent sends after this sign-in: the device
+     * the poll just enrolled, proving possession of the key it enrolled with.
+     *
+     * {@see \Tests\Support\DeviceApiRequests::asDevice()} does the same from an
+     * `enrolDevice()` result; here the device was enrolled by the sign-in
+     * itself, so only its uuid and the secret key are to hand.
+     *
+     * @return array<string, string>
+     */
+    private function asEnrolledDevice(string $uuid, string $secretKey): array
+    {
+        $auth      = Services::deviceAuthenticationService();
+        $challenge = $auth->challenge($uuid, '203.0.113.9');
+
+        return ['Authorization' => 'Bearer device.' . $auth->verify(
+            $uuid,
+            $challenge['nonce'],
+            $challenge['issuedAt'],
+            $this->signChallenge($secretKey, $uuid, $challenge['nonce'], $challenge['issuedAt']),
+        )['token']];
+    }
 }
