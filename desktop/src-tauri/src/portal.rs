@@ -135,6 +135,13 @@ pub fn may_navigate(url: &Url, origin: &Url) -> bool {
 /// redeem it. Held here rather than in the window, which never sees it.
 static HANDOFF: Mutex<Option<String>> = Mutex::new(None);
 
+/// A sign-in the agent has already redeemed, waiting for the portal to open.
+///
+/// Preferred over [`HANDOFF`]: redeeming with this machine's device credential
+/// is what stops the one-time code being a credential in its own right, and the
+/// token travels to the page in a fragment rather than over the network.
+static SIGN_IN: Mutex<Option<String>> = Mutex::new(None);
+
 /// Keep a hand-off code for the next time the portal is shown.
 pub fn stash_handoff(code: String) {
     if is_handoff_code(&code) {
@@ -146,6 +153,29 @@ pub fn stash_handoff(code: String) {
 
 fn take_handoff() -> Option<String> {
     HANDOFF.lock().ok()?.take()
+}
+
+/// Hold a sign-in the agent redeemed itself. Anything that is not a plausible
+/// token is dropped rather than put in an address.
+pub fn stash_sign_in(auth_token: String) {
+    if is_sign_in_token(&auth_token) {
+        if let Ok(mut held) = SIGN_IN.lock() {
+            *held = Some(auth_token);
+        }
+    }
+}
+
+fn take_sign_in() -> Option<String> {
+    SIGN_IN.lock().ok()?.take()
+}
+
+/// What the portal mints: 32 bytes, hex. Checked before the value is put in an
+/// address, so a server answering with something else cannot steer the page.
+fn is_sign_in_token(token: &str) -> bool {
+    token.len() == 64
+        && token
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// 64 lowercase hex, as the server issues it — and therefore safe to put in
@@ -184,6 +214,14 @@ pub fn launch_nonce() -> &'static str {
 #[must_use]
 pub fn handoff_path(code: &str, nonce: &str) -> String {
     format!("/auth/desktop#desktop_handoff={code}&n={nonce}")
+}
+
+/// The same page, for a sign-in this agent has already redeemed: the token
+/// itself, in the fragment, which is never sent to a server and is taken out of
+/// the address by the page before anything else reads it.
+#[must_use]
+pub fn sign_in_path(auth_token: &str, nonce: &str) -> String {
+    format!("/auth/desktop#desktop_token={auth_token}&n={nonce}")
 }
 
 /// Tells the portal page it is inside the desktop application, and this
@@ -255,9 +293,13 @@ pub fn show(
 ) -> Result<(), String> {
     // A sign-in waiting to be handed over goes first: the portal opens on the
     // page that redeems it, and lands on its dashboard signed in.
-    let target = match take_handoff() {
-        Some(code) => Some(portal_url(origin, &handoff_path(&code, launch_nonce()))?),
-        None => path.map(|path| portal_url(origin, path)).transpose()?,
+    let target = match (take_sign_in(), take_handoff()) {
+        // Redeemed already, with this machine's device credential.
+        (Some(token), _) => Some(portal_url(origin, &sign_in_path(&token, launch_nonce()))?),
+        // Not redeemed: an older server, or this machine had no credential to
+        // redeem with. The page redeems the code itself, as it always did.
+        (None, Some(code)) => Some(portal_url(origin, &handoff_path(&code, launch_nonce()))?),
+        (None, None) => path.map(|path| portal_url(origin, path)).transpose()?,
     };
 
     if let Some(portal) = app.get_webview(PORTAL_LABEL) {
@@ -552,6 +594,52 @@ mod tests {
 
         stash_handoff("not a code".into());
         assert_eq!(take_handoff(), None);
+    }
+
+    /// The agent redeemed the hand-off itself, so what reaches the page is the
+    /// sign-in — in the fragment, which is never sent to a server, so it is not
+    /// written to an access log the way a query string is.
+    #[test]
+    fn a_redeemed_sign_in_reaches_the_page_in_the_fragment() {
+        let token = "e".repeat(64);
+        let url = portal_url(&origin(), &sign_in_path(&token, "n0nce")).unwrap();
+
+        assert_eq!(url.path(), "/auth/desktop");
+        assert_eq!(
+            url.query(),
+            None,
+            "the sign-in must never be sent to a server"
+        );
+        assert_eq!(
+            url.fragment(),
+            Some(format!("desktop_token={token}&n=n0nce").as_str())
+        );
+    }
+
+    #[test]
+    fn only_a_well_formed_sign_in_is_kept_for_the_portal() {
+        assert!(is_sign_in_token(&"0a".repeat(32)));
+
+        for token in [
+            "",
+            "short",
+            &"Z".repeat(64),
+            &format!("{}&n=x", "a".repeat(60)),
+        ] {
+            assert!(!is_sign_in_token(token), "{token:?} must not be kept");
+        }
+    }
+
+    #[test]
+    fn a_stashed_sign_in_is_given_up_once() {
+        let token = "f".repeat(64);
+        stash_sign_in(token.clone());
+
+        assert_eq!(take_sign_in(), Some(token));
+        assert_eq!(take_sign_in(), None);
+
+        stash_sign_in("not a token".into());
+        assert_eq!(take_sign_in(), None);
     }
 
     #[test]

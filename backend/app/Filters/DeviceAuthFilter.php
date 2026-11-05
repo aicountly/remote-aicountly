@@ -77,7 +77,7 @@ class DeviceAuthFilter implements FilterInterface
         return null;
     }
 
-    private function bearerToken(RequestInterface $request): string
+    protected function bearerToken(RequestInterface $request): string
     {
         $header = $request->getHeaderLine('Authorization');
 

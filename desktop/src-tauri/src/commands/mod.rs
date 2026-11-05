@@ -184,13 +184,62 @@ pub async fn poll_desktop_sign_in(
         .await
         .map_err(|error| error.to_string())?;
 
-    // The portal's sign-in hand-off stays here: the window never holds it,
-    // and the next time the portal is shown it redeems it (`portal::show`).
+    // The portal's sign-in hand-off stays here: the window never holds it.
+    //
+    // Redeemed now, with this machine's device credential, rather than handed
+    // to the portal page to redeem over the network — the code on its own used
+    // to be enough to obtain the person's estate-wide `auth_token`, from
+    // anywhere. What the page gets is the token itself, in a fragment.
+    //
+    // If this machine has no credential to redeem with (an older server, no
+    // network for a moment, a key store that will not open), the code is stashed
+    // and the page redeems it as it always did: a sign-in that works is worth
+    // more than a hand-off that is perfectly bound, and the server refuses the
+    // unauthenticated path on its own schedule.
     if let Some(code) = outcome.portal_handoff.take() {
-        crate::portal::stash_handoff(code);
+        match redeem_handoff(&agent, outcome.device.as_ref().map(|device| device.uuid.as_str()), &code).await {
+            Some(auth_token) => crate::portal::stash_sign_in(auth_token),
+            None => crate::portal::stash_handoff(code),
+        }
     }
 
     Ok(outcome)
+}
+
+/// Redeem a portal hand-off with this machine's device credential.
+///
+/// `None` — never an error the person sees — when there is no device to
+/// authenticate as, no credential to be had, or the server refuses: the caller
+/// then falls back to letting the page redeem the code.
+async fn redeem_handoff(agent: &Agent, device_uuid: Option<&str>, code: &str) -> Option<String> {
+    let device_uuid = device_uuid?;
+
+    // The connection loop's credential when it has one with life left, as
+    // `revoke_on_server` does; otherwise prove possession once, here.
+    let margin = std::time::Duration::from_secs(SIGN_OUT_CREDENTIAL_MARGIN_SECONDS);
+    let held = agent.device_client().filter(|client| {
+        client
+            .credential()
+            .is_some_and(|credential| !credential.is_expiring(margin))
+    });
+
+    let client = match held {
+        Some(client) => client,
+        None => {
+            let keypair = agent.device_key().ok()?;
+            let mut client = remote_core::ApiClient::new(agent.config()).ok()?;
+            client.authenticate(device_uuid, &keypair).await.ok()?;
+            client
+        }
+    };
+
+    match client.redeem_portal_handoff(code).await {
+        Ok(token) => Some(token),
+        Err(error) => {
+            tracing::warn!(%error, "portal hand-off not redeemed by this machine; the portal will redeem the code");
+            None
+        }
+    }
 }
 
 /// Everything the enrolment call needs, and nothing else.

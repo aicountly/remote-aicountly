@@ -964,6 +964,33 @@ impl ApiClient {
         Self::read(response).await
     }
 
+    /// Redeem the portal sign-in hand-off this machine's claiming poll was
+    /// given, for the `auth_token` the confirming page handed over.
+    ///
+    /// **With this device's credential**, which is the point. The hand-off used
+    /// to be redeemed by the embedded portal page over the network with nothing
+    /// but the one-time code, so the code alone yielded a person's estate-wide
+    /// `auth_token` — redeemable by anything that came by it, from anywhere.
+    /// Redeeming here instead means the private key in this machine's key store
+    /// is part of the proof, and the token reaches the portal page in a URL
+    /// fragment, which no server sees.
+    pub async fn redeem_portal_handoff(&self, code: &str) -> Result<String, ApiError> {
+        #[derive(Deserialize)]
+        struct Body {
+            #[serde(rename = "authToken")]
+            auth_token: String,
+        }
+
+        let body: Body = self
+            .post(
+                "/v1/remote/desktop-signin/handoff",
+                &serde_json::json!({ "code": code }),
+            )
+            .await?;
+
+        Ok(body.auth_token)
+    }
+
     /// Register this machine.
     ///
     /// The **only** call that takes a `ses_key`, and it takes it by value so

@@ -6,15 +6,23 @@
  * the server seals it under a one-time code that only the desktop agent
  * receives. The agent opens this application in its embedded portal at
  *
+ *     /auth/desktop#desktop_token=<auth_token>&n=<per-launch nonce>
+ *
+ * when the agent redeemed the hand-off itself — which it does with its own
+ * device credential, so the one-time code is not a credential that anything
+ * holding it can cash in — or
+ *
  *     /auth/desktop#desktop_handoff=<code>&n=<per-launch nonce>
  *
- * (a path of its own, so the page always loads afresh — a fragment-only change
- * to the page already showing would not), which is turned back into `/` here
- * before anything renders,
- * and this redeems the code — once — for the token, which AuthProvider then
- * stages, checks with the portal and stores exactly like any other sign-in.
- * So somebody who confirmed in their browser is not asked to sign in again
- * inside the application.
+ * when it could not — an older server, or no device credential to hand — in
+ * which case this page redeems the code itself, as it always did.
+ *
+ * Either way it is a path of its own, so the page always loads afresh (a
+ * fragment-only change to the page already showing would not), and it is turned
+ * back into `/` here before anything renders. What comes out is an `auth_token`,
+ * which AuthProvider stages, checks with the portal and stores exactly like any
+ * other sign-in — so somebody who confirmed in their browser is not asked to
+ * sign in again inside the application.
  *
  * Two rules keep this from being a way to sign somebody in as somebody else
  * (login CSRF):
@@ -22,8 +30,8 @@
  *   * it runs only inside the desktop application's own web view, and only
  *     when the `n` in the address is the nonce that web view was started with
  *     (`features/desktop/embedding.ts`) — a link cannot know it;
- *   * the code leaves the address before anything else reads it, and is
- *     carried in the fragment, which is never sent to a server.
+ *   * what it carries leaves the address before anything else reads it, and is
+ *     in the fragment, which is never sent to a server.
  */
 
 import { getApiBaseUrl } from '../config'
@@ -31,13 +39,22 @@ import { desktopEmbedding } from '../features/desktop/embedding'
 import type { DesktopEmbedding } from '../features/desktop/embedding'
 
 const PARAM = 'desktop_handoff'
+/** A sign-in the agent has already redeemed, in place of a code to redeem. */
+const TOKEN_PARAM = 'desktop_token'
 /** Where the desktop opens a hand-off; the app itself lives at `/`. */
 export const HANDOFF_PATH = '/auth/desktop'
 const NONCE_PARAM = 'n'
 const REDEEM_TIMEOUT_MS = 15_000
 
 export interface DesktopHandoff {
+  /** The one-time code to redeem, or '' when `authToken` is already here. */
   code: string
+  /**
+   * The sign-in itself, when the agent redeemed the hand-off with its own
+   * device credential before opening this page — which is the normal case, and
+   * why the code is no longer a credential anybody holding it can cash in.
+   */
+  authToken?: string
   nonce: string
 }
 
@@ -46,10 +63,14 @@ let captured: DesktopHandoff | null = null
 /** Parse a hand-off out of a fragment, or null. */
 export function parseDesktopHandoff(hash: string): DesktopHandoff | null {
   const params = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash)
-  const code = params.get(PARAM)
   const nonce = params.get(NONCE_PARAM)
+  if (!nonce) return null
 
-  if (!code || !/^[0-9a-f]{64}$/.test(code) || !nonce) return null
+  const authToken = params.get(TOKEN_PARAM)
+  if (authToken && /^[0-9a-f]{64}$/.test(authToken)) return { code: '', authToken, nonce }
+
+  const code = params.get(PARAM)
+  if (!code || !/^[0-9a-f]{64}$/.test(code)) return null
 
   return { code, nonce }
 }
@@ -63,7 +84,8 @@ export function captureDesktopHandoff(
   history: Pick<History, 'replaceState'> = window.history,
 ): void {
   const onHandoffPath = loc.pathname === HANDOFF_PATH
-  if (!onHandoffPath && !loc.hash.includes(`${PARAM}=`)) return
+  const carriesOne = loc.hash.includes(`${PARAM}=`) || loc.hash.includes(`${TOKEN_PARAM}=`)
+  if (!onHandoffPath && !carriesOne) return
 
   captured = parseDesktopHandoff(loc.hash)
 
@@ -93,6 +115,10 @@ export async function redeemDesktopHandoff(
   embedding: DesktopEmbedding | null = desktopEmbedding(),
 ): Promise<string | null> {
   if (!embedding || embedding.nonce !== handoff.nonce) return null
+
+  // Already redeemed, by the agent, with this machine's device credential.
+  // Nothing to ask the server for.
+  if (handoff.authToken) return handoff.authToken
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REDEEM_TIMEOUT_MS)

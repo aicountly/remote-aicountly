@@ -107,6 +107,7 @@ sign-in on its own ([below](#two-step-verification)).
 | Guest token | until the session ends | `sessionStorage` | one participant, one session |
 | Signalling token | 2 minutes | memory only | one room |
 | Device credential | minutes | **memory only, on the machine** | one enrolled device, scoped |
+| Desktop sign-in hand-off code | 10 min, once | **nowhere** (only its SHA-256 is stored) | names the one hand-off whose sealed `auth_token` the enrolled machine may open |
 
 The shared `.aicountly.com` `auth_token` cookie is retired: it was readable by
 any script on any `*.aicountly.com` page. Cross-product sign-in is the portal
@@ -114,10 +115,21 @@ hand-off (`my.aicountly.com/login/authentication_jump`, backed by the portal's
 httpOnly `AIC_AUTH_TOKEN` cookie); a leftover cookie is purged at start-up and
 sign-out on `*.aicountly.com`.
 
-A **device** is not a person and never holds a person's credential. It proves
-possession of an Ed25519 private key that never leaves the machine, over a
-canonical domain-separated payload with a single-use nonce, and receives a
-short-lived scoped credential in return. There is no permanent bearer token
+A **device** is not a person and does not hold a person's credential to act
+with. It proves possession of an Ed25519 private key that never leaves the
+machine, over a canonical domain-separated payload with a single-use nonce, and
+receives a short-lived scoped credential in return.
+
+One exception, in one direction, and it is in the table above: when somebody
+confirms a desktop sign-in *and* their browser sends its `auth_token` along,
+the agent is handed a one-time code and redeems it — with its own device
+credential — for that `auth_token`, which it passes to its embedded portal so
+the person is not asked to sign in twice. The machine carries the token to its
+own web view; it never authenticates to the API as that person. The code alone
+redeems nothing: the sealed token's key is derived from the code *and* the
+fingerprint of the enrolling key, and the route refuses a redemption that is
+not the machine the hand-off was issued to (dated legacy window in
+`DesktopSignInService::HANDOFF_UNAUTHENTICATED_SUNSET`). There is no permanent bearer token
 that is a machine's identity, and revocation takes effect on the device's next
 request rather than at its next renewal. See
 [desktop/DEVICE_ENROLMENT.md](desktop/DEVICE_ENROLMENT.md).

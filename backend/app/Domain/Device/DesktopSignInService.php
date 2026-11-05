@@ -53,6 +53,22 @@ class DesktopSignInService
     /** How long the agent has to hand the portal its sign-in, once claimed. */
     private const HANDOFF_TTL_SECONDS = 600;
 
+    /**
+     * The last day a hand-off may be redeemed without a device credential.
+     *
+     * Redemption used to require nothing but the 64-hex code, so the code alone
+     * yielded a person's estate-wide `auth_token`. It now requires a credential
+     * for the device the hand-off was issued to — but an agent already
+     * installed in the field redeems the old way, and refusing it outright
+     * would leave those machines unable to finish a sign-in. So the old way
+     * keeps working, logged, until this date, by which time the agents that
+     * redeem with their device credential have shipped.
+     *
+     * Deleting this constant and the `optional-device-auth` filter is the whole
+     * of the follow-up work; nothing else depends on the date.
+     */
+    private const HANDOFF_UNAUTHENTICATED_SUNSET = '2026-12-31';
+
     /** An `auth_token` is opaque, but not unbounded. */
     private const PORTAL_TOKEN_MAX_LENGTH = 4096;
 
@@ -170,7 +186,14 @@ class DesktopSignInService
         // The confirming page's sign-in, if it sent one, leaves this row in
         // the same statement: sealed with a one-time code that is returned to
         // this caller and never stored (see sealHandoff()).
-        $handoff = $this->sealHandoff($row['portal_token'] ?? null);
+        // The machine the hand-off is for, known from the row's own payload
+        // before the device exists: the fingerprint of the key it is about to
+        // enrol with. The hand-off is sealed under it and only a credential for
+        // that device can redeem it (see redeemHandoff()).
+        $enrollingKey = DeviceSignature::normalisePublicKey((string) ($this->decodePayload($row['device_payload'])['publicKey'] ?? ''));
+        $enrollingFp  = $enrollingKey !== null ? DeviceSignature::fingerprint($enrollingKey) : null;
+
+        $handoff = $this->sealHandoff($row['portal_token'] ?? null, $enrollingFp);
 
         $this->db->table('remote_desktop_signin_codes')
             ->where('id', $row['id'])
@@ -182,6 +205,7 @@ class DesktopSignInService
                 'handoff_hash'       => $handoff['hash'] ?? null,
                 'handoff_ciphertext' => $handoff['ciphertext'] ?? null,
                 'handoff_expires_at' => $handoff !== null ? Clock::in(self::HANDOFF_TTL_SECONDS) : null,
+                'handoff_device_fp'  => $handoff !== null ? $enrollingFp : null,
             ]);
 
         if ($this->db->affectedRows() !== 1) {
@@ -214,12 +238,24 @@ class DesktopSignInService
     /**
      * Redeem a hand-off code for the AICOUNTLY sign-in it seals — once.
      *
-     * Called by the web application inside the desktop's embedded portal
-     * (docs/desktop/PORTAL.md), unauthenticated: the 32-byte code is the proof,
-     * and only the agent that claimed the sign-in ever had it. The row's copy is
-     * gone after this, whether or not the caller uses what it got.
+     * What comes back is the confirming person's AICOUNTLY `auth_token` — the
+     * estate-wide credential that mints a `ses_key` for every product — so the
+     * code is not treated as sufficient proof of anything. The caller must
+     * present a credential for the device the hand-off was issued to: the
+     * machine that proved possession of its enrolled private key moments
+     * earlier. The code is what *names* the hand-off; the device credential is
+     * what authorises opening it.
+     *
+     * The redeeming caller is the agent (`poll_desktop_sign_in`), which holds
+     * that credential. It passes the token to its embedded portal in a fragment
+     * — never over the network, never in a URL a server logs. Until
+     * {@see self::HANDOFF_UNAUTHENTICATED_SUNSET} an agent already in the field
+     * may still redeem with the code alone, which is logged.
+     *
+     * The row's copy is gone after this, whether or not the caller uses what it
+     * got.
      */
-    public function redeemHandoff(string $code): string
+    public function redeemHandoff(string $code, ?DevicePrincipal $device = null): string
     {
         $code = strtolower(trim($code));
         if (preg_match('/^[0-9a-f]{64}$/', $code) !== 1) {
@@ -239,22 +275,89 @@ class DesktopSignInService
             throw ApiException::notFound('That sign-in hand-off has expired or was already used.');
         }
 
+        $boundTo = is_string($row['handoff_device_fp'] ?? null) && $row['handoff_device_fp'] !== ''
+            ? $row['handoff_device_fp']
+            : null;
+
+        // Decided before the row is spent: a caller who is not allowed to open
+        // this hand-off must not be able to destroy it either, or anyone with
+        // the code could stop the real machine from signing in.
+        $this->assertMayRedeem($boundTo, $device);
+
         // Spend it first: two redemptions racing must not both succeed.
         $this->db->table('remote_desktop_signin_codes')
             ->where('id', $row['id'])
             ->where('handoff_hash', $hash)
-            ->update(['handoff_hash' => null, 'handoff_ciphertext' => null, 'handoff_expires_at' => null]);
+            ->update([
+                'handoff_hash'       => null,
+                'handoff_ciphertext' => null,
+                'handoff_expires_at' => null,
+                'handoff_device_fp'  => null,
+            ]);
 
         if ($this->db->affectedRows() !== 1) {
             throw ApiException::notFound('That sign-in hand-off has expired or was already used.');
         }
 
-        $token = $this->openHandoff($code, $row['handoff_ciphertext']);
+        $token = $this->openHandoff($code, $row['handoff_ciphertext'], $boundTo);
         if ($token === null) {
             throw ApiException::notFound('That sign-in hand-off has expired or was already used.');
         }
 
         return $token;
+    }
+
+    /**
+     * May this caller open a hand-off issued to the machine whose key
+     * fingerprint is `$boundTo`?
+     *
+     * Three cases, and the middle one is the only one that is temporary:
+     *
+     *   * a device credential is presented — it must name the same device, in
+     *     the `device.self` scope. Anything else is a refusal, including a
+     *     valid credential for a different machine;
+     *   * none is presented, and the sunset has not passed — allowed, and
+     *     recorded, because an agent installed before this release redeems with
+     *     the code alone;
+     *   * none is presented after the sunset, or the row predates the binding
+     *     and has nothing to check against after the sunset — refused.
+     */
+    private function assertMayRedeem(?string $boundTo, ?DevicePrincipal $device): void
+    {
+        if ($device !== null) {
+            $device->assertScope(DevicePrincipal::SCOPE_MANAGE);
+
+            $actual = $this->devices->findByUuid($device->deviceUuid)['public_key_fingerprint'] ?? null;
+
+            if ($boundTo === null || ! is_string($actual) || ! hash_equals($boundTo, $actual)) {
+                throw ApiException::notFound('That sign-in hand-off has expired or was already used.');
+            }
+
+            return;
+        }
+
+        if (Clock::hasPassed($this->unauthenticatedHandoffSunset() . ' 23:59:59+00')) {
+            throw ApiException::forbidden(
+                'DEVICE_CREDENTIAL_REQUIRED',
+                'This sign-in hand-off must be redeemed by the computer it was issued to. Update AICOUNTLY Remote and sign in again.',
+            );
+        }
+
+        log_message(
+            'warning',
+            'Remote: desktop sign-in hand-off redeemed with no device credential (agent predates '
+            . $this->unauthenticatedHandoffSunset() . '); bound={bound}',
+            ['bound' => $boundTo ?? 'none'],
+        );
+    }
+
+    /**
+     * Overridden in tests, so a test of the refusal does not start failing — or
+     * worse, start passing for the wrong reason — when the real date arrives.
+     */
+    protected function unauthenticatedHandoffSunset(): string
+    {
+        return self::HANDOFF_UNAUTHENTICATED_SUNSET;
     }
 
     /**
@@ -465,7 +568,7 @@ class DesktopSignInService
      *
      * @return array{code: string, hash: string, ciphertext: string}|null
      */
-    private function sealHandoff(mixed $token): ?array
+    private function sealHandoff(mixed $token, ?string $fingerprint = null): ?array
     {
         if (! is_string($token) || $token === '') {
             return null;
@@ -477,11 +580,13 @@ class DesktopSignInService
         return [
             'code'       => $code,
             'hash'       => hash('sha256', $code),
-            'ciphertext' => base64_encode($nonce . sodium_crypto_secretbox($token, $nonce, $this->handoffKey($code))),
+            'ciphertext' => base64_encode(
+                $nonce . sodium_crypto_secretbox($token, $nonce, $this->handoffKey($code, $fingerprint)),
+            ),
         ];
     }
 
-    private function openHandoff(string $code, string $ciphertext): ?string
+    private function openHandoff(string $code, string $ciphertext, ?string $fingerprint = null): ?string
     {
         $raw = base64_decode($ciphertext, true);
         if ($raw === false || strlen($raw) <= SODIUM_CRYPTO_SECRETBOX_NONCEBYTES) {
@@ -491,16 +596,31 @@ class DesktopSignInService
         $token = sodium_crypto_secretbox_open(
             substr($raw, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES),
             substr($raw, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES),
-            $this->handoffKey($code),
+            $this->handoffKey($code, $fingerprint),
         );
 
         return is_string($token) && $token !== '' ? $token : null;
     }
 
-    /** Domain-separated from the code's stored hash, so the hash reveals nothing of the key. */
-    private function handoffKey(string $code): string
+    /**
+     * Domain-separated from the code's stored hash, so the hash reveals nothing
+     * of the key — and, since the fingerprint of the enrolling key is mixed in,
+     * the sealed token cannot be opened with the code alone by anybody who also
+     * reads the row.
+     *
+     * A null fingerprint reproduces the pre-binding context string exactly, so
+     * a hand-off sealed by the previous release stays openable for the minutes
+     * its TTL has left.
+     */
+    private function handoffKey(string $code, ?string $fingerprint = null): string
     {
-        return hash_hmac('sha256', 'aicountly-remote/desktop-signin/portal-handoff', $code, true);
+        $context = 'aicountly-remote/desktop-signin/portal-handoff';
+
+        if ($fingerprint !== null && $fingerprint !== '') {
+            $context .= '|' . $fingerprint;
+        }
+
+        return hash_hmac('sha256', $context, $code, true);
     }
 
     /** @param list<string> $liveStatuses */
