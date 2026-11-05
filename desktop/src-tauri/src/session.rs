@@ -463,7 +463,9 @@ where
                     }
                 }
             }
-            Err(error) => tracing::debug!(%error, "the control channel could not be read"),
+            // Not `debug`: a control channel that cannot be read is why input stops, and
+            // the shipped log level is `info`, so this used to be written nowhere.
+            Err(error) => tracing::warn!(%error, "the control channel could not be read"),
         }
 
         // --- who is asking, and what is permitted -------------------------
