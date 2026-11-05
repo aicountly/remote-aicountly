@@ -13,9 +13,9 @@
 //! is given. What decides whether to give it anything is [`Agent::handle_control`],
 //! and that runs every message through the gate first.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use remote_core::{AgentConfig, AgentEvent, AgentState, ControlStateView, UnattendedState};
 use remote_core::{
@@ -80,7 +80,30 @@ pub struct Agent {
     /// belongs to. Unattended connections do not use it — they are governed by
     /// the device setting instead.
     secure_desktop_consent: AtomicBool,
+    /// How many input events the operating system refused in this session,
+    /// and when one was last reported.
+    ///
+    /// A refusal used to be discarded where it happened
+    /// (`Err(_) => Ok(Handled::Failed)`), taking the reason with it. Nothing
+    /// logged it, nothing counted it and nothing said it, so the one failure
+    /// a person actually hits — "I granted control and they cannot click
+    /// anything" — looked identical at both ends to everything working: the
+    /// controller saw "You are controlling this computer", the banner here
+    /// said who was controlling, and the mouse did not move. The audit has
+    /// carried it as an open finding for exactly that reason (P1-2, §9:
+    /// "Failures that say nothing").
+    ///
+    /// Counted always; logged at most once every
+    /// [`INJECTION_REFUSAL_LOG_INTERVAL`], because input arrives many times a
+    /// second and the log is capped and rolled — a line per event would push
+    /// out the context that makes the refusal worth having.
+    refused_injections: AtomicU64,
+    last_injection_refusal_log: Mutex<Option<Instant>>,
 }
+
+/// How often a refused injection is written to the log. The count is exact;
+/// the log is a sample, so one stuck session cannot cost the whole file.
+const INJECTION_REFUSAL_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
 /// The companion link this machine has joined.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,6 +141,8 @@ impl Agent {
             help_request: Mutex::new(None),
             secure_desktop: Mutex::new(None),
             secure_desktop_consent: AtomicBool::new(false),
+            refused_injections: AtomicU64::new(0),
+            last_injection_refusal_log: Mutex::new(None),
         }
     }
 
@@ -1351,8 +1376,60 @@ impl Agent {
         match outcome {
             Ok(()) => Ok(Handled::Applied),
             Err(remote_device::PlatformError::Unsupported(_)) => Ok(Handled::Unsupported),
-            Err(_) => Ok(Handled::Failed),
+            Err(error) => {
+                self.note_refused_injection(&error);
+
+                Ok(Handled::Failed)
+            }
         }
+    }
+
+    /// The operating system refused an input event: count it, and say so.
+    ///
+    /// On Windows this is almost always UIPI — the application runs
+    /// `asInvoker`, so Windows refuses its input while a window belonging to a
+    /// higher-integrity process is in front (Task Manager, an installer, any
+    /// app started as administrator). On macOS it is Accessibility being
+    /// withdrawn mid-session. Both look the same from either end of a session:
+    /// control is granted, both banners say so, and nothing moves.
+    ///
+    /// The reason reaching the log is the whole point. It used to be built
+    /// carefully by the platform layer and then dropped on the floor one line
+    /// later, which left no way — for the person at the machine, the person
+    /// controlling, or anybody reading the log afterwards — to tell a refused
+    /// injection from a dead connection.
+    fn note_refused_injection(&self, error: &remote_device::PlatformError) {
+        let total = self.refused_injections.fetch_add(1, Ordering::Relaxed) + 1;
+
+        let Ok(mut last) = self.last_injection_refusal_log.lock() else {
+            return;
+        };
+
+        let now = Instant::now();
+        let due = last.is_none_or(|at| now.duration_since(at) >= INJECTION_REFUSAL_LOG_INTERVAL);
+
+        if !due {
+            return;
+        }
+
+        *last = Some(now);
+
+        tracing::warn!(
+            %error,
+            refused_this_session = total,
+            "the operating system refused an injected input event; control looks granted at both \
+             ends and nothing moves",
+        );
+    }
+
+    /// How many input events the operating system refused in this session.
+    ///
+    /// Distinct from [`Agent::rejected_control_messages`], which counts what
+    /// the *gate* refused: these are events the gate admitted and the platform
+    /// then would not deliver.
+    #[must_use]
+    pub fn refused_injections(&self) -> u64 {
+        self.refused_injections.load(Ordering::Relaxed)
     }
 
     /// Release every key this agent is holding.
@@ -1839,6 +1916,97 @@ mod tests {
         let _ = agent.handle_control(&pointer(0));
 
         assert_eq!(agent.rejected_control_messages(), 2);
+    }
+
+    /// The failure nobody could see.
+    ///
+    /// "I granted control and they cannot click anything" looked the same at
+    /// both ends as everything working: the controller's room said "You are
+    /// controlling this computer", the banner here named who was controlling,
+    /// and the pointer did not move. The platform layer built a reason —
+    /// Windows refusing an injection is almost always UIPI, a window in front
+    /// running as administrator — and `dispatch` dropped it one line later
+    /// with `Err(_) => Ok(Handled::Failed)`. Nothing logged it, nothing
+    /// counted it, nothing said it (audit P1-2, §9 "Failures that say
+    /// nothing"), so neither end nor the log afterwards could tell a refused
+    /// injection from a dead connection.
+    #[test]
+    fn input_the_operating_system_refuses_is_counted_rather_than_discarded() {
+        let agent = Agent::new();
+        assert_eq!(agent.refused_injections(), 0);
+
+        let refusal = remote_device::PlatformError::Os {
+            operation: "sending input",
+            detail: "Windows refused the input, usually because the window in front runs with \
+                     higher privileges"
+                .into(),
+        };
+
+        agent.note_refused_injection(&refusal);
+        agent.note_refused_injection(&refusal);
+
+        assert_eq!(
+            agent.refused_injections(),
+            2,
+            "every refusal counts, however often they are logged",
+        );
+    }
+
+    /// The count is exact and the log is a sample: input arrives many times a
+    /// second, and the log file is capped and rolled, so a line per refused
+    /// event would push out the context that makes the refusal worth having.
+    #[test]
+    fn refusals_are_counted_exactly_and_logged_sparingly() {
+        let agent = Agent::new();
+        let refusal = remote_device::PlatformError::Os {
+            operation: "sending input",
+            detail: "refused".into(),
+        };
+
+        for _ in 0..500 {
+            agent.note_refused_injection(&refusal);
+        }
+
+        assert_eq!(agent.refused_injections(), 500);
+
+        // One burst, one log line: the first is due, the rest are inside the
+        // interval. Asserted through the timestamp the rate limit keeps,
+        // because the lines themselves go to a subscriber this test has not
+        // installed.
+        let logged_at = agent
+            .last_injection_refusal_log
+            .lock()
+            .expect("not poisoned");
+        assert!(
+            logged_at.is_some(),
+            "the first refusal of a burst is always reported",
+        );
+    }
+
+    /// What the gate turned away and what the platform would not deliver are
+    /// different failures with different fixes, so they are counted apart.
+    #[test]
+    fn a_refused_injection_is_not_a_rejected_message() {
+        let agent = Agent::new();
+        agent.begin_session(summary());
+        agent.grant_control(CONTROLLER, false, false);
+
+        // Turned away by the gate: wrong sequence.
+        let _ = agent.handle_control(&pointer(0));
+        assert_eq!(agent.rejected_control_messages(), 1);
+        assert_eq!(
+            agent.refused_injections(),
+            0,
+            "the gate refusing is not the platform refusing",
+        );
+
+        agent.note_refused_injection(&remote_device::PlatformError::Os {
+            operation: "sending input",
+            detail: "refused".into(),
+        });
+
+        assert_eq!(agent.rejected_control_messages(), 1);
+        assert_eq!(agent.refused_injections(), 1);
     }
 
     /// A setting the agent would refuse must never reach the file the service
