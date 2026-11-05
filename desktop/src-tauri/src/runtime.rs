@@ -482,18 +482,15 @@ where
                     .filter(|_| platform::supports_companion())
                     .cloned();
 
-                match &awaiting {
-                    Some(pending) => emit(sink, agent.companion_requested(pending)),
-                    None => {
-                        // Withdrawn from the browser, lapsed, or answered
-                        // elsewhere: take it off the screen.
-                        let state = agent.state();
-                        if let Some(asked) =
-                            state.active_companion().filter(|asked| !asked.is_joined())
-                        {
-                            emit(sink, agent.companion_dismissed(&asked.companion_uuid));
-                        }
-                    }
+                // Anything this poll still believes is a live companion is
+                // over: reaching here means no companion loop is running
+                // (`companion::run` is awaited inside this very loop), so a
+                // companion left in the state is one whose loop has already
+                // exited without the state catching up.
+                clear_stale_companion(agent, sink, awaiting.as_ref());
+
+                if let Some(pending) = &awaiting {
+                    emit(sink, agent.companion_requested(pending));
                 }
             }
             // The short-lived credential was not accepted. That is not the
@@ -611,6 +608,57 @@ where
     }
 
     Ended::Renew
+}
+
+/// Take a companion off the screen when this poll says it is over.
+///
+/// `keep` is the link the API still lists as pending, if any; a companion
+/// naming that same link is the one being asked about and is left alone.
+///
+/// **Reaching this code means no companion loop is running.** `companion::run`
+/// is awaited inside the same loop that polls here, so while a companion is
+/// live this function cannot execute — and any companion the state still holds
+/// is one whose loop has already exited.
+///
+/// That is why a *joined* companion is cleared too, which is the half that was
+/// missing. Nothing but `companion::run`'s own teardown ended a joined one, so
+/// a loop that exited without reaching it — or whose state update was lost —
+/// left the machine believing for ever that it was still being shared. The
+/// banner stayed up over a session that had finished, and, worse, every later
+/// request was dropped on the floor: the state machine refuses to raise one
+/// over a companion that has joined (`AgentEvent::CompanionRequested`), so the
+/// browser sat on "Confirm on … to continue" and nobody at the machine was
+/// ever asked. The only way out was restarting the application.
+fn clear_stale_companion(
+    agent: &Arc<Agent>,
+    sink: &StateSink,
+    keep: Option<&remote_core::PendingCompanion>,
+) {
+    let Some(stale) = agent.state().active_companion().cloned() else {
+        return;
+    };
+
+    if keep.is_some_and(|pending| pending.companion_uuid == stale.companion_uuid) {
+        return;
+    }
+
+    if stale.is_joined() {
+        // `end_companion` and not `companion_dismissed`: a joined companion
+        // holds the control gate and may be holding keys down. Dismissal
+        // refuses a joined one outright, which is how this state survived.
+        tracing::warn!(
+            companion = %stale.companion_uuid,
+            session = %stale.session_uuid,
+            "a companion was still on screen with no loop behind it; ending it",
+        );
+
+        emit(sink, agent.end_companion());
+
+        return;
+    }
+
+    // Withdrawn from the browser, lapsed, or answered elsewhere.
+    emit(sink, agent.companion_dismissed(&stale.companion_uuid));
 }
 
 /// The device's presence-room socket, and when to replace its token.
@@ -837,6 +885,133 @@ mod tests {
             .await
             .expect("stops promptly when the application does")
             .expect("ends cleanly");
+    }
+
+    // ------------------------------------------- a companion left behind
+
+    fn enrolled() -> Arc<Agent> {
+        let agent = Arc::new(Agent::new());
+        agent.apply(AgentEvent::Enrolled {
+            device_uuid: "00000000-0000-4000-8000-000000000002".into(),
+            device_name: "PC-22".into(),
+            company_name: None,
+            key_fingerprint: "AAAA BBBB".into(),
+        });
+        agent.apply(AgentEvent::Authenticated);
+
+        agent
+    }
+
+    fn summary(companion_uuid: &str, joined: bool) -> remote_core::CompanionSummary {
+        remote_core::CompanionSummary {
+            companion_uuid: companion_uuid.into(),
+            session_uuid: "session-1".into(),
+            display_id: "AR-10030".into(),
+            company_name: None,
+            requested_by_name: Some("Rahul".into()),
+            expires_at: None,
+            started_at: joined.then(|| "2026-11-04T09:00:00Z".to_owned()),
+            phase: if joined {
+                remote_core::CompanionPhase::Ready
+            } else {
+                remote_core::CompanionPhase::AwaitingConfirmation
+            },
+            monitors: Vec::new(),
+            monitor: None,
+            controller_name: None,
+        }
+    }
+
+    fn pending(companion_uuid: &str) -> remote_core::PendingCompanion {
+        remote_core::PendingCompanion {
+            companion_uuid: companion_uuid.into(),
+            session_uuid: "session-2".into(),
+            display_id: "AR-10031".into(),
+            company_name: None,
+            requested_by_name: Some("Rahul".into()),
+            requested_at: None,
+            expires_at: None,
+        }
+    }
+
+    /// The bug behind "Confirm on PC-22 to continue" that never resolved.
+    ///
+    /// A companion that had joined was only ever ended by `companion::run`'s
+    /// own teardown. A loop that exited without reaching it left the machine
+    /// believing it was still being shared — and the state machine refuses to
+    /// raise a new request over a companion that has joined, so every later
+    /// link was dropped and nobody at the machine was ever asked. Restarting
+    /// the application was the only way out.
+    ///
+    /// Reaching this code at all means no companion loop is running, because
+    /// `companion::run` is awaited inside the very loop that polls here.
+    #[test]
+    fn a_joined_companion_with_no_loop_behind_it_is_ended_and_stops_blocking_the_next_one() {
+        let agent = enrolled();
+        agent.begin_companion(summary("companion-1", true));
+        assert!(agent.state().active_companion().is_some());
+
+        let sink: StateSink = Arc::new(|_| {});
+        clear_stale_companion(&agent, &sink, Some(&pending("companion-2")));
+
+        assert!(
+            agent.state().active_companion().is_none(),
+            "the companion whose loop is gone is ended, joined or not",
+        );
+
+        // ...and the request that was being dropped now lands.
+        agent.companion_requested(&pending("companion-2"));
+        let state = agent.state();
+        let asked = state.active_companion().expect("asked");
+        assert_eq!(asked.companion_uuid, "companion-2");
+        assert_eq!(
+            asked.phase,
+            remote_core::CompanionPhase::AwaitingConfirmation
+        );
+    }
+
+    /// The link this poll is still being asked about is not stale.
+    #[test]
+    fn the_companion_the_api_still_lists_is_left_alone() {
+        let agent = enrolled();
+        agent.companion_requested(&pending("companion-2"));
+
+        let sink: StateSink = Arc::new(|_| {});
+        clear_stale_companion(&agent, &sink, Some(&pending("companion-2")));
+
+        assert_eq!(
+            agent
+                .state()
+                .active_companion()
+                .map(|c| c.companion_uuid.clone()),
+            Some("companion-2".to_owned()),
+            "the confirmation on screen is the one being asked about",
+        );
+    }
+
+    /// Withdrawn from the browser, lapsed, or answered elsewhere: the
+    /// confirmation comes off the screen. This half already worked.
+    #[test]
+    fn a_request_the_api_no_longer_lists_is_taken_off_the_screen() {
+        let agent = enrolled();
+        agent.companion_requested(&pending("companion-2"));
+
+        let sink: StateSink = Arc::new(|_| {});
+        clear_stale_companion(&agent, &sink, None);
+
+        assert!(agent.state().active_companion().is_none());
+    }
+
+    /// Nothing to clear is not an error, and must not disturb an idle machine.
+    #[test]
+    fn an_idle_machine_is_left_as_it_is() {
+        let agent = enrolled();
+        let before = agent.state().status.clone();
+
+        let sink: StateSink = Arc::new(|_| {});
+        clear_stale_companion(&agent, &sink, None);
+
+        assert_eq!(agent.state().status, before);
     }
 
     /// Renewal is one reading, shared with the service's presence loop:
