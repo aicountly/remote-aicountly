@@ -106,6 +106,18 @@ pub struct ReleaseFile {
     pub size: u64,
     /// Lower-case hex.
     pub sha256: String,
+    /// Whether the published binary carries a real code signature.
+    ///
+    /// make-manifest.mjs does not take this on trust: for Windows it reads the PE
+    /// certificate table, and for Mac it requires the release to carry a positive signing
+    /// result. Its own comment records why — the flag used to be the caller's word, the
+    /// caller said "signed" for every beta, and every unsigned Mac build was published as
+    /// signed. It was written into the manifest and then never read here.
+    ///
+    /// `None` means a manifest written before the field existed. See the refusal in
+    /// `installer_for` for what that is treated as, and why.
+    #[serde(default)]
+    pub signed: Option<bool>,
 }
 
 /// A newer version, as the window is told about it.
@@ -249,7 +261,23 @@ pub fn evaluate(
 
     let candidate = for_platform
         .iter()
-        .find(|file| file.arch == arch && is_safe_file_name(&file.file) && is_sha256(&file.sha256));
+        // `signed == Some(false)` is the publisher telling us this binary carries no code
+        // signature, having read the certificate table rather than guessed. Installing it
+        // would run unsigned code as a LocalSystem service installer, so it is not offered —
+        // the person is sent to the download page instead, where the same warning is shown.
+        //
+        // NOT a complete supply-chain defence, and it is worth being plain about that: the
+        // manifest itself is unsigned, so whoever can write it can also write
+        // `signed: true`, and the sha256 check verifies the file against the same manifest
+        // that named it. Closing that needs a publisher key and an on-machine signature
+        // check before execution, neither of which exists yet — recorded as a blocker rather
+        // than implied by this change.
+        .find(|file| {
+            file.arch == arch
+                && is_safe_file_name(&file.file)
+                && is_sha256(&file.sha256)
+                && file.signed != Some(false)
+        });
 
     // The build this machine would get: its own installer's, or — when there
     // is none to fetch for this architecture — the newest of the platform's,
@@ -519,6 +547,7 @@ mod tests {
             build: None,
             size: INSTALLER.len() as u64,
             sha256: sha(INSTALLER),
+            signed: Some(true),
         };
 
         ReleaseManifest {
@@ -1139,5 +1168,51 @@ mod tests {
         assert!(UPDATE_MANIFEST_URL.starts_with("https://downloads.aicountly.com/"));
         assert!(DOWNLOADS_BASE_URL.starts_with("https://downloads.aicountly.com/"));
         assert!(DOWNLOAD_PAGE_URL.starts_with("https://aicountly.com/"));
+    }
+    /// A build the publisher knows is unsigned is not offered for installation.
+    ///
+    /// `signed` is written into the manifest by `make-manifest.mjs`, which reads the PE
+    /// certificate table rather than taking the caller's word for it — and was then never
+    /// deserialized here, so an installer the publisher had already identified as unsigned
+    /// was downloaded and executed like any other, on a product whose installer registers a
+    /// LocalSystem service. The person is still told an update exists and sent to the
+    /// download page; only the silent fetch-and-run is withheld.
+    #[test]
+    fn an_unsigned_build_is_not_offered_for_installation() {
+        let mut m = manifest("1.1.0");
+        for file in &mut m.files {
+            file.signed = Some(false);
+        }
+        let unsigned = evaluate(&m, "1.0.0", None, "windows", "x64", DOWNLOADS_BASE_URL)
+            .expect("the update is still announced");
+        assert!(
+            unsigned.installer.is_none(),
+            "a build the publisher marked unsigned must not be handed to the installer"
+        );
+        assert_eq!(unsigned.latest_version, "1.1.0");
+        assert_eq!(unsigned.download_page_url, DOWNLOAD_PAGE_URL);
+
+        // Absent is NOT read as unsigned: a manifest published before the field existed
+        // would otherwise stop updating every machine in the field. That gap is exactly why
+        // the manifest itself still needs signing — a blocker, not something this closes.
+        for file in &mut m.files {
+            file.signed = None;
+        }
+        assert!(
+            evaluate(&m, "1.0.0", None, "windows", "x64", DOWNLOADS_BASE_URL)
+                .and_then(|info| info.installer)
+                .is_some(),
+            "an older manifest without the field still offers its installer"
+        );
+
+        for file in &mut m.files {
+            file.signed = Some(true);
+        }
+        assert!(
+            evaluate(&m, "1.0.0", None, "windows", "x64", DOWNLOADS_BASE_URL)
+                .and_then(|info| info.installer)
+                .is_some(),
+            "a signed build is offered"
+        );
     }
 }
