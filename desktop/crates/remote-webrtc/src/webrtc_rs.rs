@@ -56,6 +56,8 @@ use rtc::interceptor::{
     StreamInfo, TaggedPacket,
 };
 use rtc::media_stream::MediaStreamTrack;
+use rtc::peer_connection::configuration::setting_engine::SettingEngine;
+use rtc::peer_connection::transport::RTCDtlsRole;
 use rtc::rtcp::header::{PacketType, FORMAT_FIR, FORMAT_PLI};
 use rtc::rtcp::receiver_report::ReceiverReport;
 use rtc::rtcp::reception_report::ReceptionReport;
@@ -338,6 +340,7 @@ impl WebRtcSession {
             .with_configuration(configuration)
             .with_media_engine(media)
             .with_interceptor_registry(interceptors)
+            .with_setting_engine(Self::setting_engine()?)
             .with_handler(Arc::new(SessionEvents {
                 shared: Arc::clone(&shared),
             }))
@@ -502,6 +505,55 @@ impl WebRtcSession {
                 }
             }
         }
+    }
+
+    /// **Answer an offer as the DTLS server, so a data channel can open.**
+    ///
+    /// Without this, control never worked through a control companion, and
+    /// could not have: the agent's data channel was refused before a single
+    /// input event was sent.
+    ///
+    /// A browser offers `a=setup:actpass`, leaving the role to the answerer.
+    /// `rtc`'s `derive_role` then falls through to `DEFAULT_DTLS_ROLE_ANSWER`,
+    /// which is `Client` — and its SCTP transport builds a *client* endpoint
+    /// with **no server config**:
+    ///
+    /// ```text
+    ///   if dtls_role == RTCDtlsRole::Client {
+    ///       sctp::Endpoint::new(.., None)                      // cannot accept an association
+    ///   } else {
+    ///       sctp::Endpoint::new(.., Some(ServerConfig::new(..)))
+    ///   }
+    /// ```
+    ///
+    /// WebRTC data channels are established by SCTP simultaneous open — the
+    /// same file says so — so the browser sends an `INIT` whichever DTLS role
+    /// it holds. An endpoint with no server config refuses it:
+    ///
+    /// ```text
+    ///   WARN rtc_sctp::endpoint: refusing first packet due to empty server_config
+    ///   WARN rtc::peer_connection::handler: DtlsHandler.handle_read got error: Alert is Fatal or Close Notify
+    ///   INFO rtc_ice::agent: [controlled]: Setting new connection state: Disconnected
+    /// ```
+    ///
+    /// That is this agent answering, which is **always** what a companion
+    /// does: it never makes the first offer, so it never took the one path
+    /// that worked. A hosted session offers, the browser answers
+    /// `a=setup:active`, `derive_role` returns `Server` on its first arm, and
+    /// the endpoint gets a server config — which is why control works there
+    /// and nowhere else.
+    ///
+    /// Answering as the server puts the companion on that same working path.
+    /// It changes nothing when this agent offers: `derive_role` takes the
+    /// remote's explicit role first and never reaches this setting.
+    fn setting_engine() -> Result<SettingEngine, WebRtcError> {
+        let mut engine = SettingEngine::default();
+
+        engine
+            .set_answering_dtls_role(RTCDtlsRole::Server)
+            .map_err(|error| WebRtcError::Setup(error.to_string()))?;
+
+        Ok(engine)
     }
 
     async fn open_channels(&mut self) -> Result<(), WebRtcError> {
@@ -1247,6 +1299,58 @@ mod tests {
 
         session.close().await.expect("closes");
         assert_eq!(session.state(), PeerState::Closed);
+    }
+
+    /// **Answering takes the DTLS server role.** Control through a companion
+    /// depended on this and never had it.
+    ///
+    /// A browser offers `a=setup:actpass`. Answering `active` makes this agent
+    /// the DTLS client, and `rtc`'s SCTP transport then builds a client
+    /// endpoint with no server config — which refuses the browser's `INIT`,
+    /// because data channels are established by simultaneous open and the
+    /// browser sends one whichever role it holds:
+    ///
+    /// ```text
+    ///   WARN rtc_sctp::endpoint: refusing first packet due to empty server_config
+    /// ```
+    ///
+    /// No association, no data channel, no control — and a companion *always*
+    /// answers, so this was every companion session. A hosted session offers
+    /// and the browser answers `active`, which is why control worked there and
+    /// only there.
+    #[tokio::test]
+    async fn answering_takes_the_dtls_server_role_so_a_data_channel_can_open() {
+        let factory = bundled();
+
+        let mut controller = factory
+            .create_control_only(IceConfiguration::default())
+            .await
+            .expect("controller");
+        let mut companion = factory
+            .create_control_only(IceConfiguration::default())
+            .await
+            .expect("companion");
+
+        let offer = controller.create_offer().await.expect("offer");
+        assert!(
+            offer["sdp"]
+                .as_str()
+                .expect("sdp")
+                .contains("a=setup:actpass"),
+            "an offer leaves the role to the answerer, as a browser's does",
+        );
+
+        let answer = companion.accept_offer(offer).await.expect("answer");
+        let answer_sdp = answer["sdp"].as_str().expect("sdp");
+
+        assert!(
+            answer_sdp.contains("a=setup:passive"),
+            "answering passive is what gives the SCTP endpoint a server config; got: {answer_sdp}",
+        );
+        assert!(
+            !answer_sdp.contains("a=setup:active"),
+            "active is the role that cannot accept the browser's INIT",
+        );
     }
 
     /// A companion offers no media: its picture comes from its owner's
