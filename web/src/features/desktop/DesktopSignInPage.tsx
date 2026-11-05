@@ -50,6 +50,9 @@ export default function DesktopSignInPage() {
   // confirm button stays disabled rather than inviting a decision with no information.
   const [pending, setPending] = useState<PendingDesktopSignIn | null>(null)
   const [lookup, setLookup] = useState<'loading' | 'ready' | 'unavailable'>('loading')
+  // Kept apart from `error`, which belongs to confirming and declining. Reporting a lookup
+  // failure in both places said the same thing twice in two voices.
+  const [lookupError, setLookupError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!userCode) return
@@ -64,7 +67,11 @@ export default function DesktopSignInPage() {
       .catch((err) => {
         if (!live) return
         setLookup('unavailable')
-        setError(err instanceof RemoteApiError ? err.message : 'That code could not be checked.')
+        setLookupError(
+          err instanceof RemoteApiError
+            ? err.message
+            : 'That code could not be checked. Start again from the computer.',
+        )
       })
 
     return () => {
@@ -185,9 +192,8 @@ export default function DesktopSignInPage() {
               {lookup === 'loading' ? (
                 <p className="muted">Checking…</p>
               ) : lookup === 'unavailable' ? (
-                <p className="muted">
-                  This request could not be found. It may have expired, or already been used. Start again from the
-                  computer.
+                <p className="muted" role="alert">
+                  {lookupError ?? 'That code could not be checked. Start again from the computer.'}
                 </p>
               ) : (
                 <ul className="stack stack--sm tiny" aria-live="polite">

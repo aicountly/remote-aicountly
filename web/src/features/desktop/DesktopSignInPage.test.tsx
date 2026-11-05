@@ -193,7 +193,7 @@ describe('DesktopSignInPage', () => {
   })
 
   it('will not offer to confirm a request it could not read', async () => {
-    pendingMock.mockRejectedValue(new RemoteApiError(404, 'NOT_FOUND', 'That code has expired or could not be found.'))
+    pendingMock.mockRejectedValue(new RemoteApiError('NOT_FOUND', 'That code has expired or could not be found.', 404))
     renderPage()
 
     await waitFor(() => expect(screen.getByText(/could not be found/i)).toBeTruthy())
