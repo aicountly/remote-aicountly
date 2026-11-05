@@ -197,7 +197,13 @@ pub async fn poll_desktop_sign_in(
     // more than a hand-off that is perfectly bound, and the server refuses the
     // unauthenticated path on its own schedule.
     if let Some(code) = outcome.portal_handoff.take() {
-        match redeem_handoff(&agent, outcome.device.as_ref().map(|device| device.uuid.as_str()), &code).await {
+        match redeem_handoff(
+            &agent,
+            outcome.device.as_ref().map(|device| device.uuid.as_str()),
+            &code,
+        )
+        .await
+        {
             Some(auth_token) => crate::portal::stash_sign_in(auth_token),
             None => crate::portal::stash_handoff(code),
         }
