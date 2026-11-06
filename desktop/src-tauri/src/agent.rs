@@ -115,6 +115,14 @@ pub struct Agent {
     /// not move.
     discarded_input: AtomicU64,
     last_discarded_input_log: Mutex<Option<Instant>>,
+    /// Input events the machine actually applied, and when that was last
+    /// said. The counterpart to the two refusal counters above: without a
+    /// line for input that *works*, a log with no refusal in it cannot say
+    /// whether input was arriving and being applied or never arriving at
+    /// all, which is the difference between a fault on this machine and a
+    /// fault at the controller.
+    applied_input: AtomicU64,
+    last_applied_input_log: Mutex<Option<Instant>>,
 }
 
 /// How often a refused injection is written to the log. The count is exact;
@@ -161,6 +169,8 @@ impl Agent {
             last_injection_refusal_log: Mutex::new(None),
             discarded_input: AtomicU64::new(0),
             last_discarded_input_log: Mutex::new(None),
+            applied_input: AtomicU64::new(0),
+            last_applied_input_log: Mutex::new(None),
         }
     }
 
@@ -1336,6 +1346,8 @@ impl Agent {
             if let Ok(mut last) = self.last_injection.lock() {
                 *last = Some(Instant::now());
             }
+
+            self.note_applied_input();
         }
 
         Ok(handled)
@@ -1512,6 +1524,38 @@ impl Agent {
             "a control message did not reach this computer; control looks live at both ends and \
              nothing moves",
         );
+    }
+
+    /// An input event reached the machine: count it, and say so the first
+    /// time and then at the same interval as the refusals.
+    ///
+    /// The first event is said immediately, which is what makes a log
+    /// readable after the fact: it dates the moment input started working,
+    /// against the moment the control channel opened.
+    fn note_applied_input(&self) {
+        let total = self.applied_input.fetch_add(1, Ordering::Relaxed) + 1;
+
+        let Ok(mut last) = self.last_applied_input_log.lock() else {
+            return;
+        };
+
+        let now = Instant::now();
+        if !last.is_none_or(|at| now.duration_since(at) >= INJECTION_REFUSAL_LOG_INTERVAL) {
+            return;
+        }
+
+        *last = Some(now);
+
+        tracing::info!(
+            applied_this_session = total,
+            "an input event from the controller was applied to this machine"
+        );
+    }
+
+    /// How many input events this machine applied in this session.
+    #[must_use]
+    pub fn applied_input(&self) -> u64 {
+        self.applied_input.load(Ordering::Relaxed)
     }
 
     /// How many control messages were discarded before the platform saw them.
@@ -2126,6 +2170,51 @@ mod tests {
             "a message the gate refuses is reported once",
         );
         assert_eq!(agent.rejected_control_messages(), 1);
+    }
+
+    /// Input that *works* is counted, and only input that works.
+    ///
+    /// The counterpart to the two refusal counters. Without it a log holding
+    /// no refusal could not say whether input was arriving and being applied
+    /// or never arriving at all — the difference between a fault on this
+    /// machine and one at the controller, which is the question the Control
+    /// reports kept turning on.
+    ///
+    /// Deliberately asserted against the outcomes rather than against a
+    /// number: this test host has no input provider, so every event comes
+    /// back `Unsupported` here and `Applied` on Windows and macOS. Tying the
+    /// counter to the outcomes it saw holds on all three, and still fails if
+    /// the count is taken on the wrong branch.
+    #[test]
+    fn only_input_the_machine_applied_is_counted() {
+        let agent = Agent::new();
+        agent.begin_session(summary());
+        agent.grant_control(CONTROLLER, false, false);
+        assert_eq!(agent.applied_input(), 0);
+
+        let mut applied = 0;
+
+        for sequence in 1..=4 {
+            if agent.handle_control(&pointer(sequence)) == Ok(Handled::Applied) {
+                applied += 1;
+            }
+        }
+
+        assert_eq!(
+            agent.applied_input(),
+            applied,
+            "every applied input event is counted, and nothing else is",
+        );
+
+        // A refused message must not count as applied, whatever this host
+        // can do: sequence 1 again is a replay, and the gate drops it.
+        let before = agent.applied_input();
+        assert!(agent.handle_control(&pointer(1)).is_err());
+        assert_eq!(
+            agent.applied_input(),
+            before,
+            "a message the gate refuses never reached the machine",
+        );
     }
 
     /// Input arriving with no grant at all is the other half of the same
