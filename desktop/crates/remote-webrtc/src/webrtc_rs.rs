@@ -149,14 +149,14 @@ impl PeerSessionFactory for WebRtcFactory {
         ice: IceConfiguration,
         profile: CaptureProfile,
     ) -> Result<Self::Session, WebRtcError> {
-        WebRtcSession::new(ice, profile, Some(self.codec.clone())).await
+        WebRtcSession::new(ice, profile, Some(self.codec.clone()), "share").await
     }
 
     async fn create_control_only(
         &self,
         ice: IceConfiguration,
     ) -> Result<Self::Session, WebRtcError> {
-        WebRtcSession::new(ice, CaptureProfile::adaptive(), None).await
+        WebRtcSession::new(ice, CaptureProfile::adaptive(), None, "companion").await
     }
 
     fn implementation(&self) -> &'static str {
@@ -171,6 +171,12 @@ impl PeerSessionFactory for WebRtcFactory {
 /// channel would stall the driver that owns the sockets.
 #[derive(Default)]
 struct SharedState {
+    /// Which of the agent's connections this is: `"share"` for the screen
+    /// session, `"companion"` for a control-only one. Only ever used to tag
+    /// log lines — the agent runs both at once and the library's own lines
+    /// name neither, so without this a log cannot say which connection
+    /// connected, which one carried a channel, and which one failed.
+    role: &'static str,
     /// The connection state, as [`PeerState`] discriminants.
     connection: AtomicU8,
     /// Local ICE candidates the signalling client has not sent yet.
@@ -211,6 +217,12 @@ impl PeerConnectionEventHandler for SessionEvents {
     async fn on_connection_state_change(&self, state: RTCPeerConnectionState) {
         let state = map_state(state);
 
+        tracing::info!(
+            connection = self.shared.role,
+            ?state,
+            "the peer connection changed state"
+        );
+
         // Whatever was sent before this moment — before DTLS finished, or
         // while ICE was finding its way back — did not reach a decoder that
         // can use it, so the first frame from now on must not depend on it.
@@ -242,6 +254,12 @@ impl PeerConnectionEventHandler for SessionEvents {
             return;
         };
 
+        tracing::info!(
+            connection = self.shared.role,
+            %label,
+            "the peer opened a data channel"
+        );
+
         match label.as_str() {
             CONTROL_CHANNEL_LABEL => {
                 if let Ok(mut slot) = self.shared.inbound_control.lock() {
@@ -253,7 +271,14 @@ impl PeerConnectionEventHandler for SessionEvents {
                     *slot = Some(channel);
                 }
             }
-            _ => {}
+            // Not a guess: a label this build does not know is left alone.
+            // Worth a line all the same, because a peer that renamed the
+            // control channel looks exactly like one that never opened it.
+            other => tracing::warn!(
+                connection = self.shared.role,
+                label = other,
+                "a data channel arrived under a label this build does not use"
+            ),
         }
     }
 }
@@ -294,8 +319,12 @@ impl WebRtcSession {
         ice: IceConfiguration,
         profile: CaptureProfile,
         video: Option<CodecSource>,
+        role: &'static str,
     ) -> Result<Self, WebRtcError> {
-        let shared = Arc::new(SharedState::default());
+        let shared = Arc::new(SharedState {
+            role,
+            ..SharedState::default()
+        });
 
         let configuration = RTCConfigurationBuilder::default()
             .with_ice_servers(Self::ice_servers(&ice))
@@ -894,6 +923,8 @@ fn choose_h264_payload_type(codecs: &[RTCRtpCodecParameters]) -> Option<u8> {
 
 impl PeerSession for WebRtcSession {
     async fn create_offer(&mut self) -> Result<serde_json::Value, WebRtcError> {
+        tracing::info!(connection = self.shared.role, "offering");
+
         self.open_channels().await?;
 
         let offer = self
@@ -916,6 +947,10 @@ impl PeerSession for WebRtcSession {
     ) -> Result<serde_json::Value, WebRtcError> {
         let description: RTCSessionDescription =
             serde_json::from_value(offer).map_err(|error| WebRtcError::Sdp(error.to_string()))?;
+
+        // A companion only ever answers, so this line is the proof that a
+        // viewer's offer reached it at all — the half the log never showed.
+        tracing::info!(connection = self.shared.role, "answering an offer");
 
         self.forget_payload_type();
 
