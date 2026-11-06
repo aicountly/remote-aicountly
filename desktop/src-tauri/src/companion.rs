@@ -77,6 +77,11 @@ const MAX_BUFFERED_CANDIDATES: usize = 64;
 /// How long to wait between attempts to get the signalling connection back.
 const RECONNECT_PAUSE: Duration = Duration::from_secs(2);
 
+/// How long after answering a companion's control channel may still be shut
+/// before that is reported. Long enough to cover DTLS and SCTP on a slow
+/// link, short enough to appear in the log well before the person gives up.
+const CONTROL_CHANNEL_GRACE: Duration = Duration::from_secs(5);
+
 // ------------------------------------------------------------------- seams
 
 /// The signalling socket, as the companion uses it.
@@ -364,6 +369,13 @@ struct ActivePeer<P> {
     session: P,
     /// Whether the monitor layout has gone out on this peer's channel.
     layout_sent: bool,
+    /// When this peer was answered, for the two lines below.
+    answered_at: Instant,
+    /// Whether the control channel has ever been seen open. Said once, not
+    /// every poll.
+    channel_seen_open: bool,
+    /// Whether the stall below has already been reported.
+    channel_stall_reported: bool,
 }
 
 /// An offer from somebody the API had not mentioned, waiting for one read.
@@ -807,6 +819,9 @@ impl<A: CompanionApi, F: PeerSessionFactory> Companion<'_, A, F> {
                     remote: from,
                     session,
                     layout_sent: false,
+                    answered_at: Instant::now(),
+                    channel_seen_open: false,
+                    channel_stall_reported: false,
                 });
             }
             Err(error) => {
@@ -849,9 +864,41 @@ impl<A: CompanionApi, F: PeerSessionFactory> Companion<'_, A, F> {
 
         let mut replies = Vec::new();
 
+        // Read every poll, not only while a layout is waiting: whether this
+        // channel is open is the one fact that says if input can reach the
+        // machine at all, and it used to go unread and unsaid once the
+        // layout had gone out.
+        let channel_open = peer.session.control_channel_open().await;
+
+        if channel_open {
+            if !peer.channel_seen_open {
+                peer.channel_seen_open = true;
+                tracing::info!(
+                    remote = %peer.remote,
+                    after_ms = peer.answered_at.elapsed().as_millis(),
+                    "the companion's control channel is open; input can reach this machine"
+                );
+            }
+        } else if !peer.channel_stall_reported
+            && peer.session.state() == PeerState::Connected
+            && peer.answered_at.elapsed() >= CONTROL_CHANNEL_GRACE
+        {
+            peer.channel_stall_reported = true;
+            // The shape of the fault this chases: the connection is up, the
+            // picture flows, and the channel that carries clicks never
+            // opened — which looked, from the log, exactly like a companion
+            // that was never asked for.
+            tracing::warn!(
+                remote = %peer.remote,
+                after_ms = peer.answered_at.elapsed().as_millis(),
+                "the companion is connected but its control channel never opened; \
+                 no input can reach this machine"
+            );
+        }
+
         if !peer.layout_sent {
             if let Some(layout) = layout {
-                if peer.session.control_channel_open().await {
+                if channel_open {
                     replies.push(ControlMessage::MonitorLayout(layout));
                     peer.layout_sent = true;
                 }
@@ -1242,6 +1289,10 @@ mod tests {
         control_inbox: Vec<Vec<u8>>,
         /// Whether Accessibility (or its platform's equivalent) is granted.
         can_inject: bool,
+        /// Whether the control channel is still shut. Default open, so every
+        /// other test is unaffected; set to model a connection that comes up
+        /// while the channel that carries clicks never does.
+        channel_shut: bool,
     }
 
     enum Inbound {
@@ -1450,7 +1501,7 @@ mod tests {
         }
 
         async fn control_channel_open(&mut self) -> bool {
-            true
+            !self.world.lock().unwrap().channel_shut
         }
 
         fn state(&self) -> PeerState {
@@ -1734,6 +1785,68 @@ mod tests {
             message,
             Outbound::Answer { .. } | Outbound::Offer { .. }
         )));
+    }
+
+    /// A connection that comes up with its control channel still shut sends
+    /// no layout, and sends it as soon as the channel opens.
+    ///
+    /// This is the shape of the fault the Control feature kept showing: the
+    /// peer connection reaches `Connected`, the picture flows, and the
+    /// channel that carries clicks never opens. The layout is the observable
+    /// half — nothing may go out before the channel is up, and nothing may
+    /// be lost once it is.
+    #[tokio::test(start_paused = true)]
+    async fn a_shut_control_channel_holds_the_layout_until_it_opens() {
+        let world = world(view(&[B], None, None), vec![display(1, 0)]);
+        world.lock().unwrap().channel_shut = true;
+
+        let agent = agent();
+
+        let outcome = run_with(&world, &agent, {
+            let world = Arc::clone(&world);
+            async move {
+                wait(500).await;
+                World::push(&world, offer(B));
+                wait(2000).await;
+
+                {
+                    let world = world.lock().unwrap();
+                    assert_eq!(world.peers.len(), 1, "the offer was still answered");
+                    assert!(
+                        !world.peers[0]
+                            .sent
+                            .iter()
+                            .any(|message| matches!(message, ControlMessage::MonitorLayout(_))),
+                        "no layout may go out while the channel is shut"
+                    );
+                }
+
+                world.lock().unwrap().channel_shut = false;
+                wait(2000).await;
+
+                World::push(
+                    &world,
+                    Signal::SessionEnded {
+                        from: SHARER.into(),
+                    },
+                );
+            }
+        })
+        .await;
+
+        assert_eq!(outcome, CompanionEnd::SessionEnded);
+
+        let world = world.lock().unwrap();
+        let layouts = world.peers[0]
+            .sent
+            .iter()
+            .filter(|message| matches!(message, ControlMessage::MonitorLayout(_)))
+            .count();
+
+        assert_eq!(
+            layouts, 1,
+            "the layout goes out once, after the channel opens"
+        );
     }
 
     /// A requester's offer is answered with a control-only peer, the monitor

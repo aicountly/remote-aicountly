@@ -98,7 +98,16 @@ async function inPage(options) {
     // What the web client does when it arrives first: receive-only video and
     // the collaboration channel.
     pc.addTransceiver('video', { direction: 'recvonly' });
-    pc.createDataChannel('aicountly-remote', { ordered: true });
+    // Kept, and waited on below: a companion's whole purpose is this channel,
+    // and a session can carry video perfectly while it never opens. The label
+    // is the control one a companion is actually offered — `remoteControl.ts`'s
+    // CONTROL_CHANNEL_LABEL, which the agent matches on — not the
+    // collaboration channel, so this is the companion's own path.
+    window.__channel = pc.createDataChannel('aicountly-remote-control', { ordered: true });
+    window.__channelOpen = new Promise((resolve) => {
+      window.__channel.onopen = () => resolve(true);
+      setTimeout(() => resolve(false), 15000);
+    });
     await pc.setLocalDescription(await pc.createOffer());
     const answer = await (await post('/offer', pc.localDescription)).json();
     await pc.setRemoteDescription(answer);
@@ -188,8 +197,16 @@ async function inPage(options) {
 
   const inbound = last.inbound || {};
   const quality = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : {};
+  // The companion's whole purpose. Reported alongside the picture because a
+  // session can carry perfect video while this never opens, which is exactly
+  // the fault being chased.
+  const channelOpen = window.__channelOpen ? await window.__channelOpen : null;
+  const channelState = window.__channel ? window.__channel.readyState : null;
+
   const result = {
     mode: options.mode,
+    dataChannelOpen: channelOpen,
+    dataChannelState: channelState,
     elapsedMs: Math.round(performance.now() - started),
     connectionState: pc.connectionState,
     videoWidth: video.videoWidth,
@@ -232,6 +249,12 @@ function verdict(result, options) {
   const failures = [];
 
   if (!(result.framesDecoded > 0)) failures.push('no frames decoded');
+  // A control companion is exactly this shape: the browser offers, the agent
+  // answers, and the whole point is the channel rather than the picture. A
+  // session can carry perfect video while this never opens, so assert it.
+  if (options.mode === 'browser-offers' && result.dataChannelOpen !== true) {
+    failures.push(`data channel is ${result.dataChannelState}, never opened`);
+  }
   if (result.videoWidth !== options.width || result.videoHeight !== options.height) {
     failures.push(`<video> is ${result.videoWidth}x${result.videoHeight}, expected ${options.width}x${options.height}`);
   }
