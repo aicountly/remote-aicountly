@@ -46,6 +46,33 @@ use std::sync::{Arc, Mutex};
 /// How large one log file is allowed to get before it is rolled.
 pub const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
 
+/// What is logged when [`LEVEL_VARIABLE`] says nothing: everything at `info`,
+/// except mDNS.
+///
+/// `rtc_mdns` warns once per answer per query, three times over, for every
+/// machine on the local network that speaks mDNS — and it does it whether or
+/// not this computer is in a session:
+///
+/// ```text
+///   WARN rtc_mdns::proto: mDNS answers without AResource, fallback to use
+///        src ip 192.168.1.13 on Socket for local ip for query PC-2.local.
+/// ```
+///
+/// On a small office network that is tens of lines a minute, for ever. The log
+/// is capped at [`MAX_LOG_BYTES`] and rolled once, so the flood pushes out
+/// exactly what the file exists for: in a real diagnosis the last four hundred
+/// lines covered about eighteen minutes and were **entirely** mDNS, with not
+/// one line about the session being investigated. A capped log full of noise
+/// is a log nobody can read.
+///
+/// It says nothing a person can act on either. Falling back to the source
+/// address is how mDNS is expected to behave when an answer carries no A
+/// record; ICE works regardless. Errors from the same crate are kept.
+///
+/// `AICOUNTLY_REMOTE_LOG` still overrides all of this — `rtc_mdns=debug` puts
+/// it back for somebody who wants it.
+pub const DEFAULT_FILTER: &str = "info,rtc_mdns=error";
+
 /// The environment variable that sets the level, as the documentation says.
 pub const LEVEL_VARIABLE: &str = "AICOUNTLY_REMOTE_LOG";
 
@@ -91,7 +118,7 @@ pub fn init(component: &str) -> Option<PathBuf> {
     use tracing_subscriber::fmt::writer::MakeWriterExt;
 
     let filter = tracing_subscriber::EnvFilter::try_from_env(LEVEL_VARIABLE)
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(DEFAULT_FILTER));
 
     let file = log_path(component).and_then(|path| RollingLog::open(path).ok());
     let written_to = file.as_ref().map(RollingLog::path);
@@ -251,6 +278,41 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for RollingLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The log exists to be read after the fact, and mDNS was making that
+    /// impossible: `rtc_mdns` warns per answer per query for every machine on
+    /// the network, session or no session, and the file is capped and rolled.
+    /// In a real diagnosis the last four hundred lines covered about eighteen
+    /// minutes and held nothing but mDNS.
+    #[test]
+    fn the_default_filter_keeps_everything_but_the_mdns_flood() {
+        // Parsing is the assertion: `EnvFilter` drops a directive it cannot
+        // read, so a typo here would silently stop filtering anything.
+        let parsed = tracing_subscriber::EnvFilter::new(DEFAULT_FILTER).to_string();
+
+        assert!(
+            parsed.contains("rtc_mdns=error"),
+            "the mDNS directive must survive parsing; got: {parsed}",
+        );
+        assert!(
+            parsed.contains("info"),
+            "everything else still logs at info; got: {parsed}",
+        );
+    }
+
+    /// Only mDNS is quietened. The crates that found the SCTP fault —
+    /// `rtc_sctp`, `rtc_dtls`, `rtc_ice` — are low-volume and were the whole
+    /// evidence for it, so they stay at `info` and must not be swept up by a
+    /// broader rule later.
+    #[test]
+    fn the_webrtc_crates_that_diagnose_a_session_are_not_silenced() {
+        for crate_name in ["rtc_sctp", "rtc_dtls", "rtc_ice", "rtc", "webrtc"] {
+            assert!(
+                !DEFAULT_FILTER.contains(&format!("{crate_name}=")),
+                "{crate_name} carries session diagnostics and must stay at info",
+            );
+        }
+    }
 
     /// The component name becomes a path, and every caller is inside this
     /// workspace today — which is exactly when a traversal bug gets written
