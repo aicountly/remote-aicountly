@@ -146,12 +146,23 @@ class DevicePresenceService
     /**
      * What the agent needs to know about itself, in one call.
      *
-     * Its row, the capability ceiling its organisation currently imposes, the
-     * ICE configuration for whatever session it is about to join, and any
-     * unattended session waiting for it. The agent renders its Permissions
+     * Its row, the capability ceiling its organisation currently imposes, and
+     * any unattended session waiting for it. The agent renders its Permissions
      * panel from this rather than from anything it decided locally — the
      * server is the authority on what this machine may do, and the agent
      * showing something different would be the agent lying to its user.
+     *
+     * **No ICE servers.** This is every registered computer's once-a-minute
+     * check-in, not a connection. It used to carry a freshly issued set, which
+     * meant a relay credential minted, a decision logged and a slice of relay
+     * capacity booked under the lease book's lock, once a minute, for a
+     * computer that was doing nothing — seventy idle computers were enough to
+     * show the free relay pool as full, so switching admission from `observe`
+     * to `enforce` would have refused real sessions for the sake of machines
+     * that had made no connection. No agent has ever read them from here: the
+     * agent builds its ICE configuration from the join, which issues a set for
+     * that session, valid for its length. The field stays, empty, so an agent
+     * that expects the key still finds it.
      *
      * @return array<string, mixed>
      */
@@ -164,7 +175,7 @@ class DevicePresenceService
             'device'   => $device,
             'policy'   => $policy,
             'capabilities' => $this->devices->effectiveCapabilities($device, $policy),
-            'iceServers'   => $this->ice->iceServers('device-' . $principal->deviceUuid),
+            'iceServers'   => [],
             'relayAvailable' => $this->ice->hasRelay(),
             'minimumAgentVersion' => $this->config->desktopMinimumAgentVersion,
             'updateFeedUrl'       => $this->config->desktopUpdateFeedUrl !== ''

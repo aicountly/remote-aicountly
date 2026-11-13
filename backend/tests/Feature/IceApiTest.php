@@ -124,6 +124,68 @@ final class IceApiTest extends RemoteTestCase
         $this->assertStringNotContainsString('turn-ncr', (string) $raw, 'A disabled node must never reach a client.');
     }
 
+    /**
+     * A browser replaces its room token every ninety seconds for as long as it is in a session. That used to mint
+     * relay credentials, book relay capacity and write a line on the session's timeline each time.
+     */
+    public function testRenewingTheRoomTokenBooksNoRelayCapacityAndWritesNothingNewOnTheTimeline(): void
+    {
+        $s    = $this->sessionWithViewer();
+        $path = "v1/remote/sessions/{$s['session']['uuid']}/signalling-token";
+
+        $first = json_decode($this->withHeaders($s['viewer'])->post($path)->getJSON(), true)['data'];
+        $this->assertNotEmpty($first['iceServers'], 'Entering the room: the token and the relay credentials.');
+        $this->assertSame(1, $this->authorisations($s['viewerUuid']), 'And one line on the record.');
+
+        $leases = $this->leaseCount();
+
+        for ($renewal = 1; $renewal <= 3; $renewal++) {
+            $response = $this->withHeaders($s['viewer'])->withBodyFormat('json')->post($path, ['renewal' => true]);
+            $response->assertStatus(200);
+            $data = json_decode($response->getJSON(), true)['data'];
+
+            $this->assertNotEmpty($data['token'], 'A renewal is a token for the same room…');
+            $this->assertSame($s['session']['uuid'], $data['room']);
+            $this->assertNotEmpty($data['expiresAt']);
+            $this->assertArrayNotHasKey('iceServers', $data, '…and nothing else.');
+            $this->assertArrayNotHasKey('ice', $data);
+        }
+
+        $this->assertSame($leases, $this->leaseCount(), 'No relay capacity was booked for them.');
+        $this->assertSame(1, $this->authorisations($s['viewerUuid']), 'And the record still says it once.');
+
+        // A page that does not ask for the short answer still gets the whole of it — and still one line.
+        $again = json_decode($this->withHeaders($s['viewer'])->post($path)->getJSON(), true)['data'];
+        $this->assertNotEmpty($again['iceServers']);
+        $this->assertSame(1, $this->authorisations($s['viewerUuid']));
+    }
+
+    /** How many times this participant's entry to the room is on the session's record. */
+    private function authorisations(string $participantUuid): int
+    {
+        return (int) $this->db->query(
+            'SELECT COUNT(*) AS n FROM remote_session_events e JOIN remote_participants p ON p.id = e.participant_id
+              WHERE p.uuid = ? AND e.event_type = ?',
+            [$participantUuid, \App\Domain\Audit\EventType::SIGNALLING_TOKEN_ISSUED],
+        )->getRowArray()['n'];
+    }
+
+    /** How many relay leases are on the books (the ice-kit's admission ledger, a file under writable/). */
+    private function leaseCount(): int
+    {
+        $total = 0;
+
+        foreach (glob(WRITEPATH . 'ice/*.json') ?: [] as $file) {
+            $book = json_decode((string) @file_get_contents($file), true);
+
+            foreach ((array) ($book['leases'] ?? []) as $lease) {
+                $total += is_array($lease) ? 1 : 0;
+            }
+        }
+
+        return $total;
+    }
+
     public function testTheSignallingTokenCarriesTheSameGrant(): void
     {
         $s = $this->sessionWithViewer();

@@ -52,23 +52,49 @@ class SignallingController extends BaseApiController
 
         // Recorded without the token itself — the audit trail says a credential
         // was issued, never what it was (§60).
-        Services::auditService()->recordEvent(
-            (int) $session['id'],
-            EventType::SIGNALLING_TOKEN_ISSUED,
-            $participant['user_id'] !== null ? (int) $participant['user_id'] : null,
-            $participant['user_id'] === null ? 'GUEST' : 'USER',
-            (int) $participant['id'],
-        );
+        //
+        // Once for each participant, when they first enter the room. A room token
+        // lives two minutes and a browser renews it every ninety seconds for as
+        // long as it is in the session, so recording every issue wrote forty
+        // identical rows an hour for each person — which is what the session's
+        // timeline then showed, forty times an hour, pushing the events somebody
+        // reads it for (who was admitted, who was given control) off the end of
+        // the two hundred it lists. Decided here, from the record itself, and
+        // not from anything the client says.
+        if (! $this->alreadyAuthorised((int) $session['id'], (int) $participant['id'])) {
+            Services::auditService()->recordEvent(
+                (int) $session['id'],
+                EventType::SIGNALLING_TOKEN_ISSUED,
+                $participant['user_id'] !== null ? (int) $participant['user_id'] : null,
+                $participant['user_id'] === null ? 'GUEST' : 'USER',
+                (int) $participant['id'],
+            );
+        }
 
-        $grant = $this->grantFor($session, $participant);
-
-        return $this->ok([
+        $credentials = [
             'token'     => $token['token'],
             'url'       => $token['url'],
             'room'      => $token['room'],
             'expiresAt' => gmdate('c', $token['expiresAt']),
             'participantUuid' => (string) $participant['uuid'],
             'role'      => (string) $participant['participant_role'],
+        ];
+
+        // A renewal — the browser replacing a token that is about to expire, on
+        // a connection that is already up — needs the token and nothing else.
+        // The relay credentials it was given when it joined are good for twenty
+        // minutes and have their own renewal (`ice-servers` below); issuing a
+        // set here as well meant a credential minted and relay capacity booked,
+        // under the lease book's lock, every ninety seconds for every
+        // participant of every session. The client asks for the short answer;
+        // one that does not ask (an older page) gets the whole of it, as before.
+        if ($this->isRenewal()) {
+            return $this->ok($credentials + ['renewal' => true]);
+        }
+
+        $grant = $this->grantFor($session, $participant);
+
+        return $this->ok($credentials + [
             'iceServers' => $grant->iceServers(),
             // The UI uses this to explain an unreachable peer honestly instead
             // of showing "reconnecting" forever (§49).
@@ -184,6 +210,22 @@ class SignallingController extends BaseApiController
         $ice->learnLatency($context['client'], (string) $participant['uuid']);
 
         return $ice->grant((string) $participant['uuid'], $this->regionHint(), null, $context);
+    }
+
+    /** Whether the client said it is only replacing a token on a connection it already has. */
+    private function isRenewal(): bool
+    {
+        return filter_var($this->body()['renewal'] ?? false, FILTER_VALIDATE_BOOLEAN);
+    }
+
+    /** Whether this participant's entry to the room is already on the session's record. */
+    private function alreadyAuthorised(int $sessionId, int $participantId): bool
+    {
+        return db_connect()->table('remote_session_events')
+            ->where('session_id', $sessionId)
+            ->where('participant_id', $participantId)
+            ->where('event_type', EventType::SIGNALLING_TOKEN_ISSUED)
+            ->countAllResults() > 0;
     }
 
     /** The client's region hint for relay ordering (`in-west`, `in-north`); a hint, never a filter. */

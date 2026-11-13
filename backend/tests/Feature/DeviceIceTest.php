@@ -88,6 +88,54 @@ final class DeviceIceTest extends RemoteTestCase
         return json_decode($response->getJSON(), true)['data'];
     }
 
+    /**
+     * The once-a-minute check-in is not a connection, and must not cost what one costs. It used to mint a relay
+     * credential and book relay capacity for every registered computer that was doing nothing — which is how seventy
+     * idle computers came to show the free relay pool as full. The join is where an agent gets its ICE servers.
+     */
+    public function testTheCheckInIssuesNoRelayCredentialAndTheJoinStillDoes(): void
+    {
+        $fixture = $this->deviceInSession(30);
+
+        $issued = [];
+        $before = $this->leaseCount();
+
+        for ($poll = 0; $poll < 3; $poll++) {
+            $response = $this->withHeaders($fixture['headers'])->get('v1/remote/devices/me');
+            $this->assertSame(200, $response->response()->getStatusCode(), (string) $response->getJSON());
+
+            $issued[] = json_decode($response->getJSON(), true)['data']['realtime'];
+        }
+
+        foreach ($issued as $realtime) {
+            $this->assertSame([], $realtime['iceServers'], 'Nothing is issued to a computer that is only checking in.');
+            $this->assertTrue($realtime['relayAvailable'], 'It is still told a relay exists.');
+        }
+        $this->assertSame($before, $this->leaseCount(), 'And no relay capacity was booked for it.');
+
+        $joined = $this->join($fixture);
+
+        $this->assertNotEmpty($joined['iceServers'], 'The join is where the agent gets them.');
+        $this->assertArrayHasKey('credential', $joined['iceServers'][1]);
+        $this->assertGreaterThan($before, $this->leaseCount(), 'And the join is what books capacity — so the count above could have moved.');
+    }
+
+    /** How many relay leases are on the books (the ice-kit's admission ledger, a file under writable/). */
+    private function leaseCount(): int
+    {
+        $total = 0;
+
+        foreach (glob(WRITEPATH . 'ice/*.json') ?: [] as $file) {
+            $book = json_decode((string) @file_get_contents($file), true);
+
+            foreach ((array) ($book['leases'] ?? []) as $lease) {
+                $total += is_array($lease) ? 1 : 0;
+            }
+        }
+
+        return $total;
+    }
+
     public function testTheAgentCredentialCoversTheRestOfALongSession(): void
     {
         $fixture = $this->deviceInSession(360);   // a six-hour session: under the eight-hour cap

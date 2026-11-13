@@ -287,6 +287,8 @@ class IceConfigService
     /**
      * Just the RTCIceServer list, for callers that predate the grant.
      *
+     * A grant like any other: it mints a credential and books relay capacity. Not for a poll.
+     *
      * @return list<array{urls: list<string>, username?: string, credential?: string}>
      */
     public function iceServers(string $subject = 'remote'): array
