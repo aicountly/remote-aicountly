@@ -43,6 +43,18 @@ use Throwable;
  * wrong environment is NEVER papered over with a cached answer: revoking a key
  * in Console has to actually stop Remote from using it.
  *
+ * ONE REQUEST ASKS, THE REST CARRY ON. Under PHP-FPM every request is a new
+ * process, so nothing held in memory outlives it. When the answer in the file
+ * is past FRESH_TTL, the request that finds it so marks the file ("asking,
+ * until …") before it calls Console, and requests arriving meanwhile use the
+ * answer already there instead of calling too. If Console then cannot be
+ * reached, the mark is pushed FAILURE_TTL seconds on: for that long nobody asks
+ * again. Without it an outage of Console was an outage of Remote - once the
+ * file was five minutes old EVERY request stopped to call Console and waited
+ * out its timeout, two to four seconds each, until the workers ran out. With
+ * it, one request in fifteen seconds pays that and the rest do not notice. A
+ * refusal clears the mark at once, so it is never hidden behind it.
+ *
  * Failures carry a category (categories()) and a fixed sentence saying what to do
  * (hint()), chosen from the category and never built from anything Console sent,
  * so the unauthenticated /api/health can show them. No message here ever contains
@@ -54,6 +66,8 @@ final class ConsoleDatabaseDetails
     private const STALE_TTL = 604800;
     private const FAILURE_TTL = 15;
     private const TIMEOUT = 4;
+    /** Beyond TIMEOUT, how long a request that said it is asking is believed to still be asking. */
+    private const ASKING_SLACK = 2;
     private const CONNECT_TIMEOUT = 2;
     private const MAX_RESPONSE_BYTES = 65536;
     private const IDENTIFIER = '/^[A-Za-z0-9_.$-]{1,128}$/D';
@@ -225,6 +239,19 @@ final class ConsoleDatabaseDetails
             return self::remember($id, $cached['name'], $cached['user'], $cached['fetched_at'] + self::FRESH_TTL);
         }
 
+        $usable = $cached !== null && $cached['fetched_at'] + self::STALE_TTL > time();
+
+        // Another request is asking Console at this moment, or one asked within
+        // the last few seconds and could not reach it: use what is here.
+        if ($usable && $cached['retry_at'] > time()) {
+            return self::remember($id, $cached['name'], $cached['user'], $cached['retry_at']);
+        }
+
+        // This request asks. Say so first, so the ones behind it do not ask too.
+        if ($usable) {
+            self::writeFile($cached['name'], $cached['user'], $cached['fetched_at'], time() + self::TIMEOUT + self::ASKING_SLACK);
+        }
+
         $answer = self::fetch();
 
         if ($answer['ok']) {
@@ -234,12 +261,21 @@ final class ConsoleDatabaseDetails
         }
 
         // Console was unreachable or broken (not a refusal): carry on with the
-        // last good answer rather than take Remote down with it.
-        if ($answer['retryable'] && $cached !== null && $cached['fetched_at'] + self::STALE_TTL > time()) {
+        // last good answer rather than take Remote down with it - and leave
+        // word in the file, so that for the next few seconds no request asks
+        // again, in this process or in any other.
+        if ($answer['retryable'] && $usable) {
             self::log('Console database-details unavailable (' . $answer['message'] . ') - using the last details it gave, from '
                 . gmdate('c', $cached['fetched_at']) . '.');
+            self::writeFile($cached['name'], $cached['user'], $cached['fetched_at'], time() + self::FAILURE_TTL);
 
             return self::remember($id, $cached['name'], $cached['user'], time() + self::FAILURE_TTL);
+        }
+
+        // A refusal, or nothing to fall back on. Whatever mark this request
+        // left is taken off: the next request must hear the refusal itself.
+        if ($usable) {
+            self::writeFile($cached['name'], $cached['user'], $cached['fetched_at']);
         }
 
         self::$memo    = null;
@@ -502,7 +538,12 @@ final class ConsoleDatabaseDetails
         return rtrim(sys_get_temp_dir(), '/\\') . DIRECTORY_SEPARATOR . 'remote-console-db-' . self::id() . '.json';
     }
 
-    /** @return array{name: string, user: string, fetched_at: int}|null */
+    /**
+     * `retry_at` is 0 unless a request is asking Console, or one could not reach it moments ago: until then
+     * nobody else asks. It is believed only as far ahead as this class could have written it.
+     *
+     * @return array{name: string, user: string, fetched_at: int, retry_at: int}|null
+     */
     private static function readFile(): ?array
     {
         $path = self::filePath();
@@ -527,14 +568,27 @@ final class ConsoleDatabaseDetails
             return null;
         }
 
-        return ['name' => $data['name'], 'user' => $data['user'], 'fetched_at' => $data['fetched_at']];
+        $retryAt = is_int($data['retry_at'] ?? null) ? $data['retry_at'] : 0;
+        if ($retryAt > time() + max(self::FAILURE_TTL, self::TIMEOUT + self::ASKING_SLACK)) {
+            // Further ahead than anything written here: a doctored file must not be able to stop Console being asked.
+            $retryAt = 0;
+        }
+
+        return ['name' => $data['name'], 'user' => $data['user'], 'fetched_at' => $data['fetched_at'], 'retry_at' => $retryAt];
     }
 
-    private static function writeFile(string $name, string $user): void
+    /**
+     * @param int|null $fetchedAt when Console gave this answer; now, for one it has just given
+     * @param int      $retryAt   see readFile(); 0 writes no mark at all
+     */
+    private static function writeFile(string $name, string $user, ?int $fetchedAt = null, int $retryAt = 0): void
     {
         $path    = self::filePath();
         $tmp     = $path . '.' . bin2hex(random_bytes(6)) . '.tmp';
-        $payload = json_encode(['name' => $name, 'user' => $user, 'fetched_at' => time()]);
+        $payload = json_encode(
+            ['name' => $name, 'user' => $user, 'fetched_at' => $fetchedAt ?? time()]
+            + ($retryAt > 0 ? ['retry_at' => $retryAt] : []),
+        );
         if ($payload === false) {
             return;
         }
