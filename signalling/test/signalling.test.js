@@ -14,6 +14,7 @@
 
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
+import net from 'node:net';
 import { after, before, describe, it } from 'node:test';
 
 import { DEVICE_ROOM_PREFIX, TokenError, verifySignallingToken } from '../src/token.js';
@@ -230,12 +231,100 @@ describe('Rooms', () => {
  * refusing that would lock the agent out of every deployment that sets an
  * allowlist while gaining nothing — the signed token is the gate for both.
  */
+describe('the relay’s limits', () => {
+  let rateVerdict;
+  let sendText;
+  let connectionCeiling;
+
+  before(async () => {
+    process.env.REMOTE_SIGNALLING_TOKEN_SECRET = SECRET;
+    process.env.REMOTE_SIGNAL_PORT = '0';
+    process.env.REMOTE_SIGNAL_MAX_ROOM_MEMBERS = '6';
+    process.env.REMOTE_SIGNAL_MAX_CONNECTIONS = '40';
+
+    ({ rateVerdict, sendText, connectionCeiling } = await import('../src/server.js'));
+  });
+
+  it('relays up to the budget, drops beyond it, and ends a connection far beyond it', () => {
+    const rate = { windowStart: 1_000, messages: 0, bytes: 0, told: false };
+    const verdicts = [];
+
+    for (let count = 0; count < 3_001; count += 1) verdicts.push(rateVerdict(rate, 100, 2_000));
+
+    assert.equal(verdicts[599], 'ok', 'the 600th');
+    assert.equal(verdicts[600], 'drop', 'the 601st');
+    assert.equal(verdicts[2_999], 'drop', 'the 3,000th');
+    assert.equal(verdicts[3_000], 'close', 'the 3,001st');
+  });
+
+  /** One sender of very large messages was enough to hold every other room up. */
+  it('counts bytes as well as messages', () => {
+    const rate = { windowStart: 1_000, messages: 0, bytes: 0, told: false };
+
+    // 250 KB at a time: eight fit in 2 MB, the ninth does not.
+    const verdicts = Array.from({ length: 9 }, () => rateVerdict(rate, 250 * 1024, 2_000));
+
+    assert.deepEqual(verdicts.slice(0, 8), Array(8).fill('ok'));
+    assert.equal(verdicts[8], 'drop');
+  });
+
+  it('starts again with each window, and may say so again', () => {
+    const rate = { windowStart: 1_000, messages: 600, bytes: 0, told: true };
+
+    assert.equal(rateVerdict(rate, 10, 5_000), 'drop', 'still inside the window');
+    assert.equal(rateVerdict(rate, 10, 12_000), 'ok', 'a new window');
+    assert.equal(rate.told, false);
+    assert.equal(rate.messages, 1);
+  });
+
+  /**
+   * A recipient that has stopped reading had everything sent to it held in
+   * memory until the heartbeat noticed: 404 MB for one socket, measured.
+   */
+  it('ends a connection that has stopped reading instead of queueing for it without limit', () => {
+    const calls = [];
+    const socket = (bufferedAmount) => ({
+      OPEN: 1,
+      readyState: 1,
+      bufferedAmount,
+      participant: { room: 'room' },
+      send: (text) => calls.push(['send', text]),
+      terminate: () => calls.push(['terminate']),
+    });
+
+    sendText(socket(0), 'hello');
+    sendText(socket(900 * 1024), 'still reading, slowly');
+    sendText(socket(2 * 1024 * 1024), 'not reading');
+
+    assert.deepEqual(calls, [['send', 'hello'], ['send', 'still reading, slowly'], ['terminate']]);
+  });
+
+  it('writes nothing to a socket that is not open', () => {
+    const calls = [];
+
+    sendText({ OPEN: 1, readyState: 3, bufferedAmount: 0, send: () => calls.push('send'), terminate: () => calls.push('terminate') }, 'x');
+
+    assert.deepEqual(calls, []);
+  });
+
+  /** Every connection is an open file, so the limit on those is the limit on these. */
+  it('accepts no more connections than the open-file limit leaves room for', () => {
+    assert.equal(connectionCeiling(20_000, null), 20_000, 'no limit to read: what was configured');
+    assert.equal(connectionCeiling(20_000, 1_024), 960, 'the usual 1,024: sixty-four kept back');
+    assert.equal(connectionCeiling(500, 65_536), 500, 'configured lower than the limit allows');
+    assert.equal(connectionCeiling(20_000, 32), 1, 'never less than one');
+  });
+});
+
 describe('originAllowed', () => {
   let originAllowed;
 
   before(async () => {
     process.env.REMOTE_SIGNALLING_TOKEN_SECRET = SECRET;
     process.env.REMOTE_SIGNAL_PORT = '0';
+    // Small enough to reach in a test; read once, when the module loads.
+    process.env.REMOTE_SIGNAL_MAX_ROOM_MEMBERS = '6';
+    process.env.REMOTE_SIGNAL_MAX_CONNECTIONS = '40';
 
     ({ originAllowed } = await import('../src/server.js'));
   });
@@ -270,6 +359,9 @@ describe('signalling server', () => {
   before(async () => {
     process.env.REMOTE_SIGNALLING_TOKEN_SECRET = SECRET;
     process.env.REMOTE_SIGNAL_PORT = '0';
+    // Small enough to reach in a test; read once, when the module loads.
+    process.env.REMOTE_SIGNAL_MAX_ROOM_MEMBERS = '6';
+    process.env.REMOTE_SIGNAL_MAX_CONNECTIONS = '40';
 
     ({ server, wss } = await import('../src/server.js'));
     ({ WebSocket } = await import('ws'));
@@ -345,6 +437,133 @@ describe('signalling server', () => {
       });
     });
   }
+
+  /** A raw upgrade request, for a request line no WebSocket client would send. Resolves with the status line. */
+  function rawUpgrade(path) {
+    return new Promise((resolve, reject) => {
+      const socket = net.connect(port, '127.0.0.1', () => {
+        socket.write(
+          `GET ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n` +
+            'Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n',
+        );
+      });
+
+      let received = '';
+      socket.on('data', (chunk) => {
+        received += chunk.toString('utf8');
+      });
+      socket.on('close', () => resolve(received.split('\r\n')[0]));
+      socket.on('error', reject);
+      setTimeout(() => socket.destroy(), 2000).unref();
+    });
+  }
+
+  const uuid = (n) => `aaaaaaaa-bbbb-4ccc-8ddd-${String(n).padStart(12, '0')}`;
+  const roomId = (n) => `99999999-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+  /**
+   * `new URL('//', …)` throws. Thrown from the upgrade handler it ended the
+   * process, and with it every connection in every room; any process on the
+   * same server can send that request line to the port.
+   */
+  it('answers 400 to a request line it cannot parse, and carries on', async () => {
+    assert.equal(await rawUpgrade('//'), 'HTTP/1.1 400 Bad request');
+
+    // Still here, and still serving.
+    const ws = await connect(mintToken({ sub: uuid(1), room: roomId(1) }));
+    assert.equal((await nextMessage(ws, (m) => m.type === 'joined')).type, 'joined');
+    ws.close();
+  });
+
+  /**
+   * Over the budget used to mean the connection was closed — and a close is
+   * announced to the room as that participant leaving, so their peers tore
+   * down connections that were working. A pointer sent through the relay plus
+   * one negotiation was enough.
+   */
+  it('drops what is over a connection’s budget and says so, without ending the connection', async () => {
+    const busy = await connect(mintToken({ sub: uuid(2), room: roomId(2) }));
+    const peer = await connect(mintToken({ sub: uuid(3), room: roomId(2) }));
+    await nextMessage(busy, (m) => m.type === 'joined');
+    await nextMessage(peer, (m) => m.type === 'joined');
+
+    // 650 where 600 are allowed.
+    for (let count = 0; count < 650; count += 1) busy.send(JSON.stringify({ type: 'ping' }));
+
+    // Let everything sent be answered, then count.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    const refusals = busy.received.filter((m) => m.type === 'error' && m.code === 'RATE_LIMITED');
+
+    assert.equal(busy.received.filter((m) => m.type === 'pong').length, 600, 'what was within the budget was answered');
+    assert.equal(refusals.length, 1, 'and it was told once, not fifty times');
+    assert.match(refusals[0].message, /some were not relayed/);
+    assert.equal(busy.readyState, WebSocket.OPEN, 'the connection is still up');
+    assert.equal(peer.received.filter((m) => m.type === 'peer-left').length, 0, 'and nobody was told it left');
+
+    busy.close();
+    peer.close();
+  });
+
+  it('ends a connection that is several times over its budget', async () => {
+    const flood = await connect(mintToken({ sub: uuid(4), room: roomId(3) }));
+    await nextMessage(flood, (m) => m.type === 'joined');
+
+    const closed = new Promise((resolve) => flood.on('close', (code) => resolve(code)));
+
+    for (let count = 0; count < 3100 && flood.readyState === WebSocket.OPEN; count += 1) {
+      flood.send(JSON.stringify({ type: 'ping' }));
+    }
+
+    assert.equal(await closed, 4008);
+  });
+
+  /** A room is a handful of people; the ceiling is on what a broadcast is multiplied by. */
+  it('lets nobody new into a full room, and still lets a member reconnect', async () => {
+    const room = roomId(4);
+    const members = [];
+
+    for (let n = 10; n < 16; n += 1) {
+      members.push(await connect(mintToken({ sub: uuid(n), room })));
+    }
+
+    await assert.rejects(connect(mintToken({ sub: uuid(16), room })), /HTTP 409/);
+
+    // The same participant on a new connection — a renewed token — is not somebody new.
+    const again = await connect(mintToken({ sub: uuid(10), room }));
+    assert.equal((await nextMessage(again, (m) => m.type === 'joined')).type, 'joined');
+
+    for (const ws of [...members, again]) ws.close();
+  });
+
+  /**
+   * Every connection is an open file. At the operating system's limit a new
+   * socket is accepted and then reset, nothing is logged, and the health check
+   * fails with it; refusing just below says what is the matter.
+   */
+  it('refuses with 503 once it holds as many connections as it may, and still answers its health check', async () => {
+    // Whatever earlier tests left closing has closed.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const held = [];
+    while (wss.clients.size < 40) {
+      const n = 100 + held.length;
+      held.push(await connect(mintToken({ sub: uuid(n), room: roomId(n) })));
+    }
+
+    await assert.rejects(connect(mintToken({ sub: uuid(999), room: roomId(999) })), /HTTP 503/);
+
+    const health = await fetch(`http://127.0.0.1:${port}/health`);
+    assert.equal(health.status, 200);
+    assert.equal((await health.json()).status, 'ok');
+
+    for (const ws of held) ws.close();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Room again: accepted.
+    const ws = await connect(mintToken({ sub: uuid(998), room: roomId(998) }));
+    ws.close();
+  });
 
   it('refuses a connection with a forged token', async () => {
     await assert.rejects(

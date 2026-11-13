@@ -24,6 +24,7 @@
  * beside a PHP application that has no long-lived processes at all.
  */
 
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 
@@ -80,9 +81,110 @@ export function originAllowed(origin, allowed) {
 /** Dead sockets are indistinguishable from idle ones without a heartbeat. */
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
-/** Per-connection budget. Generous for ICE trickle, tight enough to matter. */
-const RATE_LIMIT_MESSAGES = 240;
+/**
+ * How many sockets are pinged before the event loop is given back.
+ *
+ * Every socket used to be pinged in one synchronous pass. Measured, that pass
+ * held the loop for 125-184 ms at 10,000 sockets and 262-317 ms at 19,900, and
+ * a message relayed at that moment waited that long — every thirty seconds, in
+ * every room. In batches, nothing waits longer than one batch.
+ */
+const HEARTBEAT_BATCH = 500;
+
+/**
+ * Per-connection budget for each window: messages, and bytes.
+ *
+ * What is over the budget is **dropped, and the sender told**; the connection
+ * stays. It used to be closed at 240 messages, and a close is announced to the
+ * room as the participant leaving, so their peers tore down connections that
+ * were working. Ordinary use reached it: a pointer sent over the relay at the
+ * web's own pace is 200 messages a window, and an offer and its candidates on
+ * top of that crossed it, as did a newcomer answering six peers at forty
+ * candidates each. 600 leaves room for both together.
+ *
+ * Bytes are counted as well as messages because the fan-out is what costs: one
+ * sender inside the old message budget, sending 250 KB messages into a room of
+ * fifty, took 89% of the process's core and held every other room's messages
+ * for a quarter to three quarters of a second.
+ *
+ * A connection several times over either is not a participant with a busy
+ * network, and that one is closed.
+ */
+const RATE_LIMIT_MESSAGES = 600;
+const RATE_LIMIT_BYTES = 2 * 1024 * 1024;
 const RATE_LIMIT_WINDOW_MS = 10_000;
+const RATE_LIMIT_ABUSE_FACTOR = 5;
+
+/**
+ * How much may be waiting to be written to one socket before it is given up on.
+ *
+ * A recipient that has stopped reading — a frozen tab, a network that takes
+ * nothing — otherwise has everything sent to it held here in memory until the
+ * heartbeat notices, up to a minute later: measured, 5.6 MB a second and 404 MB
+ * for one such socket. A megabyte is several seconds of anything this service
+ * relays.
+ */
+const MAX_BUFFERED_BYTES = 1024 * 1024;
+
+/**
+ * The most members one room may hold. A session is a handful of people; this is
+ * the ceiling on what a broadcast can be multiplied by, not a product limit.
+ */
+const MAX_ROOM_MEMBERS = positiveInteger(process.env.REMOTE_SIGNAL_MAX_ROOM_MEMBERS, 64);
+
+/** Files kept back for the listening socket, the log, a health check and whatever Node itself has open. */
+const OPEN_FILE_HEADROOM = 64;
+
+/**
+ * The most connections accepted at once (REMOTE_SIGNAL_MAX_CONNECTIONS), never
+ * more than the process's open-file limit leaves room for.
+ *
+ * Every connection is an open file. At the limit the operating system still
+ * completes the TCP handshake and then resets the socket, nothing is logged,
+ * and the health check — one more file — fails with it, so the service looks
+ * down while its existing rooms are working. Refusing just below the limit with
+ * a 503 says what is the matter and leaves the health check answerable. Each
+ * registered computer holds one connection here for as long as it is switched
+ * on, so this number, not the session count, is what a deployment runs out of.
+ */
+const MAX_CONNECTIONS = connectionCeiling(
+  positiveInteger(process.env.REMOTE_SIGNAL_MAX_CONNECTIONS, 20_000),
+  openFileLimit(),
+);
+
+/**
+ * @param {string|undefined} value
+ * @param {number} fallback
+ */
+function positiveInteger(value, fallback) {
+  const parsed = Number(value);
+
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** This process's soft open-file limit, or null where it cannot be read or there is none. */
+function openFileLimit() {
+  try {
+    const match = /^Max open files\s+(\d+|unlimited)\s/m.exec(readFileSync('/proc/self/limits', 'utf8'));
+
+    return match && match[1] !== 'unlimited' ? Number(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * How many connections to accept: what was configured, or what the open-file
+ * limit leaves room for, whichever is less.
+ *
+ * @param {number} configured
+ * @param {number|null} openFiles
+ */
+export function connectionCeiling(configured, openFiles) {
+  if (openFiles === null) return configured;
+
+  return Math.max(1, Math.min(configured, openFiles - OPEN_FILE_HEADROOM));
+}
 
 /** The only message types a client may send. Anything else is dropped. */
 const RELAYABLE = new Set(['offer', 'answer', 'ice-candidate', 'peer-ready', 'renegotiate']);
@@ -154,11 +256,35 @@ const server = createServer((req, res) => {
 
 const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
 
+/** When a refusal for being full was last logged: one line a minute says it, a line per attempt would bury it. */
+let fullLoggedAt = 0;
+
 server.on('upgrade', (request, socket, head) => {
-  const url = new URL(request.url ?? '/', 'http://localhost');
+  // A request line this cannot parse is somebody else's mistake, and must stay
+  // theirs. `new URL('//', …)` throws, and thrown from here it took the process
+  // down — and with it every connection in every room. Any process on the same
+  // server can send that line to the port.
+  let url;
+  try {
+    url = new URL(request.url ?? '/', 'http://localhost');
+  } catch {
+    return refuseUpgrade(socket, 400, 'Bad request');
+  }
 
   if (url.pathname !== '/signal' && url.pathname !== '/') {
     return refuseUpgrade(socket, 404, 'Not found');
+  }
+
+  if (wss.clients.size >= MAX_CONNECTIONS) {
+    if (Date.now() - fullLoggedAt > 60_000) {
+      fullLoggedAt = Date.now();
+      console.error(
+        `[remote-signal] refusing new connections: ${wss.clients.size} are open and the limit is ${MAX_CONNECTIONS}. ` +
+          'Raise the open-file limit of this process (ulimit -n) and REMOTE_SIGNAL_MAX_CONNECTIONS.',
+      );
+    }
+
+    return refuseUpgrade(socket, 503, 'Service unavailable');
   }
 
   if (!originAllowed(request.headers.origin, ALLOWED_ORIGINS)) {
@@ -180,6 +306,17 @@ server.on('upgrade', (request, socket, head) => {
     console.warn(`[remote-signal] refused upgrade: ${code}`);
 
     return refuseUpgrade(socket, 401, 'Unauthorized');
+  }
+
+  // A room that is full takes nobody new. Somebody already in it — a reconnect,
+  // a renewed token — is not new.
+  if (
+    rooms.size(participant.room) >= MAX_ROOM_MEMBERS &&
+    rooms.member(participant.room, participant.participantUuid) === null
+  ) {
+    console.warn(`[remote-signal] refused upgrade: room ${participant.room} is full (${MAX_ROOM_MEMBERS})`);
+
+    return refuseUpgrade(socket, 409, 'Room is full');
   }
 
   // One connection's epoch: an opaque id the client makes once per page load
@@ -238,8 +375,7 @@ function refuseUpgrade(socket, status, message) {
 wss.on('connection', (ws, _request, participant) => {
   ws.isAlive = true;
   ws.participant = participant;
-  ws.rateWindowStart = Date.now();
-  ws.rateCount = 0;
+  ws.rate = { windowStart: Date.now(), messages: 0, bytes: 0, told: false };
 
   // A token expires long before a session does; the client re-mints and
   // reconnects. Closing on expiry is what stops a connection outliving the
@@ -274,8 +410,20 @@ wss.on('connection', (ws, _request, participant) => {
   });
 
   ws.on('message', (raw) => {
-    if (!withinRateLimit(ws)) {
+    const verdict = rateVerdict(ws.rate, raw.length ?? raw.byteLength ?? 0, Date.now());
+
+    if (verdict === 'close') {
       close(ws, 4008, 'Too many messages');
+
+      return;
+    }
+
+    if (verdict === 'drop') {
+      // Said once a window: a reply to every dropped message would be the same flood, in reverse.
+      if (!ws.rate.told) {
+        ws.rate.told = true;
+        send(ws, { type: 'error', code: 'RATE_LIMITED', message: 'Too many messages: some were not relayed' });
+      }
 
       return;
     }
@@ -289,7 +437,13 @@ wss.on('connection', (ws, _request, participant) => {
       return;
     }
 
-    handle(ws, message);
+    // One message this cannot route must not be the end of the process, and of
+    // every room in it.
+    try {
+      handle(ws, message);
+    } catch (error) {
+      console.error(`[remote-signal] a message could not be handled in room ${participant.room}: ${error?.message}`);
+    }
   });
 
   ws.on('close', () => {
@@ -385,17 +539,34 @@ function handle(ws, message) {
   send(ws, { type: 'error', code: 'UNSUPPORTED_TYPE', message: `Unsupported message type: ${type}` });
 }
 
-function withinRateLimit(ws) {
-  const now = Date.now();
-
-  if (now - ws.rateWindowStart > RATE_LIMIT_WINDOW_MS) {
-    ws.rateWindowStart = now;
-    ws.rateCount = 0;
+/**
+ * Count one message against a connection's budget and say what to do with it:
+ * relay it (`ok`), not relay it (`drop`), or end the connection (`close`).
+ *
+ * @param {{windowStart: number, messages: number, bytes: number, told: boolean}} rate the connection's count, updated
+ * @param {number} bytes the size of this message
+ * @param {number} now
+ * @returns {'ok'|'drop'|'close'}
+ */
+export function rateVerdict(rate, bytes, now) {
+  if (now - rate.windowStart > RATE_LIMIT_WINDOW_MS) {
+    rate.windowStart = now;
+    rate.messages = 0;
+    rate.bytes = 0;
+    rate.told = false;
   }
 
-  ws.rateCount += 1;
+  rate.messages += 1;
+  rate.bytes += bytes;
 
-  return ws.rateCount <= RATE_LIMIT_MESSAGES;
+  if (
+    rate.messages > RATE_LIMIT_MESSAGES * RATE_LIMIT_ABUSE_FACTOR ||
+    rate.bytes > RATE_LIMIT_BYTES * RATE_LIMIT_ABUSE_FACTOR
+  ) {
+    return 'close';
+  }
+
+  return rate.messages > RATE_LIMIT_MESSAGES || rate.bytes > RATE_LIMIT_BYTES ? 'drop' : 'ok';
 }
 
 function describe({ participant }) {
@@ -412,14 +583,40 @@ function describe({ participant }) {
 }
 
 function send(socket, payload) {
-  if (socket.readyState === socket.OPEN) {
-    socket.send(JSON.stringify(payload));
+  sendText(socket, JSON.stringify(payload));
+}
+
+/**
+ * Write one already-serialised message to a socket — unless it has stopped
+ * reading, in which case it is ended instead (MAX_BUFFERED_BYTES). Ending it is
+ * announced to its room as that participant leaving, which is what has happened.
+ *
+ * @param {import('ws').WebSocket} socket
+ * @param {string} text
+ */
+export function sendText(socket, text) {
+  if (socket.readyState !== socket.OPEN) return;
+
+  if (socket.bufferedAmount > MAX_BUFFERED_BYTES) {
+    console.warn(
+      `[remote-signal] a connection in room ${socket.participant?.room ?? '?'} is not reading ` +
+        `(${socket.bufferedAmount} bytes waiting); ending it`,
+    );
+    socket.terminate();
+
+    return;
   }
+
+  socket.send(text);
 }
 
 function broadcast(room, exceptParticipantUuid, payload) {
-  for (const member of rooms.peers(room, exceptParticipantUuid)) {
-    send(member.socket, payload);
+  // Serialised once, not once for each recipient: in a room of fifty that was
+  // fifty copies of the same work for every message.
+  const text = JSON.stringify(payload);
+
+  for (const member of rooms.others(room, exceptParticipantUuid)) {
+    sendText(member.socket, text);
   }
 }
 
@@ -434,16 +631,31 @@ function close(socket, code, reason) {
 // A socket whose network vanished stays "open" forever without this; the ping
 // is what turns a dead peer into a peer-left the other side can react to.
 const heartbeat = setInterval(() => {
-  for (const client of wss.clients) {
-    if (client.isAlive === false) {
-      client.terminate();
+  const clients = [...wss.clients];
+  let next = 0;
 
-      continue;
+  // A batch, then the event loop, then the next batch (HEARTBEAT_BATCH).
+  const pingBatch = () => {
+    const end = Math.min(next + HEARTBEAT_BATCH, clients.length);
+
+    for (; next < end; next += 1) {
+      const client = clients[next];
+
+      if (client.isAlive === false) {
+        client.terminate();
+
+        continue;
+      }
+
+      client.isAlive = false;
+
+      if (client.readyState === client.OPEN) client.ping();
     }
 
-    client.isAlive = false;
-    client.ping();
-  }
+    if (next < clients.length) setImmediate(pingBatch);
+  };
+
+  pingBatch();
 }, HEARTBEAT_INTERVAL_MS);
 
 heartbeat.unref();
@@ -453,7 +665,7 @@ heartbeat.unref();
 // ---------------------------------------------------------------------------
 
 server.listen(PORT, HOST, () => {
-  console.log(`[remote-signal] listening on ${HOST}:${PORT}`);
+  console.log(`[remote-signal] listening on ${HOST}:${PORT}, accepting up to ${MAX_CONNECTIONS} connections`);
   if (ALLOWED_ORIGINS.length === 0) {
     console.warn('[remote-signal] REMOTE_SIGNAL_ALLOWED_ORIGINS is empty — any origin may open a socket with a valid token.');
   }
