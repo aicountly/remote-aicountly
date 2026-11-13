@@ -107,7 +107,10 @@ const HELP_PEER_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// and what a page reload and a dropped Wi-Fi connection look like. Every one
 /// of those comes straight back. Ending the session on the announcement, as
 /// this used to, ended every hosted session about two minutes in.
-const REJOIN_GRACE: Duration = Duration::from_secs(30);
+///
+/// A minute, because the slowest of them is a reload: the page has to load
+/// again and, in a session somebody is attending, be let back in.
+const REJOIN_GRACE: Duration = Duration::from_secs(60);
 
 /// How often the last picture may be sent again for a viewer waiting on a
 /// keyframe while the screen is still.

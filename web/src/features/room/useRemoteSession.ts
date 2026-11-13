@@ -674,6 +674,9 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
         // The room (and a control companion in it) re-reads the state now.
         engineRef.current?.sendControlHint()
 
+        // And so does this page: each participant's own control state lives on the session record.
+        void reload()
+
         await reload()
       } catch (err) {
         if (mountedRef.current) {

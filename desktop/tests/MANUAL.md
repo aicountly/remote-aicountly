@@ -140,7 +140,7 @@ not on a real machine. They are the first things to check on one.
 | 4a.9 | Hold Ctrl in the browser, Alt+Tab away to another window, release, come back and type | Plain text arrives. Ctrl is not stuck down on the controlled machine |
 | 4a.10 | Double-click a word in Notepad, and a file on the desktop | The word is selected; the file opens |
 | 4a.11 | Reload the helper's browser tab while controlling | The helper comes back to the same session, the picture returns within a few seconds, and — once readmitted — control works without anything being sent "more times than before" |
-| 4a.12 | Close the helper's tab and wait | The session ends on the machine within about thirty seconds, not immediately and not never |
+| 4a.12 | Close the helper's tab and wait | The session ends on the machine within about a minute, not immediately and not never |
 | 4a.13 | Leave the shared screen completely still, then join from a second browser profile after the first has left | The picture appears at once, not when something next moves |
 
 ### 4b. Two screens

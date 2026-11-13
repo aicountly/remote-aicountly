@@ -447,7 +447,7 @@ struct Companion<'a, A: CompanionApi, F: PeerSessionFactory> {
 /// moment later, still sharing. Ending the link on the announcement ended
 /// every companion about two minutes in. An owner who really left is ended by
 /// the API, which the control read reports.
-const SHARER_GRACE: Duration = Duration::from_secs(30);
+const SHARER_GRACE: Duration = Duration::from_secs(60);
 
 /// Be this machine's owner's control companion for one link, until it ends.
 ///

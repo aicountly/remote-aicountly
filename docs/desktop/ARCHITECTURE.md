@@ -240,7 +240,7 @@ gap at the wrong moment.
 
 * the session survives its helper's reconnects: a departure the relay
   announces — a renewed room token, a reload, a dropped connection — is waited
-  out for thirty seconds, the same page coming back keeps its connection, and
+  out for a minute, the same page coming back keeps its connection, and
   a reloaded page gets a connection of its own;
 * control input goes from the data channel straight through the gate, on the
   connection's own reader, rather than once a turn of the session loop;
