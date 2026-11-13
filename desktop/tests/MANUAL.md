@@ -122,6 +122,51 @@ product.
 | 4.13 | Browser: Stop controlling | Both ends agree that it stopped |
 | 4.14 | Session detail → the timeline | `CONTROL_REQUESTED`, `_DENIED`, `_GRANTED`, `_REVOKED`, with who and when |
 
+### 4a. The session stays up, and control works the way a person expects
+
+Each of these was a fault found by reading the code and reproduced in a test,
+not on a real machine. They are the first things to check on one.
+
+| # | Do | Expect |
+|---|---|---|
+| 4a.1 | Start a help session from the app ("give your code"), join it from a browser, and **leave both alone for five minutes** | The picture keeps moving and the session is still running. Before this change the session ended about two minutes in, when the browser's room token expired and the relay announced the helper as gone |
+| 4a.2 | With the picture up and **nobody** controlling, watch a clock on the shared screen | It ticks. Before, the picture froze the moment the control channel opened |
+| 4a.3 | Close the agent's window to the tray, then request control from the browser | The window **comes forward** with the consent dialog |
+| 4a.4 | **Allow control**, and start a stopwatch | The browser shows Controlling **within a second or two**, and the pointer follows at once. Before, it could take twenty-five seconds |
+| 4a.5 | Move the mouse in circles for ten seconds | Smooth. No pause every three seconds, no burst of movement after a still moment |
+| 4a.6 | In Notepad on the controlled machine: type text, then Ctrl+A, Ctrl+C, End, Ctrl+V, Ctrl+Z | Select all, copy, paste and undo all happen. Before, every shortcut was dead: a letter was injected as a character with no key behind it |
+| 4a.7 | Alt+F (a menu), Alt+F4 on a spare window, Win+R, Win+D, Ctrl+Shift+Esc | Each does what it does at the keyboard. Win and Alt+Tab reach the remote machine only in **full screen** (the browser keeps them otherwise) — check both |
+| 4a.8 | On a controller with AltGr (a German or French layout): type `@`, `€`, `{` | The character appears; no shortcut fires |
+| 4a.9 | Hold Ctrl in the browser, Alt+Tab away to another window, release, come back and type | Plain text arrives. Ctrl is not stuck down on the controlled machine |
+| 4a.10 | Double-click a word in Notepad, and a file on the desktop | The word is selected; the file opens |
+| 4a.11 | Reload the helper's browser tab while controlling | The helper comes back to the same session, the picture returns within a few seconds, and — once readmitted — control works without anything being sent "more times than before" |
+| 4a.12 | Close the helper's tab and wait | The session ends on the machine within about thirty seconds, not immediately and not never |
+| 4a.13 | Leave the shared screen completely still, then join from a second browser profile after the first has left | The picture appears at once, not when something next moves |
+
+### 4b. Two screens
+
+| # | Do | Expect |
+|---|---|---|
+| 4b.1 | On a machine with two displays, grant control | Beside the full screen button the browser shows **1** and **2** |
+| 4b.2 | Click **2** | The picture changes to the second display within a second |
+| 4b.3 | Click in the four corners of the second display's picture | Each click lands in that corner **of the second display**, not the first |
+| 4b.4 | Drag a window from one display to the other at the machine, then switch in the browser | It is where it was left |
+| 4b.5 | Stop control | The switcher goes. The picture stays on the display it was showing |
+| 4b.6 | With one display | No switcher is offered |
+
+### 4c. Sound
+
+| # | Do | Expect |
+|---|---|---|
+| 4c.1 | Fresh install: App settings | "Share this computer's sound" is there and **off** |
+| 4c.2 | With it off, play a video on the machine during a session | The helper hears nothing. `agent.log` has no "sound is being shared" line |
+| 4c.3 | Switch it on, Save, play the video again | The helper hears it within a second or two — telephone quality, in step with the picture. `agent.log`: "this computer's sound is being shared" with the mixer's rate and channels |
+| 4c.4 | Switch it off again **during** the session | The sound stops within a second; the picture carries on |
+| 4c.5 | Pause the video for ten seconds, then play | Sound resumes cleanly, not sped up or stretched |
+| 4c.6 | Unplug the headphones (or change the default output) mid-session | A gap of a couple of seconds, then sound again from the new device |
+| 4c.7 | Open the room from a pasted link in a new tab and touch nothing | The **picture** is there. The sound starts at the first click or key press |
+| 4c.8 | On a Mac | The setting is not offered: a Mac hosts without sound |
+
 ## 5. Control that must be refused
 
 | # | Do | Expect |

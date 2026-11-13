@@ -86,7 +86,7 @@ the lookup tables around them — where a click lands, the virtual-key codes, th
 clipboard bounds — are tested on Linux as well. What only a Windows runner can
 check is `mod imp` itself, and that is what it compiles and clippy-checks.
 
-`cargo test --workspace` runs **614 Rust tests** on any host. The H.264 tests among
+`cargo test --workspace` runs **713 Rust tests** on any host. The H.264 tests among
 them encode with OpenH264 compiled from source (`remote-webrtc`'s test-only
 `bundled-openh264` feature); the application itself loads Cisco's binary.
 
@@ -238,7 +238,28 @@ gap at the wrong moment.
   arrangement and where each licence condition is met:
   [docs/legal/OPENH264.md](../legal/OPENH264.md).
 
+* the session survives its helper's reconnects: a departure the relay
+  announces — a renewed room token, a reload, a dropped connection — is waited
+  out for thirty seconds, the same page coming back keeps its connection, and
+  a reloaded page gets a connection of its own;
+* control input goes from the data channel straight through the gate, on the
+  connection's own reader, rather than once a turn of the session loop;
+* **more than one display**: the controller is sent the layout, may ask for
+  another display once control is granted (`select_monitor`), and input lands
+  on whichever is being shown;
+* **sound**, on Windows: what the computer is playing, beside its picture,
+  when the person at the computer has switched that on. G.711 from a WASAPI
+  loopback capture (`remote-webrtc`'s `audio` module, `platform/sound.rs`).
+
 **Not built**
+
+* **Full-band sound.** The sound track is G.711 — telephone quality, the one
+  codec every browser must decode and one that needs no library. Opus would
+  carry music properly and needs an encoder the application does not ship.
+* **Sound from a Mac.** macOS has no loopback of what its speakers play;
+  system sound needs ScreenCaptureKit or a Core Audio process tap.
+* **More than one viewer of a hosted session.** The computer connects to one
+  person at a time; a second arrival waits until the first has gone.
 
 * **A hardware video encoder.** Frames are encoded in software with Cisco's
   OpenH264 (`remote-webrtc`'s `video` module), which is fast enough for 1080p

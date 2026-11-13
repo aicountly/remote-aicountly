@@ -1054,6 +1054,7 @@ impl<A: CompanionApi, F: PeerSessionFactory> Companion<'_, A, F> {
             && (self.overrides.is_paused() || self.agent.control_admits_input());
 
         let (local, injected) = self.api.input_activity();
+        let was_paused = self.overrides.is_paused();
 
         match self.overrides.observe(controlled, local, injected) {
             Some(true) => {
@@ -1064,6 +1065,16 @@ impl<A: CompanionApi, F: PeerSessionFactory> Companion<'_, A, F> {
                 .await;
             }
             Some(false) => {
+                (self.sink)(self.agent.set_companion_paused(false));
+                self.send_control(ControlMessage::ControlResumed).await;
+            }
+            // The override let go of a pause without announcing it — control
+            // stopped being held for a moment (the monitor was picked again,
+            // say). The gate and the controller's browser were both told
+            // "paused", and nothing else ever tells them otherwise: the same
+            // grant coming back found the gate still shut and the browser
+            // still sending nothing.
+            None if was_paused && !self.overrides.is_paused() => {
                 (self.sink)(self.agent.set_companion_paused(false));
                 self.send_control(ControlMessage::ControlResumed).await;
             }

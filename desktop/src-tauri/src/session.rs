@@ -37,10 +37,25 @@
 //! every exit from [`host`]. [`CapturePump`] takes a frame from the platform at
 //! the profile's rate and hands it to `PeerSession::send_frame`, which encodes
 //! it; under congestion the profile steps down and back up towards the
-//! configured ceiling, never above it. The display shown is the primary one,
-//! and input lands on the same display because the agent maps it onto the
-//! capture's active monitor. The controller is told which display that is with
-//! a `monitor_layout` message as soon as the control channel opens.
+//! configured ceiling, never above it. The display shown is the primary one
+//! until a controller asks for another (`select_monitor`, which the gate
+//! admits only with control granted), and input lands on whichever is shown
+//! because the agent maps it onto the capture's active monitor. The
+//! controller is told which display that is with a `monitor_layout` message
+//! as soon as the control channel opens, and again whenever it changes.
+//!
+//! # Who is in the room
+//!
+//! One person at a time. The relay announces a departure whenever a socket
+//! closes — a renewed token, a reload, a dropped connection — so one is
+//! waited out rather than taken as the end ([`REJOIN_GRACE`]); [`arrival`]
+//! decides whether somebody arriving is the same page coming back, a new
+//! page, or somebody else.
+//!
+//! # The sound
+//!
+//! Beside the picture, where the platform can capture it and only while the
+//! person at the computer has it switched on (`platform::sound`).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
