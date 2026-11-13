@@ -11,6 +11,16 @@
  * window's whole job is to make "somebody is connected to your computer"
  * impossible to miss, and a green that means five different things cannot do
  * that.
+ *
+ * # Text has to be readable on what it sits on
+ *
+ * The brand green carries white text at 2.9:1, which is under the 4.5:1 that
+ * ordinary-size text needs (WCAG 2.1 AA) — and it was the colour of the
+ * session banner, its stop buttons and every primary button, so the words
+ * this application most needs read were its faintest. Anything that carries
+ * text is `--aicountly-green-darker` (6.7:1) instead; the brand green is for
+ * marks, dots and borders. The muted, warning and danger text colours are set
+ * for the same test against the surfaces they are used on.
  */
 
 :root {
@@ -18,6 +28,7 @@
   --aicountly-green: #25b003;
   --aicountly-green-dark: #1d8d03;
   --aicountly-green-darker: #166b02;
+  --aicountly-green-darkest: #0f5201;
   --aicountly-green-soft: #edf9e9;
   --aicountly-green-border: #c6e8bb;
 
@@ -31,7 +42,9 @@
   /* --- Text ------------------------------------------------------------- */
   --text-primary: #172018;
   --text-secondary: #667068;
-  --text-muted: #8b948c;
+  /* 5.0:1 on white and 4.7:1 on the window's background; it was 3.1:1, and it
+     is the colour of every hint — the scam warning among them. */
+  --text-muted: #68726a;
   --text-inverse: #ffffff;
 
   /* --- The application's own chrome --------------------------------------
@@ -50,11 +63,14 @@
   --border-strong: #cfd8cf;
 
   /* --- Semantic --------------------------------------------------------- */
-  --danger: #d92d20;
+  /* 5.1:1 on its own soft background (was 4.5:1, on the line). */
+  --danger: #c8291d;
   --danger-soft: #fef3f2;
   --danger-border: #fbd5d1;
 
-  --warning: #b76e00;
+  /* 6.1:1 as text on its soft background and 6.4:1 under white text, where
+     the unattended banner uses it as a background; it was 3.8:1 and 4.0:1. */
+  --warning: #8a5200;
   --warning-soft: #fffaeb;
   --warning-border: #fedf89;
 

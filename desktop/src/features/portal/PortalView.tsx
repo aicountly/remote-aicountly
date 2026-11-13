@@ -148,7 +148,7 @@ export function PortalView({
   )
 
   return (
-    <section className="portal" aria-label="AICOUNTLY Remote">
+    <section className={hidden ? 'portal portal--hidden' : 'portal'} aria-label="AICOUNTLY Remote">
       {signInPage ? (
         <div className="portal__toolbar">
           <button type="button" className="portal__tool" onClick={() => void bridge.portalAction('back').catch(() => undefined)}>

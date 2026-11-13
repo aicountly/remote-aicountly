@@ -241,6 +241,12 @@ export interface About {
   supportsCompanion: boolean
   /** Whether it can send what the computer is playing beside its screen (Windows). */
   supportsSound: boolean
+  /**
+   * Whether a controller can be let answer the operating system's own prompts —
+   * Windows' administrator box and lock screen. Windows only: a Mac hosts a
+   * session and has neither, so it is offered neither the tick nor the setting.
+   */
+  supportsSecureDesktop: boolean
   /** The system-wide Stop control shortcut, as this platform writes it. */
   stopShortcut: string
   /** Where the device key is kept. The store's name, never anything in it. */

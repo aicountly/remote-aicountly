@@ -149,6 +149,19 @@ pub fn supports_companion() -> bool {
     cfg!(any(target_os = "windows", target_os = "macos"))
 }
 
+/// Whether this build can let a controller answer the operating system's
+/// own prompts — Windows' "Do you want to allow this app to make changes?"
+/// box and its lock screen, through the background service's helper.
+///
+/// Windows only. A Mac hosts a session and has neither the prompts nor the
+/// service, so the window must not offer it the tick box or the setting:
+/// both used to be shown wherever hosting was, and a Mac was asked about
+/// "Windows administrator prompts".
+#[must_use]
+pub fn supports_secure_desktop() -> bool {
+    cfg!(target_os = "windows")
+}
+
 /// Whether this build has a real platform implementation at all — either
 /// role.
 ///

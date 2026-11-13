@@ -6,30 +6,20 @@
  * inventing it. What this renders is the same typographic wordmark the web
  * app falls back to, beside the Remote product mark — a screen outline with a
  * signal arc, which *is* ours and carries no text.
+ *
+ * The name and nothing else. A "for Windows" pill and the version number used
+ * to sit beside it, and with them the header needed more width than the
+ * window opens at: the name, the pill and half the tabs each broke onto two
+ * lines. Both are in App settings → About, which is where somebody is asked
+ * to read them out.
  */
-export function Brand({
-  version,
-  build = null,
-  platform = null,
-}: {
-  version: string
-  /** Which build of the version, from the About panel; the installer's name carries the same number. */
-  build?: string | null
-  /** `Windows` or `macOS`: this is the application, not the web portal it shows. */
-  platform?: string | null
-}) {
+export function Brand() {
   return (
     <div className="app__brand">
       <span className="app__brand-mark" aria-hidden="true">
         <RemoteMark />
       </span>
       <span>AICOUNTLY Remote</span>
-      {platform === 'Windows' || platform === 'macOS' ? (
-        <span className="app__platform">{platform === 'macOS' ? 'for Mac' : 'for Windows'}</span>
-      ) : null}
-      <span className="app__version" title={build ? `Build ${build}` : undefined}>
-        {version}
-      </span>
     </div>
   )
 }

@@ -239,6 +239,7 @@ pub fn run() {
             commands::portal_hide,
             commands::portal_action,
             commands::about,
+            commands::show_log_folder,
             commands::computers::list_computers,
             commands::computers::computer_history,
             commands::computers::start_help_session,

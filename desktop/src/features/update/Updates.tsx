@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import * as bridge from '../../services/tauri'
 import type { UpdateInfo, UpdateStarted } from '../../types/agent'
@@ -105,16 +105,30 @@ export function Updates({
     onPromptChange?.(showingPrompt)
   }, [showingPrompt, onPromptChange])
 
+  // The prompt is in front of the window, so the keyboard goes to it: Tab used
+  // to walk through every control behind it first, and Esc did nothing.
+  const dialog = useRef<HTMLElement>(null)
+
+  useEffect(() => {
+    if (showingPrompt) dialog.current?.focus()
+  }, [showingPrompt])
+
   if (!update) return null
 
   if (showingPrompt) {
     return (
       <div className="update-dialog__backdrop">
         <section
+          ref={dialog}
           className="card update-dialog"
           role="dialog"
           aria-modal="true"
           aria-labelledby="update-dialog-title"
+          tabIndex={-1}
+          onKeyDown={(event) => {
+            // Esc is Skip — unless the installer is already on its way.
+            if (event.key === 'Escape' && !installing && !started) skip()
+          }}
         >
           <h2 className="card__title" id="update-dialog-title">
             Update available

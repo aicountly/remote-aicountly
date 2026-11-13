@@ -26,7 +26,7 @@ function session(overrides: Partial<SessionSummary> = {}): SessionSummary {
 }
 
 describe('ControlRequest', () => {
-  it('names who is asking, from which organisation, in which session', () => {
+  it('names who is asking, and from which organisation', () => {
     render(
       <ControlRequest
         session={session()}
@@ -45,7 +45,117 @@ describe('ControlRequest', () => {
     expect(
       screen.getByText('Sam in support is asking to control this computer'),
     ).toBeInTheDocument()
-    expect(screen.getByText(/From Northwind, in session AR-10282/)).toBeInTheDocument()
+    expect(screen.getByText('From Northwind.')).toBeInTheDocument()
+    // The session's number is one the person at the computer never saw.
+    expect(screen.queryByText(/AR-10282/)).not.toBeInTheDocument()
+    // Named after who is asking, for a screen reader as for anybody else.
+    expect(
+      screen.getByRole('alertdialog', { name: 'Sam in support is asking to control this computer' }),
+    ).toBeInTheDocument()
+  })
+
+  /**
+   * This is the screen a scam phone call ends at: "open the app and press
+   * Allow". It has to say, in the dialog and not in small print, who should
+   * never be let in.
+   */
+  it('warns against allowing somebody the person does not know or did not ask', () => {
+    render(
+      <ControlRequest
+        session={session()}
+        requesterName="Sam in support"
+        clipboardAllowedByPolicy={false}
+        shareClipboard={false}
+        onShareClipboardChange={vi.fn()}
+        secureDesktopSupported={false}
+        answerSecureDesktop={false}
+        onAnswerSecureDesktopChange={vi.fn()}
+        onAllow={vi.fn()}
+        onDeny={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText(/only allow this if you know Sam in support and asked them for help/i)).toBeInTheDocument()
+    expect(screen.getByText(/never calls or messages anybody to ask for control/i)).toBeInTheDocument()
+  })
+
+  /** How to stop it is part of what is being agreed to — the shortcut included. */
+  it('says every way to stop control, in this platform’s words', () => {
+    const { rerender } = render(
+      <ControlRequest
+        session={session()}
+        requesterName="Sam in support"
+        stopShortcut="Ctrl+Alt+Shift+S"
+        clipboardAllowedByPolicy={false}
+        shareClipboard={false}
+        onShareClipboardChange={vi.fn()}
+        secureDesktopSupported={false}
+        answerSecureDesktop={false}
+        onAnswerSecureDesktopChange={vi.fn()}
+        onAllow={vi.fn()}
+        onDeny={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('Ctrl+Alt+Shift+S')).toBeInTheDocument()
+    expect(screen.getByText(/beside the clock/)).toBeInTheDocument()
+
+    rerender(
+      <ControlRequest
+        session={session()}
+        requesterName="Sam in support"
+        computerName="Mac"
+        stopShortcut="⌘⌥⇧S"
+        clipboardAllowedByPolicy={false}
+        shareClipboard={false}
+        onShareClipboardChange={vi.fn()}
+        secureDesktopSupported={false}
+        answerSecureDesktop={false}
+        onAnswerSecureDesktopChange={vi.fn()}
+        onAllow={vi.fn()}
+        onDeny={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('Sam in support is asking to control this Mac')).toBeInTheDocument()
+    expect(screen.getByText(/in the menu bar/)).toBeInTheDocument()
+    expect(screen.queryByText(/beside the clock/)).not.toBeInTheDocument()
+  })
+
+  /**
+   * The keyboard goes to the dialog, not to a button: a key pressed a moment
+   * too late, meant for something else, must not be able to allow control.
+   * Esc declines.
+   */
+  it('takes the keyboard without putting it on either answer, and Esc is Not now', async () => {
+    const onAllow = vi.fn()
+    const onDeny = vi.fn()
+
+    render(
+      <ControlRequest
+        session={session()}
+        requesterName="Sam in support"
+        clipboardAllowedByPolicy={false}
+        shareClipboard={false}
+        onShareClipboardChange={vi.fn()}
+        secureDesktopSupported={false}
+        answerSecureDesktop={false}
+        onAnswerSecureDesktopChange={vi.fn()}
+        onAllow={onAllow}
+        onDeny={onDeny}
+      />,
+    )
+
+    expect(screen.getByRole('alertdialog')).toHaveFocus()
+
+    await userEvent.keyboard('{Enter}')
+    await userEvent.keyboard(' ')
+    expect(onAllow).not.toHaveBeenCalled()
+    expect(onDeny).not.toHaveBeenCalled()
+
+    await userEvent.keyboard('{Escape}')
+    expect(onDeny).toHaveBeenCalledOnce()
+    expect(onAllow).not.toHaveBeenCalled()
   })
 
   /** Allowing this is a decision about a keyboard and a mouse, said in those words. */

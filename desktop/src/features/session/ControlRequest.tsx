@@ -1,3 +1,5 @@
+import { useEffect, useRef } from 'react'
+
 import type { SessionSummary } from '../../types/agent'
 
 /**
@@ -8,14 +10,22 @@ import type { SessionSummary } from '../../types/agent'
  * to say exactly that — not "allow access", not "grant permission", but what
  * the other person will be able to do.
  *
- * Three things are always named: **who**, **which organisation**, and **what
- * control means**. Clipboard sharing is a separate tick, off by default,
- * because control and clipboard are different exposures and starting one must
- * not silently start the other.
+ * Four things are always said: **who** is asking, **that this should only be
+ * somebody the person knows and asked for help** — remote-control tools are
+ * what phone scammers ask their victims to open, and this is the screen such
+ * a call ends at — **what control means**, and **how to stop it**. Clipboard
+ * sharing is a separate tick, off by default, because control and clipboard
+ * are different exposures and starting one must not silently start the other.
+ *
+ * The keyboard goes to the dialog when it appears, not to either button: no
+ * key pressed a moment too late, meant for something else, can answer it.
+ * Esc is "Not now".
  */
 export function ControlRequest({
   session,
   requesterName,
+  computerName = 'computer',
+  stopShortcut = null,
   clipboardAllowedByPolicy,
   shareClipboard,
   onShareClipboardChange,
@@ -28,6 +38,10 @@ export function ControlRequest({
 }: {
   session: SessionSummary
   requesterName: string
+  /** "Mac" or "computer". */
+  computerName?: string
+  /** The system-wide Stop control shortcut, as this platform writes it. */
+  stopShortcut?: string | null
   clipboardAllowedByPolicy: boolean
   shareClipboard: boolean
   onShareClipboardChange: (value: boolean) => void
@@ -39,25 +53,56 @@ export function ControlRequest({
   onDeny: () => void
   busy?: boolean
 }) {
-  return (
-    <section className="card" role="alertdialog" aria-label="Someone is asking to control this computer">
-      <h2 className="card__title">{requesterName} is asking to control this computer</h2>
-      <p className="card__subtitle">
-        {session.companyName
-          ? `From ${session.companyName}, in session ${session.displayId}.`
-          : `In session ${session.displayId}.`}
-      </p>
+  const dialog = useRef<HTMLElement>(null)
 
-      <div className="notice notice--warning" style={{ marginBottom: 'var(--space-4)' }}>
+  useEffect(() => {
+    dialog.current?.focus()
+  }, [])
+
+  return (
+    <section
+      ref={dialog}
+      className="card consent"
+      role="alertdialog"
+      aria-labelledby="control-request-title"
+      aria-describedby="control-request-meaning"
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && !busy) onDeny()
+      }}
+    >
+      <h2 className="card__title" id="control-request-title">
+        {requesterName} is asking to control this {computerName}
+      </h2>
+      {session.companyName ? <p className="card__subtitle">From {session.companyName}.</p> : null}
+
+      <div className="notice notice--danger consent__caution">
+        <p>
+          <strong>Only allow this if you know {requesterName} and asked them for help.</strong> AICOUNTLY never calls or
+          messages anybody to ask for control of their {computerName}. If you were not expecting this, choose{' '}
+          <strong>Not now</strong>.
+        </p>
+      </div>
+
+      <div
+        className="notice notice--warning"
+        id="control-request-meaning"
+        style={{ marginBottom: 'var(--space-4)' }}
+      >
         <p className="notice__title">What allowing this means</p>
         <p>
           {requesterName} will be able to move your mouse, type on your keyboard and open
-          anything you can open on this computer.
+          anything you can open on this {computerName}.
         </p>
         <p>
-          You can stop it at any moment with <strong>Stop control</strong> — in this window or
-          from the AICOUNTLY Remote icon beside the clock. Stopping takes effect immediately
-          and does not need their agreement.
+          You can stop it at any moment with <strong>Stop control</strong> — at the top of this window, from the
+          AICOUNTLY Remote icon {computerName === 'Mac' ? 'in the menu bar' : 'beside the clock'}
+          {stopShortcut ? (
+            <>
+              , or by pressing <kbd>{stopShortcut}</kbd>
+            </>
+          ) : null}
+          . Stopping takes effect immediately and does not need their agreement.
         </p>
       </div>
 
@@ -66,7 +111,7 @@ export function ControlRequest({
           <span>
             <span className="field__label">Also share the clipboard</span>
             <span className="field__hint">
-              Text {requesterName} copies can be pasted on this computer. Nothing you copy here is
+              Text {requesterName} copies can be pasted on this {computerName}. Nothing you copy here is
               sent to them. Off unless you tick it.
             </span>
           </span>

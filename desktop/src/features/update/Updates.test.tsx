@@ -92,6 +92,21 @@ describe('the update check when the window opens', () => {
 })
 
 describe('Skip', () => {
+  /** The prompt is in front of the window: the keyboard is its, and Esc is Skip. */
+  it('takes the keyboard when it opens, and Esc skips it', async () => {
+    bridge.checkForUpdate.mockResolvedValue(update())
+    render(<Updates sessionActive={false} />)
+
+    const dialog = await screen.findByRole('dialog', { name: 'Update available' })
+    expect(dialog).toHaveFocus()
+
+    await userEvent.keyboard('{Escape}')
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Update now' })).toBeInTheDocument()
+    expect(bridge.installUpdate).not.toHaveBeenCalled()
+  })
+
   it('closes the prompt and leaves a banner with Update now', async () => {
     bridge.checkForUpdate.mockResolvedValue(update())
     render(<Updates sessionActive={false} />)

@@ -6,78 +6,95 @@ import { activeSession, isBeingControlled } from '../../types/agent'
 /**
  * **The most important element in the product.**
  *
- * If somebody is connected to this computer, this is on screen. It says who,
- * from which organisation, since when, whether they are controlling, and
- * whether they arrived through unattended access — and it carries both stop
- * controls, so the answer to "how do I make this stop?" is never more than one
- * click from the answer to "is anything happening?".
+ * If somebody is connected to this computer, this is on screen — at the top
+ * of the window, on every tab, and still there when the page below scrolls.
+ * It says **as a sentence** who is connected and what they can do: looking at
+ * the screen is one sentence, using the mouse and keyboard is another, and
+ * nobody has to read a grid of labels to tell the two apart. Both stop
+ * controls sit beside the sentence, so the answer to "how do I make this
+ * stop?" is never more than one click from the answer to "is anything
+ * happening?".
  *
  * It is rendered from `activeSession(state)`, which is derived from the
  * status rather than stored beside it, so there is no way to be in a session
  * without this appearing.
+ *
+ * The stop buttons are **never disabled**. They used to grey out while any
+ * other action in the window was in flight — a slow "Turn off unattended
+ * access" took Stop control away for as long as the server took to answer.
  */
 export function SessionBanner({
   state,
+  computerName = 'computer',
+  stopShortcut = null,
   onStopControl,
   onEndSession,
-  busy,
 }: {
   state: AgentState
+  /** "Mac" or "computer". */
+  computerName?: string
+  /** The system-wide Stop control shortcut, as this platform writes it. */
+  stopShortcut?: string | null
   onStopControl: () => void
   onEndSession: () => void
-  busy?: boolean
 }) {
   const session = activeSession(state)
 
   if (!session) return null
 
   const controlled = isBeingControlled(state)
+  const name = session.connectedName.trim()
+  const asking = session.control.state === 'requested'
 
   return (
     <section
-      className={`session-banner${session.unattended ? ' session-banner--unattended' : ''}`}
-      role="status"
-      aria-live="polite"
+      className={[
+        'session-banner',
+        session.unattended ? 'session-banner--unattended' : '',
+        controlled ? 'session-banner--controlled' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      aria-label="Remote session"
     >
-      <h2 className="session-banner__title">
-        <span className="session-banner__dot" aria-hidden="true" />
-        Remote session active
-      </h2>
+      <div className="session-banner__text">
+        {/* Only the sentence is announced when it changes. The clock below
+            ticks every second and must not be read out every second. */}
+        <h2 className="session-banner__title" role="status">
+          <span className="session-banner__dot" aria-hidden="true" />
+          {sessionSentence(name, controlled, computerName)}
+        </h2>
 
-      <div className="session-banner__facts">
-        <Fact label="Connected person" value={session.connectedName} />
-        {session.companyName ? <Fact label="Organisation" value={session.companyName} /> : null}
-        <Fact label="Started" value={<Elapsed since={session.startedAt} />} />
-        <Fact
-          label="Control"
-          value={
-            controlled
-              ? session.control.clipboard
-                ? 'Controlling, clipboard shared'
-                : 'Controlling'
-              : session.control.state === 'requested'
-                ? 'Control requested'
-                : 'Viewing only'
-          }
-        />
-      </div>
-
-      {session.unattended ? (
-        <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>
-          This connection used unattended access, which somebody enabled on this computer
-          earlier. You can end it here, and turn unattended access off entirely under
-          <strong> Unattended access</strong>.
+        <p className="session-banner__facts">
+          {session.companyName ? <>{session.companyName} · </> : null}
+          {name ? 'Connected for ' : 'Open for '}
+          <Elapsed since={session.startedAt} />
+          {controlled && session.control.clipboard ? ' · Clipboard shared' : ''}
+          {!controlled && asking ? ' · Asking to control' : ''}
+          {controlled && stopShortcut ? (
+            <>
+              {' · '}
+              <kbd>{stopShortcut}</kbd> stops control from anywhere
+            </>
+          ) : null}
         </p>
-      ) : null}
+
+        {session.unattended ? (
+          <p className="session-banner__note">
+            This connection used unattended access, which somebody enabled on this {computerName} earlier. You can end
+            it here, and turn unattended access off entirely under <strong>Unattended access</strong>.
+          </p>
+        ) : null}
+      </div>
 
       <div className="session-banner__actions">
         {controlled ? (
-          <button type="button" className="btn btn--inverse" onClick={onStopControl} disabled={busy}>
+          <button type="button" className="btn btn--stop" onClick={onStopControl}>
             Stop control
           </button>
         ) : null}
 
-        <button type="button" className="btn btn--inverse" onClick={onEndSession} disabled={busy}>
+        <button type="button" className="btn btn--inverse" onClick={onEndSession}>
           End session
         </button>
       </div>
@@ -85,13 +102,18 @@ export function SessionBanner({
   )
 }
 
-function Fact({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div>
-      <div className="session-banner__fact-label">{label}</div>
-      <div className="session-banner__fact-value">{value}</div>
-    </div>
-  )
+/**
+ * What is happening, in the words the person at the computer would use.
+ *
+ * Nobody connected yet — a help session with its code just read out — is its
+ * own sentence: the banner used to say "Remote session active", "Connected
+ * person" over a blank, and "Viewing only", about a session nobody was in.
+ */
+export function sessionSentence(connectedName: string, controlled: boolean, computerName: string): string {
+  if (controlled) return `${connectedName || 'Someone'} is controlling this ${computerName}`
+  if (connectedName) return `${connectedName} can see this ${computerName}’s screen`
+
+  return 'Waiting for someone to join — nobody is connected yet'
 }
 
 /**
@@ -112,7 +134,7 @@ export function Elapsed({ since }: { since: string }) {
     return () => clearInterval(timer)
   }, [since])
 
-  return <span>{formatClock(seconds)}</span>
+  return <span aria-live="off">{formatClock(seconds)}</span>
 }
 
 export function elapsedSeconds(since: string): number {

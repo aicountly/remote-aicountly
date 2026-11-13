@@ -73,8 +73,44 @@ describe('GetHelp', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Turn away' }))
     expect(onAnswer).toHaveBeenCalledWith(expect.objectContaining({ uuid: 'p-1' }), false)
 
-    await userEvent.click(screen.getByRole('button', { name: 'End the session' }))
+    // The same words as the button at the top of the window, which does the same thing.
+    await userEvent.click(screen.getByRole('button', { name: 'End session' }))
     expect(onEnd).toHaveBeenCalledOnce()
+  })
+
+  /**
+   * "They type it under Join session" named a menu and not the place the
+   * menu is; and a code that can only be read aloud cannot be sent in a
+   * message, which is how most people would rather send nine digits.
+   */
+  it('says where the helper types the code, and lets it be copied', async () => {
+    const user = userEvent.setup()
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(<GetHelp {...props({ help: HELP, hosting: true, remoteAddress: 'remote.aicountly.com' })} />)
+
+    expect(screen.getByText('remote.aicountly.com')).toBeInTheDocument()
+    expect(screen.getByText(/stops working when you end the session/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Copy code' }))
+
+    expect(writeText).toHaveBeenCalledWith('123 456 789')
+    expect(await screen.findByText('Copied')).toBeInTheDocument()
+  })
+
+  /** Offline, "Get a code" used to stay enabled and fail with "Something went wrong." */
+  it('does not offer a code it cannot make while this computer is offline, and says why', () => {
+    render(<GetHelp {...props({ offline: true })} />)
+
+    expect(screen.getByRole('button', { name: 'Get a code' })).toBeDisabled()
+    expect(screen.getByText(/is not connected to AICOUNTLY Remote at the moment/i)).toBeInTheDocument()
+  })
+
+  /** The stop button on this card is never greyed out by something else in flight. */
+  it('lets the session be ended even while something else is still in flight', () => {
+    render(<GetHelp {...props({ help: HELP, hosting: true, busy: true })} />)
+
+    expect(screen.getByRole('button', { name: 'End session' })).toBeEnabled()
   })
 
   it('asks for Screen Recording on a Mac that has not allowed it', async () => {
@@ -130,6 +166,8 @@ describe('HelpAdmission', () => {
 
     expect(screen.getByText('Sam wants to join your help session')).toBeInTheDocument()
     expect(screen.getByText(/1 more waiting/)).toBeInTheDocument()
+    // The scam case: a stranger who was read a code over the phone.
+    expect(screen.getByText(/only let in somebody you know and gave your code to/i)).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: 'Let Sam in' }))
     expect(onAnswer).toHaveBeenCalledWith(expect.objectContaining({ uuid: 'p-1' }), true)

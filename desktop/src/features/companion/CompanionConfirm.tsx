@@ -1,3 +1,5 @@
+import { useEffect, useRef } from 'react'
+
 import type { CompanionSummary } from '../../types/agent'
 import { AccessibilityNotice } from './AccessibilityNotice'
 
@@ -32,9 +34,26 @@ export function CompanionConfirm({
     ? `session ${companion.displayId} (${companion.companyName})`
     : `session ${companion.displayId}`
 
+  // The keyboard goes to the question when it appears, and to neither answer:
+  // no key meant for something else can say yes. Esc is "Not now".
+  const dialog = useRef<HTMLElement>(null)
+
+  useEffect(() => {
+    dialog.current?.focus()
+  }, [])
+
   return (
-    <section className="card" role="alertdialog" aria-label="Allow control while you share">
-      <h2 className="card__title">
+    <section
+      ref={dialog}
+      className="card consent"
+      role="alertdialog"
+      aria-labelledby="companion-confirm-title"
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && !busy) onDecline()
+      }}
+    >
+      <h2 className="card__title" id="companion-confirm-title">
         Let people in {where} control this {computerName} while you share it?
       </h2>
       <p className="card__subtitle">
@@ -42,6 +61,14 @@ export function CompanionConfirm({
           ? `${companion.requestedByName} linked this ${computerName} to the screen being shared from the browser.`
           : `This ${computerName} was linked to the screen being shared from the browser.`}
       </p>
+
+      <div className="notice notice--danger consent__caution">
+        <p>
+          <strong>Only allow this if you started this session yourself, to get help from somebody you know.</strong>{' '}
+          AICOUNTLY never calls or messages anybody to ask for control of their {computerName}. If you were not
+          expecting this, choose <strong>Not now</strong>.
+        </p>
+      </div>
 
       <div className="notice notice--warning" style={{ marginBottom: 'var(--space-4)' }}>
         <p className="notice__title">What allowing this means</p>

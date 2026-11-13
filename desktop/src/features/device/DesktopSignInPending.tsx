@@ -32,7 +32,7 @@ export function DesktopSignInPending({
 }) {
   return (
     <section className="card">
-      <h2 className="card__title">Sign in to register this device</h2>
+      <h2 className="card__title">Sign in on this computer</h2>
 
       {outcome === 'pending' ? (
         <div className="signin-pending">

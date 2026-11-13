@@ -113,10 +113,45 @@ describe('CompanionConfirm', () => {
     )
 
     expect(screen.getByText(/Privacy & Security → Accessibility/)).toBeInTheDocument()
-    expect(screen.getByText(/Screen Recording is not needed/)).toBeInTheDocument()
+    // It used to add that Screen Recording "is not needed" — false of a Mac
+    // showing its own screen, and shown beside the notice that asks for it.
+    expect(screen.queryByText(/Screen Recording/)).not.toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: /open accessibility settings/i }))
     expect(onOpenAccessibility).toHaveBeenCalledOnce()
+  })
+})
+
+describe('CompanionConfirm, as a decision', () => {
+  /**
+   * The same rule as the request for control: the keyboard goes to the
+   * question and to neither answer, Esc is "Not now", and it says who should
+   * never be let in.
+   */
+  it('takes the keyboard without putting it on either answer, warns, and Esc is Not now', async () => {
+    const onAllow = vi.fn()
+    const onDecline = vi.fn()
+
+    render(
+      <CompanionConfirm
+        companion={companion({ phase: 'awaiting_confirmation', startedAt: null })}
+        computerName="Mac"
+        needsAccessibility={false}
+        onAllow={onAllow}
+        onDecline={onDecline}
+        onOpenAccessibility={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('alertdialog')).toHaveFocus()
+    expect(screen.getByText(/only allow this if you started this session yourself/i)).toBeInTheDocument()
+
+    await userEvent.keyboard('{Enter}')
+    expect(onAllow).not.toHaveBeenCalled()
+
+    await userEvent.keyboard('{Escape}')
+    expect(onDecline).toHaveBeenCalledOnce()
+    expect(onAllow).not.toHaveBeenCalled()
   })
 })
 

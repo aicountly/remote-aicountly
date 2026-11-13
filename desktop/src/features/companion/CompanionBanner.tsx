@@ -11,6 +11,9 @@ import { Elapsed } from '../session/SessionBanner'
  * While the person here is using their own mouse or keyboard it says that
  * remote input is paused. Otherwise it says the computer can be given control
  * from the browser, and offers to stop that too.
+ *
+ * Like the session banner, it sits at the top of the window on every tab, and
+ * its stop buttons are never disabled by something else being in flight.
  */
 export function CompanionBanner({
   state,
@@ -18,14 +21,12 @@ export function CompanionBanner({
   stopShortcut,
   onStopControl,
   onLeave,
-  busy,
 }: {
   state: AgentState
   computerName: string
   stopShortcut: string | null
   onStopControl: () => void
   onLeave: () => void
-  busy?: boolean
 }) {
   const companion = activeCompanion(state)
 
@@ -42,56 +43,58 @@ export function CompanionBanner({
         : `This ${computerName} can be controlled while you share`
 
   return (
-    <section className="session-banner" role="status" aria-live="polite">
-      <h2 className="session-banner__title">
-        <span className="session-banner__dot" aria-hidden="true" />
-        {title}
-      </h2>
+    <section
+      className={['session-banner', controlled ? 'session-banner--controlled' : ''].filter(Boolean).join(' ')}
+      aria-label="Control while you share"
+    >
+      <div className="session-banner__text">
+        <h2 className="session-banner__title" role="status">
+          <span className="session-banner__dot" aria-hidden="true" />
+          {title}
+        </h2>
 
-      <div className="session-banner__facts">
-        <Fact label="Session" value={companion.displayId} />
-        {companion.companyName ? <Fact label="Organisation" value={companion.companyName} /> : null}
-        {companion.startedAt ? <Fact label="Since" value={<Elapsed since={companion.startedAt} />} /> : null}
-        <Fact label="Screen" value={companion.monitor?.name ?? 'Not chosen yet'} />
+        <p className="session-banner__facts">
+          {/* The number the browser shows for the session this computer is linked to. */}
+          Session {companion.displayId}
+          {companion.companyName ? <> · {companion.companyName}</> : null}
+          {' · '}Screen: {companion.monitor?.name ?? 'not chosen yet'}
+          {companion.startedAt ? (
+            <>
+              {' · for '}
+              <Elapsed since={companion.startedAt} />
+            </>
+          ) : null}
+          {controlled && stopShortcut ? (
+            <>
+              {' · '}
+              <kbd>{stopShortcut}</kbd> stops control from anywhere
+            </>
+          ) : null}
+        </p>
+
+        {companion.phase === 'paused' ? (
+          <p className="session-banner__note">
+            {controller}&apos;s input waits while you use your own mouse or keyboard, and carries on when you stop for
+            a moment.
+          </p>
+        ) : companion.phase === 'ready' ? (
+          <p className="session-banner__note">
+            Nobody is controlling it. Anyone who asks needs your approval in the browser first.
+          </p>
+        ) : null}
       </div>
-
-      {companion.phase === 'paused' ? (
-        <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>
-          {controller}&apos;s input waits while you use your own mouse or keyboard, and carries on
-          when you stop for a moment.
-        </p>
-      ) : companion.phase === 'ready' ? (
-        <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>
-          Nobody is controlling it. Anyone who asks needs your approval in the browser first.
-        </p>
-      ) : null}
 
       <div className="session-banner__actions">
         {controlled ? (
-          <button type="button" className="btn btn--inverse" onClick={onStopControl} disabled={busy}>
+          <button type="button" className="btn btn--stop" onClick={onStopControl}>
             Stop control
           </button>
         ) : null}
 
-        <button type="button" className="btn btn--inverse" onClick={onLeave} disabled={busy}>
+        <button type="button" className="btn btn--inverse" onClick={onLeave}>
           Stop allowing control
         </button>
       </div>
-
-      {controlled && stopShortcut ? (
-        <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>
-          Or press <kbd>{stopShortcut}</kbd> anywhere.
-        </p>
-      ) : null}
     </section>
-  )
-}
-
-function Fact({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div>
-      <div className="session-banner__fact-label">{label}</div>
-      <div className="session-banner__fact-value">{value}</div>
-    </div>
   )
 }

@@ -22,13 +22,11 @@ export function UnattendedCard({
   onEnable,
   onDisable,
   busy,
-  error,
 }: {
   state: AgentState
   onEnable: () => void
   onDisable: () => void
   busy?: boolean
-  error?: string | null
 }) {
   const { unattended } = state
 
@@ -63,12 +61,6 @@ export function UnattendedCard({
             </span>
           </div>
         </>
-      ) : null}
-
-      {error ? (
-        <div className="notice notice--danger" style={{ marginTop: 'var(--space-4)' }}>
-          {error}
-        </div>
       ) : null}
 
       {!unattended.allowedByPolicy && !unattended.enabled ? (
