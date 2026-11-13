@@ -449,4 +449,74 @@ final class CompanionControlTest extends RemoteTestCase
         $session = $this->share($fixture['session'], $fixture['sharer'], 'monitor', 3024, 1964);
         $this->assertSame(3024, (int) $session['actual_surface_width']);
     }
+
+    /**
+     * The same monitor reported again is the same monitor, and control in progress is left alone.
+     *
+     * What returns from the JSONB column is not identical to what was written — the keys come back in the
+     * database's order and a scale of 2.0 comes back as the integer 2 — so an identity comparison never matched,
+     * and every repeat of the same report revoked the controller with MONITOR_CHANGED.
+     */
+    public function testReportingTheSameMonitorAgainDoesNotRevokeControl(): void
+    {
+        $fixture    = $this->companionScenario();
+        $companions = Services::companionService();
+
+        $link = $companions->link($fixture['session'], $fixture['sharer'], $this->policyOf($fixture['sharer']), (string) $fixture['device']['uuid'])['link'];
+        $companions->join($fixture['principal'], (string) $link['uuid']);
+        $companions->selectMonitor($fixture['principal'], (string) $link['uuid'], $this->monitor(), 'AUTO_SINGLE');
+
+        $this->assertSame('GRANTED', (string) $this->grantViewer($fixture)['control_state']);
+
+        // The machine reports again: the same display, its keys in another order and its scale as a float.
+        $again = ['scale' => 2.0, 'height' => 982, 'width' => 1512, 'y' => 0, 'x' => 0, 'name' => 'Built-in Retina Display', 'id' => 1];
+        $companions->selectMonitor($fixture['principal'], (string) $link['uuid'], $again, 'AUTO_SINGLE');
+
+        $state = $this->state($fixture['session']);
+        $this->assertSame(
+            (string) $fixture['viewerParticipant']['uuid'],
+            $state['controllerUuid'],
+            'the same monitor again is not a change of monitor',
+        );
+        $this->assertTrue($state['companion']['ready']);
+    }
+
+    /** The comparison itself: by value, whatever the key order and whether a whole number is an int or a float. */
+    public function testAStoredMonitorIsComparedByValue(): void
+    {
+        $clean = \App\Domain\Device\CompanionService::cleanMonitor($this->monitor());
+
+        $stored = ['y' => 0, 'x' => 0, 'id' => 1, 'name' => 'Built-in Retina Display', 'scale' => 2, 'width' => 1512, 'height' => 982];
+        $this->assertTrue(\App\Domain\Device\CompanionService::sameMonitor($stored, $clean));
+
+        $this->assertFalse(\App\Domain\Device\CompanionService::sameMonitor(null, $clean));
+        $this->assertFalse(\App\Domain\Device\CompanionService::sameMonitor(['width' => 1920] + $stored, $clean));
+        $this->assertFalse(\App\Domain\Device\CompanionService::sameMonitor(['scale' => 1.5] + $stored, $clean));
+        $this->assertFalse(\App\Domain\Device\CompanionService::sameMonitor(['name' => 'Another'] + $stored, $clean));
+    }
+
+    /**
+     * Somebody who asked for control and then left is not waiting for an answer.
+     *
+     * Leaving does not clear a participant's control state, so they used to stay in `pendingRequests` for the rest
+     * of the session — and the computer, which asks about the first request it is shown, went on putting a consent
+     * dialog up for a person who had gone.
+     */
+    public function testARequestFromSomebodyWhoLeftIsNoLongerPending(): void
+    {
+        $fixture = $this->companionScenario();
+        $this->activeCompanion($fixture);
+
+        $session = $this->reload($fixture['session']);
+        Services::controlService()->request($session, $fixture['viewer'], $this->policyOf($fixture['viewer']));
+
+        $this->assertSame(
+            [(string) $fixture['viewerParticipant']['uuid']],
+            array_column($this->state($fixture['session'])['pendingRequests'], 'participantUuid'),
+        );
+
+        Services::participantService()->leave($this->reload($fixture['session']), (string) $fixture['viewerParticipant']['uuid']);
+
+        $this->assertSame([], $this->state($fixture['session'])['pendingRequests']);
+    }
 }

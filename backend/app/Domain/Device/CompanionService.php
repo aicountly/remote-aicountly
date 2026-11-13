@@ -547,7 +547,14 @@ class CompanionService
             $previous = json_decode($previous, true) ?: null;
         }
 
-        if ((string) $link['status'] === CompanionLinks::STATUS_ACTIVE && $previous === $clean && $link['monitor_match'] === $matchedBy) {
+        // The same monitor reported again changes nothing — and must be recognised as the same. What comes
+        // back from the JSONB column is not identical to what went in: the keys return in the database's
+        // order, not the one they were written in, and a scale of 2.0 was stored as 2 and returns an integer.
+        // An identity comparison therefore never matched, so every repeat of the same report was taken for
+        // a different monitor and revoked the control in progress (MONITOR_CHANGED). Compared by value.
+        if ((string) $link['status'] === CompanionLinks::STATUS_ACTIVE
+            && self::sameMonitor(is_array($previous) ? $previous : null, $clean)
+            && $link['monitor_match'] === $matchedBy) {
             return ['link' => $link, 'session' => $session];
         }
 
@@ -848,6 +855,42 @@ class CompanionService
      * @param  array<string, mixed> $monitor
      * @return array{id: int, name: string, x: int, y: int, width: int, height: int, scale: float}
      */
+    /**
+     * Whether a stored monitor and a freshly cleaned one describe the same display: the same keys with equal
+     * values, whatever order the keys are in and whether a whole number arrived as an integer or a float.
+     *
+     * @param array<string, mixed>|null $stored
+     * @param array<string, mixed>      $clean
+     */
+    public static function sameMonitor(?array $stored, array $clean): bool
+    {
+        if ($stored === null || count($stored) !== count($clean)) {
+            return false;
+        }
+
+        foreach ($clean as $key => $value) {
+            if (! array_key_exists($key, $stored)) {
+                return false;
+            }
+
+            $other = $stored[$key];
+
+            if ((is_int($value) || is_float($value)) && (is_int($other) || is_float($other))) {
+                if (abs((float) $value - (float) $other) > 0.000001) {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if ($value !== $other) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     public static function cleanMonitor(array $monitor): array
     {
         $fields = [];

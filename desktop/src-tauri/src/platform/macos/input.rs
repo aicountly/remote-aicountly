@@ -27,6 +27,7 @@
 //! scroll arithmetic are all outside `mod imp`, so Linux CI tests them.
 
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 #[cfg(not(target_os = "macos"))]
 use remote_device::PlatformError;
@@ -67,6 +68,102 @@ pub fn event_flags(modifiers: Modifiers) -> u64 {
     }
 
     flags
+}
+
+/// The `CGEventFlags` for the modifier keys this agent is holding down,
+/// from their key codes.
+///
+/// Every event here is made from a private source, so it carries no modifier
+/// state but what is set on it. A key event sets its own; a mouse event had
+/// none — so ⌘-click, ⇧-click to extend a selection and ⌥-drag to copy all
+/// arrived as a plain click, with the modifier the controller was holding
+/// simply missing. Mouse and scroll events take their flags from here.
+#[must_use]
+pub fn held_modifier_flags(held: &[u16]) -> u64 {
+    held.iter().fold(0, |flags, code| {
+        flags
+            | match code {
+                // kVK_Command, kVK_RightCommand
+                0x37 | 0x36 => FLAG_COMMAND,
+                // kVK_Shift, kVK_RightShift
+                0x38 | 0x3C => FLAG_SHIFT,
+                // kVK_Option, kVK_RightOption
+                0x3A | 0x3D => FLAG_OPTION,
+                // kVK_Control, kVK_RightControl
+                0x3B | 0x3E => FLAG_CONTROL,
+                _ => 0,
+            }
+    })
+}
+
+/// How close together two presses have to be, in time, to be one
+/// multiple click. macOS's own default (`NSEvent.doubleClickInterval`).
+pub const MULTI_CLICK_INTERVAL: Duration = Duration::from_millis(500);
+
+/// And in space, in points: a hand does not hold perfectly still.
+pub const MULTI_CLICK_DISTANCE: f64 = 5.0;
+
+/// Counts consecutive presses of one button in one place.
+///
+/// macOS does not work out a double click for posted events the way Windows
+/// does for injected ones: each mouse event carries a *click state* — 1, 2,
+/// 3 — and an application opens a file or selects a word only when the second
+/// press says 2. The controller's browser cannot say: a pointer event's click
+/// count is always zero. Every press therefore went out as a first click, and
+/// **nothing on a controlled Mac could be double-clicked**. The count is kept
+/// here instead, from when and where the presses arrive.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ClickCounter {
+    last: Option<LastPress>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LastPress {
+    button: MouseButton,
+    at: Instant,
+    point: (f64, f64),
+    count: u32,
+}
+
+impl ClickCounter {
+    /// A button went down at `point`, at `at`. The click state for it: 1 for
+    /// a first click, 2 for the second of a double, 3 for a triple.
+    pub fn press(&mut self, button: MouseButton, at: Instant, point: (f64, f64)) -> i64 {
+        let count = match self.last {
+            Some(last)
+                if last.button == button
+                    && at.saturating_duration_since(last.at) <= MULTI_CLICK_INTERVAL
+                    && (last.point.0 - point.0).abs() <= MULTI_CLICK_DISTANCE
+                    && (last.point.1 - point.1).abs() <= MULTI_CLICK_DISTANCE =>
+            {
+                // Past a triple it starts again, as macOS does.
+                if last.count >= 3 {
+                    1
+                } else {
+                    last.count + 1
+                }
+            }
+            _ => 1,
+        };
+
+        self.last = Some(LastPress {
+            button,
+            at,
+            point,
+            count,
+        });
+
+        i64::from(count)
+    }
+
+    /// The click state for the release of `button`: the same as its press.
+    #[must_use]
+    pub fn release(&self, button: MouseButton) -> i64 {
+        match self.last {
+            Some(last) if last.button == button => i64::from(last.count),
+            _ => 1,
+        }
+    }
 }
 
 /// The macOS virtual key code (`kVK_*`, `Events.h`) for a named key.
@@ -343,6 +440,12 @@ pub fn scroll_lines(notches: f64) -> i32 {
     }
 }
 
+/// Whether two characters are the same key going down and up: ⌘⇧C goes down
+/// as `C`, and with Shift let go first the release is reported as `c`.
+fn same_character(a: char, b: char) -> bool {
+    a == b || a.to_lowercase().eq(b.to_lowercase())
+}
+
 /// Injection, through `CGEventPost`.
 pub struct MacInput {
     /// Key codes held down by this agent, for [`InputProvider::release_all`].
@@ -351,6 +454,13 @@ pub struct MacInput {
     held_buttons: Mutex<HeldButtons>,
     /// Where this agent last put the pointer, in global points.
     last_point: Mutex<Option<(f64, f64)>>,
+    /// Consecutive presses, for the click state. See [`ClickCounter`].
+    clicks: Mutex<ClickCounter>,
+    /// Characters that went down as a *key* (a shortcut), with the key code,
+    /// so the release goes out as that key whatever the modifiers are by
+    /// then. ⌘C with ⌘ let go first sends the C release with no modifier,
+    /// which would otherwise be a text release and leave the C key down.
+    pressed_as_key: Mutex<Vec<(char, u16)>>,
 }
 
 impl Default for MacInput {
@@ -367,7 +477,55 @@ impl MacInput {
             held_keys: Mutex::new(Vec::new()),
             held_buttons: Mutex::new(HeldButtons::default()),
             last_point: Mutex::new(None),
+            clicks: Mutex::new(ClickCounter::default()),
+            pressed_as_key: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The click state for a press of `button` at `point`, now.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn click_state_for_press(&self, button: MouseButton, point: (f64, f64)) -> i64 {
+        self.clicks
+            .lock()
+            .map(|mut clicks| clicks.press(button, Instant::now(), point))
+            .unwrap_or(1)
+    }
+
+    /// The click state for a release of `button`.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn click_state_for_release(&self, button: MouseButton) -> i64 {
+        self.clicks
+            .lock()
+            .map(|clicks| clicks.release(button))
+            .unwrap_or(1)
+    }
+
+    /// The modifier flags for a mouse or scroll event: whatever modifier keys
+    /// this agent is holding. See [`held_modifier_flags`].
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn modifier_flags(&self) -> u64 {
+        held_modifier_flags(&self.held_keys())
+    }
+
+    /// Remember that `character` went down as key `code`.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn remember_key_press(&self, character: char, code: u16) {
+        if let Ok(mut pressed) = self.pressed_as_key.lock() {
+            pressed.retain(|(held, _)| !same_character(*held, character));
+            pressed.push((character, code));
+        }
+    }
+
+    /// The key code `character` went down as, if it went down as a key.
+    /// Taken: a release happens once.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn take_key_press(&self, character: char) -> Option<u16> {
+        let mut pressed = self.pressed_as_key.lock().ok()?;
+        let index = pressed
+            .iter()
+            .position(|(held, _)| same_character(*held, character))?;
+
+        Some(pressed.remove(index).1)
     }
 
     // Called from the injection path and from the tests, both of which a
@@ -505,6 +663,10 @@ impl InputProvider for MacInput {
             held.clear();
         }
 
+        if let Ok(mut pressed) = self.pressed_as_key.lock() {
+            pressed.clear();
+        }
+
         #[cfg(target_os = "macos")]
         {
             // Best effort, each one: a key that will not release must not stop
@@ -634,6 +796,10 @@ mod imp {
         )
         .map_err(|()| failed("moving the pointer"))?;
 
+        // ⌥-drag copies and ⇧-drag constrains: a drag carries the modifiers
+        // being held, like a click.
+        event.set_flags(CGEventFlags::from_bits_truncate(input.modifier_flags()));
+
         post(input, &event);
         input.remember_point(point);
 
@@ -701,6 +867,7 @@ mod imp {
         };
 
         let at = CGPoint::new(point.0, point.1);
+        let flags = input.modifier_flags();
         let click = |event_type: CGEventType, clicks: i64| -> PlatformResult<()> {
             let event = CGEvent::new_mouse_event(source()?, event_type, at, button)
                 .map_err(|()| failed("clicking"))?;
@@ -708,6 +875,8 @@ mod imp {
             // double click; macOS does not infer it from timing for posted
             // events.
             event.set_integer_value_field(EventField::MOUSE_EVENT_CLICK_STATE, clicks);
+            // ⌘-click and ⇧-click: the modifiers this agent is holding.
+            event.set_flags(CGEventFlags::from_bits_truncate(flags));
             post(input, &event);
 
             Ok(())
@@ -719,9 +888,15 @@ mod imp {
             click(down, 2)?;
             click(up, 2)?;
             input.track_button(event.button, false);
+        } else if event.pressed {
+            // The controller's browser cannot say this is the second press of
+            // a double click, so it is counted here (`ClickCounter`).
+            let clicks = input.click_state_for_press(event.button, point);
+            click(down, clicks)?;
+            input.track_button(event.button, true);
         } else {
-            click(if event.pressed { down } else { up }, 1)?;
-            input.track_button(event.button, event.pressed);
+            click(up, input.click_state_for_release(event.button))?;
+            input.track_button(event.button, false);
         }
 
         Ok(())
@@ -743,13 +918,33 @@ mod imp {
         let wheel =
             CGEvent::new_scroll_event(source()?, ScrollEventUnit::LINE, 2, vertical, horizontal, 0)
                 .map_err(|()| failed("scrolling"))?;
+        // ⌘-scroll zooms: the modifiers being held go with the wheel.
+        wheel.set_flags(CGEventFlags::from_bits_truncate(input.modifier_flags()));
         post(input, &wheel);
 
         Ok(())
     }
 
     pub fn key(input: &MacInput, event: KeyEvent) -> PlatformResult<()> {
-        match key_plan(&event) {
+        let mut plan = key_plan(&event);
+
+        // A character released goes out the way it went down. If it went down
+        // as a key (a shortcut), it comes up as that key even though the
+        // modifier that made it one may have been let go already.
+        if let remote_protocol::Key::Character(character) = event.key {
+            if event.pressed {
+                if let KeyPlan::Code { code, .. } = plan {
+                    input.remember_key_press(character, code);
+                }
+            } else if let Some(code) = input.take_key_press(character) {
+                plan = KeyPlan::Code {
+                    code,
+                    flags: super::event_flags(event.modifiers),
+                };
+            }
+        }
+
+        match plan {
             KeyPlan::Code { code, flags } => {
                 let key = CGEvent::new_keyboard_event(source()?, code, event.pressed)
                     .map_err(|()| failed("sending a key"))?;
@@ -881,6 +1076,122 @@ mod tests {
         assert_eq!(mac_keycode(Key::Function(21)), None);
         assert_eq!(mac_keycode(Key::Function(0)), None);
         assert_eq!(mac_keycode(Key::PrintScreen), None, "no such key on a Mac");
+    }
+
+    fn at(start: Instant, millis: u64) -> Instant {
+        start + Duration::from_millis(millis)
+    }
+
+    /// **A double click is the second press saying 2.** macOS does not infer
+    /// it for posted events and the controller's browser cannot say, so
+    /// before this nothing on a controlled Mac could be double-clicked.
+    #[test]
+    fn two_quick_presses_in_one_place_are_a_double_click() {
+        let mut clicks = ClickCounter::default();
+        let start = Instant::now();
+
+        assert_eq!(clicks.press(MouseButton::Left, start, (100.0, 100.0)), 1);
+        assert_eq!(clicks.release(MouseButton::Left), 1);
+
+        assert_eq!(
+            clicks.press(MouseButton::Left, at(start, 180), (101.0, 99.0)),
+            2,
+            "the second press, a moment later and a point away"
+        );
+        assert_eq!(clicks.release(MouseButton::Left), 2, "and its release");
+
+        assert_eq!(
+            clicks.press(MouseButton::Left, at(start, 360), (101.0, 99.0)),
+            3,
+            "a triple click selects the line"
+        );
+        assert_eq!(
+            clicks.press(MouseButton::Left, at(start, 540), (101.0, 99.0)),
+            1,
+            "and a fourth starts again"
+        );
+    }
+
+    #[test]
+    fn slow_distant_or_different_presses_are_single_clicks() {
+        let start = Instant::now();
+
+        // Too slow.
+        let mut clicks = ClickCounter::default();
+        clicks.press(MouseButton::Left, start, (100.0, 100.0));
+        assert_eq!(
+            clicks.press(MouseButton::Left, at(start, 900), (100.0, 100.0)),
+            1
+        );
+
+        // Somewhere else.
+        let mut clicks = ClickCounter::default();
+        clicks.press(MouseButton::Left, start, (100.0, 100.0));
+        assert_eq!(
+            clicks.press(MouseButton::Left, at(start, 100), (160.0, 100.0)),
+            1
+        );
+
+        // Another button.
+        let mut clicks = ClickCounter::default();
+        clicks.press(MouseButton::Left, start, (100.0, 100.0));
+        assert_eq!(
+            clicks.press(MouseButton::Right, at(start, 100), (100.0, 100.0)),
+            1
+        );
+        assert_eq!(
+            clicks.release(MouseButton::Left),
+            1,
+            "a release with no press of its own is a single"
+        );
+    }
+
+    /// A mouse event carries only the modifiers set on it, so the ones this
+    /// agent is holding are set — or ⌘-click is a plain click.
+    #[test]
+    fn a_click_carries_the_modifiers_being_held() {
+        assert_eq!(held_modifier_flags(&[]), 0);
+        assert_eq!(held_modifier_flags(&[0x37]), FLAG_COMMAND);
+        assert_eq!(
+            held_modifier_flags(&[0x38, 0x00]),
+            FLAG_SHIFT,
+            "and not the A key"
+        );
+        assert_eq!(
+            held_modifier_flags(&[0x3A, 0x3B, 0x37, 0x38]),
+            FLAG_OPTION | FLAG_CONTROL | FLAG_COMMAND | FLAG_SHIFT
+        );
+
+        // The codes the key table itself uses for the four modifiers.
+        for (key, flag) in [
+            (Key::Meta, FLAG_COMMAND),
+            (Key::Shift, FLAG_SHIFT),
+            (Key::Alt, FLAG_OPTION),
+            (Key::Ctrl, FLAG_CONTROL),
+        ] {
+            let code = mac_keycode(key).expect("a modifier has a code");
+            assert_eq!(held_modifier_flags(&[code]), flag, "{key:?}");
+        }
+    }
+
+    /// ⌘C with ⌘ let go first: the C release has no modifier, and must still
+    /// go out as the C key that went down.
+    #[test]
+    fn a_shortcuts_release_is_remembered_as_the_key_that_went_down() {
+        let input = MacInput::new();
+
+        input.remember_key_press('c', 0x08);
+        assert_eq!(input.take_key_press('x'), None);
+        assert_eq!(input.take_key_press('c'), Some(0x08));
+        assert_eq!(input.take_key_press('c'), None, "released once");
+
+        // ⌘⇧C goes down as `C` and can come up as `c`.
+        input.remember_key_press('C', 0x08);
+        assert_eq!(input.take_key_press('c'), Some(0x08));
+
+        input.remember_key_press('v', 0x09);
+        assert!(input.release_all().is_ok());
+        assert_eq!(input.take_key_press('v'), None, "nothing is left held");
     }
 
     /// Plain typing goes as text, so the intended character arrives whatever
