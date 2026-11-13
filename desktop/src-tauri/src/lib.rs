@@ -64,14 +64,32 @@ pub fn stop_shortcut_label() -> &'static str {
     }
 }
 
-/// Whether a state change should bring the window forward: a companion link
-/// waiting for an answer, or a monitor to pick — each once, when it first
-/// appears. `last` is the previous answer's key.
+/// Whether a state change should bring the window forward: somebody asking
+/// to control this computer, a companion link waiting for an answer, or a
+/// monitor to pick — each once, when it first appears. `last` is the previous
+/// answer's key.
+///
+/// A request for control is the question this application exists to ask, and
+/// its dialog lives only in the window. It used to be left out here, so with
+/// the window closed to the tray — which is where it is on a computer
+/// somebody is being helped on — the request waited for ever and the helper
+/// was never answered.
 #[must_use]
 pub fn needs_attention(state: &remote_core::AgentState, last: &mut Option<String>) -> bool {
-    use remote_core::CompanionPhase;
+    use remote_core::{CompanionPhase, ControlStateView};
 
-    let key = state
+    let control = state
+        .active_session()
+        .filter(|session| session.control.state == ControlStateView::Requested)
+        .map(|session| {
+            format!(
+                "control:{}:{}",
+                session.session_uuid,
+                session.control.requester_uuid.as_deref().unwrap_or("")
+            )
+        });
+
+    let companion = state
         .active_companion()
         .filter(|companion| {
             matches!(
@@ -81,6 +99,8 @@ pub fn needs_attention(state: &remote_core::AgentState, last: &mut Option<String
                 && companion.monitors.is_empty())
         })
         .map(|companion| format!("{}:{:?}", companion.companion_uuid, companion.phase));
+
+    let key = control.or(companion);
 
     let raise = key.is_some() && key != *last;
     *last = key;
@@ -377,6 +397,59 @@ mod tests {
         });
         assert!(!needs_attention(&idle, &mut last));
         assert!(needs_attention(&asked(), &mut last), "asked again later");
+    }
+
+    /// Somebody asking to control this computer brings the window forward:
+    /// the dialog that answers them is nowhere else, and the window is
+    /// usually closed to the tray.
+    #[test]
+    fn a_request_for_control_raises_the_window_once_per_request() {
+        use remote_core::{ControlStateView, ControlSummary, SessionSummary};
+
+        let hosting = AgentState::not_enrolled("1.0.0")
+            .apply(AgentEvent::Enrolled {
+                device_uuid: "d".into(),
+                device_name: "PC".into(),
+                company_name: None,
+                key_fingerprint: "AAAA".into(),
+            })
+            .apply(AgentEvent::Authenticated)
+            .apply(AgentEvent::SessionStarted(SessionSummary {
+                session_uuid: "s".into(),
+                display_id: "AR-1".into(),
+                connected_name: "Sam".into(),
+                company_name: None,
+                started_at: "2026-02-10T09:00:00Z".into(),
+                unattended: false,
+                control: ControlSummary {
+                    state: ControlStateView::None,
+                    clipboard: false,
+                    requester_uuid: None,
+                    requester_name: None,
+                },
+            }));
+
+        let asked_by = |who: &str| {
+            hosting.clone().apply(AgentEvent::ControlChanged {
+                state: ControlStateView::Requested,
+                clipboard: false,
+                requester_uuid: Some(who.into()),
+                requester_name: Some("Sam".into()),
+            })
+        };
+
+        let mut last = None;
+
+        assert!(!needs_attention(&hosting, &mut last), "nobody is asking");
+        assert!(needs_attention(&asked_by("viewer-1"), &mut last));
+        assert!(
+            !needs_attention(&asked_by("viewer-1"), &mut last),
+            "the same request, read again on the next poll"
+        );
+        assert!(
+            needs_attention(&asked_by("viewer-2"), &mut last),
+            "somebody else asking is a new question"
+        );
     }
 
     #[test]

@@ -431,7 +431,23 @@ struct Companion<'a, A: CompanionApi, F: PeerSessionFactory> {
     link_joined: bool,
     monitor: MonitorState,
     overrides: LocalOverride,
+    /// Keep-alives the control channel's reader answered at the gate, waiting
+    /// for this loop to send their replies. The reader applies input the
+    /// moment it arrives; only this loop can send.
+    pings: Arc<std::sync::Mutex<Vec<u64>>>,
+    /// When the relay said the owner left the room, until they come back.
+    sharer_left_at: Option<Instant>,
 }
+
+/// How long a companion waits for an owner the relay said has left.
+///
+/// The relay announces a departure whenever a participant's socket closes,
+/// which is also what a browser's two-minute room token expiring, a reload
+/// and a dropped connection look like — and the owner's browser is back a
+/// moment later, still sharing. Ending the link on the announcement ended
+/// every companion about two minutes in. An owner who really left is ended by
+/// the API, which the control read reports.
+const SHARER_GRACE: Duration = Duration::from_secs(30);
 
 /// Be this machine's owner's control companion for one link, until it ends.
 ///
@@ -507,6 +523,8 @@ where
         link_joined: false,
         monitor: MonitorState::default(),
         overrides: LocalOverride::default(),
+        pings: Arc::default(),
+        sharer_left_at: None,
     };
 
     tracing::info!(
@@ -670,6 +688,16 @@ impl<A: CompanionApi, F: PeerSessionFactory> Companion<'_, A, F> {
                 }
             }
 
+            // --- an owner who left and did not come back -------------------
+            if self
+                .sharer_left_at
+                .is_some_and(|left| left.elapsed() >= SHARER_GRACE)
+            {
+                socket.close().await;
+
+                return CompanionEnd::SharerLeft;
+            }
+
             // --- a peer that failed is gone; the companion is not ----------
             if self
                 .peer
@@ -721,7 +749,15 @@ impl<A: CompanionApi, F: PeerSessionFactory> Companion<'_, A, F> {
 
             Signal::PeerLeft { from } => {
                 if self.sharer_uuid.as_deref() == Some(from.as_str()) {
-                    return Some(CompanionEnd::SharerLeft);
+                    // Not the end yet: see `SHARER_GRACE`.
+                    if self.sharer_left_at.is_none() {
+                        tracing::info!("the owner left the room; waiting for them to come back");
+                        self.sharer_left_at = Some(Instant::now());
+                    }
+
+                    self.poll_now = true;
+
+                    return None;
                 }
 
                 if self.peer.as_ref().is_some_and(|peer| peer.remote == from) {
@@ -743,7 +779,28 @@ impl<A: CompanionApi, F: PeerSessionFactory> Companion<'_, A, F> {
             Signal::SessionEnded { .. } => return Some(CompanionEnd::SessionEnded),
 
             // "Poll now": read the API, which is the only authority.
-            Signal::ControlHint { .. } | Signal::PeerJoined { .. } => self.poll_now = true,
+            Signal::ControlHint { .. } => self.poll_now = true,
+
+            Signal::PeerJoined { peer, .. } => {
+                if self.sharer_uuid.as_deref() == Some(peer.participant_uuid.as_str()) {
+                    // The owner is back; they had not left after all.
+                    self.sharer_left_at = None;
+                }
+
+                self.poll_now = true;
+            }
+
+            // The room as it is now — sent again whenever this companion's
+            // own connection is renewed. The owner being listed means they
+            // are here.
+            Signal::Joined { peers, .. } => {
+                if peers
+                    .iter()
+                    .any(|peer| self.sharer_uuid.as_deref() == Some(peer.participant_uuid.as_str()))
+                {
+                    self.sharer_left_at = None;
+                }
+            }
 
             Signal::Error { code, message } => {
                 tracing::warn!(%code, %message, "the relay refused something");
@@ -752,7 +809,6 @@ impl<A: CompanionApi, F: PeerSessionFactory> Companion<'_, A, F> {
             // A companion never offers, so it has no answer to take; the rest
             // needs nothing.
             Signal::Answer { .. }
-            | Signal::Joined { .. }
             | Signal::Renegotiate { .. }
             | Signal::PeerUnavailable { .. }
             | Signal::DeviceInvite { .. }
@@ -801,6 +857,35 @@ impl<A: CompanionApi, F: PeerSessionFactory> Companion<'_, A, F> {
                 return;
             }
         };
+
+        // A new connection numbers its control messages from the start again.
+        self.agent.restart_control_stream();
+
+        // Input goes through the gate the moment it comes off the channel,
+        // rather than once a turn of this loop — which also waits on the
+        // relay, on the API and on the monitor report, and made a mouse that
+        // moved in bursts. A keep-alive is answered here, where sending is.
+        {
+            let agent = Arc::clone(self.agent);
+            let pings = Arc::clone(&self.pings);
+
+            session.set_control_sink(Arc::new(move |bytes: Vec<u8>| {
+                match agent.handle_control(&bytes) {
+                    Ok(Handled::Pinged(nonce)) => {
+                        if let Ok(mut waiting) = pings.lock() {
+                            // Bounded: a peer that floods pings gets a few
+                            // answers, not a growing queue.
+                            if waiting.len() < 16 {
+                                waiting.push(nonce);
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    // `Agent::handle_control` reports the refusal itself.
+                    Err(error) => tracing::debug!(?error, "a control message was refused"),
+                }
+            }));
+        }
 
         match session.accept_offer(payload).await {
             Ok(answer) => {
@@ -922,6 +1007,15 @@ impl<A: CompanionApi, F: PeerSessionFactory> Companion<'_, A, F> {
             // Not `debug`: a control channel that cannot be read is why input stops, and
             // the shipped log level is `info`, so this used to be written nowhere.
             Err(error) => tracing::warn!(%error, "the control channel could not be read"),
+        }
+
+        // Keep-alives the connection's own reader took through the gate.
+        if let Ok(mut waiting) = self.pings.lock() {
+            replies.extend(
+                waiting
+                    .drain(..)
+                    .map(|nonce| ControlMessage::Pong { nonce }),
+            );
         }
 
         if self.agent.take_stop_notice() {

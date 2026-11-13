@@ -70,7 +70,9 @@ use rtc::sansio::Protocol;
 use rtc::shared::error::Error as InterceptorError;
 use rtc::shared::time::SystemInstant;
 use tokio::task::JoinHandle;
-use webrtc::data_channel::{DataChannel, RTCDataChannelInit, RTCDataChannelState};
+use webrtc::data_channel::{
+    DataChannel, DataChannelEvent, RTCDataChannelInit, RTCDataChannelState,
+};
 use webrtc::media_stream::track_local::static_rtp::TrackLocalStaticRTP;
 use webrtc::media_stream::track_local::{TrackLocal, TrackLocalEvent};
 use webrtc::peer_connection::{
@@ -83,7 +85,8 @@ use webrtc::rtp_transceiver::RtpSender;
 use crate::video::rtp::H264Packetizer;
 use crate::video::{CodecSource, H264Encoder, H264_FMTP, H264_MIME_TYPE, VIDEO_CLOCK_RATE};
 use crate::{
-    Congestion, IceConfiguration, PeerSession, PeerSessionFactory, PeerState, WebRtcError,
+    Congestion, ControlSink, IceConfiguration, PeerSession, PeerSessionFactory, PeerState,
+    WebRtcError,
 };
 
 /// The collaboration channel Browser V1 already uses.
@@ -181,8 +184,13 @@ struct SharedState {
     connection: AtomicU8,
     /// Local ICE candidates the signalling client has not sent yet.
     local_candidates: Mutex<Vec<serde_json::Value>>,
-    /// Control messages that have arrived and not been handed over.
+    /// Control messages that have arrived and not been handed over. Filled by
+    /// the control channel's reader task while no [`ControlSink`] is set.
     inbox: Mutex<Vec<Vec<u8>>>,
+    /// Where the control channel's reader task hands each message the moment
+    /// it arrives, once the host has asked for that. `None` leaves them in
+    /// `inbox` for `receive_control`.
+    control_sink: Mutex<Option<ControlSink>>,
     /// A data channel the peer opened, waiting to be adopted.
     inbound_control: Mutex<Option<Arc<dyn DataChannel>>>,
     inbound_collaboration: Mutex<Option<Arc<dyn DataChannel>>>,
@@ -308,6 +316,10 @@ pub struct WebRtcSession {
     video: Option<VideoSender>,
     collaboration: Option<Arc<dyn DataChannel>>,
     control: Option<Arc<dyn DataChannel>>,
+    /// One task per data channel, reading it for as long as it is open. See
+    /// [`read_control_channel`] for why reading is a task and not a call.
+    /// Aborted on close and drop.
+    readers: Vec<JoinHandle<()>>,
     shared: Arc<SharedState>,
     profile: CaptureProfile,
 }
@@ -393,6 +405,7 @@ impl WebRtcSession {
             video,
             collaboration: None,
             control: None,
+            readers: Vec::new(),
             shared,
             profile,
         })
@@ -488,51 +501,60 @@ impl WebRtcSession {
     /// The channels the peer opened, once it has opened them.
     ///
     /// Called by the agent's loop after negotiation. Adopting them here rather
-    /// than in the callback keeps every decision on the agent's own task.
+    /// than in the callback keeps every decision on the agent's own task. Each
+    /// channel gets its reader the moment it is adopted.
     fn adopt_inbound_channels(&mut self) {
         if self.control.is_none() {
-            if let Ok(mut slot) = self.shared.inbound_control.lock() {
-                self.control = slot.take();
+            let arrived = self
+                .shared
+                .inbound_control
+                .lock()
+                .ok()
+                .and_then(|mut slot| slot.take());
+
+            if let Some(channel) = arrived {
+                self.read_control(&channel);
+                self.control = Some(channel);
             }
         }
 
         if self.collaboration.is_none() {
-            if let Ok(mut slot) = self.shared.inbound_collaboration.lock() {
-                self.collaboration = slot.take();
+            let arrived = self
+                .shared
+                .inbound_collaboration
+                .lock()
+                .ok()
+                .and_then(|mut slot| slot.take());
+
+            if let Some(channel) = arrived {
+                self.read_collaboration(&channel);
+                self.collaboration = Some(channel);
             }
         }
     }
 
-    /// Move whatever has arrived on the control channel into the inbox.
-    ///
-    /// webrtc-rs 0.20 delivers data-channel events by polling rather than by
-    /// callback, so this is where reading actually happens.
-    async fn drain_control_channel(&mut self) {
-        self.adopt_inbound_channels();
+    /// Start reading the control channel. See [`read_control_channel`].
+    fn read_control(&mut self, channel: &Arc<dyn DataChannel>) {
+        self.readers.push(tokio::spawn(read_control_channel(
+            Arc::clone(channel),
+            Arc::clone(&self.shared),
+        )));
+    }
 
-        let Some(channel) = self.control.clone() else {
-            return;
-        };
+    /// Start reading — and discarding — the collaboration channel. See
+    /// [`drain_collaboration_channel`].
+    fn read_collaboration(&mut self, channel: &Arc<dyn DataChannel>) {
+        self.readers
+            .push(tokio::spawn(drain_collaboration_channel(Arc::clone(
+                channel,
+            ))));
+    }
 
-        // Bounded: one drain does not spin forever on a peer that is writing
-        // faster than the agent can read.
-        for _ in 0..MAX_QUEUED_CONTROL_MESSAGES {
-            let Some(event) = channel.poll().await else {
-                break;
-            };
-
-            if let webrtc::data_channel::DataChannelEvent::OnMessage(message) = event {
-                // Checked before anything is copied.
-                if message.data.len() > remote_protocol::MAX_MESSAGE_BYTES {
-                    continue;
-                }
-
-                if let Ok(mut inbox) = self.shared.inbox.lock() {
-                    if inbox.len() < MAX_QUEUED_CONTROL_MESSAGES {
-                        inbox.push(message.data.to_vec());
-                    }
-                }
-            }
+    /// Stop every channel reader. They hold the channels, so this comes
+    /// before the channels and the connection are closed.
+    fn stop_readers(&mut self) {
+        for reader in self.readers.drain(..) {
+            reader.abort();
         }
     }
 
@@ -585,7 +607,119 @@ impl WebRtcSession {
         Ok(engine)
     }
 
+    /// Run `work` on the screen track's encoder and send what it produces.
+    ///
+    /// The common half of sending a new frame and repeating the last one:
+    /// the state check, the negotiated payload type, the encode on the
+    /// blocking pool, the packetising and the write.
+    async fn encode_and_send<W>(&mut self, work: W) -> Result<(), WebRtcError>
+    where
+        W: FnOnce(
+                &mut H264Encoder,
+                Instant,
+            )
+                -> Result<Option<crate::video::EncodedFrame>, crate::video::VideoError>
+            + Send
+            + 'static,
+    {
+        let state = self.state();
+
+        // A control-only session has no track to put a frame on, and says so
+        // rather than dropping it as though it had been sent.
+        let Some(video) = self.video.as_mut() else {
+            return Err(WebRtcError::Media(
+                "this is a control-only connection with no video track".into(),
+            ));
+        };
+
+        match state {
+            PeerState::Connected => {}
+            // Gone for good: the host should stop capturing, and is told so.
+            PeerState::Failed | PeerState::Closed => return Err(WebRtcError::WrongState(state)),
+            // Not up yet, or briefly lost. Nobody can receive this frame, so
+            // encoding it would only spend a core; the first frame once the
+            // connection is up is an IDR either way.
+            PeerState::New | PeerState::Connecting | PeerState::Disconnected => return Ok(()),
+        }
+
+        let payload_type = match video.payload_type {
+            Some(payload_type) => payload_type,
+            None => {
+                let parameters = video
+                    .sender
+                    .get_parameters()
+                    .await
+                    .map_err(|error| WebRtcError::Media(error.to_string()))?;
+
+                let payload_type = choose_h264_payload_type(&parameters.rtp_parameters.codecs)
+                    .ok_or_else(|| {
+                        WebRtcError::Media("the viewer's browser did not accept H.264 video".into())
+                    })?;
+
+                video.payload_type = Some(payload_type);
+                payload_type
+            }
+        };
+
+        let mut encoder = video
+            .encoder
+            .take()
+            .unwrap_or_else(|| Box::new(H264Encoder::new(self.profile, video.codec.clone())));
+
+        if self.shared.keyframe_requested.swap(false, Ordering::SeqCst) {
+            encoder.request_keyframe();
+        }
+
+        // The encode runs on tokio's blocking pool, not on the session's own
+        // thread. The host drives every session from one current-thread
+        // runtime, and that thread is also the one webrtc-rs's driver reads
+        // the sockets on — so an encode in place would hold up every control
+        // message, every ICE check and every data-channel chunk for as long as
+        // it took.
+        let now = Instant::now();
+        let (encoder, encoded) = tokio::task::spawn_blocking(move || {
+            let encoded = work(&mut encoder, now);
+
+            (encoder, encoded)
+        })
+        .await
+        .map_err(|error| WebRtcError::Media(format!("the encoder stopped: {error}")))?;
+
+        video.encoder = Some(encoder);
+
+        let Some(encoded) = encoded.map_err(|error| WebRtcError::Media(error.to_string()))? else {
+            // Paced out or skipped by rate control: nothing to send, and
+            // nothing wrong.
+            return Ok(());
+        };
+
+        let packets = video
+            .packetizer
+            .packetize(encoded.data.into(), payload_type, encoded.media_time_us)
+            .map_err(WebRtcError::Media)?;
+
+        // Every packet is offered even if one is refused: a frame with a
+        // missing packet is one the NACK path can still mend, a frame cut off
+        // halfway is not.
+        let mut failure = None;
+        for packet in packets {
+            if let Err(error) = video.track.write_rtp(packet).await {
+                failure.get_or_insert_with(|| error.to_string());
+            }
+        }
+
+        failure.map_or(Ok(()), |error| Err(WebRtcError::Media(error)))
+    }
+
     async fn open_channels(&mut self) -> Result<(), WebRtcError> {
+        // A second offer on the same connection — an ICE restart — carries
+        // the channels it already has. Opening another pair would leave the
+        // browser with two control channels and this end reading the wrong
+        // one.
+        if self.control.is_some() && self.collaboration.is_some() {
+            return Ok(());
+        }
+
         let ordered = RTCDataChannelInit {
             ordered: true,
             ..RTCDataChannelInit::default()
@@ -603,10 +737,83 @@ impl WebRtcSession {
             .await
             .map_err(|error| WebRtcError::DataChannel(error.to_string()))?;
 
+        self.read_collaboration(&collaboration);
+        self.read_control(&control);
+
         self.collaboration = Some(collaboration);
         self.control = Some(control);
 
         Ok(())
+    }
+}
+
+/// Read the control channel for as long as it is open, handing each message
+/// on the moment it arrives.
+///
+/// **A task, because the library's read waits.** `DataChannel::poll` in
+/// webrtc-rs 0.20 is `recv().await` on the channel's event queue: it returns
+/// when the *next* event arrives, not when the queue is empty. The session
+/// used to call it from `receive_control`, in a loop, on the agent's own
+/// task — so the first read after the channel opened did not come back until
+/// a message did, and then went straight back to waiting for the next one,
+/// up to 1024 of them. Everything else that task does stopped with it: the
+/// picture (a hosted session froze the moment its control channel opened),
+/// the question to the API about who is asking for control (so the consent
+/// dialog never appeared), ICE candidates, the local-input override — and the
+/// input itself, which sat in the inbox until enough of it had piled up for
+/// the read to give up. Both ends said "controlling", and nothing moved.
+///
+/// Read here instead, a message either goes straight to the [`ControlSink`]
+/// the host installed — applied while the agent's own task is busy encoding
+/// a frame or waiting on the API — or waits in the inbox for the next
+/// `receive_control`, which now only empties it and never waits.
+async fn read_control_channel(channel: Arc<dyn DataChannel>, shared: Arc<SharedState>) {
+    while let Some(event) = channel.poll().await {
+        let message = match event {
+            DataChannelEvent::OnMessage(message) => message,
+            DataChannelEvent::OnClose => break,
+            _ => continue,
+        };
+
+        // Checked before anything is copied.
+        if message.data.len() > remote_protocol::MAX_MESSAGE_BYTES {
+            continue;
+        }
+
+        let sink = shared
+            .control_sink
+            .lock()
+            .ok()
+            .and_then(|sink| sink.as_ref().map(Arc::clone));
+
+        match sink {
+            Some(sink) => sink(message.data.to_vec()),
+            None => {
+                if let Ok(mut inbox) = shared.inbox.lock() {
+                    // A peer that floods the channel must not grow this
+                    // without limit; what does not fit is dropped, and the
+                    // gate's sequence check takes the gap in its stride.
+                    if inbox.len() < MAX_QUEUED_CONTROL_MESSAGES {
+                        inbox.push(message.data.to_vec());
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Read the collaboration channel and discard what arrives.
+///
+/// The agent does not act on chat, pointers or annotations — but a channel
+/// nobody reads is not free. webrtc-rs queues at most 256 events per channel
+/// and logs an error for every one after that, so a viewer moving their
+/// pointer over the picture filled the queue in a few seconds and the capped
+/// log with the same line from then on.
+async fn drain_collaboration_channel(channel: Arc<dyn DataChannel>) {
+    while let Some(event) = channel.poll().await {
+        if matches!(event, DataChannelEvent::OnClose) {
+            break;
+        }
     }
 }
 
@@ -1010,95 +1217,25 @@ impl PeerSession for WebRtcSession {
     }
 
     async fn send_frame(&mut self, frame: Frame) -> Result<(), WebRtcError> {
-        let state = self.state();
-
-        // A control-only session has no track to put a frame on, and says so
-        // rather than dropping it as though it had been sent.
-        let Some(video) = self.video.as_mut() else {
-            return Err(WebRtcError::Media(
-                "this is a control-only connection with no video track".into(),
-            ));
-        };
-
-        match state {
-            PeerState::Connected => {}
-            // Gone for good: the host should stop capturing, and is told so.
-            PeerState::Failed | PeerState::Closed => return Err(WebRtcError::WrongState(state)),
-            // Not up yet, or briefly lost. Nobody can receive this frame, so
-            // encoding it would only spend a core; the first frame once the
-            // connection is up is an IDR either way.
-            PeerState::New | PeerState::Connecting | PeerState::Disconnected => return Ok(()),
-        }
-
-        let payload_type = match video.payload_type {
-            Some(payload_type) => payload_type,
-            None => {
-                let parameters = video
-                    .sender
-                    .get_parameters()
-                    .await
-                    .map_err(|error| WebRtcError::Media(error.to_string()))?;
-
-                let payload_type = choose_h264_payload_type(&parameters.rtp_parameters.codecs)
-                    .ok_or_else(|| {
-                        WebRtcError::Media("the viewer's browser did not accept H.264 video".into())
-                    })?;
-
-                video.payload_type = Some(payload_type);
-                payload_type
-            }
-        };
-
-        let mut encoder = video
-            .encoder
-            .take()
-            .unwrap_or_else(|| Box::new(H264Encoder::new(self.profile, video.codec.clone())));
-
-        if self.shared.keyframe_requested.swap(false, Ordering::SeqCst) {
-            encoder.request_keyframe();
-        }
-
-        // The encode runs on tokio's blocking pool, not on the session's own
-        // thread. The host drives every session from one current-thread
-        // runtime, and that thread is also the one webrtc-rs's driver reads
-        // the sockets on — so an encode in place would hold up every control
-        // message, every ICE check and every data-channel chunk for as long as
-        // it took. The frame moves in with the encoder and is dropped there,
-        // the moment it has been encoded.
-        let now = Instant::now();
-        let (encoder, encoded) = tokio::task::spawn_blocking(move || {
+        self.encode_and_send(move |encoder, now| {
             let encoded = encoder.encode(&frame, now);
+            // Dropped here, the moment it has been encoded.
             drop(frame);
 
-            (encoder, encoded)
+            encoded
         })
         .await
-        .map_err(|error| WebRtcError::Media(format!("the encoder stopped: {error}")))?;
+    }
 
-        video.encoder = Some(encoder);
-
-        let Some(encoded) = encoded.map_err(|error| WebRtcError::Media(error.to_string()))? else {
-            // Paced out or skipped by rate control: nothing to send, and
-            // nothing wrong.
+    async fn refresh_picture(&mut self) -> Result<(), WebRtcError> {
+        // Only when somebody is waiting for a keyframe. Otherwise a still
+        // screen is exactly what the viewer already has.
+        if self.video.is_none() || !self.shared.keyframe_requested.load(Ordering::SeqCst) {
             return Ok(());
-        };
-
-        let packets = video
-            .packetizer
-            .packetize(encoded.data.into(), payload_type, encoded.media_time_us)
-            .map_err(WebRtcError::Media)?;
-
-        // Every packet is offered even if one is refused: a frame with a
-        // missing packet is one the NACK path can still mend, a frame cut off
-        // halfway is not.
-        let mut failure = None;
-        for packet in packets {
-            if let Err(error) = video.track.write_rtp(packet).await {
-                failure.get_or_insert_with(|| error.to_string());
-            }
         }
 
-        failure.map_or(Ok(()), |error| Err(WebRtcError::Media(error)))
+        self.encode_and_send(|encoder, now| encoder.encode_again(now))
+            .await
     }
 
     fn request_keyframe(&mut self) {
@@ -1126,8 +1263,30 @@ impl PeerSession for WebRtcSession {
             .map_err(|error| WebRtcError::DataChannel(error.to_string()))
     }
 
+    fn set_control_sink(&mut self, sink: ControlSink) {
+        if let Ok(mut held) = self.shared.control_sink.lock() {
+            *held = Some(Arc::clone(&sink));
+        }
+
+        // Anything that arrived before the sink did goes to it now, in order,
+        // rather than being left for a `receive_control` the host may no
+        // longer call.
+        let waiting = self
+            .shared
+            .inbox
+            .lock()
+            .map(|mut inbox| std::mem::take(&mut *inbox))
+            .unwrap_or_default();
+
+        for bytes in waiting {
+            sink(bytes);
+        }
+    }
+
     async fn receive_control(&mut self) -> Result<Vec<Vec<u8>>, WebRtcError> {
-        self.drain_control_channel().await;
+        // Never waits: the channel's reader task fills the inbox, and this
+        // empties it. See `read_control_channel`.
+        self.adopt_inbound_channels();
 
         Ok(self
             .shared
@@ -1181,6 +1340,9 @@ impl PeerSession for WebRtcSession {
             video.feedback.abort();
         }
 
+        // The channel readers too, for the same reason.
+        self.stop_readers();
+
         // Channels next, then the connection: closing the peer while a
         // channel is mid-poll is how a teardown produces a warning nobody can
         // act on.
@@ -1213,6 +1375,8 @@ impl Drop for WebRtcSession {
         if let Some(video) = self.video.as_ref() {
             video.feedback.abort();
         }
+
+        self.stop_readers();
     }
 }
 
@@ -1647,6 +1811,179 @@ mod tests {
             session.send_frame(frame).await,
             Err(WebRtcError::WrongState(PeerState::Closed))
         );
+    }
+
+    /// Connect two of the agent's own sessions over the loopback interfaces:
+    /// `offerer` makes the offer, `answerer` answers, and candidates are
+    /// trickled both ways until both report `Connected`.
+    async fn connect_pair(offerer: &mut WebRtcSession, answerer: &mut WebRtcSession) {
+        let offer = offerer.create_offer().await.expect("offer");
+        let answer = answerer.accept_offer(offer).await.expect("answer");
+        offerer.accept_answer(answer).await.expect("accepts");
+
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while offerer.state() != PeerState::Connected || answerer.state() != PeerState::Connected {
+            assert!(
+                Instant::now() < deadline,
+                "never connected: {:?} / {:?}",
+                offerer.state(),
+                answerer.state()
+            );
+
+            for candidate in offerer.take_local_candidates() {
+                answerer.add_ice_candidate(candidate).await.expect("added");
+            }
+            for candidate in answerer.take_local_candidates() {
+                offerer.add_ice_candidate(candidate).await.expect("added");
+            }
+
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// Wait for the control channel to open on both ends.
+    async fn control_open(a: &mut WebRtcSession, b: &mut WebRtcSession) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !(a.control_channel_open().await && b.control_channel_open().await) {
+            assert!(
+                Instant::now() < deadline,
+                "the control channel never opened"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// **Reading the control channel never waits for a message.**
+    ///
+    /// Both of the agent's loops — a hosted session and a control companion —
+    /// call `receive_control` once a turn, between handling signalling,
+    /// sending the picture and asking the API who may control. It has to hand
+    /// back what has arrived and return: a read that waits for the next
+    /// message stops the turn, and with it the picture, the consent dialog and
+    /// the very input it was waiting for.
+    #[tokio::test]
+    async fn reading_the_control_channel_returns_at_once_when_nothing_has_arrived() {
+        let factory = bundled();
+
+        let mut controller = factory
+            .create_control_only(IceConfiguration::default())
+            .await
+            .expect("controller");
+        let mut companion = factory
+            .create_control_only(IceConfiguration::default())
+            .await
+            .expect("companion");
+
+        connect_pair(&mut controller, &mut companion).await;
+        control_open(&mut controller, &mut companion).await;
+
+        // Nothing has been sent. Both ends — the one that opened the channel
+        // and the one that was handed it — must come straight back, every
+        // time they are asked.
+        for _ in 0..3 {
+            let nothing =
+                tokio::time::timeout(Duration::from_millis(500), companion.receive_control())
+                    .await
+                    .expect("the answering end must not wait for a message")
+                    .expect("reads");
+            assert!(nothing.is_empty());
+
+            let nothing =
+                tokio::time::timeout(Duration::from_millis(500), controller.receive_control())
+                    .await
+                    .expect("the offering end must not wait for a message")
+                    .expect("reads");
+            assert!(nothing.is_empty());
+        }
+
+        // Three messages go out; all three come back, in order, without the
+        // reader having to be sent a fourth to let go.
+        for text in ["one", "two", "three"] {
+            controller
+                .send_control(text.as_bytes())
+                .await
+                .expect("sends");
+        }
+
+        let mut received: Vec<Vec<u8>> = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while received.len() < 3 {
+            assert!(Instant::now() < deadline, "only {} arrived", received.len());
+
+            received.extend(
+                tokio::time::timeout(Duration::from_millis(500), companion.receive_control())
+                    .await
+                    .expect("must not wait for more than has arrived")
+                    .expect("reads"),
+            );
+
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        assert_eq!(
+            received,
+            vec![b"one".to_vec(), b"two".to_vec(), b"three".to_vec()]
+        );
+
+        controller.close().await.expect("closes");
+        companion.close().await.expect("closes");
+    }
+
+    /// With a sink, a message is handed over as it comes off the channel —
+    /// nobody has to call `receive_control` for input to be applied, which is
+    /// what keeps a mouse moving while the host's loop encodes a frame.
+    #[tokio::test]
+    async fn a_control_sink_gets_each_message_without_the_loop_asking() {
+        let factory = bundled();
+
+        let mut controller = factory
+            .create_control_only(IceConfiguration::default())
+            .await
+            .expect("controller");
+        let mut companion = factory
+            .create_control_only(IceConfiguration::default())
+            .await
+            .expect("companion");
+
+        connect_pair(&mut controller, &mut companion).await;
+        control_open(&mut controller, &mut companion).await;
+
+        // One message arrives before anybody has installed a sink: it waits
+        // in the inbox, and installing the sink hands it over first.
+        controller.send_control(b"early").await.expect("sends");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let seen: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+        let into = Arc::clone(&seen);
+        companion.set_control_sink(Arc::new(move |bytes| {
+            into.lock().unwrap().push(bytes);
+        }));
+
+        for text in ["one", "two"] {
+            controller
+                .send_control(text.as_bytes())
+                .await
+                .expect("sends");
+        }
+
+        // Deliberately no `receive_control` here.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while seen.lock().unwrap().len() < 3 {
+            assert!(Instant::now() < deadline, "the sink was not called");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![b"early".to_vec(), b"one".to_vec(), b"two".to_vec()]
+        );
+        assert!(
+            companion.receive_control().await.expect("reads").is_empty(),
+            "a message handed to the sink is not handed over twice"
+        );
+
+        controller.close().await.expect("closes");
+        companion.close().await.expect("closes");
     }
 
     /// The viewer side of the loopback test: a plain webrtc-rs peer that

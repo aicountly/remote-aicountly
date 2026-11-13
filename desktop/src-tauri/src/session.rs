@@ -85,6 +85,19 @@ const PEER_TIMEOUT: Duration = Duration::from_secs(180);
 /// joins — but still bounded, for the same reason.
 const HELP_PEER_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
+/// How long the session waits for somebody the relay said has left.
+///
+/// The relay announces a departure whenever a participant's socket closes —
+/// which is also what a browser's two-minute room token expiring looks like,
+/// and what a page reload and a dropped Wi-Fi connection look like. Every one
+/// of those comes straight back. Ending the session on the announcement, as
+/// this used to, ended every hosted session about two minutes in.
+const REJOIN_GRACE: Duration = Duration::from_secs(30);
+
+/// How often the last picture may be sent again for a viewer waiting on a
+/// keyframe while the screen is still.
+const REFRESH_INTERVAL: Duration = Duration::from_millis(400);
+
 /// How long to wait before trying to start a capture the platform refused
 /// (Screen Recording not yet allowed on a Mac, a display being reconfigured).
 const CAPTURE_RETRY: Duration = Duration::from_secs(3);
@@ -303,9 +316,17 @@ where
     let profile = CaptureProfile::for_quality(quality_from(&agent.config().capture_quality));
     let mut pump = CapturePump::new(profile);
 
-    let mut peer = match factory.create(joined.ice.clone(), profile).await {
+    let peer = match new_peer(&factory, agent, &joined.ice, profile).await {
         Ok(peer) => peer,
         Err(error) => return Ended::Refused(error.to_string()),
+    };
+
+    let mut link = Link {
+        peer,
+        remote: None,
+        epoch: None,
+        negotiated: false,
+        left_at: None,
     };
 
     let mut socket =
@@ -319,12 +340,13 @@ where
             }
         };
 
-    // The peer to trickle candidates to. Whoever is in the room with us —
-    // which is not the same question as who is *controlling*, and conflating
-    // the two would mean a session that never connects until control is
-    // granted.
-    let mut peer_uuid: Option<String> = None;
     let mut last_control_poll = Instant::now() - CONTROL_POLL;
+    // The read of the control state that is under way, if one is. Never
+    // awaited in line: a slow answer from the API used to stop the picture
+    // and the input for as long as it took, every three seconds.
+    let mut control_read: Option<
+        tokio::task::JoinHandle<Result<remote_core::SessionControlView, ApiError>>,
+    > = None;
     let joined_at = Instant::now();
     let mut renew_after = renew_at(joined.signalling_expires_at);
     // Whether a Secure Desktop helper has been asked for, so it is started once
@@ -339,7 +361,7 @@ where
 
     loop {
         if stopping.load(Ordering::SeqCst) {
-            announce_end(&mut peer, joined, session_uuid, Ended::Stopped).await;
+            announce_end(&mut link.peer, joined, session_uuid, Ended::Stopped).await;
             socket.close().await;
 
             return Ended::Stopped;
@@ -347,7 +369,7 @@ where
 
         // Ended by the person at the machine, in the window.
         if !agent.is_hosting(session_uuid) {
-            announce_end(&mut peer, joined, session_uuid, Ended::Normally).await;
+            announce_end(&mut link.peer, joined, session_uuid, Ended::Normally).await;
             socket.close().await;
 
             return Ended::Normally;
@@ -362,11 +384,12 @@ where
                 match handle_signal(
                     agent,
                     sink,
-                    &mut peer,
+                    &factory,
+                    &mut link,
+                    &mut pump,
                     &mut socket,
                     signal,
-                    &joined.participant_uuid,
-                    &mut peer_uuid,
+                    joined,
                 )
                 .await
                 {
@@ -375,7 +398,7 @@ where
                     // rather than at the next poll.
                     Continue::PollNow => last_control_poll = Instant::now() - CONTROL_POLL,
                     Continue::Stop(reason) => {
-                        announce_end(&mut peer, joined, session_uuid, reason.clone()).await;
+                        announce_end(&mut link.peer, joined, session_uuid, reason.clone()).await;
                         socket.close().await;
 
                         return reason;
@@ -397,12 +420,13 @@ where
                         continue;
                     }
                     Renewal::Over(reason) => {
-                        announce_end(&mut peer, joined, session_uuid, reason.clone()).await;
+                        announce_end(&mut link.peer, joined, session_uuid, reason.clone()).await;
 
                         return reason;
                     }
                     Renewal::Retry => {
-                        announce_end(&mut peer, joined, session_uuid, Ended::Disconnected).await;
+                        announce_end(&mut link.peer, joined, session_uuid, Ended::Disconnected)
+                            .await;
 
                         return Ended::Disconnected;
                     }
@@ -426,7 +450,7 @@ where
                     tracing::debug!("the signalling connection was renewed");
                 }
                 Renewal::Over(reason) => {
-                    announce_end(&mut peer, joined, session_uuid, reason.clone()).await;
+                    announce_end(&mut link.peer, joined, session_uuid, reason.clone()).await;
                     socket.close().await;
 
                     return reason;
@@ -440,8 +464,8 @@ where
         // Only once there is somebody to send them to. A candidate sent into an
         // empty room is one the relay answers `peer-unavailable` to and the
         // peer never sees.
-        if let Some(target) = peer_uuid.clone() {
-            for candidate in peer.take_local_candidates() {
+        if let Some(target) = link.remote.clone() {
+            for candidate in link.peer.take_local_candidates() {
                 let _ = socket
                     .send(&Outbound::IceCandidate {
                         to: target.clone(),
@@ -453,9 +477,13 @@ where
 
         // --- the control channel ------------------------------------------
         //
-        // Every message goes through the gate. Nothing here inspects one
-        // first, and nothing here can act on one the gate refused.
-        match peer.receive_control().await {
+        // Every message goes through the gate. Input is handed to
+        // `Agent::handle_control` by the connection's own reader the moment
+        // it arrives (`new_peer` installs the sink), so a click does not wait
+        // for this loop to come round past a frame being encoded. What is
+        // read here is whatever a session without such a reader holds; with
+        // one, it is empty.
+        match link.peer.receive_control().await {
             Ok(messages) => {
                 for bytes in messages {
                     if let Err(error) = agent.handle_control(&bytes) {
@@ -468,15 +496,49 @@ where
             Err(error) => tracing::warn!(%error, "the control channel could not be read"),
         }
 
+        // Stop control was pressed here: tell the controller on the control
+        // channel too, so their browser stops sending at once and says why.
+        if agent.take_stop_notice() {
+            if let Some(bytes) = control_ended_bytes_for(
+                session_uuid,
+                &joined.participant_uuid,
+                remote_protocol::ControlEndReason::StoppedLocally,
+            ) {
+                let _ = link.peer.send_control(&bytes).await;
+            }
+        }
+
+        // The API has just been told what the person here decided. Nudge the
+        // room, so the browser waiting on that answer reads it now.
+        if agent.take_control_hint() {
+            let _ = socket.send(&Outbound::ControlHint).await;
+            last_control_poll = Instant::now() - CONTROL_POLL;
+        }
+
         // --- who is asking, and what is permitted -------------------------
-        if last_control_poll.elapsed() >= CONTROL_POLL {
+        if control_read.is_none() && last_control_poll.elapsed() >= CONTROL_POLL {
             last_control_poll = Instant::now();
 
-            match client.session_control(session_uuid).await {
-                Ok(view) => adopt_control(agent, sink, &view),
-                Err(error) if error.is_device_rejected() => {
+            if let Some(reader) = agent.device_client() {
+                let session = session_uuid.to_owned();
+
+                control_read = Some(tokio::spawn(async move {
+                    reader.session_control(&session).await
+                }));
+            }
+        }
+
+        if control_read.as_ref().is_some_and(|read| read.is_finished()) {
+            let outcome = match control_read.take() {
+                Some(read) => read.await.ok(),
+                None => None,
+            };
+
+            match outcome {
+                Some(Ok(view)) => adopt_control(agent, sink, &view),
+                Some(Err(error)) if error.is_device_rejected() => {
                     announce_end(
-                        &mut peer,
+                        &mut link.peer,
                         joined,
                         session_uuid,
                         Ended::Refused("removed".into()),
@@ -485,7 +547,10 @@ where
 
                     return Ended::Refused("This computer was removed from AICOUNTLY.".into());
                 }
-                Err(error) => tracing::debug!(%error, "the control state could not be read"),
+                Some(Err(error)) => {
+                    tracing::debug!(%error, "the control state could not be read");
+                }
+                None => {}
             }
         }
 
@@ -525,22 +590,187 @@ where
         }
 
         // --- the picture -------------------------------------------------
-        pump.turn(agent, &mut peer, session_uuid, &joined.participant_uuid)
-            .await;
+        pump.turn(
+            agent,
+            &mut link.peer,
+            session_uuid,
+            &joined.participant_uuid,
+        )
+        .await;
 
         // --- give up on a session nobody joins ----------------------------
-        if peer_uuid.is_none() && joined_at.elapsed() >= peer_timeout {
+        if link.remote.is_none() && joined_at.elapsed() >= peer_timeout {
             socket.close().await;
 
             return Ended::NoPeer;
         }
 
-        if peer.state() == PeerState::Failed {
-            announce_end(&mut peer, joined, session_uuid, Ended::Disconnected).await;
+        // --- somebody who left and did not come back ----------------------
+        //
+        // Only once the connection itself has gone as well: a browser whose
+        // signalling dropped while its peer connection is still up is still
+        // watching.
+        let awaited = link
+            .left_at
+            .is_some_and(|left| left.elapsed() < REJOIN_GRACE);
+
+        if link.left_at.is_some() && !awaited && link.peer.state() != PeerState::Connected {
+            announce_end(&mut link.peer, joined, session_uuid, Ended::Normally).await;
             socket.close().await;
 
-            return Ended::Disconnected;
+            return Ended::Normally;
         }
+
+        // A page that is reloading takes its connection down with it; while
+        // it is being waited for, that is not the end either.
+        if link.peer.state() == PeerState::Failed && !awaited {
+            // The other end went without the relay saying so (a closed lid, a
+            // lost network). If they have already been announced as gone this
+            // is simply the session ending; otherwise the connection was lost.
+            let ended = if link.left_at.is_some() {
+                Ended::Normally
+            } else {
+                Ended::Disconnected
+            };
+
+            announce_end(&mut link.peer, joined, session_uuid, ended.clone()).await;
+            socket.close().await;
+
+            return ended;
+        }
+    }
+}
+
+/// The connection to whoever is watching, and what is known about them.
+struct Link<P> {
+    peer: P,
+    /// Who the connection is with, once somebody has been in the room.
+    remote: Option<String>,
+    /// Which page of theirs it is with — the relay's epoch for them.
+    epoch: Option<String>,
+    /// Whether an offer or an answer has been exchanged on `peer`. A
+    /// connection that has negotiated with one page cannot be offered to
+    /// another, so a new page gets a new one.
+    negotiated: bool,
+    /// When the relay said they left, until they come back.
+    left_at: Option<Instant>,
+}
+
+/// A peer connection for a hosted session, with its control input going
+/// straight to the gate.
+async fn new_peer<F: PeerSessionFactory>(
+    factory: &F,
+    agent: &Arc<Agent>,
+    ice: &IceConfiguration,
+    profile: CaptureProfile,
+) -> Result<F::Session, remote_webrtc::WebRtcError> {
+    let mut peer = factory.create(ice.clone(), profile).await?;
+
+    // A new connection is a new stream of control messages, numbered from
+    // the start again.
+    agent.restart_control_stream();
+
+    let agent = Arc::clone(agent);
+    peer.set_control_sink(Arc::new(move |bytes: Vec<u8>| {
+        // The only thing ever called with bytes from the peer, and it runs
+        // the gate before anything reaches the input providers.
+        if let Err(error) = agent.handle_control(&bytes) {
+            tracing::debug!(?error, "a control message was refused");
+        }
+    }));
+
+    Ok(peer)
+}
+
+/// Close the connection and start a fresh one, for a page that is not the
+/// one the old connection was negotiated with. `false` when no new
+/// connection could be made, in which case the old one is gone too and the
+/// next arrival tries again.
+async fn replace_peer<F: PeerSessionFactory>(
+    factory: &F,
+    agent: &Arc<Agent>,
+    link: &mut Link<F::Session>,
+    pump: &mut CapturePump,
+    joined: &Joined,
+) -> bool {
+    let _ = link.peer.close().await;
+
+    // Nothing is captured for a connection that has gone, and whatever its
+    // controller was holding is let go.
+    agent.stop_capture();
+    agent.release_input();
+    pump.restart(Instant::now());
+
+    match new_peer(factory, agent, &joined.ice, pump.ceiling).await {
+        Ok(peer) => {
+            link.peer = peer;
+            link.negotiated = false;
+
+            true
+        }
+        Err(error) => {
+            tracing::warn!(%error, "a new connection could not be created");
+
+            false
+        }
+    }
+}
+
+/// What to do about somebody arriving in the room.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Arrival {
+    /// The page we are already connected to, back after its signalling
+    /// dropped or its token was renewed. The connection never went away.
+    Returned,
+    /// Offer on the connection we hold: it was still being set up with this
+    /// same page.
+    Reoffer,
+    /// Offer on a connection of its own: a new page, or a new person.
+    Offer,
+    /// Somebody else, while the session is connected to one person already.
+    Busy,
+}
+
+/// Decide what an arrival means.
+///
+/// `remote` and `epoch` are who the session is connected to and which page of
+/// theirs; `left` is whether the relay has said they left; `state` is the
+/// connection's own state.
+fn arrival(
+    remote: Option<&str>,
+    epoch: Option<&str>,
+    left: bool,
+    state: PeerState,
+    arrived: &str,
+    arrived_epoch: Option<&str>,
+) -> Arrival {
+    let Some(current) = remote else {
+        return Arrival::Offer;
+    };
+
+    if current != arrived {
+        // One at a time. Somebody new is taken only when the person the
+        // session was with has gone.
+        let live = matches!(state, PeerState::Connected | PeerState::Connecting);
+
+        return if live && !left {
+            Arrival::Busy
+        } else {
+            Arrival::Offer
+        };
+    }
+
+    // The same person. The same page too, if the relay repeats its epoch.
+    let same_page = matches!((epoch, arrived_epoch), (Some(known), Some(now)) if known == now);
+
+    match state {
+        // The connection is up. Unless this is plainly a different page, it
+        // is the one we are already talking to.
+        PeerState::Connected if same_page || arrived_epoch.is_none() || epoch.is_none() => {
+            Arrival::Returned
+        }
+        PeerState::New | PeerState::Connecting if same_page => Arrival::Reoffer,
+        _ => Arrival::Offer,
     }
 }
 
@@ -555,6 +785,11 @@ struct CapturePump {
     ceiling: CaptureProfile,
     /// What the capture is running at now.
     profile: CaptureProfile,
+    /// The display the controller asked for, kept so a capture that is
+    /// started again shows the same one.
+    monitor: Option<u32>,
+    /// When the last picture may next be sent again for a waiting viewer.
+    next_refresh_at: Instant,
     /// The display being shown, once capture has started.
     layout: Option<remote_protocol::MonitorLayout>,
     /// Whether the controller has been told which display that is.
@@ -581,6 +816,8 @@ impl CapturePump {
         Self {
             ceiling: profile,
             profile,
+            monitor: None,
+            next_refresh_at: now,
             layout: None,
             layout_sent: false,
             next_frame_at: now,
@@ -591,6 +828,16 @@ impl CapturePump {
             secure_desktop_was_active: false,
             secure_desktop_told: None,
         }
+    }
+
+    /// Start again from nothing, for a new connection: the capture has been
+    /// stopped, and starts when the new connection is up.
+    fn restart(&mut self, now: Instant) {
+        self.layout = None;
+        self.layout_sent = false;
+        self.next_attempt_at = now;
+        self.next_frame_at = now;
+        self.secure_desktop_told = None;
     }
 
     /// How long the loop may wait on signalling before the next frame is due.
@@ -630,8 +877,39 @@ impl CapturePump {
     ) {
         let now = Instant::now();
 
+        // The controller asked for another of this computer's displays. The
+        // gate admitted the request; here the capture moves, and input moves
+        // with it because it lands on the capture's active display.
+        if let Some(requested) = agent.take_monitor_request() {
+            self.monitor = Some(requested);
+
+            if self.layout.is_some() {
+                match agent.start_capture(self.monitor, self.profile) {
+                    Ok(layout) => {
+                        tracing::info!(
+                            monitor = layout.active_monitor_id,
+                            "the controller switched to another display"
+                        );
+                        self.layout = Some(layout);
+                        // The controller is told which display it now sees.
+                        self.layout_sent = false;
+                        self.next_frame_at = now;
+                        // A different picture: the decoder starts again.
+                        peer.request_keyframe();
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "the display could not be switched");
+                        // Whatever was being shown has stopped; start again.
+                        self.layout = None;
+                        self.layout_sent = false;
+                        self.next_attempt_at = now;
+                    }
+                }
+            }
+        }
+
         if self.should_start(peer.state(), now) {
-            match agent.start_capture(self.profile) {
+            match agent.start_capture(self.monitor, self.profile) {
                 Ok(layout) => {
                     tracing::info!(
                         monitor = layout.active_monitor_id,
@@ -722,6 +1000,18 @@ impl CapturePump {
         };
 
         let Some(frame) = frame else {
+            // Nothing changed on the screen. A viewer who is waiting for a
+            // keyframe — they have just connected, or lost a packet — gets
+            // the picture they should be looking at, rather than nothing
+            // until something moves.
+            if now >= self.next_refresh_at {
+                self.next_refresh_at = now + REFRESH_INTERVAL;
+
+                if let Err(error) = peer.refresh_picture().await {
+                    tracing::debug!(%error, "the picture was not sent again");
+                }
+            }
+
             return;
         };
 
@@ -840,48 +1130,114 @@ enum Continue {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn handle_signal<P: PeerSession>(
+async fn handle_signal<F: PeerSessionFactory>(
     agent: &Arc<Agent>,
     sink: &StateSink,
-    peer: &mut P,
+    factory: &F,
+    link: &mut Link<F::Session>,
+    pump: &mut CapturePump,
     socket: &mut SignallingSocket,
     signal: Signal,
-    self_uuid: &str,
-    peer_uuid: &mut Option<String>,
+    joined: &Joined,
 ) -> Continue {
-    match signal {
-        // We are the newcomer. Whoever is already here offers to us, so there
-        // is nothing to do but note who to trickle candidates to — and, if
-        // the room said who they are, put their name where the session
-        // banner and the consent dialog read it from.
-        Signal::Joined { peers, .. } => {
-            let identified = peers
-                .into_iter()
-                .find(|entry| entry.participant_uuid != self_uuid);
+    let self_uuid = joined.participant_uuid.as_str();
 
-            if let Some(entry) = &identified {
+    match signal {
+        // We are the newcomer — or our own signalling connection was just
+        // renewed, which the relay answers the same way. Whoever is already
+        // here offers to us, so there is nothing to do but note who to
+        // trickle candidates to — and, if the room said who they are, put
+        // their name where the session banner and the consent dialog read it
+        // from.
+        Signal::Joined { peers, .. } => {
+            let others: Vec<_> = peers
+                .into_iter()
+                .filter(|entry| entry.participant_uuid != self_uuid)
+                .collect();
+
+            // The person we are already connected to, if they are listed;
+            // otherwise whoever is there.
+            let identified = others
+                .iter()
+                .find(|entry| link.remote.as_deref() == Some(entry.participant_uuid.as_str()))
+                .or_else(|| others.first())
+                .cloned();
+
+            if let Some(entry) = identified {
                 if !entry.display_name.is_empty() {
                     sink(agent.peer_connected(&entry.display_name));
                 }
-            }
 
-            *peer_uuid = identified.map(|entry| entry.participant_uuid);
+                if link.remote.as_deref() == Some(entry.participant_uuid.as_str()) {
+                    // Still in the room: they did not leave after all.
+                    link.left_at = None;
+                } else if link.remote.is_none() {
+                    link.remote = Some(entry.participant_uuid);
+                    link.epoch = entry.epoch;
+                }
+            }
         }
 
-        // We were here first, so we offer.
+        // We were here first, so we offer — unless this is the page we are
+        // already connected to coming back.
         Signal::PeerJoined { peer: arrived, .. } => {
             if arrived.participant_uuid == self_uuid {
                 return Continue::Carry;
             }
 
-            *peer_uuid = Some(arrived.participant_uuid.clone());
+            let decision = arrival(
+                link.remote.as_deref(),
+                link.epoch.as_deref(),
+                link.left_at.is_some(),
+                link.peer.state(),
+                &arrived.participant_uuid,
+                arrived.epoch.as_deref(),
+            );
+
+            match decision {
+                Arrival::Busy => {
+                    tracing::info!(
+                        "somebody else joined the session; this computer is already connected \
+                         to one person and serves one at a time"
+                    );
+
+                    return Continue::Carry;
+                }
+                Arrival::Returned => {
+                    tracing::info!("the person connected is back in the room");
+                    link.left_at = None;
+
+                    if arrived.epoch.is_some() {
+                        link.epoch = arrived.epoch;
+                    }
+
+                    // They may have missed a change of control while away.
+                    return Continue::PollNow;
+                }
+                Arrival::Offer | Arrival::Reoffer => {}
+            }
+
+            // A connection that has negotiated with one page cannot be
+            // offered to another.
+            if decision == Arrival::Offer
+                && link.negotiated
+                && !replace_peer(factory, agent, link, pump, joined).await
+            {
+                return Continue::Carry;
+            }
+
+            link.remote = Some(arrived.participant_uuid.clone());
+            link.epoch = arrived.epoch.clone();
+            link.left_at = None;
 
             if !arrived.display_name.is_empty() {
                 sink(agent.peer_connected(&arrived.display_name));
             }
 
-            match peer.create_offer().await {
+            match link.peer.create_offer().await {
                 Ok(offer) => {
+                    link.negotiated = true;
+
                     let _ = socket
                         .send(&Outbound::Offer {
                             to: arrived.participant_uuid,
@@ -894,10 +1250,54 @@ async fn handle_signal<P: PeerSession>(
         }
 
         Signal::Offer { from, payload } => {
-            *peer_uuid = Some(from.clone());
+            if from == self_uuid {
+                return Continue::Carry;
+            }
 
-            match peer.accept_offer(payload).await {
+            let current = link.remote.as_deref() == Some(from.as_str());
+            let live = matches!(
+                link.peer.state(),
+                PeerState::Connected | PeerState::Connecting
+            );
+
+            if !current && link.remote.is_some() && live && link.left_at.is_none() {
+                tracing::info!(
+                    "an offer arrived from somebody else; this computer is already connected \
+                     to one person and serves one at a time"
+                );
+
+                return Continue::Carry;
+            }
+
+            // Somebody new takes a connection of their own.
+            if !current
+                && link.negotiated
+                && !replace_peer(factory, agent, link, pump, joined).await
+            {
+                return Continue::Carry;
+            }
+
+            let mut answer = link.peer.accept_offer(payload.clone()).await;
+
+            // The connection could not take it. While it is up that is a
+            // renegotiation gone wrong, and the connection is worth more than
+            // the offer. While it is not, the offer is for a connection we do
+            // not hold — ours crossed theirs, or their page is new — so it
+            // gets a fresh one.
+            if answer.is_err()
+                && link.negotiated
+                && link.peer.state() != PeerState::Connected
+                && replace_peer(factory, agent, link, pump, joined).await
+            {
+                answer = link.peer.accept_offer(payload).await;
+            }
+
+            match answer {
                 Ok(answer) => {
+                    link.negotiated = true;
+                    link.remote = Some(from.clone());
+                    link.left_at = None;
+
                     let _ = socket
                         .send(&Outbound::Answer {
                             to: from,
@@ -909,18 +1309,36 @@ async fn handle_signal<P: PeerSession>(
             }
         }
 
-        Signal::Answer { payload, .. } => {
-            if let Err(error) = peer.accept_answer(payload).await {
+        Signal::Answer { from, payload } => {
+            if link.remote.as_deref() != Some(from.as_str()) {
+                return Continue::Carry;
+            }
+
+            if let Err(error) = link.peer.accept_answer(payload).await {
                 tracing::warn!(%error, "an answer could not be used");
             }
         }
 
-        Signal::IceCandidate { payload, .. } => {
-            // A candidate the library cannot use is normal during trickle.
-            let _ = peer.add_ice_candidate(payload).await;
+        Signal::IceCandidate { from, payload } => {
+            if link.remote.as_deref() == Some(from.as_str()) {
+                // A candidate the library cannot use is normal during trickle.
+                let _ = link.peer.add_ice_candidate(payload).await;
+            }
         }
 
-        Signal::PeerLeft { .. } => return Continue::Stop(Ended::Normally),
+        // **Not the end of the session.** The relay says this whenever a
+        // participant's socket closes: their two-minute room token expired,
+        // their page reloaded, their network dropped for a moment. They are
+        // waited for (`REJOIN_GRACE`), and whatever they were holding on this
+        // machine is let go meanwhile.
+        Signal::PeerLeft { from } => {
+            if link.remote.as_deref() == Some(from.as_str()) && link.left_at.is_none() {
+                tracing::info!("the person connected left the room; waiting for them to come back");
+                link.left_at = Some(Instant::now());
+                agent.release_input();
+            }
+        }
+
         Signal::SessionEnded { .. } => return Continue::Stop(Ended::Normally),
 
         Signal::Error { code, message } => {
@@ -978,6 +1396,33 @@ fn adopt_control(agent: &Arc<Agent>, sink: &StateSink, view: &remote_core::Sessi
         return;
     }
 
+    // Somebody is controlling this machine right now, by the gate's own
+    // account. Two reads must not take that away:
+    //
+    // * the one that crosses the Allow just pressed here — the API still
+    //   lists the request, because the report of the answer has not landed.
+    //   Raising the request again put the gate back to "asking", dropped the
+    //   controller's input and showed the dialog a second time;
+    // * a second person asking while the first is controlling, which did the
+    //   same to the first on every read until they were turned down.
+    //
+    // So while the gate is granted, a pending request changes nothing unless
+    // the API also says the person the gate names is no longer involved.
+    if agent.control_state() == ControlState::Granted {
+        let controller = agent.controller_uuid();
+
+        let still_theirs = controller.is_some()
+            && (view.controller_uuid == controller
+                || view
+                    .pending_requests
+                    .iter()
+                    .any(|waiting| Some(&waiting.participant_uuid) == controller.as_ref()));
+
+        if still_theirs && !view.pending_requests.is_empty() {
+            return;
+        }
+    }
+
     if let Some(waiting) = view.pending_requests.first() {
         // The API said somebody is waiting. That is the only thing that raises
         // a consent dialog on this machine, and their name travels with it —
@@ -1028,6 +1473,15 @@ fn control_ended_bytes(
     participant_uuid: &str,
     ended: &Ended,
 ) -> Option<Vec<u8>> {
+    control_ended_bytes_for(session_uuid, participant_uuid, ended.wire_reason())
+}
+
+/// `control_ended` with this reason.
+fn control_ended_bytes_for(
+    session_uuid: &str,
+    participant_uuid: &str,
+    reason: remote_protocol::ControlEndReason,
+) -> Option<Vec<u8>> {
     let sequence = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
@@ -1037,9 +1491,7 @@ fn control_ended_bytes(
         session_uuid,
         participant_uuid,
         sequence,
-        remote_protocol::ControlMessage::ControlEnded {
-            reason: ended.wire_reason(),
-        },
+        remote_protocol::ControlMessage::ControlEnded { reason },
     );
 
     serde_json::to_vec(&envelope).ok()
@@ -1247,6 +1699,222 @@ mod tests {
 
     /// Switching it off mid-session ends control at the next read, rather than
     /// leaving the grant in force until the session happens to end.
+    /// The read that crosses an Allow still lists the request, because the
+    /// report of the answer has not landed. It must not take the grant away
+    /// again: that dropped the controller's input and put the dialog back.
+    #[test]
+    fn a_read_that_crosses_an_allow_does_not_undo_it() {
+        let agent = control_agent();
+        let sink: StateSink = Arc::new(|_| {});
+
+        adopt_control(&agent, &sink, &waiting_view(true));
+        assert_eq!(requester(&agent).as_deref(), Some("operator-1"));
+
+        // The person at the machine presses Allow.
+        agent.grant_control("operator-1", false, false);
+        assert_eq!(agent.control_state(), ControlState::Granted);
+
+        // The API has not heard yet: the same request is still listed.
+        adopt_control(&agent, &sink, &waiting_view(true));
+
+        assert_eq!(
+            agent.control_state(),
+            ControlState::Granted,
+            "a stale read is not a new request"
+        );
+        assert!(agent.state().is_being_controlled());
+    }
+
+    /// A second person asking must not cut off the one who is controlling.
+    #[test]
+    fn somebody_else_asking_does_not_interrupt_the_controller() {
+        let agent = control_agent();
+        let sink: StateSink = Arc::new(|_| {});
+
+        let granted = remote_core::SessionControlView {
+            controller_uuid: Some("operator-1".into()),
+            controller_name: Some("Sam".into()),
+            grant_id: Some("grant-1".into()),
+            allow_remote_control: true,
+            ..remote_core::SessionControlView::default()
+        };
+        adopt_control(&agent, &sink, &granted);
+        assert_eq!(agent.control_state(), ControlState::Granted);
+
+        adopt_control(
+            &agent,
+            &sink,
+            &remote_core::SessionControlView {
+                pending_requests: vec![remote_core::PendingControlRequest {
+                    participant_uuid: "operator-2".into(),
+                    display_name: "Priya".into(),
+                    requested_at: None,
+                }],
+                ..granted
+            },
+        );
+
+        assert_eq!(agent.control_state(), ControlState::Granted);
+        assert_eq!(agent.controller_uuid().as_deref(), Some("operator-1"));
+    }
+
+    /// Once the API no longer names the controller at all, a waiting request
+    /// is a real one and is asked about.
+    #[test]
+    fn a_request_is_raised_once_the_previous_controller_is_gone() {
+        let agent = control_agent();
+        let sink: StateSink = Arc::new(|_| {});
+
+        adopt_control(
+            &agent,
+            &sink,
+            &remote_core::SessionControlView {
+                controller_uuid: Some("operator-2".into()),
+                grant_id: Some("grant-1".into()),
+                allow_remote_control: true,
+                ..remote_core::SessionControlView::default()
+            },
+        );
+        assert_eq!(agent.control_state(), ControlState::Granted);
+
+        // operator-2 is neither controlling nor asking any more; operator-1 asks.
+        adopt_control(&agent, &sink, &waiting_view(true));
+
+        assert_eq!(requester(&agent).as_deref(), Some("operator-1"));
+        assert_ne!(agent.control_state(), ControlState::Granted);
+    }
+
+    /// **A departure the relay announces is not the end of the session.** It
+    /// says so whenever a socket closes — a browser's two-minute room token
+    /// expiring, a reload, a dropped connection — and the same page is back a
+    /// moment later with its peer connection intact.
+    #[test]
+    fn the_same_page_coming_back_keeps_its_connection() {
+        // Announced as gone, then back with the same epoch, connection up.
+        assert_eq!(
+            arrival(
+                Some("viewer"),
+                Some("page-1"),
+                true,
+                PeerState::Connected,
+                "viewer",
+                Some("page-1")
+            ),
+            Arrival::Returned
+        );
+        // A renewed token with no departure announced at all.
+        assert_eq!(
+            arrival(
+                Some("viewer"),
+                Some("page-1"),
+                false,
+                PeerState::Connected,
+                "viewer",
+                Some("page-1")
+            ),
+            Arrival::Returned
+        );
+        // A relay or a browser that sends no epoch: the live connection is
+        // the evidence.
+        assert_eq!(
+            arrival(
+                Some("viewer"),
+                None,
+                true,
+                PeerState::Connected,
+                "viewer",
+                None
+            ),
+            Arrival::Returned
+        );
+    }
+
+    /// A reloaded page has a new epoch and no peer connection: the one this
+    /// computer holds died with the old page, so the new page gets a new one.
+    #[test]
+    fn a_reloaded_page_gets_a_connection_of_its_own() {
+        assert_eq!(
+            arrival(
+                Some("viewer"),
+                Some("page-1"),
+                true,
+                PeerState::Connected,
+                "viewer",
+                Some("page-2")
+            ),
+            Arrival::Offer
+        );
+        // The same page, but the connection it had is gone.
+        assert_eq!(
+            arrival(
+                Some("viewer"),
+                Some("page-1"),
+                true,
+                PeerState::Failed,
+                "viewer",
+                Some("page-1")
+            ),
+            Arrival::Offer
+        );
+        // Still being set up with this very page: offer again on it.
+        assert_eq!(
+            arrival(
+                Some("viewer"),
+                Some("page-1"),
+                false,
+                PeerState::Connecting,
+                "viewer",
+                Some("page-1")
+            ),
+            Arrival::Reoffer
+        );
+    }
+
+    /// One person at a time: a second arrival does not take the connection
+    /// from the first, and is taken once the first has gone.
+    #[test]
+    fn a_second_person_waits_until_the_first_has_gone() {
+        assert_eq!(
+            arrival(None, None, false, PeerState::New, "viewer", Some("p")),
+            Arrival::Offer,
+            "the first to arrive is offered to"
+        );
+        assert_eq!(
+            arrival(
+                Some("viewer"),
+                Some("p"),
+                false,
+                PeerState::Connected,
+                "other",
+                Some("q")
+            ),
+            Arrival::Busy
+        );
+        assert_eq!(
+            arrival(
+                Some("viewer"),
+                Some("p"),
+                true,
+                PeerState::Connected,
+                "other",
+                Some("q")
+            ),
+            Arrival::Offer,
+            "the first was announced as gone"
+        );
+        assert_eq!(
+            arrival(
+                Some("viewer"),
+                Some("p"),
+                false,
+                PeerState::Failed,
+                "other",
+                Some("q")
+            ),
+            Arrival::Offer
+        );
+    }
+
     #[test]
     fn a_grant_is_dropped_when_the_switch_goes_off() {
         let agent = control_agent();

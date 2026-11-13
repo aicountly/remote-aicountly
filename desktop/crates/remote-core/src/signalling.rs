@@ -67,6 +67,15 @@ pub struct Peer {
     /// What the peer says it can do. **An upper bound, never a grant.**
     #[serde(default)]
     pub capabilities: serde_json::Value,
+    /// The peer's connection epoch: an opaque value a browser makes once per
+    /// page load and repeats on every reconnect of that page.
+    ///
+    /// It is what tells a page that merely re-minted its two-minute token —
+    /// same epoch, and its peer connection is still the one we hold — from a
+    /// page that was reloaded, whose peer connection died with it. `None` for
+    /// a peer that sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<String>,
 }
 
 /// One message from the relay.
@@ -211,6 +220,11 @@ pub enum Outbound {
     },
     /// Tell the room this session has ended.
     SessionEnded,
+    /// "Read the control state now." Sent after the person at this machine
+    /// allowed, declined or stopped control, so the browser waiting on that
+    /// answer asks the API at once instead of at its next poll. It carries
+    /// nothing and grants nothing; the relay drops any payload.
+    ControlHint,
     /// Keep the socket honest.
     Ping,
 }

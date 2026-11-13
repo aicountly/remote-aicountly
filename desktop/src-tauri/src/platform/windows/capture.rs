@@ -74,6 +74,23 @@ pub fn secure_desktop_in_front() -> bool {
     }
 }
 
+/// The layout with the display being captured as its active one.
+///
+/// The agent lands every pointer event of a hosted session on the layout's
+/// active display. Windows' own enumeration always names the *primary*
+/// display there, so once a controller switched the picture to a second
+/// screen their clicks would still have landed on the first. A display that
+/// has gone since the capture started leaves the layout as Windows gave it.
+// Called only from the Windows half and from the tests.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[must_use]
+pub fn active_while_capturing(layout: MonitorLayout, capturing: Option<u32>) -> MonitorLayout {
+    match capturing.and_then(|id| layout.with_active(id)) {
+        Some(following) => following,
+        None => layout,
+    }
+}
+
 /// Capture, through `Windows.Graphics.Capture`.
 pub struct WindowsCapture {
     running: AtomicBool,
@@ -127,7 +144,15 @@ impl ScreenCaptureProvider for WindowsCapture {
     fn monitors(&self) -> PlatformResult<MonitorLayout> {
         #[cfg(target_os = "windows")]
         {
-            imp::enumerate_monitors()
+            let capturing = self
+                .running
+                .load(Ordering::SeqCst)
+                .then_some(self.monitor_id);
+
+            Ok(active_while_capturing(
+                imp::enumerate_monitors()?,
+                capturing,
+            ))
         }
 
         #[cfg(not(target_os = "windows"))]
@@ -870,6 +895,47 @@ mod tests {
         assert!(!capture.is_running());
         assert!(capture.stop().is_ok());
         assert!(capture.stop().is_ok());
+    }
+
+    fn two_displays() -> MonitorLayout {
+        let display = |id: u32, primary: bool, x: i32| remote_protocol::Monitor {
+            id,
+            name: format!("Display {id}"),
+            primary,
+            x,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale: 1.0,
+            refresh_hz: None,
+            orientation: remote_protocol::Orientation::Landscape,
+        };
+
+        MonitorLayout {
+            monitors: vec![display(1, true, 0), display(2, false, 1920)],
+            active_monitor_id: 1,
+        }
+    }
+
+    /// Input lands on the layout's active display, so while the second screen
+    /// is the one being shown it has to be the active one — or a click on the
+    /// picture of screen two lands on screen one.
+    #[test]
+    fn the_display_being_captured_is_the_active_one() {
+        assert_eq!(
+            active_while_capturing(two_displays(), Some(2)).active_monitor_id,
+            2
+        );
+        // Not capturing: Windows' own answer, the primary display.
+        assert_eq!(
+            active_while_capturing(two_displays(), None).active_monitor_id,
+            1
+        );
+        // The captured display was unplugged: the layout is left as it is.
+        assert_eq!(
+            active_while_capturing(two_displays(), Some(7)).active_monitor_id,
+            1
+        );
     }
 
     // The monitor arithmetic, the DPI fallback and the Secure Desktop wording

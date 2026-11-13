@@ -185,6 +185,13 @@ pub enum SignalMessage {
     },
 }
 
+/// Where control messages go as they arrive. See
+/// [`PeerSession::set_control_sink`].
+///
+/// Called from the connection's own reader, never from the host's loop, so it
+/// must not wait on anything the loop holds.
+pub type ControlSink = std::sync::Arc<dyn Fn(Vec<u8>) + Send + Sync>;
+
 /// One peer connection, as the agent uses it.
 ///
 /// Async, because everything underneath is. Deliberately small: the agent
@@ -250,6 +257,20 @@ pub trait PeerSession: Send {
     /// connection has failed or been closed.
     async fn send_frame(&mut self, frame: Frame) -> Result<(), WebRtcError>;
 
+    /// Send the picture that was sent last once more, as a keyframe, if the
+    /// viewer is waiting for one.
+    ///
+    /// For the turns in which the capture had nothing new: a capture that
+    /// delivers on change is silent while the desktop is still, and a viewer
+    /// who joined or lost a packet just then would otherwise look at nothing
+    /// until something on the screen moved. Does nothing when no keyframe has
+    /// been asked for, or when no frame has been sent yet.
+    ///
+    /// A session with no video track has nothing to do, which is the default.
+    async fn refresh_picture(&mut self) -> Result<(), WebRtcError> {
+        Ok(())
+    }
+
     /// Make the next frame sent an IDR — a keyframe a decoder can start from
     /// with no history.
     ///
@@ -278,7 +299,25 @@ pub trait PeerSession: Send {
     async fn send_control(&mut self, bytes: &[u8]) -> Result<(), WebRtcError>;
 
     /// Take whatever has arrived on the control channel since the last call.
+    ///
+    /// **Never waits.** It returns what is there — usually nothing — and the
+    /// caller's loop carries on. Messages handed to a [`ControlSink`] are not
+    /// returned here as well.
     async fn receive_control(&mut self) -> Result<Vec<Vec<u8>>, WebRtcError>;
+
+    /// Hand every control message to `sink` the moment it arrives, instead of
+    /// holding it for the next [`PeerSession::receive_control`].
+    ///
+    /// Input is latency: a mouse that waits for the host's loop to come round
+    /// — past a frame being encoded, or a question to the API — is a mouse
+    /// that lags and stutters. With a sink, a message is applied as it is
+    /// read off the channel, whatever the loop is doing.
+    ///
+    /// The default keeps messages for `receive_control`, which is what a
+    /// session with no reader of its own (a test's fake) does.
+    fn set_control_sink(&mut self, sink: ControlSink) {
+        let _ = sink;
+    }
 
     /// Whether the control channel is open, so a message sent now is
     /// delivered rather than refused. A companion sends its monitor layout the
