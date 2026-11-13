@@ -15,6 +15,18 @@
 //! common way remote control lands clicks on the wrong monitor, so it lives in
 //! [`to_virtual_desktop`], which is pure arithmetic and tested on every host.
 //!
+//! # A shortcut is a key, not a character
+//!
+//! Plain typing is injected as Unicode (`KEYEVENTF_UNICODE`), so the character
+//! the controller typed is the one that arrives whatever keyboard layout the
+//! host uses. A shortcut cannot go that way. Windows delivers a Unicode
+//! injection as `VK_PACKET`, which carries a character and **no key**: an
+//! application looking for Ctrl+C sees Ctrl held and a packet, not the C key,
+//! and does nothing. So a character typed while Ctrl, Alt or the Windows key
+//! is held is injected as the virtual key that produces it
+//! ([`character_plan`]), with its scan code, and released the same way it was
+//! pressed even if the modifier was let go first ([`WindowsInput::held`]).
+//!
 //! # What this cannot reach
 //!
 //! `SendInput` from this user-session process is not delivered to the Secure
@@ -34,7 +46,7 @@ use remote_device::{InputProvider, PlatformResult};
 // Only the refusals a host without an implementation returns need it.
 #[cfg(not(target_os = "windows"))]
 use remote_device::PlatformError;
-use remote_protocol::{Key, KeyEvent, MouseEvent, PointerPosition, ScrollEvent};
+use remote_protocol::{Key, KeyEvent, Modifiers, MouseEvent, PointerPosition, ScrollEvent};
 
 /// One notch of a wheel, as Windows counts it.
 pub const WHEEL_DELTA: i32 = 120;
@@ -44,13 +56,18 @@ pub const ABSOLUTE_RANGE: f64 = 65_535.0;
 
 /// Injection, through `SendInput`.
 pub struct WindowsInput {
-    /// Keys currently held down by *this* agent.
+    /// Keys currently held down by *this* agent, and how each was pressed.
     ///
     /// Tracked so [`InputProvider::release_all`] can put the keyboard back
     /// exactly as it found it. Without it, a controller whose tab closed
     /// mid-chord leaves Ctrl held on somebody else's machine — which reads, to
     /// the person sitting there, as a broken keyboard.
-    held: Mutex<Vec<Key>>,
+    ///
+    /// The virtual key a *character* went down as is kept beside it, because
+    /// the release has to match the press: Ctrl+C sends the C key down, and
+    /// if Ctrl comes up first the C release arrives with no modifier and
+    /// would otherwise go out as a Unicode release — leaving the C key held.
+    held: Mutex<Vec<(Key, Option<u16>)>>,
 }
 
 impl Default for WindowsInput {
@@ -72,18 +89,28 @@ impl WindowsInput {
     // Called from the injection path and from the tests, both of which the
     // non-Windows build has nothing of.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    fn track(&self, key: Key, pressed: bool) {
+    fn track(&self, key: Key, virtual_code: Option<u16>, pressed: bool) {
         let Ok(mut held) = self.held.lock() else {
             return;
         };
 
         if pressed {
-            if !held.contains(&key) {
-                held.push(key);
+            if !held.iter().any(|(candidate, _)| same_key(*candidate, key)) {
+                held.push((key, virtual_code));
             }
         } else {
-            held.retain(|candidate| candidate != &key);
+            held.retain(|(candidate, _)| !same_key(*candidate, key));
         }
+    }
+
+    /// The virtual key `key` went down as, if it is held and went down as one.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    fn pressed_as(&self, key: Key) -> Option<u16> {
+        self.held.lock().ok().and_then(|held| {
+            held.iter()
+                .find(|(candidate, _)| same_key(*candidate, key))
+                .and_then(|(_, virtual_code)| *virtual_code)
+        })
     }
 
     /// What is currently held. For the diagnostics panel and the tests.
@@ -91,8 +118,79 @@ impl WindowsInput {
     pub fn held_keys(&self) -> Vec<Key> {
         self.held
             .lock()
-            .map(|held| held.clone())
+            .map(|held| held.iter().map(|(key, _)| *key).collect())
             .unwrap_or_default()
+    }
+}
+
+/// Whether two protocol keys are the same physical key going down and up.
+///
+/// A letter is compared without its case: Ctrl+Shift+C goes down as `C`, and
+/// if Shift is let go first the browser reports the release as `c` — the same
+/// key, which must come up.
+fn same_key(a: Key, b: Key) -> bool {
+    match (a, b) {
+        (Key::Character(a), Key::Character(b)) => a == b || a.to_lowercase().eq(b.to_lowercase()),
+        _ => a == b,
+    }
+}
+
+/// How one printable character is injected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CharacterPlan {
+    /// As text: `KEYEVENTF_UNICODE`, whatever layout the host uses.
+    Unicode,
+    /// As a key: this virtual-key code, so a shortcut is seen as one.
+    VirtualKey(u16),
+}
+
+/// Decide how a printable character is injected.
+///
+/// `layout` is what the host's keyboard layout says about a character:
+/// the virtual key that produces it and the `VkKeyScanW` shift state needed
+/// (bit 0 Shift, bit 1 Ctrl, bit 2 Alt), or `None` when no key does. It is a
+/// parameter so the decision is tested on every host.
+///
+/// * No Ctrl, Alt or Windows key held: text. This is ordinary typing.
+/// * Ctrl **and** Alt held with a character that is not a letter or a digit:
+///   text. That is AltGr on the controller's keyboard composing `@`, `€` or
+///   `{`, which browsers report as Ctrl+Alt — the person typed a character,
+///   not a shortcut.
+/// * A letter or a digit: its own virtual key. `VK_A`…`VK_Z` and `VK_0`…`VK_9`
+///   are the ASCII codes, on every layout.
+/// * Anything else: whatever key the host's layout produces it with, unless
+///   that takes AltGr there (Ctrl or Alt in the shift state), in which case it
+///   cannot be pressed as a shortcut and goes as text.
+///
+/// Shift is never added or removed here: the controller's own Shift key was
+/// already injected when they pressed it.
+#[must_use]
+pub fn character_plan(
+    character: char,
+    modifiers: Modifiers,
+    layout: impl Fn(char) -> Option<(u16, u8)>,
+) -> CharacterPlan {
+    let shortcut = modifiers.ctrl || modifiers.alt || modifiers.meta;
+
+    if !shortcut {
+        return CharacterPlan::Unicode;
+    }
+
+    if character.is_ascii_alphanumeric() {
+        return CharacterPlan::VirtualKey(character.to_ascii_uppercase() as u16);
+    }
+
+    // AltGr text from the controller's layout, not a shortcut.
+    if modifiers.ctrl && modifiers.alt && !modifiers.meta {
+        return CharacterPlan::Unicode;
+    }
+
+    match layout(character) {
+        // Bits 1 and 2: the host's own layout needs Ctrl or Alt for it.
+        Some((code, shift_state)) if shift_state & 0b110 == 0 && code != 0 => {
+            CharacterPlan::VirtualKey(code)
+        }
+        _ => CharacterPlan::Unicode,
     }
 }
 
@@ -283,8 +381,16 @@ impl InputProvider for WindowsInput {
     fn key(&self, event: KeyEvent) -> PlatformResult<()> {
         #[cfg(target_os = "windows")]
         {
-            imp::key(event)?;
-            self.track(event.key, event.pressed);
+            // A release goes out the way the press did, whatever the
+            // modifiers are by now.
+            let pressed_as = if event.pressed {
+                None
+            } else {
+                self.pressed_as(event.key)
+            };
+
+            let virtual_code = imp::key(event, pressed_as)?;
+            self.track(event.key, virtual_code, event.pressed);
 
             Ok(())
         }
@@ -298,22 +404,25 @@ impl InputProvider for WindowsInput {
     }
 
     fn release_all(&self) -> PlatformResult<()> {
-        let held = self.held_keys();
-
-        if let Ok(mut tracked) = self.held.lock() {
-            tracked.clear();
-        }
+        let held = self
+            .held
+            .lock()
+            .map(|mut tracked| std::mem::take(&mut *tracked))
+            .unwrap_or_default();
 
         #[cfg(target_os = "windows")]
         {
-            for key in held {
+            for (key, virtual_code) in held {
                 // Best effort, and deliberately so: one key that will not
                 // release must not stop the rest from being released.
-                let _ = imp::key(KeyEvent {
-                    key,
-                    pressed: false,
-                    modifiers: remote_protocol::Modifiers::none(),
-                });
+                let _ = imp::key(
+                    KeyEvent {
+                        key,
+                        pressed: false,
+                        modifiers: Modifiers::none(),
+                    },
+                    virtual_code,
+                );
             }
         }
 
@@ -343,16 +452,18 @@ mod imp {
     //! The `SendInput` half. Compiled only on Windows.
 
     use super::{
-        idle_seconds, is_extended, to_virtual_desktop, virtual_key, wheel_delta, VirtualDesktop,
+        character_plan, idle_seconds, is_extended, to_virtual_desktop, virtual_key, wheel_delta,
+        CharacterPlan, VirtualDesktop,
     };
     use remote_device::{PlatformError, PlatformResult};
     use remote_protocol::{Key, KeyEvent, MouseButton, MouseEvent, PointerPosition, ScrollEvent};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS,
-        KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE,
-        MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN,
-        MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
-        MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT, MOUSE_EVENT_FLAGS,
+        MapVirtualKeyW, SendInput, VkKeyScanW, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE,
+        KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
+        MAPVK_VK_TO_VSC, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN,
+        MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE,
+        MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL,
+        MOUSEINPUT, MOUSE_EVENT_FLAGS,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
@@ -561,45 +672,115 @@ mod imp {
         send(&inputs)
     }
 
-    pub fn key(event: KeyEvent) -> PlatformResult<()> {
+    /// What the host's keyboard layout says about a character: the virtual
+    /// key that produces it, and the shift state it needs.
+    fn layout_key(character: char) -> Option<(u16, u8)> {
+        let mut units = [0_u16; 2];
+        let encoded = character.encode_utf16(&mut units);
+
+        // A character outside the Basic Multilingual Plane has no key.
+        if encoded.len() != 1 {
+            return None;
+        }
+
+        // SAFETY: takes a UTF-16 code unit and returns a packed result.
+        let packed = unsafe { VkKeyScanW(encoded[0]) };
+
+        // -1 in both bytes: no key on this layout produces the character.
+        if packed == -1 {
+            return None;
+        }
+
+        let packed = packed as u16;
+
+        Some((packed & 0x00FF, (packed >> 8) as u8))
+    }
+
+    /// The hardware scan code a virtual key has on this keyboard, or zero.
+    ///
+    /// Sent beside the virtual key because some applications — games, remote
+    /// desktop clients, virtual machines — read the scan code and ignore the
+    /// virtual key altogether.
+    fn scan_code(virtual_code: u16) -> u16 {
+        // SAFETY: takes two integers and returns one.
+        unsafe { MapVirtualKeyW(u32::from(virtual_code), MAPVK_VK_TO_VSC) as u16 }
+    }
+
+    /// Inject one key event.
+    ///
+    /// `pressed_as` is the virtual key a character being *released* went down
+    /// as, if it went down as one — the release must match the press. Returns
+    /// the virtual key a character was injected as, for the caller to
+    /// remember, or `None` when it went as text or is a named key.
+    pub fn key(event: KeyEvent, pressed_as: Option<u16>) -> PlatformResult<Option<u16>> {
         let mut flags = KEYBD_EVENT_FLAGS(0);
 
         if !event.pressed {
             flags |= KEYEVENTF_KEYUP;
         }
 
-        let (virtual_code, scan_code) = match event.key {
+        let virtual_code = match event.key {
             Key::Character(character) => {
-                // Unicode injection: the character the controller intends is
-                // the one that arrives, whatever layout the host is using.
-                let mut units = [0_u16; 2];
-                let encoded = character.encode_utf16(&mut units);
+                let plan = match pressed_as {
+                    Some(code) => CharacterPlan::VirtualKey(code),
+                    None if event.pressed => character_plan(character, event.modifiers, layout_key),
+                    // Released, and it did not go down as a key: it went down
+                    // as text, so it comes up as text.
+                    None => CharacterPlan::Unicode,
+                };
 
-                let mut inputs = Vec::with_capacity(encoded.len());
-                for unit in encoded.iter() {
-                    inputs.push(INPUT {
-                        r#type: INPUT_KEYBOARD,
-                        Anonymous: INPUT_0 {
-                            ki: KEYBDINPUT {
-                                wVk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(0),
-                                wScan: *unit,
-                                dwFlags: flags | KEYEVENTF_UNICODE,
-                                time: 0,
-                                dwExtraInfo: 0,
+                match plan {
+                    CharacterPlan::VirtualKey(code) => {
+                        send(&[INPUT {
+                            r#type: INPUT_KEYBOARD,
+                            Anonymous: INPUT_0 {
+                                ki: KEYBDINPUT {
+                                    wVk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(
+                                        code,
+                                    ),
+                                    wScan: scan_code(code),
+                                    dwFlags: flags,
+                                    time: 0,
+                                    dwExtraInfo: 0,
+                                },
                             },
-                        },
-                    });
-                }
+                        }])?;
 
-                return send(&inputs);
+                        return Ok(Some(code));
+                    }
+                    CharacterPlan::Unicode => {
+                        // Unicode injection: the character the controller
+                        // intends is the one that arrives, whatever layout
+                        // the host is using.
+                        let mut units = [0_u16; 2];
+                        let encoded = character.encode_utf16(&mut units);
+
+                        let mut inputs = Vec::with_capacity(encoded.len());
+                        for unit in encoded.iter() {
+                            inputs.push(INPUT {
+                                r#type: INPUT_KEYBOARD,
+                                Anonymous: INPUT_0 {
+                                    ki: KEYBDINPUT {
+                                        wVk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(0),
+                                        wScan: *unit,
+                                        dwFlags: flags | KEYEVENTF_UNICODE,
+                                        time: 0,
+                                        dwExtraInfo: 0,
+                                    },
+                                },
+                            });
+                        }
+
+                        send(&inputs)?;
+
+                        return Ok(None);
+                    }
+                }
             }
-            other => (
-                virtual_key(other).ok_or(PlatformError::Os {
-                    operation: "sending a key",
-                    detail: "that key is not one AICOUNTLY Remote sends".into(),
-                })?,
-                0_u16,
-            ),
+            other => virtual_key(other).ok_or(PlatformError::Os {
+                operation: "sending a key",
+                detail: "that key is not one AICOUNTLY Remote sends".into(),
+            })?,
         };
 
         if is_extended(event.key) {
@@ -611,13 +792,15 @@ mod imp {
             Anonymous: INPUT_0 {
                 ki: KEYBDINPUT {
                     wVk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(virtual_code),
-                    wScan: scan_code,
+                    wScan: scan_code(virtual_code),
                     dwFlags: flags,
                     time: 0,
                     dwExtraInfo: 0,
                 },
             },
-        }])
+        }])?;
+
+        Ok(None)
     }
 }
 
@@ -627,7 +810,7 @@ mod tests {
     // Used only by the no-implementation test below, which is the one that
     // does not compile on Windows.
     #[cfg(not(target_os = "windows"))]
-    use remote_protocol::{Modifiers, MouseButton};
+    use remote_protocol::MouseButton;
 
     fn desktop() -> VirtualDesktop {
         VirtualDesktop {
@@ -792,20 +975,173 @@ mod tests {
     fn held_keys_are_tracked_so_they_can_all_be_released() {
         let input = WindowsInput::new();
 
-        input.track(Key::Ctrl, true);
-        input.track(Key::Shift, true);
-        input.track(Key::Character('a'), true);
+        input.track(Key::Ctrl, None, true);
+        input.track(Key::Shift, None, true);
+        input.track(Key::Character('a'), None, true);
 
         assert_eq!(input.held_keys().len(), 3);
 
-        input.track(Key::Character('a'), false);
+        input.track(Key::Character('a'), None, false);
         assert_eq!(input.held_keys().len(), 2);
 
         // Pressing a key that is already down does not double-count it.
-        input.track(Key::Ctrl, true);
+        input.track(Key::Ctrl, None, true);
         assert_eq!(input.held_keys().len(), 2);
 
         assert!(input.release_all().is_ok());
+        assert!(input.held_keys().is_empty());
+    }
+
+    fn mods(ctrl: bool, alt: bool, shift: bool, meta: bool) -> Modifiers {
+        Modifiers {
+            ctrl,
+            alt,
+            shift,
+            meta,
+        }
+    }
+
+    /// A US layout, as `VkKeyScanW` reports it: the key, and bit 0 for Shift.
+    fn us_layout(character: char) -> Option<(u16, u8)> {
+        Some(match character {
+            '=' => (0xBB, 0),
+            '+' => (0xBB, 1),
+            '-' => (0xBD, 0),
+            '/' => (0xBF, 0),
+            '[' => (0xDB, 0),
+            // AltGr on this pretend layout: Ctrl+Alt in the shift state.
+            '€' => (0x35, 0b110),
+            _ => return None,
+        })
+    }
+
+    /// Ordinary typing goes as text, so the character the controller typed
+    /// arrives whatever layout the host uses — capitals included, which are
+    /// Shift and nothing else.
+    #[test]
+    fn plain_typing_is_injected_as_text() {
+        for (character, modifiers) in [
+            ('a', Modifiers::none()),
+            ('A', mods(false, false, true, false)),
+            ('é', Modifiers::none()),
+            ('+', mods(false, false, true, false)),
+        ] {
+            assert_eq!(
+                character_plan(character, modifiers, us_layout),
+                CharacterPlan::Unicode,
+                "{character:?}"
+            );
+        }
+    }
+
+    /// **Ctrl+C has to arrive as the C key.** A Unicode injection is a
+    /// character with no key behind it, and no application treats that as a
+    /// shortcut — so copy, paste, select all, save, undo and every Alt and
+    /// Windows-key combination did nothing on the controlled computer.
+    #[test]
+    fn a_character_typed_with_ctrl_alt_or_the_windows_key_is_injected_as_its_key() {
+        let ctrl = mods(true, false, false, false);
+
+        assert_eq!(
+            character_plan('c', ctrl, us_layout),
+            CharacterPlan::VirtualKey(0x43)
+        );
+        assert_eq!(
+            character_plan('v', ctrl, us_layout),
+            CharacterPlan::VirtualKey(0x56)
+        );
+        // Ctrl+Shift+C: the browser reports the capital, and the key is the same.
+        assert_eq!(
+            character_plan('C', mods(true, false, true, false), us_layout),
+            CharacterPlan::VirtualKey(0x43)
+        );
+        assert_eq!(
+            character_plan('1', ctrl, us_layout),
+            CharacterPlan::VirtualKey(0x31)
+        );
+        // Alt+F, Windows+R, Windows+D.
+        assert_eq!(
+            character_plan('f', mods(false, true, false, false), us_layout),
+            CharacterPlan::VirtualKey(0x46)
+        );
+        assert_eq!(
+            character_plan('r', mods(false, false, false, true), us_layout),
+            CharacterPlan::VirtualKey(0x52)
+        );
+        // Ctrl+Alt+letter is a real shortcut, not AltGr text.
+        assert_eq!(
+            character_plan('k', mods(true, true, false, false), us_layout),
+            CharacterPlan::VirtualKey(0x4B)
+        );
+    }
+
+    /// Punctuation in a shortcut is whichever key the host's layout makes it
+    /// with — Ctrl and + to zoom, Ctrl and / to comment.
+    #[test]
+    fn punctuation_in_a_shortcut_uses_the_hosts_own_layout() {
+        let ctrl = mods(true, false, false, false);
+
+        assert_eq!(
+            character_plan('=', ctrl, us_layout),
+            CharacterPlan::VirtualKey(0xBB)
+        );
+        assert_eq!(
+            character_plan('+', mods(true, false, true, false), us_layout),
+            CharacterPlan::VirtualKey(0xBB)
+        );
+        assert_eq!(
+            character_plan('/', ctrl, us_layout),
+            CharacterPlan::VirtualKey(0xBF)
+        );
+        // No key on the host's layout makes it: it goes as text.
+        assert_eq!(character_plan('ß', ctrl, us_layout), CharacterPlan::Unicode);
+        // The host's layout needs AltGr for it, which cannot be a shortcut.
+        assert_eq!(character_plan('€', ctrl, us_layout), CharacterPlan::Unicode);
+    }
+
+    /// AltGr on the controller's keyboard reaches the browser as Ctrl+Alt.
+    /// The `@` or `€` it composed is something the person typed.
+    #[test]
+    fn altgr_text_from_the_controllers_keyboard_stays_text() {
+        let altgr = mods(true, true, false, false);
+
+        assert_eq!(
+            character_plan('@', altgr, us_layout),
+            CharacterPlan::Unicode
+        );
+        assert_eq!(
+            character_plan('[', altgr, us_layout),
+            CharacterPlan::Unicode
+        );
+        assert_eq!(
+            character_plan('€', altgr, us_layout),
+            CharacterPlan::Unicode
+        );
+    }
+
+    /// Ctrl+C with Ctrl let go first: the C release arrives with no modifier,
+    /// and has to go out as the key that went down — not as a Unicode release
+    /// that leaves the C key held on the controlled computer.
+    #[test]
+    fn a_release_is_remembered_as_the_key_that_went_down() {
+        let input = WindowsInput::new();
+
+        input.track(Key::Ctrl, None, true);
+        input.track(Key::Character('c'), Some(0x43), true);
+        input.track(Key::Ctrl, None, false);
+
+        assert_eq!(input.pressed_as(Key::Character('c')), Some(0x43));
+        assert_eq!(input.pressed_as(Key::Character('x')), None);
+
+        input.track(Key::Character('c'), None, false);
+        assert_eq!(input.pressed_as(Key::Character('c')), None);
+        assert!(input.held_keys().is_empty());
+
+        // Ctrl+Shift+C goes down as `C`; with Shift let go first the browser
+        // reports the release as `c`. It is the same key.
+        input.track(Key::Character('C'), Some(0x43), true);
+        assert_eq!(input.pressed_as(Key::Character('c')), Some(0x43));
+        input.track(Key::Character('c'), None, false);
         assert!(input.held_keys().is_empty());
     }
 

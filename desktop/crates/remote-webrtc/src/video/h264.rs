@@ -169,6 +169,9 @@ pub struct H264Encoder {
     /// The codec generation `encoder` was built from.
     built_from: u64,
     picture: I420Picture,
+    /// The capture time of the frame `picture` was converted from, once one
+    /// has been. What [`H264Encoder::encode_again`] stamps a repeat with.
+    last_capture_us: Option<u64>,
     clock: MediaClock,
     gate: FrameGate,
     keyframes: KeyframeSchedule,
@@ -191,6 +194,7 @@ impl H264Encoder {
             built_for: (0, 0),
             built_from: 0,
             picture: I420Picture::new(),
+            last_capture_us: None,
             clock: MediaClock::new(),
             gate: FrameGate::new(),
             keyframes: KeyframeSchedule::default(),
@@ -293,6 +297,7 @@ impl H264Encoder {
         let size = encoded_size(&self.profile, frame.width, frame.height);
 
         convert_into(frame, size, &mut self.picture)?;
+        self.last_capture_us = Some(frame.timestamp_us);
 
         if self.encoder.is_none() || self.built_for != size {
             // Dropped first, so the old instance is gone before a new one is
@@ -308,6 +313,54 @@ impl H264Encoder {
             self.stats.encoder_builds += 1;
         }
 
+        self.encode_picture(size, media_time_us)
+    }
+
+    /// Encode the picture that was encoded last once more, as an IDR.
+    ///
+    /// For a screen that is not changing. A capture that delivers on change
+    /// (`Windows.Graphics.Capture`) hands over nothing while the desktop is
+    /// still, so a viewer who joins, or loses a packet, at that moment asked
+    /// for a keyframe that had no frame to ride on — and looked at a black or
+    /// broken picture until something on the screen moved. The picture this
+    /// encoder converted last is still in its buffer; this sends it again,
+    /// whole.
+    ///
+    /// `Ok(None)` when there is nothing to repeat: no frame has been encoded
+    /// yet, or the stream is being reshaped and the next real frame starts it.
+    ///
+    /// # Errors
+    ///
+    /// As [`H264Encoder::encode`].
+    pub fn encode_again(&mut self, now: Instant) -> Result<Option<EncodedFrame>, VideoError> {
+        if self.encoder.is_some() && self.codec.generation() != self.built_from {
+            self.encoder = None;
+        }
+
+        let Some(capture_us) = self.last_capture_us else {
+            return Ok(None);
+        };
+
+        let size = (self.picture.width(), self.picture.height());
+
+        if self.encoder.is_none() || self.built_for != size || size.0 == 0 || size.1 == 0 {
+            return Ok(None);
+        }
+
+        // The same capture time as before: the clock takes the wall-clock gap
+        // instead, which is what a repeat is.
+        let media_time_us = self.clock.stamp(capture_us, now);
+        self.keyframes.request();
+
+        self.encode_picture(size, media_time_us)
+    }
+
+    /// Encode `self.picture`, already converted, at `media_time_us`.
+    fn encode_picture(
+        &mut self,
+        size: (u32, u32),
+        media_time_us: u64,
+    ) -> Result<Option<EncodedFrame>, VideoError> {
         let Some(encoder) = self.encoder.as_mut() else {
             return Err(VideoError::Encoder("the encoder was not built".into()));
         };
@@ -664,6 +717,40 @@ mod tests {
     /// A different size rebuilds the encoder and starts the new stream with
     /// an IDR that decodes at the new size — a display change, or a
     /// different monitor, mid-session.
+    /// A still screen hands the encoder nothing, so a keyframe asked for then
+    /// has to be made from the picture it already holds.
+    #[test]
+    fn the_last_picture_can_be_sent_again_as_a_keyframe() {
+        let mut encoder = bundled(CaptureProfile::adaptive());
+        let start = Instant::now();
+
+        // Nothing has been encoded: nothing to repeat.
+        assert!(encoder.encode_again(start).expect("no error").is_none());
+
+        let mut last = None;
+        for index in 0..5_u64 {
+            let frame = crate::video::testing::pattern(320, 180, index, index * 33_333);
+            last = encoder
+                .encode(&frame, start + Duration::from_millis(index * 33))
+                .expect("encodes");
+        }
+        let last = last.expect("a frame");
+        assert!(!last.keyframe, "the fifth frame is an ordinary one");
+
+        let again = encoder
+            .encode_again(start + Duration::from_millis(500))
+            .expect("encodes")
+            .expect("a frame");
+
+        assert!(again.keyframe, "a repeat is a keyframe");
+        assert!(is_self_contained_keyframe(&again.data));
+        assert_eq!((again.width, again.height), (last.width, last.height));
+        assert!(
+            again.media_time_us > last.media_time_us,
+            "and it is later than the frame it repeats"
+        );
+    }
+
     #[test]
     fn a_new_size_rebuilds_the_encoder_with_an_idr() {
         let mut encoder = bundled(CaptureProfile::adaptive());

@@ -14,7 +14,7 @@
 //! and that runs every message through the gate first.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use remote_core::{AgentConfig, AgentEvent, AgentState, ControlStateView, UnattendedState};
@@ -64,6 +64,19 @@ pub struct Agent {
     /// Stop control was pressed and the controller has not been told on the
     /// control channel yet.
     stop_notice: AtomicBool,
+    /// The API has just been told what the person at this machine decided
+    /// about control, and the room has not been nudged to read it yet.
+    ///
+    /// A hosted session's helper learned of an Allow only from its own polls
+    /// — up to twenty-five seconds later — because nothing told the room. The
+    /// loop that owns the signalling socket takes this and sends
+    /// `control-hint`. An `Arc` because it is set from the task that makes the
+    /// report, after the report has landed: a nudge sent before the API knows
+    /// the answer makes the browser read the old one.
+    control_hint: Arc<AtomicBool>,
+    /// The display a controller asked a hosted session to show instead, until
+    /// the session loop switches the capture to it.
+    monitor_request: Mutex<Option<u32>>,
     /// When input was last injected, so the local-input override does not
     /// mistake this agent's own events for the person at the machine.
     last_injection: Mutex<Option<Instant>>,
@@ -129,6 +142,13 @@ pub struct Agent {
 /// the log is a sample, so one stuck session cannot cost the whole file.
 const INJECTION_REFUSAL_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
+/// How many times a control decision is reported before giving up.
+const CONTROL_REPORT_ATTEMPTS: u32 = 4;
+
+/// The pause before the first retry of a control report; each later one
+/// waits that much longer.
+const CONTROL_REPORT_RETRY: Duration = Duration::from_millis(600);
+
 /// The companion link this machine has joined.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CompanionContext {
@@ -161,6 +181,8 @@ impl Agent {
             monitor_choice: Mutex::new(None),
             companion_leave: AtomicBool::new(false),
             stop_notice: AtomicBool::new(false),
+            control_hint: Arc::new(AtomicBool::new(false)),
+            monitor_request: Mutex::new(None),
             last_injection: Mutex::new(None),
             help_request: Mutex::new(None),
             secure_desktop: Mutex::new(None),
@@ -237,6 +259,17 @@ impl Agent {
             .lock()
             .map(|config| config.clone())
             .unwrap_or_default()
+    }
+
+    /// Whether the person at this computer has sound switched on for the
+    /// people they share its screen with. Asked many times a second by the
+    /// sound capture, so it reads the one field rather than cloning the lot.
+    #[must_use]
+    pub fn shares_sound(&self) -> bool {
+        self.config
+            .lock()
+            .map(|config| config.share_sound)
+            .unwrap_or(false)
     }
 
     /// Replace the configuration, after validating it, and write it back.
@@ -519,15 +552,80 @@ impl Agent {
 
         let session = session_uuid.to_owned();
         let participant = participant_uuid.to_owned();
+        let hint = Arc::clone(&self.control_hint);
 
         tauri::async_runtime::spawn(async move {
-            if let Err(error) = client
-                .report_control_decision(&session, &participant, decision, clipboard)
-                .await
-            {
-                tracing::warn!(%error, "the control decision could not be reported");
+            // Tried more than once. This call is the only way the server —
+            // and through it the browser waiting on the answer — learns of an
+            // Allow, and one lost request used to leave the helper asking for
+            // ever while the machine believed it had said yes.
+            for attempt in 0..CONTROL_REPORT_ATTEMPTS {
+                match client
+                    .report_control_decision(&session, &participant, decision, clipboard)
+                    .await
+                {
+                    Ok(_) => break,
+                    // The server answered and said no: asking again changes
+                    // nothing.
+                    Err(error @ remote_core::ApiError::Refused { .. }) => {
+                        tracing::warn!(%error, "the control decision was refused by the server");
+
+                        break;
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            %error,
+                            attempt = attempt + 1,
+                            "the control decision could not be reported"
+                        );
+
+                        tokio::time::sleep(CONTROL_REPORT_RETRY * (attempt + 1)).await;
+                    }
+                }
             }
+
+            // Whatever happened, the room should look now: the answer is the
+            // API's to give.
+            hint.store(true, Ordering::SeqCst);
         });
+    }
+
+    /// Whether the room should be nudged to read the control state — a
+    /// decision made here has just reached the API. Cleared by reading it.
+    pub fn take_control_hint(&self) -> bool {
+        self.control_hint.swap(false, Ordering::SeqCst)
+    }
+
+    /// Let go of every key and button this agent is holding for a controller.
+    ///
+    /// For the moments a controller goes away without saying so — their page
+    /// closed or reloaded mid-chord — which would otherwise leave Ctrl held
+    /// on this machine.
+    pub fn release_input(&self) {
+        self.release_all_input();
+    }
+
+    /// Start the gate's sequence check again, for a new connection.
+    ///
+    /// A browser numbers its control messages per connection. When the
+    /// controller's page reloads under a grant that still stands, its numbers
+    /// start again below the last one the old page reached, and a gate that
+    /// remembered that mark would refuse every one of them as replayed.
+    pub fn restart_control_stream(&self) {
+        if let Ok(mut gate) = self.gate.lock() {
+            if let Some(gate) = gate.as_mut() {
+                gate.restart_stream();
+            }
+        }
+    }
+
+    /// The display a controller asked to be shown, if one is waiting. Taken:
+    /// the capture is switched once.
+    pub fn take_monitor_request(&self) -> Option<u32> {
+        self.monitor_request
+            .lock()
+            .ok()
+            .and_then(|mut request| request.take())
     }
 
     // ------------------------------------------------------------- control
@@ -540,6 +638,12 @@ impl Agent {
 
         // A fresh session grants nothing yet, Secure Desktop included.
         self.secure_desktop_consent.store(false, Ordering::SeqCst);
+        self.control_hint.store(false, Ordering::SeqCst);
+        self.stop_notice.store(false, Ordering::SeqCst);
+
+        if let Ok(mut request) = self.monitor_request.lock() {
+            *request = None;
+        }
 
         self.apply(AgentEvent::SessionStarted(summary))
     }
@@ -717,7 +821,7 @@ impl Agent {
     }
 
     /// Whoever the gate currently names as the controller.
-    fn controller_uuid(&self) -> Option<String> {
+    pub fn controller_uuid(&self) -> Option<String> {
         self.gate.lock().ok().and_then(|gate| {
             gate.as_ref()
                 .and_then(|gate| gate.controller().map(str::to_owned))
@@ -1031,14 +1135,16 @@ impl Agent {
 
     // ------------------------------------------------------------ capture
 
-    /// Start capturing the display a hosted session shows: the primary one,
-    /// or the first the platform lists. Input is then mapped onto the same
+    /// Start capturing the display a hosted session shows: `monitor` when the
+    /// controller asked for one that exists, otherwise the primary one, or
+    /// the first the platform lists. Input is then mapped onto the same
     /// display, because `dispatch` reads the capture's active monitor.
     ///
     /// Returns the layout, with the captured display as the active one, for
     /// the controller.
     pub fn start_capture(
         &self,
+        monitor: Option<u32>,
         profile: remote_device::frame::CaptureProfile,
     ) -> PlatformResult<MonitorLayout> {
         let mut providers = self
@@ -1054,7 +1160,9 @@ impl Agent {
             .capture;
 
         let layout = capture.monitors()?;
-        let monitor_id = shared_monitor(&layout)
+        let monitor_id = monitor
+            .filter(|id| layout.find(*id).is_some())
+            .or_else(|| shared_monitor(&layout))
             .ok_or(remote_device::PlatformError::NotFound("A display to show"))?;
 
         if capture.is_running() {
@@ -1384,6 +1492,23 @@ impl Agent {
             .lock()
             .ok()
             .and_then(|companion| companion.as_ref().map(|companion| companion.monitor_id));
+
+        // A hosted session shows its own screen, so its controller may ask
+        // for another of this computer's displays. The gate admitted this
+        // only because control is granted; the session loop switches the
+        // capture, and input follows it because it lands on the capture's
+        // active display.
+        if let ControlMessage::SelectMonitor { monitor_id } = envelope.message {
+            if companion_monitor.is_some() {
+                return Ok(Handled::Ignored);
+            }
+
+            if let Ok(mut request) = self.monitor_request.lock() {
+                *request = Some(monitor_id);
+            }
+
+            return Ok(Handled::Applied);
+        }
 
         if matches!(companion_monitor, Some(None)) {
             // The companion has joined but has not matched the shared monitor
@@ -2516,6 +2641,80 @@ mod tests {
             .encode()
             .unwrap();
         assert_eq!(agent.handle_control(&ping), Ok(Handled::Pinged(9)));
+    }
+
+    /// A hosted session shows this computer's own screen, so its controller
+    /// may ask for another display — once control is granted, and not before.
+    #[test]
+    fn a_hosted_sessions_controller_can_ask_for_another_display() {
+        let agent = enrolled_agent();
+        agent.begin_session(remote_core::SessionSummary {
+            session_uuid: SESSION.into(),
+            display_id: "AR-1".into(),
+            connected_name: "Sam".into(),
+            company_name: None,
+            started_at: "2026-02-10T09:00:00Z".into(),
+            unattended: false,
+            control: remote_core::ControlSummary {
+                state: remote_core::ControlStateView::None,
+                clipboard: false,
+                requester_uuid: None,
+                requester_name: None,
+            },
+        });
+
+        let select = |sequence: u64| {
+            ControlEnvelope::new(
+                SESSION,
+                CONTROLLER,
+                sequence,
+                ControlMessage::SelectMonitor { monitor_id: 2 },
+            )
+            .encode()
+            .unwrap()
+        };
+
+        // No grant: the gate refuses it, and nothing is switched.
+        assert!(agent.handle_control(&select(1)).is_err());
+        assert_eq!(agent.take_monitor_request(), None);
+
+        agent.grant_control(CONTROLLER, false, false);
+
+        assert_eq!(agent.handle_control(&select(2)), Ok(Handled::Applied));
+        assert_eq!(agent.take_monitor_request(), Some(2));
+        assert_eq!(agent.take_monitor_request(), None, "taken once");
+    }
+
+    /// A controller's page that reloads under a standing grant numbers its
+    /// messages from the start again. They are a new connection's, not a
+    /// replay, and must be admitted.
+    #[test]
+    fn a_new_connection_under_the_same_grant_starts_its_numbering_again() {
+        let agent = enrolled_agent();
+        companion(&agent);
+        agent.companion_monitor_chosen(&display(1));
+        agent.sync_companion_control(Some(CONTROLLER.into()), None, Some("grant-1".into()));
+
+        let click = |sequence: u64| {
+            ControlEnvelope::new(
+                SESSION,
+                CONTROLLER,
+                sequence,
+                ControlMessage::SelectMonitor { monitor_id: 1 },
+            )
+            .encode()
+            .unwrap()
+        };
+
+        assert!(agent.handle_control(&click(500)).is_ok());
+        assert!(
+            agent.handle_control(&click(1)).is_err(),
+            "within one connection an older number is a replay"
+        );
+
+        agent.restart_control_stream();
+
+        assert!(agent.handle_control(&click(1)).is_ok());
     }
 
     #[test]

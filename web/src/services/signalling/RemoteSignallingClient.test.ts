@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { RemoteSignallingClient } from './RemoteSignallingClient'
+import { RemoteSignallingClient, renewDelayMs } from './RemoteSignallingClient'
 
 /**
  * How the room's socket presents its token. A URL is what reverse proxies log,
@@ -23,7 +23,16 @@ class FakeSocket {
     FakeSocket.instances.push(this)
   }
   send() {}
-  close() {}
+  closed: number | null = null
+  close(code?: number) {
+    this.closed = code ?? 1000
+    this.readyState = 3
+  }
+  /** The relay accepted the connection. */
+  open() {
+    this.readyState = FakeSocket.OPEN
+    this.onopen?.()
+  }
 }
 
 describe('RemoteSignallingClient', () => {
@@ -114,5 +123,119 @@ describe('RemoteSignallingClient', () => {
     expect(FakeSocket.instances[0].url).toBe('not a url')
 
     client.close()
+  })
+  /**
+   * The relay closes a socket when its two-minute token expires and tells the room the participant
+   * left. A computer hosting the session through the desktop app ended the session on that. So the
+   * connection is replaced before the token expires, and the relay announces nothing.
+   */
+  describe('renewing before the token expires', () => {
+    const start = async (expiresAt: string | null, onMessage = vi.fn(), onStatus = vi.fn()) => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-11-13T10:00:00Z'))
+      vi.stubGlobal('WebSocket', FakeSocket)
+
+      const refreshToken = vi.fn(async () => ({
+        url: 'wss://signal.test/signal',
+        token: 'second.tok.en',
+        expiresAt: '2026-11-13T10:03:30Z',
+      }))
+
+      const client = new RemoteSignallingClient({
+        url: 'wss://signal.test/signal',
+        token: 'first.tok.en',
+        expiresAt,
+        refreshToken,
+        onMessage,
+        onStatus,
+      })
+
+      client.connect()
+      FakeSocket.instances[0].open()
+
+      return { client, refreshToken, onMessage, onStatus }
+    }
+
+    it('asks thirty seconds before the expiry, and never sooner than a few seconds from now', () => {
+      const now = Date.parse('2026-11-13T10:00:00Z')
+
+      expect(renewDelayMs('2026-11-13T10:02:00Z', now)).toBe(90_000)
+      // Nothing said when: the server's documented two minutes.
+      expect(renewDelayMs(null, now)).toBe(90_000)
+      expect(renewDelayMs('not a date', now)).toBe(90_000)
+      // Already past, or nearly: soon, but not in a spin.
+      expect(renewDelayMs('2026-11-13T09:59:00Z', now)).toBe(5_000)
+    })
+
+    it('opens the new connection first, and only then lets go of the old one', async () => {
+      const { client, refreshToken, onMessage, onStatus } = await start('2026-11-13T10:02:00Z')
+      const [first] = FakeSocket.instances
+
+      await vi.advanceTimersByTimeAsync(89_000)
+      expect(refreshToken).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(refreshToken).toHaveBeenCalledTimes(1)
+
+      const second = FakeSocket.instances[1]
+      expect(second.protocols).toEqual(['aicountly-remote.second.tok.en'])
+      expect(first.closed).toBeNull()
+
+      // The relay takes the new connection and closes the old one as replaced — in that order.
+      first.onclose?.({ code: 4004 })
+      second.open()
+
+      expect(first.closed).toBe(1000)
+      expect(onStatus).not.toHaveBeenCalledWith('closed')
+      expect(onStatus).not.toHaveBeenCalledWith('reconnecting')
+      expect(client.currentStatus).toBe('open')
+
+      // The relay's greeting on the renewed connection is not an arrival; everything else is delivered.
+      second.onmessage?.({ data: JSON.stringify({ type: 'joined', peers: [] }) })
+      second.onmessage?.({ data: JSON.stringify({ type: 'offer', from: 'peer' }) })
+      expect(onMessage).toHaveBeenCalledTimes(1)
+      expect(onMessage).toHaveBeenCalledWith({ type: 'offer', from: 'peer' })
+
+      // And the renewed connection is renewed in its turn, from its own expiry.
+      await vi.advanceTimersByTimeAsync(89_000)
+      expect(refreshToken).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(refreshToken).toHaveBeenCalledTimes(2)
+
+      client.close()
+    })
+
+    it('keeps the live connection when a renewal fails, and tries again', async () => {
+      const { client, refreshToken } = await start('2026-11-13T10:02:00Z')
+      const [first] = FakeSocket.instances
+
+      await vi.advanceTimersByTimeAsync(90_000)
+      const second = FakeSocket.instances[1]
+
+      // The replacement never opens.
+      second.onclose?.({ code: 1006 })
+
+      expect(first.closed).toBeNull()
+      expect(client.currentStatus).toBe('open')
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(refreshToken).toHaveBeenCalledTimes(2)
+      expect(FakeSocket.instances).toHaveLength(3)
+
+      client.close()
+    })
+
+    it('still reconnects when the live connection drops with no renewal under way', async () => {
+      const { client, refreshToken } = await start('2026-11-13T10:02:00Z')
+      const [first] = FakeSocket.instances
+
+      first.onclose?.({ code: 4003 })
+      await vi.advanceTimersByTimeAsync(1_000)
+
+      expect(refreshToken).toHaveBeenCalledTimes(1)
+      expect(FakeSocket.instances).toHaveLength(2)
+
+      client.close()
+    })
   })
 })

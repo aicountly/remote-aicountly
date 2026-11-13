@@ -67,8 +67,10 @@ export type SignallingStatus = 'idle' | 'connecting' | 'open' | 'reconnecting' |
 interface Options {
   url: string
   token: string
+  /** When `token` stops being accepted (ISO 8601), if the API said. */
+  expiresAt?: string | null
   /** Mint a fresh token — the old one expires long before a session does. */
-  refreshToken: () => Promise<{ url: string; token: string }>
+  refreshToken: () => Promise<{ url: string; token: string; expiresAt?: string | null }>
   onMessage: (message: SignallingMessage) => void
   onStatus: (status: SignallingStatus) => void
   /**
@@ -84,6 +86,34 @@ const MAX_RECONNECT_ATTEMPTS = 8
 const BASE_BACKOFF_MS = 500
 const MAX_BACKOFF_MS = 15_000
 
+/**
+ * How long before its token expires the connection is replaced with a fresh one.
+ *
+ * The relay closes a socket the moment its token expires and tells the room the participant **left**. For
+ * a browser peer that was a half-second blip every two minutes; for a computer hosting the session through
+ * the desktop app it was the end of the session, because its helper had "left". Replacing the socket first
+ * means the relay sees the same participant arrive on a newer connection, closes the old one as replaced,
+ * and announces nothing.
+ */
+const RENEW_BEFORE_EXPIRY_MS = 30_000
+
+/** The room token's lifetime when nothing said when it expires (`remote.signallingTokenTtl`). */
+const ASSUMED_TOKEN_LIFETIME_MS = 120_000
+
+/** Never sooner than this, so a short or already-past expiry cannot spin. */
+const MIN_RENEW_DELAY_MS = 5_000
+
+/** How long to wait before trying a renewal that failed again. */
+const RENEW_RETRY_MS = 5_000
+
+/** How long from now to replace the connection, given when its token expires. */
+export function renewDelayMs(expiresAt: string | null | undefined, now = Date.now()): number {
+  const expiry = expiresAt ? Date.parse(expiresAt) : Number.NaN
+  const lifetime = Number.isFinite(expiry) ? expiry - now : ASSUMED_TOKEN_LIFETIME_MS
+
+  return Math.max(MIN_RENEW_DELAY_MS, lifetime - RENEW_BEFORE_EXPIRY_MS)
+}
+
 export class RemoteSignallingClient {
   private socket: WebSocket | null = null
   private attempts = 0
@@ -94,10 +124,16 @@ export class RemoteSignallingClient {
 
   private url: string
   private token: string
+  /** When the token the live socket was opened with expires, if known. */
+  private expiresAt: string | null
+  private renewTimer: ReturnType<typeof setTimeout> | null = null
+  /** The replacement socket, from the moment it is created until it takes over or fails. */
+  private successor: WebSocket | null = null
 
   constructor(private readonly options: Options) {
     this.url = options.url
     this.token = options.token
+    this.expiresAt = options.expiresAt ?? null
   }
 
   get currentStatus(): SignallingStatus {
@@ -146,8 +182,14 @@ export class RemoteSignallingClient {
     socket.onopen = () => {
       this.attempts = 0
       this.setStatus('open')
+      this.scheduleRenewal()
     }
 
+    this.listen(socket)
+  }
+
+  /** Deliver `socket`'s messages, and reconnect when it closes for a reason that is not ours. */
+  private listen(socket: WebSocket, options: { renewal?: boolean } = {}): void {
     socket.onmessage = (event) => {
       let message: SignallingMessage
       try {
@@ -155,6 +197,11 @@ export class RemoteSignallingClient {
       } catch {
         return
       }
+
+      // The relay greets every connection with the room as it stands. On a renewed connection this
+      // page is not a newcomer — it has been here all along, with its peer connections — and treating
+      // the greeting as an arrival would have the room wait for offers that are not coming.
+      if (options.renewal && message.type === 'joined') return
 
       this.options.onMessage(message)
     }
@@ -164,7 +211,15 @@ export class RemoteSignallingClient {
     }
 
     socket.onclose = (event) => {
+      // Not the live socket any more (a renewal already took over): nothing to do.
+      if (this.socket !== socket) return
+
+      // The relay closed this one because its replacement arrived. The replacement takes over in its
+      // own `onopen`, which may run a moment after this.
+      if (event.code === 4004 && this.successor) return
+
       this.socket = null
+      this.cancelRenewal()
 
       if (this.disposed) {
         this.setStatus('closed')
@@ -185,6 +240,127 @@ export class RemoteSignallingClient {
     }
   }
 
+  // ------------------------------------------------- renewal before expiry
+
+  private scheduleRenewal(delay = renewDelayMs(this.expiresAt)): void {
+    if (this.renewTimer) clearTimeout(this.renewTimer)
+    if (this.disposed) return
+
+    this.renewTimer = setTimeout(() => {
+      this.renewTimer = null
+      void this.renew()
+    }, delay)
+  }
+
+  private cancelRenewal(): void {
+    if (this.renewTimer) {
+      clearTimeout(this.renewTimer)
+      this.renewTimer = null
+    }
+
+    if (this.successor) {
+      const successor = this.successor
+      this.successor = null
+      successor.onopen = null
+      successor.onclose = null
+      successor.onerror = null
+      successor.onmessage = null
+
+      try {
+        successor.close(1000, 'Renewal abandoned')
+      } catch {
+        /* already closed */
+      }
+    }
+  }
+
+  /**
+   * Make before break: open a connection with a fresh token, and let it take over from the live one.
+   *
+   * The relay closes the old socket as replaced (4004) and tells nobody that this participant left.
+   * If anything here fails, the live socket is untouched and the renewal is tried again shortly; if it
+   * is still failing when the token expires, the ordinary reconnect path takes over as before.
+   */
+  private async renew(): Promise<void> {
+    if (this.disposed || this.successor) return
+
+    const current = this.socket
+    if (!current || current.readyState !== WebSocket.OPEN) return
+
+    let fresh: { url: string; token: string; expiresAt?: string | null }
+    try {
+      fresh = await this.options.refreshToken()
+    } catch {
+      this.scheduleRenewal(RENEW_RETRY_MS)
+
+      return
+    }
+
+    // The live socket went away while the token was being minted: the reconnect path owns it now.
+    if (this.disposed || this.socket !== current) return
+
+    this.url = fresh.url
+    this.token = fresh.token
+    this.expiresAt = fresh.expiresAt ?? null
+
+    const next = new WebSocket(this.endpoint(), signallingProtocols(this.token))
+    this.successor = next
+
+    // From the start: the relay routes this participant's messages to the new socket the moment it
+    // connects, which is before `onopen` runs here.
+    this.listen(next, { renewal: true })
+
+    const abandon = () => {
+      if (this.successor !== next) return
+
+      this.successor = null
+      next.onopen = null
+      next.onclose = null
+      next.onerror = null
+      next.onmessage = null
+
+      // The relay may already have closed the old socket in favour of this one. With neither left,
+      // this is an ordinary lost connection.
+      if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+        this.socket = null
+        void this.scheduleReconnect()
+
+        return
+      }
+
+      this.scheduleRenewal(RENEW_RETRY_MS)
+    }
+
+    next.onclose = abandon
+    next.onerror = abandon
+
+    next.onopen = () => {
+      if (this.disposed || this.successor !== next) return
+
+      const old = this.socket
+      this.successor = null
+      this.socket = next
+
+      // Re-attached now that it is the live socket, so a close of it reconnects.
+      this.listen(next, { renewal: true })
+
+      if (old && old !== next) {
+        old.onopen = null
+        old.onclose = null
+        old.onerror = null
+        old.onmessage = null
+
+        if (old.readyState === WebSocket.OPEN || old.readyState === WebSocket.CONNECTING) {
+          old.close(1000, 'Renewed')
+        }
+      }
+
+      this.attempts = 0
+      this.setStatus('open')
+      this.scheduleRenewal()
+    }
+  }
+
   send(message: { type: string; to?: string; payload?: unknown }): boolean {
     if (this.socket?.readyState !== WebSocket.OPEN) {
       return false
@@ -202,6 +378,8 @@ export class RemoteSignallingClient {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
     }
+
+    this.cancelRenewal()
 
     if (this.socket) {
       // Detach handlers first: a close we asked for must not trigger the
@@ -248,6 +426,7 @@ export class RemoteSignallingClient {
         const fresh = await this.options.refreshToken()
         this.url = fresh.url
         this.token = fresh.token
+        this.expiresAt = fresh.expiresAt ?? null
       } catch {
         // Could not re-mint — the session may have ended or the host may have
         // removed us. Try again on the next tick of the backoff.

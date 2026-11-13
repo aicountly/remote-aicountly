@@ -72,6 +72,13 @@ windows = { version = "0.62", features = [
     "Wdk_System_SystemServices",
     "Win32_Foundation",
     "Win32_Graphics_Dxgi_Common",
+    # WASAPI loopback: what the computer is playing, for a session's sound
+    # track (src/platform/sound.rs).
+    "Win32_Media_Audio",
+    # `IMMDevice::Activate` takes an optional PROPVARIANT, so the crate only
+    # generates it with these two on. Nothing here passes one.
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
     "Win32_Security_Cryptography",
     "Win32_System_Ole",
     "Win32_System_Registry",

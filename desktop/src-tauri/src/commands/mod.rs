@@ -40,6 +40,9 @@ pub struct About {
     pub supports_hosting: bool,
     /// Whether it can be its owner's control companion for a browser share.
     pub supports_companion: bool,
+    /// Whether it can send what the computer is playing beside its screen.
+    /// Where it cannot, the setting for it is not offered.
+    pub supports_sound: bool,
     /// The system-wide Stop control shortcut, as this platform writes it.
     pub stop_shortcut: String,
     /// Where the device key is kept — "Windows DPAPI (machine scope)".
@@ -943,6 +946,7 @@ pub fn about(agent: tauri::State<'_, Arc<Agent>>) -> About {
         supported: platform::is_supported(),
         supports_hosting: platform::supports_hosting(),
         supports_companion: platform::supports_companion(),
+        supports_sound: platform::sound::supported(),
         stop_shortcut: crate::stop_shortcut_label().to_owned(),
         key_storage: platform::secure_storage().describe().to_owned(),
         log_file: remote_core::log_path("agent").map(|path| path.display().to_string()),

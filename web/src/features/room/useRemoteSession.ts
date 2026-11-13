@@ -30,6 +30,7 @@ import { readCaptureHandle, requestMicrophone, requestScreenShare } from '../../
 import { RemoteCaptureError } from '../../services/webrtc/screenCapture'
 import type {
   ChatMessage,
+  ControlState,
   EffectivePolicy,
   SessionControlState,
   SessionDetail,
@@ -79,6 +80,35 @@ const CONTROL_POLL_ACTIVE_MS = 4_000
 
 /** And slower when nothing is outstanding, which is nearly always. */
 const CONTROL_POLL_IDLE_MS = 15_000
+
+/**
+ * This participant's control state, from the freshest thing the browser holds.
+ *
+ * The session record carries it, but that record is re-read every twenty-five seconds for somebody who is
+ * only watching — so after the person at the computer pressed Allow, the helper's browser went on showing
+ * "waiting" and sent nothing for up to that long, which looked exactly like control not working. The
+ * control read is asked every few seconds, and at once when the room is nudged, and it names the
+ * controller and everybody waiting; where it speaks, it wins.
+ *
+ * DENIED and REVOKED stay the record's to say: the control read holds no trace of an answer that was no.
+ */
+export function effectiveControlState(
+  recorded: ControlState | null,
+  control: SessionControlState | null,
+  myParticipantUuid: string | null,
+): ControlState | null {
+  if (!control || !myParticipantUuid) return recorded
+
+  if (control.controllerUuid === myParticipantUuid) return 'GRANTED'
+
+  if (control.pendingRequests.some((request) => request.participantUuid === myParticipantUuid)) {
+    return 'REQUESTED'
+  }
+
+  // The control read no longer names this participant, so a GRANTED or REQUESTED the record still shows
+  // is one it has not caught up on.
+  return recorded === 'GRANTED' || recorded === 'REQUESTED' ? 'NONE' : recorded
+}
 
 export type ShareIntentState =
   | { phase: 'idle' }
@@ -197,17 +227,33 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
   // without a control panel, which is exactly what they are entitled to.
   const isGuestParticipant = Boolean(guestParticipantUuid)
 
+  // Who was controlling and who was waiting at the last control read, to notice when that changes.
+  const controlSeenRef = useRef<string | null>(null)
+
   const refreshControl = useCallback(async () => {
     if (isGuestParticipant) return
 
     try {
       const state = await fetchControlState(sessionUuid)
 
-      if (mountedRef.current) setControl(state)
+      if (!mountedRef.current) return
+
+      setControl(state)
+
+      // A change of controller or of who is waiting is also a change to the session record (each
+      // participant's own control state), which is otherwise re-read far less often. Read it now, so
+      // the two never disagree for longer than a round trip.
+      const seen = `${state.controllerUuid ?? ''}|${state.pendingRequests
+        .map((request) => request.participantUuid)
+        .join(',')}`
+
+      if (controlSeenRef.current !== null && controlSeenRef.current !== seen) void reload()
+
+      controlSeenRef.current = seen
     } catch {
       /* the room does not fail because control state could not be read */
     }
-  }, [sessionUuid, isGuestParticipant])
+  }, [sessionUuid, isGuestParticipant, reload])
 
   // A control companion waiting to be confirmed or to find its screen is also
   // something two people are waiting on (docs/desktop/CONTROL_COMPANION.md).
@@ -216,8 +262,16 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     control?.companion?.status === 'JOINED' ||
     (control?.companion?.status === 'ACTIVE' && !control.companion.ready)
 
+  const myParticipantUuid = guestParticipantUuid ?? session?.me?.uuid ?? null
+  const myControlState = effectiveControlState(session?.me?.controlState ?? null, control, myParticipantUuid)
+
+  // Somebody waiting on an answer, or somebody controlling: both are states a person at one end is
+  // watching for the end of, so both are read at the faster pace.
   const controlOutstanding =
-    (control?.pendingRequests.length ?? 0) > 0 || session?.me?.controlState === 'REQUESTED' || companionSettling
+    (control?.pendingRequests.length ?? 0) > 0 ||
+    myControlState === 'REQUESTED' ||
+    myControlState === 'GRANTED' ||
+    companionSettling
 
   const myStatus = session?.me?.status ?? null
   // A boolean, not the status: APPROVED -> JOINED is the same admitted participant and must keep the same engine.
@@ -239,8 +293,6 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
   }, [refreshControl, isGuestParticipant, ended, admitted, controlOutstanding])
 
   // --- Engine --------------------------------------------------------------
-
-  const myParticipantUuid = guestParticipantUuid ?? session?.me?.uuid ?? null
 
   // The engine depends on who I am and whether I am admitted, never on the session record itself. That record is a new
   // object on every poll, and an effect keyed on it tore the engine down each time — socket, peer connections and the
@@ -584,7 +636,6 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
 
   const hostPeerUuid = controllableHost?.participantUuid ?? null
   const controlChannelReady = controllableHost?.controlChannelReady ?? false
-  const myControlState = session?.me?.controlState ?? null
   const engineLive = live !== null
 
   // A control companion is connected to only while this person's own control
@@ -622,6 +673,9 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
 
         // The room (and a control companion in it) re-reads the state now.
         engineRef.current?.sendControlHint()
+
+        // And so does this page: each participant's own control state lives on the session record.
+        void reload()
 
         await reload()
       } catch (err) {
@@ -716,6 +770,16 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     [],
   )
 
+  /** The keyboard stopped being this page's: let go of whatever is held on the controlled computer. */
+  const releaseControlKeys = useCallback(() => {
+    engineRef.current?.releaseControlKeys()
+  }, [])
+
+  /** Ask the computer being controlled to show another of its displays. */
+  const selectControlMonitor = useCallback((monitorId: number) => {
+    engineRef.current?.selectControlMonitor(monitorId)
+  }, [])
+
   const dismissControlNotice = useCallback(() => setControlNotice(null), [])
 
   /** Link one of my own computers as a control companion, and tell it to look now. */
@@ -771,6 +835,11 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     controlPaused: live?.controlPaused ?? null,
     /** A Windows administrator prompt (the Secure Desktop) is open on the controlled machine. */
     secureDesktop: live?.secureDesktop ?? null,
+    /** This participant's control state, from the freshest read (effectiveControlState). */
+    myControlState,
+    /** The controlled computer's displays, and the one on screen. More than one can be switched between. */
+    monitors: live?.monitors ?? [],
+    activeMonitorId: live?.activeMonitorId ?? null,
     actions: {
       reload,
       beginShare,
@@ -807,6 +876,8 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
       sendControlScroll,
       sendControlKey,
       sendControlClipboard,
+      releaseControlKeys,
+      selectControlMonitor,
       reconnect,
       checkRelay,
     },

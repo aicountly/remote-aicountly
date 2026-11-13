@@ -783,9 +783,14 @@ class ControlService
         $host       = $this->controllableHost($session);
         $controller = $this->currentController((int) $session['id']);
 
+        // Only somebody who is still in the session is waiting for an answer. Leaving does not clear a
+        // participant's control state, so a helper who asked and then closed the tab stayed in this list for
+        // the rest of the session: the computer went on showing a consent dialog for a person who had gone,
+        // and — because it answers the first request it is shown — never reached the next one.
         $pending = array_values(array_filter(
             $this->participants->forSession((int) $session['id']),
-            static fn (array $row) => (string) $row['control_state'] === self::STATE_REQUESTED,
+            static fn (array $row) => (string) $row['control_state'] === self::STATE_REQUESTED
+                && in_array((string) $row['status'], ['APPROVED', 'JOINED'], true),
         ));
 
         $link = $this->companions->latestFor($session);

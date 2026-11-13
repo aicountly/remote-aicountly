@@ -233,6 +233,21 @@ impl ControlGate {
         self.paused = false;
     }
 
+    /// Start the sequence check again, for a new connection from the
+    /// controller.
+    ///
+    /// The sequence exists so a message cannot be replayed *within a
+    /// connection*. A browser numbers its messages per connection, so when
+    /// the controller's page reloads under a grant that still stands — the
+    /// same participant, the same grant — its numbers begin again below the
+    /// mark the old page reached, and every one was refused as stale until
+    /// the new page had sent more messages than the old one ever did. The
+    /// grant, the controller and a local Stop are all left exactly as they
+    /// are: this admits nobody who was not admitted before.
+    pub fn restart_stream(&mut self) {
+        self.last_sequence = 0;
+    }
+
     /// The person at the machine is using it: drop every act on the machine
     /// until [`Self::resume`]. The grant stands and nobody is told but the
     /// controller.

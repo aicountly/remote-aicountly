@@ -85,6 +85,10 @@ vi.mock('./useRemoteSession', () => ({
     isControlling: room.isControlling,
     controlPaused: null,
     secureDesktop: null,
+    // The hook reads it from the control state as well; with no control read, it is the record's.
+    myControlState: (room.session ?? session).me?.controlState ?? null,
+    monitors: room.live?.monitors ?? [],
+    activeMonitorId: room.live?.activeMonitorId ?? null,
     actions,
   }),
 }))
@@ -239,6 +243,8 @@ describe('full screen in the room', () => {
     controllingPeerId: null,
     controlPaused: null,
     secureDesktop: null,
+    monitors: [],
+    activeMonitorId: null,
     network: {
       path: 'direct',
       relayNode: null,
@@ -293,6 +299,63 @@ describe('full screen in the room', () => {
     const stop = screen.getAllByRole('button', { name: 'Stop controlling' })
     expect(stop).toHaveLength(1)
     expect(document.querySelector('.stage')).not.toContainElement(stop[0])
+  })
+
+  it('offers the other screens of a computer being controlled, and asks for the one picked', async () => {
+    const display = (id: number, primary: boolean, x: number) => ({
+      id,
+      name: `Display ${id}`,
+      primary,
+      x,
+      y: 0,
+      width: 1920,
+      height: 1080,
+      scale: 1,
+      orientation: 'landscape',
+    })
+
+    const selectControlMonitor = vi.fn()
+    Object.assign(actions, { selectControlMonitor, releaseControlKeys: vi.fn() })
+
+    room.session = { ...session, participants: [sharer, viewer], me: viewer }
+    room.live = {
+      ...watching(),
+      controllingPeerId: 'p-host',
+      monitors: [display(1, true, 0), display(2, false, 1920)],
+      activeMonitorId: 1,
+    }
+    room.isControlling = true
+    room.controllableHost = agent
+    renderRoom()
+
+    const screens = within(screen.getByRole('group', { name: 'Screens of the remote computer' }))
+    expect(screens.getByRole('button', { name: '1' })).toHaveAttribute('aria-pressed', 'true')
+
+    await userEvent.click(screens.getByRole('button', { name: '2' }))
+    expect(selectControlMonitor).toHaveBeenCalledWith(2)
+
+    // The screen already on show is not asked for again.
+    await userEvent.click(screens.getByRole('button', { name: '1' }))
+    expect(selectControlMonitor).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers no screen switcher for one screen, or to somebody who is only watching', () => {
+    const one = { id: 1, name: 'Display 1', primary: true, x: 0, y: 0, width: 1920, height: 1080, scale: 1, orientation: 'landscape' }
+
+    room.session = { ...session, participants: [sharer, viewer], me: viewer }
+    room.live = { ...watching(), controllingPeerId: 'p-host', monitors: [one], activeMonitorId: 1 }
+    room.isControlling = true
+    room.controllableHost = agent
+    const view = renderRoom()
+
+    expect(screen.queryByRole('group', { name: 'Screens of the remote computer' })).toBeNull()
+
+    // Two screens, but nobody is controlling: the computer switches only for whoever it gave control to.
+    room.live = { ...watching(), monitors: [one, { ...one, id: 2, primary: false, x: 1920 }], activeMonitorId: 1 }
+    room.isControlling = false
+    view.rerender(roomTree())
+
+    expect(screen.queryByRole('group', { name: 'Screens of the remote computer' })).toBeNull()
   })
 
   it('leaves full screen when somebody knocks, so the host can answer', async () => {

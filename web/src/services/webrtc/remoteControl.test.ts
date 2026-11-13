@@ -4,6 +4,7 @@ import {
   CONTROL_CHANNEL_LABEL,
   CONTROL_PROTOCOL_VERSION,
   ControlSender,
+  modifiersForKey,
   MAX_CONTROL_MESSAGE_BYTES,
   controlKeyFrom,
   decodeControlEnvelope,
@@ -194,6 +195,51 @@ describe('ControlSender', () => {
     expect(instance.sent).toBe(3)
   })
 
+  it('numbers a later sender above an earlier one, so the agent does not take it for a replay', () => {
+    // The agent admits only a sequence newer than the last it acted on. A sender made later — control
+    // granted again, the connection rebuilt, the page reloaded — that started again at 1 had every
+    // message refused until it had sent more than the one before it ever did.
+    const first: ControlEnvelope[] = []
+    const earlier = new ControlSender(
+      'session-1',
+      'participant-1',
+      (bytes) => {
+        first.push(JSON.parse(new TextDecoder().decode(bytes)) as ControlEnvelope)
+
+        return true
+      },
+      1_800_000_000_000,
+    )
+    for (let index = 0; index < 500; index += 1) earlier.movePointer({ x: 0.5, y: 0.5 }, true)
+
+    const second: ControlEnvelope[] = []
+    const later = new ControlSender(
+      'session-1',
+      'participant-1',
+      (bytes) => {
+        second.push(JSON.parse(new TextDecoder().decode(bytes)) as ControlEnvelope)
+
+        return true
+      },
+      // Any later moment: a second is two thousand times what a mouse sends in one.
+      1_800_000_001_000,
+    )
+    later.movePointer({ x: 0.5, y: 0.5 }, true)
+
+    expect(second[0].n).toBeGreaterThan(first[first.length - 1].n)
+    // The count for the diagnostics panel is still a count.
+    expect(earlier.sent).toBe(500)
+    expect(later.sent).toBe(1)
+  })
+
+  it('asks for another display by its id', () => {
+    const { instance, sent } = sender()
+
+    instance.selectMonitor(2)
+
+    expect(sent[0].m).toEqual({ type: 'select_monitor', monitor_id: 2 })
+  })
+
   it('does not advance the sequence for a message the channel refused', () => {
     // A gap would read to the agent as a dropped event.
     const sent: ControlEnvelope[] = []
@@ -300,5 +346,35 @@ describe('decodeControlEnvelope', () => {
     expect(decodeControlEnvelope('not json')).toBeNull()
     expect(decodeControlEnvelope(JSON.stringify({ v: 1, s: 1, m: {} }))).toBeNull()
     expect(decodeControlEnvelope(JSON.stringify({ v: 1, s: 'a', p: 'b', n: 1, m: 'nope' }))).toBeNull()
+  })
+})
+
+describe('modifiersForKey', () => {
+  const event = (overrides: Partial<{ ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }>, altGraph = false) => ({
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    metaKey: false,
+    ...overrides,
+    getModifierState: (key: string) => key === 'AltGraph' && altGraph,
+  })
+
+  it('passes a shortcut’s modifiers through', () => {
+    expect(modifiersForKey(event({ ctrlKey: true, shiftKey: true }))).toEqual({
+      ctrl: true,
+      alt: false,
+      shift: true,
+      meta: false,
+    })
+  })
+
+  it('takes Ctrl and Alt out of a character typed with AltGr', () => {
+    // Windows reports AltGr as Ctrl+Alt. The @ it composes is typing, not a shortcut.
+    expect(modifiersForKey(event({ ctrlKey: true, altKey: true }, true))).toEqual({
+      ctrl: false,
+      alt: false,
+      shift: false,
+      meta: false,
+    })
   })
 })

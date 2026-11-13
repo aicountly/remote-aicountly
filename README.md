@@ -32,6 +32,12 @@ On a Windows machine with **AICOUNTLY Remote for Windows** installed:
 
 - **Remote control**, after the person at the machine agrees — visible while it
   is running, and stoppable from the machine instantly, without the network
+- **Every screen of the machine** — with more than one display, whoever is
+  controlling switches between them from the room
+- **Its sound**, beside its picture, when the person at the machine switches
+  that on in the app's settings — off by default, and off again at any moment
+  (telephone quality; not on a Mac — see
+  [docs/desktop/ARCHITECTURE.md](docs/desktop/ARCHITECTURE.md#what-is-built-and-what-is-not))
 - **Registered computers** with their own cryptographic identity, revocable
   server-side
 - **Unattended access** as its own deliberate, audited, revocable setting —

@@ -452,6 +452,26 @@ where
 
                         tracing::info!(?ended, session = %pending.uuid, "the session ended");
 
+                        // Whoever connected has gone, or never arrived. The
+                        // API goes on listing an unattended session as
+                        // waiting for this computer until it expires, an hour
+                        // on — so this computer joined it again, and again,
+                        // showing a session running with nobody in it. Ended
+                        // here, it is over at both ends; connecting again
+                        // starts a new one.
+                        if matches!(
+                            ended,
+                            session::Ended::Normally
+                                | session::Ended::NoPeer
+                                | session::Ended::Disconnected
+                        ) {
+                            if let Some(client) = agent.device_client() {
+                                if let Err(error) = client.end_hosted_session(&pending.uuid).await {
+                                    tracing::debug!(%error, "the finished session was not ended at the server");
+                                }
+                            }
+                        }
+
                         // The credential may well have expired while it ran, so
                         // the outer loop re-authenticates rather than this one
                         // carrying on with a stale one.
