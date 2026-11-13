@@ -79,7 +79,10 @@ async function inPage(options) {
 
   const pc = new RTCPeerConnection({ iceServers: [] });
   const video = document.createElement('video');
-  video.muted = true;
+  // Not muted: Chromium measures the energy of received sound after the
+  // element's volume, so a muted element reports silence whatever arrives.
+  // Chromium is started with autoplay allowed (see `main`).
+  video.muted = false;
   video.autoplay = true;
   video.playsInline = true;
   document.body.appendChild(video);
@@ -94,20 +97,44 @@ async function inPage(options) {
     video.play().catch((error) => log(`play() refused: ${error}`));
   };
 
+  // What a controller's browser sends the moment the control channel opens.
+  // The agent has to hand every one of these over without its session loop
+  // stopping to wait for the next — the fault that froze the picture and held
+  // back every click — so the agent's side counts them while it keeps sending
+  // frames, and the picture is checked as before.
+  const CONTROL_MESSAGES = ['interop-control-1', 'interop-control-2', 'interop-control-3'];
+  const watchControl = (channel) => {
+    window.__channel = channel;
+    window.__channelOpen = new Promise((resolve) => {
+      const opened = () => {
+        for (const message of CONTROL_MESSAGES) channel.send(new TextEncoder().encode(message));
+        resolve(true);
+      };
+      if (channel.readyState === 'open') opened();
+      else channel.onopen = opened;
+      setTimeout(() => resolve(false), 15000);
+    });
+  };
+
+  // When the agent offers, it opens the channels and the browser is handed them.
+  pc.ondatachannel = (event) => {
+    log(`data channel ${event.channel.label}`);
+    if (event.channel.label === 'aicountly-remote-control') watchControl(event.channel);
+  };
+
   if (options.mode === 'browser-offers') {
     // What the web client does when it arrives first: receive-only video and
     // the collaboration channel.
     pc.addTransceiver('video', { direction: 'recvonly' });
+    // And receive-only audio, as the web client's `offerToReceiveAudio` asks:
+    // the computer's sound travels beside its picture.
+    pc.addTransceiver('audio', { direction: 'recvonly' });
     // Kept, and waited on below: a companion's whole purpose is this channel,
     // and a session can carry video perfectly while it never opens. The label
     // is the control one a companion is actually offered — `remoteControl.ts`'s
     // CONTROL_CHANNEL_LABEL, which the agent matches on — not the
     // collaboration channel, so this is the companion's own path.
-    window.__channel = pc.createDataChannel('aicountly-remote-control', { ordered: true });
-    window.__channelOpen = new Promise((resolve) => {
-      window.__channel.onopen = () => resolve(true);
-      setTimeout(() => resolve(false), 15000);
-    });
+    watchControl(pc.createDataChannel('aicountly-remote-control', { ordered: true }));
     await pc.setLocalDescription(await pc.createOffer());
     const answer = await (await post('/offer', pc.localDescription)).json();
     await pc.setRemoteDescription(answer);
@@ -148,6 +175,18 @@ async function inPage(options) {
     const local = pair ? report.get(pair.localCandidateId) : null;
     const remote = pair ? report.get(pair.remoteCandidateId) : null;
     return { inbound, codec, local, remote, pair };
+  }
+
+  // The computer's sound: what arrived, under which codec, and whether there
+  // was anything in it but silence.
+  async function inboundAudio() {
+    const report = await pc.getStats();
+    let inbound = null;
+    report.forEach((entry) => {
+      if (entry.type === 'inbound-rtp' && entry.kind === 'audio') inbound = entry;
+    });
+    const codec = inbound && inbound.codecId ? report.get(inbound.codecId) : null;
+    return { inbound, codec };
   }
 
   // The bars the agent draws: eight across the top three quarters, colour
@@ -193,6 +232,16 @@ async function inPage(options) {
   await new Promise((resolve) => setTimeout(resolve, 200));
   const bars = video.videoWidth ? sampleBars() : [];
   last = await inboundVideo();
+
+  // Sound follows the picture by a moment: give it a little longer to be
+  // heard, rather than reading the statistics before the first packets.
+  let sound = await inboundAudio();
+  const soundDeadline = performance.now() + 6000;
+  while (performance.now() < soundDeadline &&
+         !((sound.inbound && sound.inbound.totalAudioEnergy > 0) && sound.inbound.packetsReceived >= 50)) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    sound = await inboundAudio();
+  }
   trickling = false;
 
   const inbound = last.inbound || {};
@@ -237,6 +286,13 @@ async function inPage(options) {
         `${last.remote.candidateType} ${last.remote.address}:${last.remote.port}`
       : null,
     bars,
+    controlMessagesSent: channelOpen ? CONTROL_MESSAGES.length : 0,
+    audioCodec: sound.codec ? `${sound.codec.mimeType} ${sound.codec.clockRate}` : null,
+    audioPayloadType: sound.codec ? sound.codec.payloadType : null,
+    audioPacketsReceived: sound.inbound ? sound.inbound.packetsReceived : 0,
+    audioPacketsLost: sound.inbound ? sound.inbound.packetsLost : null,
+    audioEnergy: sound.inbound ? sound.inbound.totalAudioEnergy : 0,
+    audioSecondsPlayed: sound.inbound ? sound.inbound.totalSamplesDuration : 0,
     negotiatedVideo: [remoteSdp, localSdp].map((sdp) =>
       sdp.split('\r\n').filter((line) => /^a=(rtpmap|fmtp):\d+ .*(H264|packetization)/.test(line))),
   };
@@ -252,9 +308,18 @@ function verdict(result, options) {
   // A control companion is exactly this shape: the browser offers, the agent
   // answers, and the whole point is the channel rather than the picture. A
   // session can carry perfect video while this never opens, so assert it.
-  if (options.mode === 'browser-offers' && result.dataChannelOpen !== true) {
-    failures.push(`data channel is ${result.dataChannelState}, never opened`);
+  if (result.dataChannelOpen !== true) {
+    failures.push(`the control channel is ${result.dataChannelState}, never opened`);
   }
+
+  // The computer's sound, beside its picture: G.711, arriving, and audible.
+  if (!result.audioCodec || !/^audio\/PCMU/i.test(result.audioCodec)) {
+    failures.push(`audio codec is ${result.audioCodec}`);
+  }
+  if (!(result.audioPacketsReceived >= 50)) {
+    failures.push(`only ${result.audioPacketsReceived} audio packets arrived`);
+  }
+  if (!(result.audioEnergy > 0)) failures.push('the sound that arrived was silent');
   if (result.videoWidth !== options.width || result.videoHeight !== options.height) {
     failures.push(`<video> is ${result.videoWidth}x${result.videoHeight}, expected ${options.width}x${options.height}`);
   }

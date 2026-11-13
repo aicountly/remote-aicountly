@@ -165,6 +165,12 @@ export interface AgentConfig {
    * default; attended sessions ask the person at the machine instead.
    */
   allowSecureDesktopUnattended: boolean
+  /**
+   * Whether a session that shows this computer's screen also carries what the
+   * computer is playing. The person at the computer's switch: off until they
+   * turn it on, and read live, so switching it off stops the sound at once.
+   */
+  shareSound: boolean
 }
 
 // ------------------------------------------------------------- video codec
@@ -233,6 +239,8 @@ export interface About {
   supportsHosting: boolean
   /** Whether it can be its owner's control companion for a browser share. */
   supportsCompanion: boolean
+  /** Whether it can send what the computer is playing beside its screen (Windows). */
+  supportsSound: boolean
   /** The system-wide Stop control shortcut, as this platform writes it. */
   stopShortcut: string
   /** Where the device key is kept. The store's name, never anything in it. */

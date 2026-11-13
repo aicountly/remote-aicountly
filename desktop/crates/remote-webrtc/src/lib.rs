@@ -36,6 +36,7 @@ use std::fmt;
 use remote_device::{CaptureProfile, Frame};
 use serde::{Deserialize, Serialize};
 
+pub mod audio;
 pub mod video;
 
 #[cfg(feature = "webrtc-rs")]
@@ -304,6 +305,18 @@ pub trait PeerSession: Send {
     /// caller's loop carries on. Messages handed to a [`ControlSink`] are not
     /// returned here as well.
     async fn receive_control(&mut self) -> Result<Vec<Vec<u8>>, WebRtcError>;
+
+    /// Where to hand the computer's sound, if this session has a sound track.
+    ///
+    /// A session that shows a screen always has one — it is offered beside
+    /// the screen track, so switching the sound on mid-session needs no
+    /// renegotiation — and nothing is ever sent on it unless the host hands
+    /// sound in here. The handle can go to another thread; see
+    /// [`audio::AudioSink`]. `None` for a control-only session, and by
+    /// default.
+    fn audio_sink(&self) -> Option<audio::AudioSink> {
+        None
+    }
 
     /// Hand every control message to `sink` the moment it arrives, instead of
     /// holding it for the next [`PeerSession::receive_control`].

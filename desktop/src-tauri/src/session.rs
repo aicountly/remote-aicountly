@@ -798,6 +798,10 @@ struct CapturePump {
     /// The display the controller asked for, kept so a capture that is
     /// started again shows the same one.
     monitor: Option<u32>,
+    /// This computer's sound, running beside the picture. It captures only
+    /// while the person here has sound switched on, and is dropped — which
+    /// stops it — whenever the picture stops.
+    sound: Option<crate::platform::sound::SoundCapture>,
     /// When the last picture may next be sent again for a waiting viewer.
     next_refresh_at: Instant,
     /// The display being shown, once capture has started.
@@ -827,6 +831,7 @@ impl CapturePump {
             ceiling: profile,
             profile,
             monitor: None,
+            sound: None,
             next_refresh_at: now,
             layout: None,
             layout_sent: false,
@@ -843,6 +848,8 @@ impl CapturePump {
     /// Start again from nothing, for a new connection: the capture has been
     /// stopped, and starts when the new connection is up.
     fn restart(&mut self, now: Instant) {
+        // The sound belonged to the connection that has gone.
+        self.sound = None;
         self.layout = None;
         self.layout_sent = false;
         self.next_attempt_at = now;
@@ -930,6 +937,10 @@ impl CapturePump {
 
                     // The viewer can draw nothing until a keyframe arrives.
                     peer.request_keyframe();
+
+                    // And its sound, beside it — if this computer can send
+                    // sound, and only while the person here has it on.
+                    self.sound = start_sound(agent, peer);
                 }
                 Err(error) => {
                     self.next_attempt_at = now + CAPTURE_RETRY;
@@ -1032,6 +1043,7 @@ impl CapturePump {
             Err(remote_webrtc::WebRtcError::WrongState(state)) => {
                 tracing::info!(?state, "the connection ended; the capture stops");
                 agent.stop_capture();
+                self.sound = None;
                 self.layout = None;
                 self.layout_sent = false;
                 self.next_attempt_at = now + CAPTURE_RETRY;
@@ -1080,6 +1092,35 @@ impl CapturePump {
             {
                 let _ = peer.send_control(&bytes).await;
             }
+        }
+    }
+}
+
+/// Start this computer's sound beside its picture.
+///
+/// `None` where the platform cannot capture sound, where the connection has
+/// no sound track, or where the capture would not start — none of which is a
+/// reason for the session not to carry on showing the screen. The capture
+/// itself does nothing until the person at the computer has sound switched
+/// on, and stops the moment they switch it off: it asks, continuously.
+fn start_sound<P: PeerSession>(
+    agent: &Arc<Agent>,
+    peer: &P,
+) -> Option<crate::platform::sound::SoundCapture> {
+    if !crate::platform::sound::supported() {
+        return None;
+    }
+
+    let sink = peer.audio_sink()?;
+    let agent = Arc::clone(agent);
+
+    match crate::platform::sound::SoundCapture::start(sink, Arc::new(move || agent.shares_sound()))
+    {
+        Ok(capture) => Some(capture),
+        Err(error) => {
+            tracing::warn!(%error, "this computer's sound will not be shared");
+
+            None
         }
     }
 }

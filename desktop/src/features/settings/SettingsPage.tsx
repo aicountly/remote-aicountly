@@ -96,6 +96,25 @@ export function SettingsPage({
           />
         </label>
 
+        {about?.supportsSound ? (
+          <label className="field field--inline">
+            <span>
+              <span className="field__label">Share this computer’s sound</span>
+              <span className="field__hint">
+                When you show this computer’s screen to somebody, let them hear what it is playing
+                as well. Off until you turn it on, and you can turn it off again at any time, even
+                during a session — the sound stops at once. Nothing is listened to while it is off.
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              checked={draft.shareSound}
+              onChange={(event) => setDraft({ ...draft, shareSound: event.target.checked })}
+              disabled={busy}
+            />
+          </label>
+        ) : null}
+
         {about?.supportsHosting ? (
           <label className="field field--inline">
             <span>

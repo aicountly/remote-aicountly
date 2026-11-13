@@ -40,6 +40,7 @@ use remote_security::SecureStorageProvider;
 /// Describing a display, and the Secure Desktop. Plain numbers, so it lives
 /// above the platform gate and is tested on every host.
 pub mod display;
+pub mod sound;
 
 pub mod macos;
 

@@ -82,6 +82,9 @@ use webrtc::peer_connection::{
 };
 use webrtc::rtp_transceiver::RtpSender;
 
+use crate::audio::{
+    AudioChunk, AudioSink, PcmuEncoder, AUDIO_CLOCK_RATE, PACKET_SAMPLES, PCMU_MIME_TYPE,
+};
 use crate::video::rtp::H264Packetizer;
 use crate::video::{CodecSource, H264Encoder, H264_FMTP, H264_MIME_TYPE, VIDEO_CLOCK_RATE};
 use crate::{
@@ -106,6 +109,23 @@ const H264_PAYLOAD_TYPE: u8 = 125;
 
 /// The SSRC the screen track is sent on.
 const VIDEO_SSRC: u32 = 0x4149_434F;
+
+/// The SSRC the sound track is sent on.
+const AUDIO_SSRC: u32 = 0x4149_4153;
+
+/// How many chunks of captured sound may wait for the sender.
+///
+/// A sound card hands over a chunk every ten milliseconds or so, so this is
+/// about half a second. Past it a chunk is dropped rather than queued: sound
+/// that arrives late is worse than a gap in it.
+const AUDIO_QUEUE: usize = 48;
+
+/// How long a silence has to be before the next packet is the start of a new
+/// burst of sound, with the marker bit and a timestamp that says how long the
+/// silence was.
+///
+/// A loopback capture delivers nothing while the computer plays nothing.
+const AUDIO_GAP: Duration = Duration::from_millis(200);
 
 /// How long the RTCP watcher waits on the track before letting go of it and
 /// looking again.
@@ -201,6 +221,9 @@ struct SharedState {
     /// What the browser's latest reception report said about the screen
     /// track. `None` until one has arrived.
     link: Mutex<Option<LinkReading>>,
+    /// A new remote description may have renumbered the sound codec: the
+    /// sound sender reads its payload type again before its next packet.
+    sound_renegotiated: AtomicBool,
 }
 
 /// One reception report about the screen track, as `congestion()` reports
@@ -309,11 +332,21 @@ struct VideoSender {
     feedback: JoinHandle<()>,
 }
 
+/// The sound track and the task that feeds it.
+struct AudioSender {
+    /// Where captured sound is handed in, from any thread.
+    queue: tokio::sync::mpsc::Sender<AudioChunk>,
+    /// Encodes, packetises and sends. Aborted on close and drop.
+    task: JoinHandle<()>,
+}
+
 /// One peer connection.
 pub struct WebRtcSession {
     peer: Arc<dyn PeerConnection>,
     /// The screen track. `None` for a control-only session, which has none.
     video: Option<VideoSender>,
+    /// The sound track. Beside the screen track, and absent with it.
+    audio: Option<AudioSender>,
     collaboration: Option<Arc<dyn DataChannel>>,
     control: Option<Arc<dyn DataChannel>>,
     /// One task per data channel, reading it for as long as it is open. See
@@ -400,9 +433,19 @@ impl WebRtcSession {
             None => None,
         };
 
+        // A session that shows this computer's screen can carry its sound
+        // too. The track is always offered, so that switching the sound on
+        // mid-session needs no renegotiation; whether anything is ever put on
+        // it is the host's decision, and the person at the computer's.
+        let audio = match video {
+            Some(_) => Some(Self::add_sound_track(&peer, &shared).await?),
+            None => None,
+        };
+
         Ok(Self {
             peer,
             video,
+            audio,
             collaboration: None,
             control: None,
             readers: Vec::new(),
@@ -452,11 +495,46 @@ impl WebRtcSession {
         })
     }
 
+    /// The sound track: G.711 on a fixed SSRC, in the same media stream as
+    /// the screen so a browser plays them together, and the task that sends
+    /// what the capture hands in.
+    async fn add_sound_track(
+        peer: &Arc<dyn PeerConnection>,
+        shared: &Arc<SharedState>,
+    ) -> Result<AudioSender, WebRtcError> {
+        let track = Arc::new(TrackLocalStaticRTP::new(MediaStreamTrack::new(
+            "aicountly-remote".to_owned(),
+            "sound".to_owned(),
+            "Computer sound".to_owned(),
+            RtpCodecKind::Audio,
+            vec![RTCRtpEncodingParameters {
+                rtp_coding_parameters: RTCRtpCodingParameters {
+                    ssrc: Some(AUDIO_SSRC),
+                    ..Default::default()
+                },
+                codec: pcmu_codec(),
+                ..Default::default()
+            }],
+        )));
+
+        let sender = peer
+            .add_track(Arc::clone(&track) as Arc<dyn TrackLocal>)
+            .await
+            .map_err(|error| WebRtcError::Media(error.to_string()))?;
+
+        let (queue, chunks) = tokio::sync::mpsc::channel(AUDIO_QUEUE);
+        let task = tokio::spawn(send_sound(track, sender, Arc::clone(shared), chunks));
+
+        Ok(AudioSender { queue, task })
+    }
+
     /// A new remote description may have renumbered the codecs.
     fn forget_payload_type(&mut self) {
         if let Some(video) = self.video.as_mut() {
             video.payload_type = None;
         }
+
+        self.shared.sound_renegotiated.store(true, Ordering::SeqCst);
     }
 
     /// Translate the API's ICE list into the library's shape.
@@ -848,6 +926,157 @@ fn h264_codec(rtcp_feedback: Vec<RTCPFeedback>) -> RTCRtpCodec {
         channels: 0,
         sdp_fmtp_line: H264_FMTP.to_owned(),
         rtcp_feedback,
+    }
+}
+
+/// The sound track's codec: G.711 µ-law, 8 kHz, one channel. See
+/// [`crate::audio`] for why.
+fn pcmu_codec() -> RTCRtpCodec {
+    RTCRtpCodec {
+        mime_type: PCMU_MIME_TYPE.to_owned(),
+        clock_rate: AUDIO_CLOCK_RATE,
+        channels: 0,
+        sdp_fmtp_line: String::new(),
+        rtcp_feedback: vec![],
+    }
+}
+
+/// The payload type to send G.711 under, from the negotiated codecs. Zero in
+/// every SDP there has ever been — but read rather than assumed, because a
+/// packet under a number nobody negotiated is dropped after `write_rtp` has
+/// said `Ok`, exactly as for the screen track.
+fn choose_pcmu_payload_type(codecs: &[RTCRtpCodecParameters]) -> Option<u8> {
+    codecs
+        .iter()
+        .find(|codec| {
+            codec
+                .rtp_codec
+                .mime_type
+                .eq_ignore_ascii_case(PCMU_MIME_TYPE)
+        })
+        .map(|codec| codec.payload_type)
+}
+
+/// Numbers and stamps the sound track's packets.
+struct SoundPacketizer {
+    sequencer: Box<dyn rtc::rtp::sequence::Sequencer>,
+    timestamp: u32,
+    last_at: Option<Instant>,
+}
+
+impl SoundPacketizer {
+    fn new() -> Self {
+        Self {
+            sequencer: Box::new(rtc::rtp::sequence::new_random_sequencer()),
+            // The clock: where it starts says nothing, as RFC 3550 asks.
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|elapsed| elapsed.subsec_nanos())
+                .unwrap_or_default(),
+            last_at: None,
+        }
+    }
+
+    /// The packet for one 20 ms payload, handed over at `now`.
+    ///
+    /// Consecutive packets are one packet's worth of samples apart. After a
+    /// silence the timestamp moves on by as long as the silence lasted and
+    /// the marker bit says a new burst begins, so the browser plays the gap
+    /// as a gap instead of stretching what came before across it.
+    fn packet(
+        &mut self,
+        payload: Vec<u8>,
+        payload_type: u8,
+        now: Instant,
+    ) -> rtc::rtp::packet::Packet {
+        let step = payload.len() as u32;
+
+        let marker = match self.last_at {
+            Some(last) => {
+                let gap = now.saturating_duration_since(last);
+
+                if gap > AUDIO_GAP {
+                    let ticks = gap.as_micros() as u64 * u64::from(AUDIO_CLOCK_RATE) / 1_000_000;
+                    self.timestamp = self.timestamp.wrapping_add(ticks as u32);
+
+                    true
+                } else {
+                    self.timestamp = self.timestamp.wrapping_add(step);
+
+                    false
+                }
+            }
+            None => true,
+        };
+
+        self.last_at = Some(now);
+
+        rtc::rtp::packet::Packet {
+            header: rtc::rtp::header::Header {
+                version: 2,
+                marker,
+                payload_type,
+                sequence_number: self.sequencer.next_sequence_number(),
+                timestamp: self.timestamp,
+                ssrc: AUDIO_SSRC,
+                ..Default::default()
+            },
+            payload: bytes::Bytes::from(payload),
+        }
+    }
+}
+
+/// Send the computer's sound: encode each chunk the capture hands in and put
+/// the packets on the sound track.
+///
+/// A task of its own, fed through a queue, so sound does not wait for the
+/// host's loop — which encodes a frame of video at a time — and the capture's
+/// thread never waits for the network.
+async fn send_sound(
+    track: Arc<TrackLocalStaticRTP>,
+    sender: Arc<dyn RtpSender>,
+    shared: Arc<SharedState>,
+    mut chunks: tokio::sync::mpsc::Receiver<AudioChunk>,
+) {
+    let mut encoder = PcmuEncoder::new();
+    let mut packets = SoundPacketizer::new();
+    let mut payload_type: Option<u8> = None;
+
+    while let Some(chunk) = chunks.recv().await {
+        // Nobody can hear it: not up yet, or lost. The partly filled packet
+        // goes too, so what is sent first afterwards is not half old sound.
+        if state_from_u8(shared.connection.load(Ordering::SeqCst)) != PeerState::Connected {
+            encoder.reset();
+
+            continue;
+        }
+
+        if shared.sound_renegotiated.swap(false, Ordering::SeqCst) {
+            payload_type = None;
+        }
+
+        if payload_type.is_none() {
+            payload_type = match sender.get_parameters().await {
+                Ok(parameters) => choose_pcmu_payload_type(&parameters.rtp_parameters.codecs),
+                Err(_) => None,
+            };
+        }
+
+        // The viewer's browser did not take G.711. Every browser does; if one
+        // ever does not, nothing is sent under a number it never agreed to.
+        let Some(payload_type) = payload_type else {
+            continue;
+        };
+
+        let now = Instant::now();
+
+        for payload in encoder.push(&chunk) {
+            debug_assert_eq!(payload.len(), PACKET_SAMPLES);
+
+            let _ = track
+                .write_rtp(packets.packet(payload, payload_type, now))
+                .await;
+        }
     }
 }
 
@@ -1263,6 +1492,14 @@ impl PeerSession for WebRtcSession {
             .map_err(|error| WebRtcError::DataChannel(error.to_string()))
     }
 
+    fn audio_sink(&self) -> Option<AudioSink> {
+        let queue = self.audio.as_ref()?.queue.clone();
+
+        // `try_send`: a full queue drops the chunk, and never makes the
+        // capture's thread wait.
+        Some(AudioSink::new(move |chunk| queue.try_send(chunk).is_ok()))
+    }
+
     fn set_control_sink(&mut self, sink: ControlSink) {
         if let Ok(mut held) = self.shared.control_sink.lock() {
             *held = Some(Arc::clone(&sink));
@@ -1340,8 +1577,12 @@ impl PeerSession for WebRtcSession {
             video.feedback.abort();
         }
 
-        // The channel readers too, for the same reason.
+        // The channel readers too, for the same reason, and the sound sender.
         self.stop_readers();
+
+        if let Some(audio) = self.audio.as_ref() {
+            audio.task.abort();
+        }
 
         // Channels next, then the connection: closing the peer while a
         // channel is mid-poll is how a teardown produces a warning nobody can
@@ -1374,6 +1615,10 @@ impl Drop for WebRtcSession {
     fn drop(&mut self) {
         if let Some(video) = self.video.as_ref() {
             video.feedback.abort();
+        }
+
+        if let Some(audio) = self.audio.as_ref() {
+            audio.task.abort();
         }
 
         self.stop_readers();
@@ -1991,7 +2236,10 @@ mod tests {
     #[derive(Clone, Default)]
     struct ViewerEvents {
         candidates: Arc<Mutex<Vec<RTCIceCandidateInit>>>,
+        /// The screen track.
         track: Arc<Mutex<Option<Arc<dyn webrtc::media_stream::track_remote::TrackRemote>>>>,
+        /// The sound track.
+        sound: Arc<Mutex<Option<Arc<dyn webrtc::media_stream::track_remote::TrackRemote>>>>,
     }
 
     #[async_trait::async_trait]
@@ -2003,8 +2251,244 @@ mod tests {
         }
 
         async fn on_track(&self, track: Arc<dyn webrtc::media_stream::track_remote::TrackRemote>) {
-            *self.track.lock().unwrap() = Some(track);
+            let slot = if track.kind().await == RtpCodecKind::Audio {
+                &self.sound
+            } else {
+                &self.track
+            };
+
+            *slot.lock().unwrap() = Some(track);
         }
+    }
+
+    /// The G.711 expansion, to hear what arrived.
+    fn expand_mulaw(byte: u8) -> i16 {
+        let byte = !byte;
+        let magnitude =
+            (((i32::from(byte & 0x0F) << 3) + 0x84) << i32::from((byte >> 4) & 0x07)) - 0x84;
+
+        if byte & 0x80 != 0 {
+            -magnitude as i16
+        } else {
+            magnitude as i16
+        }
+    }
+
+    /// A hosted session offers its sound beside its screen, as G.711 — the
+    /// codec every browser must decode — and a control-only one offers none.
+    #[tokio::test]
+    async fn a_session_that_shows_a_screen_offers_its_sound_too() {
+        let factory = bundled();
+
+        let mut host = factory
+            .create(IceConfiguration::default(), CaptureProfile::adaptive())
+            .await
+            .expect("host");
+        let offer = host.create_offer().await.expect("offer");
+        let sdp = offer["sdp"].as_str().expect("sdp");
+
+        let audio: String = sdp
+            .split("m=")
+            .find(|section| section.starts_with("audio"))
+            .expect("an audio section")
+            .to_owned();
+        assert!(audio.contains("PCMU/8000"), "G.711 is offered: {audio}");
+        assert!(host.audio_sink().is_some());
+
+        let companion = factory
+            .create_control_only(IceConfiguration::default())
+            .await
+            .expect("companion");
+        assert!(
+            companion.audio_sink().is_none(),
+            "a companion sends no media"
+        );
+
+        host.close().await.expect("closes");
+    }
+
+    /// End to end: sound handed to the session's sink arrives at a second
+    /// peer as 20 ms G.711 packets on the negotiated payload type, evenly
+    /// stamped, and is the tone that went in.
+    #[tokio::test]
+    async fn sound_handed_to_the_sink_reaches_the_viewer() {
+        use webrtc::media_stream::track_remote::TrackRemoteEvent;
+
+        let mut agent = bundled()
+            .create(IceConfiguration::default(), CaptureProfile::adaptive())
+            .await
+            .expect("agent");
+
+        let events = ViewerEvents::default();
+        let mut media = MediaEngine::default();
+        media.register_default_codecs().expect("codecs");
+        let viewer = PeerConnectionBuilder::new()
+            .with_configuration(RTCConfigurationBuilder::default().build())
+            .with_media_engine(media)
+            .with_handler(Arc::new(events.clone()))
+            .with_udp_addrs(vec!["0.0.0.0:0".to_owned()])
+            .build()
+            .await
+            .expect("viewer");
+
+        let offer = agent.create_offer().await.expect("offer");
+        viewer
+            .set_remote_description(serde_json::from_value(offer).expect("an offer"))
+            .await
+            .expect("the viewer takes the offer");
+        let answer = viewer.create_answer(None).await.expect("answer");
+        viewer
+            .set_local_description(answer.clone())
+            .await
+            .expect("the viewer sets its answer");
+        agent
+            .accept_answer(serde_json::to_value(answer).expect("serialises"))
+            .await
+            .expect("the agent takes the answer");
+
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while agent.state() != PeerState::Connected {
+            assert!(Instant::now() < deadline, "never connected");
+
+            for candidate in agent.take_local_candidates() {
+                let init = serde_json::from_value(candidate).expect("a candidate");
+                let _ = viewer.add_ice_candidate(init).await;
+            }
+
+            let from_viewer = std::mem::take(&mut *events.candidates.lock().unwrap());
+            for candidate in from_viewer {
+                let value = serde_json::to_value(candidate).expect("serialises");
+                agent.add_ice_candidate(value).await.expect("added");
+            }
+
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        // A 440 Hz tone at half scale, 48 kHz stereo, in the 10 ms chunks a
+        // sound card hands over.
+        let sink = agent.audio_sink().expect("a sound track");
+        let mut received: Vec<rtc::rtp::packet::Packet> = Vec::new();
+        let mut frame = 0_u64;
+        let start = Instant::now();
+
+        while received.len() < 40 {
+            assert!(
+                start.elapsed() < Duration::from_secs(20),
+                "no sound arrived"
+            );
+
+            let mut samples = Vec::with_capacity(480 * 2);
+            for _ in 0..480 {
+                let value =
+                    (std::f64::consts::TAU * 440.0 * frame as f64 / 48_000.0).sin() as f32 * 0.5;
+                samples.extend([value, value]);
+                frame += 1;
+            }
+            sink.push(AudioChunk {
+                sample_rate: 48_000,
+                channels: 2,
+                samples,
+            });
+
+            let sound = events.sound.lock().unwrap().clone();
+            if let Some(sound) = sound {
+                while let Ok(Some(event)) =
+                    tokio::time::timeout(Duration::from_millis(2), sound.poll()).await
+                {
+                    if let TrackRemoteEvent::OnRtpPacket(packet) = event {
+                        received.push(packet);
+                    }
+                }
+            }
+
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        // Skip the first few: the far side attaches to the track a moment
+        // after sound starts flowing.
+        let run = &received[received.len() - 20..];
+
+        for pair in run.windows(2) {
+            assert_eq!(pair[0].header.payload_type, 0, "PCMU's payload type");
+            assert_eq!(pair[0].header.ssrc, AUDIO_SSRC);
+            assert_eq!(pair[0].payload.len(), PACKET_SAMPLES, "20 ms a packet");
+            assert_eq!(
+                pair[1]
+                    .header
+                    .sequence_number
+                    .wrapping_sub(pair[0].header.sequence_number),
+                1
+            );
+            assert_eq!(
+                pair[1]
+                    .header
+                    .timestamp
+                    .wrapping_sub(pair[0].header.timestamp),
+                PACKET_SAMPLES as u32,
+                "consecutive packets are one packet of samples apart"
+            );
+        }
+
+        let heard: Vec<i16> = run
+            .iter()
+            .flat_map(|packet| packet.payload.iter().map(|byte| expand_mulaw(*byte)))
+            .collect();
+        let peak = heard
+            .iter()
+            .map(|sample| sample.unsigned_abs())
+            .max()
+            .unwrap();
+        assert!((14_000..=17_500).contains(&peak), "half scale: {peak}");
+
+        // 20 packets are 0.4 s: 440 Hz crosses zero about 352 times.
+        let crossings = heard
+            .windows(2)
+            .filter(|pair| (pair[0] < 0) != (pair[1] < 0))
+            .count();
+        assert!((340..=364).contains(&crossings), "{crossings} crossings");
+
+        agent.close().await.expect("closes");
+        viewer.close().await.expect("closes viewer");
+    }
+
+    /// After a silence — a loopback capture delivers nothing while nothing
+    /// plays — the next packet starts a new burst: marked, and stamped as
+    /// late as the silence was long.
+    #[test]
+    fn a_silence_is_a_gap_in_the_timestamps_not_a_stretch() {
+        let mut packets = SoundPacketizer::new();
+        let start = Instant::now();
+        let payload = || vec![0xFF_u8; PACKET_SAMPLES];
+
+        let first = packets.packet(payload(), 0, start);
+        let second = packets.packet(payload(), 0, start + Duration::from_millis(20));
+        let after = packets.packet(payload(), 0, start + Duration::from_millis(2_020));
+        let next = packets.packet(payload(), 0, start + Duration::from_millis(2_040));
+
+        assert!(first.header.marker, "the first packet starts a burst");
+        assert!(!second.header.marker);
+        assert_eq!(
+            second.header.timestamp.wrapping_sub(first.header.timestamp),
+            160
+        );
+
+        assert!(after.header.marker, "and so does the first after a silence");
+        assert_eq!(
+            after.header.timestamp.wrapping_sub(second.header.timestamp),
+            16_000,
+            "two seconds of silence are two seconds of timestamp"
+        );
+        assert_eq!(
+            next.header.timestamp.wrapping_sub(after.header.timestamp),
+            160
+        );
+        assert_eq!(
+            next.header
+                .sequence_number
+                .wrapping_sub(first.header.sequence_number),
+            3,
+            "sequence numbers never skip"
+        );
     }
 
     /// End to end inside one process: the agent's session offers, a second

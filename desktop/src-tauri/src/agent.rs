@@ -261,6 +261,17 @@ impl Agent {
             .unwrap_or_default()
     }
 
+    /// Whether the person at this computer has sound switched on for the
+    /// people they share its screen with. Asked many times a second by the
+    /// sound capture, so it reads the one field rather than cloning the lot.
+    #[must_use]
+    pub fn shares_sound(&self) -> bool {
+        self.config
+            .lock()
+            .map(|config| config.share_sound)
+            .unwrap_or(false)
+    }
+
     /// Replace the configuration, after validating it, and write it back.
     ///
     /// Validated before it is stored and stored before it is written, so a

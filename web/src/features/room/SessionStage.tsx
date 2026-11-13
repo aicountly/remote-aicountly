@@ -143,6 +143,15 @@ export default function SessionStage({
   const fullscreen = useFullscreen(stageRef)
   const exitFullscreen = fullscreen.exit
 
+  // A browser will not start sound a person has not asked for: until somebody
+  // has clicked or typed on this page, playing a stream that carries sound is
+  // refused — and with it the picture. A computer sharing through the desktop
+  // app sends its sound beside its screen, so somebody who opened the room
+  // from a link and has touched nothing yet would have seen no screen at all.
+  // The picture is shown without sound instead, and the sound joins it at the
+  // first click or key press.
+  const [soundWaiting, setSoundWaiting] = useState(false)
+
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
@@ -150,11 +159,32 @@ export default function SessionStage({
     if (video.srcObject !== stream) {
       video.srcObject = stream
 
-      // A stream can arrive before the element is ready to play it; autoplay
-      // rejection here is normal and not worth surfacing.
-      video.play().catch(() => undefined)
+      video.play().catch((error: unknown) => {
+        // Refused for want of a gesture: play it silently now.
+        if ((error as { name?: string } | null)?.name !== 'NotAllowedError') return
+
+        video.muted = true
+        setSoundWaiting(true)
+        // A stream can arrive before the element is ready to play it; a
+        // rejection of the silent attempt is that, and not worth surfacing.
+        video.play().catch(() => undefined)
+      })
     }
   }, [stream])
+
+  useEffect(() => {
+    if (!soundWaiting) return
+
+    const start = () => setSoundWaiting(false)
+
+    window.addEventListener('pointerdown', start, { once: true })
+    window.addEventListener('keydown', start, { once: true })
+
+    return () => {
+      window.removeEventListener('pointerdown', start)
+      window.removeEventListener('keydown', start)
+    }
+  }, [soundWaiting])
 
   const toNormalised = useCallback((event: { clientX: number; clientY: number }) => {
     const rect = surfaceRef.current?.getBoundingClientRect()
@@ -473,8 +503,9 @@ export default function SessionStage({
             autoPlay
             playsInline
             // Muted for the local preview only: hearing your own shared audio
-            // back is feedback, not a feature.
-            muted={!isViewingRemote}
+            // back is feedback, not a feature. And until the browser allows
+            // sound on this page (`soundWaiting`).
+            muted={!isViewingRemote || soundWaiting}
           />
 
           <AnnotationLayer shapes={shapes} />

@@ -80,6 +80,19 @@ pub struct AgentConfig {
     /// nothing on its own.
     #[serde(default)]
     pub allow_secure_desktop_unattended: bool,
+
+    /// Whether a session that shows this computer's screen also carries what
+    /// the computer is playing.
+    ///
+    /// The person at the computer's switch, in App settings, and **off until
+    /// they turn it on**: sound is a different exposure from the picture —
+    /// it can be the other half of a call — so it is asked for separately,
+    /// the way the clipboard is. It is read continuously while a session
+    /// runs, so switching it off stops the sound within a moment. Nothing is
+    /// captured while it is off. `serde(default)`, so a configuration written
+    /// before the setting existed reads as off.
+    #[serde(default)]
+    pub share_sound: bool,
 }
 
 /// [`AgentConfig::openh264_enabled`] for a file that does not mention it.
@@ -98,6 +111,7 @@ impl Default for AgentConfig {
             capture_quality: "adaptive".into(),
             openh264_enabled: default_openh264_enabled(),
             allow_secure_desktop_unattended: false,
+            share_sound: false,
         }
     }
 }
@@ -687,6 +701,35 @@ mod tests {
 
         assert!(message.contains("could not be saved"));
         assert!(!message.contains("could not be read"));
+    }
+
+    /// Sound is the person at the computer's to switch on: off by default,
+    /// and off for a configuration written before the setting existed.
+    #[test]
+    fn sharing_sound_is_off_until_somebody_switches_it_on() {
+        assert!(!AgentConfig::default().share_sound);
+
+        let older = r#"{
+            "apiBaseUrl": "https://remote.aicountly.com/api",
+            "portalUrl": "https://my.aicountly.com",
+            "presenceIntervalSeconds": 60,
+            "runInBackground": true,
+            "startAtLogin": true,
+            "captureQuality": "adaptive"
+        }"#;
+
+        let config = AgentConfig::from_json(older).expect("an older configuration still parses");
+        assert!(!config.share_sound, "a missing field reads as off");
+
+        let on = AgentConfig {
+            share_sound: true,
+            ..AgentConfig::default()
+        };
+        assert!(on.to_json().contains("\"shareSound\": true"));
+        assert_eq!(
+            AgentConfig::from_json(&on.to_json()).expect("round trips"),
+            on
+        );
     }
 
     /// Off by default, and a configuration written before the field existed

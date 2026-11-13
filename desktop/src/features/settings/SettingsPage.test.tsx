@@ -40,6 +40,7 @@ const CONFIG: AgentConfig = {
   captureQuality: 'adaptive',
   openh264Enabled: true,
   allowSecureDesktopUnattended: false,
+  shareSound: false,
 }
 
 const READY: CodecStatus = {
@@ -68,6 +69,7 @@ function about(overrides: Partial<About> = {}): About {
     supported: true,
     supportsHosting: true,
     supportsCompanion: true,
+    supportsSound: true,
     stopShortcut: 'Ctrl+Alt+Shift+S',
     keyStorage: 'Windows DPAPI (machine scope)',
     logFile: null,
@@ -160,6 +162,29 @@ describe('the Video codec section', () => {
     const label = document.getElementById('openh264-attribution')
     expect(label?.textContent).toBe(ATTRIBUTION)
     expect(label?.closest('label')).toContainElement(toggle)
+  })
+
+  /**
+   * Sound is the person at the computer's to switch on. It is saved with the rest of the form, and is not
+   * offered at all where the computer cannot send it.
+   */
+  it('offers the sound switch, off, and saves it switched on', async () => {
+    const onSave = vi.fn()
+    render(<SettingsPage config={CONFIG} about={about()} onSave={onSave} />)
+
+    const sound = screen.getByRole('checkbox', { name: /Share this computer’s sound/ })
+    expect(sound).not.toBeChecked()
+
+    await userEvent.click(sound)
+    await userEvent.click(screen.getByRole('button', { name: 'Save settings' }))
+
+    expect(onSave).toHaveBeenLastCalledWith({ ...CONFIG, shareSound: true })
+  })
+
+  it('does not offer the sound switch on a computer that cannot send sound', () => {
+    render(<SettingsPage config={CONFIG} about={about({ supportsSound: false })} onSave={vi.fn()} />)
+
+    expect(screen.queryByRole('checkbox', { name: /Share this computer’s sound/ })).toBeNull()
   })
 
   it('shows the installed version and size', async () => {

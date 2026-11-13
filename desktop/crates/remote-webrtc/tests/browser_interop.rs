@@ -123,6 +123,20 @@ async fn run(mode: Mode, source: (u32, u32), expected: (u32, u32)) {
     let mut sent_while_connected = 0_u64;
     let mut slowest_send = Duration::ZERO;
 
+    // The computer's sound: a 440 Hz tone handed to the session's sink as
+    // the capture would hand it, 48 kHz stereo, for as long as the picture.
+    let sound = session
+        .audio_sink()
+        .expect("a hosted session has a sound track");
+    let mut sound_frames = 0_u64;
+
+    // Whatever the browser sends on the control channel. Read once a turn,
+    // between frames, exactly as the host's loop reads it — and it must come
+    // straight back every time, or the frames stop and the picture check
+    // below fails with it.
+    let mut control: Vec<Vec<u8>> = Vec::new();
+    let mut slowest_control_read = Duration::ZERO;
+
     let (status, report) = loop {
         tokio::select! {
             Some(request) = requests.recv() => {
@@ -139,6 +153,30 @@ async fn run(mode: Mode, source: (u32, u32), expected: (u32, u32)) {
                 if connected {
                     sent_while_connected += 1;
                     slowest_send = slowest_send.max(began.elapsed());
+                }
+
+                let began = Instant::now();
+                control.extend(session.receive_control().await.expect("the control channel is read"));
+                slowest_control_read = slowest_control_read.max(began.elapsed());
+
+                // Sound up to now, so it keeps pace with the wall clock
+                // however long a frame took.
+                let due = (started.elapsed().as_secs_f64() * 48_000.0) as u64;
+                if due > sound_frames {
+                    let mut samples = Vec::with_capacity((due - sound_frames) as usize * 2);
+                    for index in sound_frames..due {
+                        let value = (std::f64::consts::TAU * 440.0 * index as f64 / 48_000.0).sin()
+                            as f32
+                            * 0.5;
+                        samples.extend([value, value]);
+                    }
+                    sound_frames = due;
+
+                    sound.push(remote_webrtc::audio::AudioChunk {
+                        sample_rate: 48_000,
+                        channels: 2,
+                        samples,
+                    });
                 }
             }
             finished = &mut node => break finished.expect("the script ran"),
@@ -170,6 +208,27 @@ async fn run(mode: Mode, source: (u32, u32), expected: (u32, u32)) {
         Some(0),
         "the browser check failed: {}",
         report["failures"]
+    );
+
+    // Every control message the browser sent came off the channel, in order,
+    // without the read ever waiting for one.
+    println!(
+        "agent: {} control messages read, slowest read {:.1} ms",
+        control.len(),
+        slowest_control_read.as_secs_f64() * 1000.0
+    );
+    assert_eq!(
+        control,
+        vec![
+            b"interop-control-1".to_vec(),
+            b"interop-control-2".to_vec(),
+            b"interop-control-3".to_vec(),
+        ],
+        "the browser's control messages reach the agent"
+    );
+    assert!(
+        slowest_control_read < Duration::from_millis(250),
+        "reading the control channel waited {slowest_control_read:?}"
     );
 }
 
