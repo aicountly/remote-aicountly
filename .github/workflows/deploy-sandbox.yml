@@ -338,7 +338,16 @@ jobs:
           # build output. A --delete deploy would remove them and quietly bring the site back
           # up in the middle of a window. Nothing here passes --delete-excluded, so an exclude
           # protects them from deletion as well as from being overwritten.
+          #
+          # assets/ is different: this build's files ARE uploaded there, and the earlier
+          # builds' are left alone ('P' protects from --delete and from nothing else). Every
+          # screen of the app is a file loaded when it is first opened, named after its
+          # contents — so a page somebody opened before this deploy goes on asking for the
+          # files of the build it came from, and deleting them here broke its next screen
+          # until the page reloaded itself. In a session room that reload is somebody
+          # dropping out of a call. The step after this one removes them a month on.
           rsync -avz --delete \
+            --filter='P /assets/***' \
             --exclude='.maintenance' \
             --exclude='.maintenance.json' \
             --exclude='.maintenance-allow' \
@@ -351,6 +360,13 @@ jobs:
             --chmod=D755,F644 \
             -e ssh \
             web/dist/ "deploy-target:$REMOTE_ROOT/"
+
+          # The files of builds a month gone. rsync carries each file's time across, and
+          # every file of the build just uploaded was written minutes ago, so nothing this
+          # deploy serves is old enough to match. Only plain files directly in assets/, and
+          # a failure here is a tidy-up that did not happen, never a failed deploy.
+          ssh deploy-target "find '$REMOTE_ROOT/assets' -maxdepth 1 -type f -mtime +30 -delete" \
+            || echo "::warning::Old build files in assets/ were not pruned. The deploy itself is unaffected."
 
       # Atomic deploys (console-react-app ops/estate/kit/DEPLOY_SAFETY.md §1): backend/ is uploaded to a stage
       # OUTSIDE the document root (~/.aicountly-deploy/remote-sandbox/stage, same filters the api/ rsync had), then
