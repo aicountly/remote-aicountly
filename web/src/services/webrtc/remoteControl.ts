@@ -279,18 +279,29 @@ export function controlKeyFrom(event: { key: string }): ControlKey | null {
  * Starting at 1 and never reusing a number is this side's half of that.
  */
 export class ControlSender {
-  private sequence = 0
+  private sequence: number
+  private count = 0
   private lastPointerAt = 0
 
+  /**
+   * @param startingAfter The sequence the first message follows. The engine passes the clock, so that a
+   *   sender made later — control granted again, the connection rebuilt, this page reloaded — always
+   *   numbers above every sender before it. An agent admits only a sequence newer than the last it acted
+   *   on, and one whose numbers started again at 1 had every message refused as a replay until it had
+   *   sent more than its predecessor ever did: control said "granted" and nothing moved.
+   */
   constructor(
     private readonly sessionUuid: string,
     private readonly participantUuid: string,
     private readonly transmit: (bytes: ArrayBuffer) => boolean,
-  ) {}
+    startingAfter = 0,
+  ) {
+    this.sequence = Number.isFinite(startingAfter) && startingAfter > 0 ? Math.floor(startingAfter) : 0
+  }
 
   /** How many messages have been sent. For the diagnostics panel. */
   get sent(): number {
-    return this.sequence
+    return this.count
   }
 
   /** Send one message. Returns false when the channel would not take it. */
@@ -313,6 +324,7 @@ export class ControlSender {
     if (!this.transmit(bytes.buffer as ArrayBuffer)) return false
 
     this.sequence += 1
+    this.count += 1
 
     return true
   }
@@ -366,6 +378,34 @@ export class ControlSender {
       text,
     })
   }
+
+  /** Ask the computer to show another of its displays. It answers with a new `monitor_layout`. */
+  selectMonitor(monitorId: number): boolean {
+    return this.send({ type: 'select_monitor', monitor_id: monitorId })
+  }
+}
+
+/**
+ * The modifier state to send with a key, with AltGr taken out of it.
+ *
+ * Windows reports AltGr as Ctrl and Alt held together. The character it composes — `@`, `€`, `{` on
+ * many European keyboards — is something the person typed, not a shortcut, and sending it with Ctrl
+ * and Alt set would have the controlled computer treat it as one.
+ */
+export function modifiersForKey(event: {
+  ctrlKey: boolean
+  altKey: boolean
+  shiftKey: boolean
+  metaKey: boolean
+  getModifierState?: (key: string) => boolean
+}): Modifiers {
+  const modifiers = modifiersFrom(event)
+
+  if (event.getModifierState?.('AltGraph')) {
+    return { ...modifiers, ctrl: false, alt: false }
+  }
+
+  return modifiers
 }
 
 /**

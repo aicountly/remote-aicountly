@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement, ReactNode } from 'react'
-import { Maximize, Minimize, MonitorOff, MousePointer2, ShieldCheck } from 'lucide-react'
+import { Maximize, Minimize, Monitor, MonitorOff, MousePointer2, ShieldCheck } from 'lucide-react'
 
 import type { AnnotationShape, EngineSnapshot } from '../../services/webrtc/RemoteSessionEngine'
 import { normalisePointer } from '../../services/webrtc/remoteControl'
-import type { PointerPosition as ControlPoint } from '../../services/webrtc/remoteControl'
+import type { MonitorDescription, PointerPosition as ControlPoint } from '../../services/webrtc/remoteControl'
 import type { SessionDetail } from '../../types/remote'
 import { useFullscreen } from './useFullscreen'
 
@@ -27,6 +27,23 @@ export type AnnotationTool = 'none' | 'pen' | 'arrow' | 'rectangle' | 'highlight
 
 /** Nothing needs the person: one shared empty list, so an absent prop is not a new one every render. */
 const NOTHING: readonly string[] = []
+
+/** No displays reported: the same, for the switcher. */
+const NO_MONITORS: readonly MonitorDescription[] = []
+
+/**
+ * The Keyboard Lock API (Chrome and Edge, in full screen): with it, the keys a
+ * browser normally keeps for itself — Alt+Tab, the Windows key, Ctrl+W, Ctrl+T,
+ * Esc — reach the page, and so the controlled computer.
+ */
+interface KeyboardLock {
+  lock?: (keyCodes?: string[]) => Promise<void>
+  unlock?: () => void
+}
+
+function keyboardLock(): KeyboardLock | null {
+  return (navigator as Navigator & { keyboard?: KeyboardLock }).keyboard ?? null
+}
 
 interface Props {
   session: SessionDetail
@@ -52,6 +69,20 @@ interface Props {
   onControlScroll?: (deltaX: number, deltaY: number, position?: ControlPoint) => void
   onControlKey?: (event: KeyboardEvent, pressed: boolean) => boolean
   onControlClipboard?: (text: string) => boolean
+  /**
+   * The keyboard stopped being the stage's — focus went to another window or
+   * another part of the page. Whatever is held on the controlled computer is
+   * released, because the key-up that would have done it goes elsewhere.
+   */
+  onControlRelease?: () => void
+  /**
+   * The controlled computer's displays, when it shares its own screen through
+   * the desktop app, and the one on screen now. With more than one, the person
+   * controlling gets a switcher — the second screen of a two-screen desk.
+   */
+  monitors?: readonly MonitorDescription[]
+  activeMonitorId?: number | null
+  onSelectMonitor?: (monitorId: number) => void
   /** Set when the host granted the clipboard as well. Separate from control. */
   clipboardShared?: boolean
   /**
@@ -91,6 +122,10 @@ export default function SessionStage({
   onControlScroll,
   onControlKey,
   onControlClipboard,
+  onControlRelease,
+  monitors = NO_MONITORS,
+  activeMonitorId = null,
+  onSelectMonitor,
   clipboardShared = false,
   fullscreenStatus = null,
   fullscreenBanners = null,
@@ -312,6 +347,42 @@ export default function SessionStage({
     if (controlling) surfaceRef.current?.focus()
   }, [fullscreen, controlling])
 
+  // Full screen while controlling takes the whole keyboard. A browser keeps
+  // Alt+Tab, the Windows key, Ctrl+W, Ctrl+T and Esc for itself; pressed while
+  // helping somebody, they switched the helper's own windows or closed the
+  // helper's own tab. Locked, they go to the computer being controlled, and
+  // leaving full screen is a long press of Esc — the browser says so itself.
+  // Where the API does not exist (Firefox, Safari) nothing changes.
+  useEffect(() => {
+    if (!fullscreen.active || !controlling) return
+
+    const keyboard = keyboardLock()
+    if (!keyboard?.lock) return
+
+    keyboard.lock().catch(() => undefined)
+
+    return () => keyboard.unlock?.()
+  }, [fullscreen.active, controlling])
+
+  // The keyboard is somebody else's now — another window, another tab. The
+  // key-up for anything held went with it, so say it here.
+  useEffect(() => {
+    if (!controlling || !onControlRelease) return
+
+    const release = () => onControlRelease()
+    const onVisibility = () => {
+      if (document.hidden) onControlRelease()
+    }
+
+    window.addEventListener('blur', release)
+    document.addEventListener('visibilitychange', onVisibility)
+
+    return () => {
+      window.removeEventListener('blur', release)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [controlling, onControlRelease])
+
   // Control ending — stopped here, revoked by the host, ended at the machine —
   // is explained in the room (`controlNotice`), and asking again happens there.
   const wasControlling = useRef(controlling)
@@ -390,6 +461,7 @@ export default function SessionStage({
           onPointerCancel={controlling ? handleControlPointerUp : handlePointerUp}
           onKeyDown={controlling ? (event) => handleControlKey(event, true) : undefined}
           onKeyUp={controlling ? (event) => handleControlKey(event, false) : undefined}
+          onBlur={controlling ? () => onControlRelease?.() : undefined}
           onContextMenu={controlling ? (event) => event.preventDefault() : undefined}
           tabIndex={controlling ? 0 : undefined}
           role={controlling ? 'application' : undefined}
@@ -469,6 +541,39 @@ export default function SessionStage({
             {session.sourceProductLabel ? ` · ${session.sourceProductLabel}` : ''}
             {session.companyName ? ` · ${session.companyName}` : ''}
           </span>
+        </div>
+      ) : null}
+
+      {/* The other screens of the computer being controlled. Shown only while
+          controlling — the computer switches for the person it gave control to —
+          and only when there is more than one to switch between. */}
+      {controlling && isViewingRemote && monitors.length > 1 && onSelectMonitor ? (
+        <div className="stage__monitors" role="group" aria-label="Screens of the remote computer">
+          <Monitor size={14} aria-hidden="true" />
+          {monitors.map((monitor, index) => {
+            const active = monitor.id === activeMonitorId
+
+            return (
+              <button
+                key={monitor.id}
+                type="button"
+                className={['stage__monitor', active ? 'stage__monitor--active' : ''].filter(Boolean).join(' ')}
+                aria-pressed={active}
+                title={`${monitor.name || `Screen ${index + 1}`} · ${monitor.width} × ${monitor.height}${
+                  monitor.primary ? ' · main screen' : ''
+                }`}
+                onClick={() => {
+                  if (!active) onSelectMonitor(monitor.id)
+
+                  // Keys go to the remote computer only while the surface has
+                  // focus, and pressing this took it.
+                  surfaceRef.current?.focus()
+                }}
+              >
+                {index + 1}
+              </button>
+            )
+          })}
         </div>
       ) : null}
 

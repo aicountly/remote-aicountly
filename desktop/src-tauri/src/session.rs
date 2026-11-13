@@ -329,16 +329,26 @@ where
         left_at: None,
     };
 
-    let mut socket =
-        match SignallingSocket::connect(&joined.signalling_url, &joined.signalling_token).await {
-            Ok(socket) => socket,
-            Err(SignallingError::Address(reason)) => return Ended::Refused(reason),
-            Err(error) => {
-                tracing::warn!(%error, "the signalling connection failed");
+    // This run's epoch: the same on every renewal of the socket, and a new
+    // one if the session is ever hosted again — which is how a browser tells
+    // "it renewed its token" from "it started again" (`connect_url_with_epoch`).
+    let epoch = uuid::Uuid::new_v4().simple().to_string();
 
-                return Ended::Disconnected;
-            }
-        };
+    let mut socket = match SignallingSocket::connect_as(
+        &joined.signalling_url,
+        &joined.signalling_token,
+        Some(&epoch),
+    )
+    .await
+    {
+        Ok(socket) => socket,
+        Err(SignallingError::Address(reason)) => return Ended::Refused(reason),
+        Err(error) => {
+            tracing::warn!(%error, "the signalling connection failed");
+
+            return Ended::Disconnected;
+        }
+    };
 
     let mut last_control_poll = Instant::now() - CONTROL_POLL;
     // The read of the control state that is under way, if one is. Never
@@ -412,7 +422,7 @@ where
             Ok(Ok(None)) | Ok(Err(_)) => {
                 tracing::info!("the signalling connection closed; reconnecting");
 
-                match reconnect_signalling(client, session_uuid, stopping).await {
+                match reconnect_signalling(client, session_uuid, &epoch, stopping).await {
                     Renewal::Fresh(fresh, expires_at) => {
                         socket = *fresh;
                         renew_after = renew_at(expires_at);
@@ -442,7 +452,7 @@ where
         // Make before break: the new socket joins the room as the same participant, the relay closes the old one as
         // replaced, and nobody in the room sees this computer leave.
         if Instant::now() >= renew_after {
-            match renew_signalling(client, session_uuid).await {
+            match renew_signalling(client, session_uuid, &epoch).await {
                 Renewal::Fresh(fresh, expires_at) => {
                     let old = std::mem::replace(&mut socket, *fresh);
                     old.close().await;
@@ -1522,6 +1532,7 @@ pub(crate) fn renew_in(expires_at: Option<time::OffsetDateTime>) -> Duration {
 async fn reconnect_signalling(
     client: &ApiClient,
     session_uuid: &str,
+    epoch: &str,
     stopping: &Arc<AtomicBool>,
 ) -> Renewal {
     let started = Instant::now();
@@ -1531,7 +1542,7 @@ async fn reconnect_signalling(
             return Renewal::Over(Ended::Stopped);
         }
 
-        match renew_signalling(client, session_uuid).await {
+        match renew_signalling(client, session_uuid, epoch).await {
             Renewal::Retry if started.elapsed() < RECONNECT_WINDOW => {
                 tokio::time::sleep(Duration::from_secs(2)).await
             }
@@ -1551,7 +1562,7 @@ enum Renewal {
 }
 
 /// Join again (the API returns the same participant and a fresh room token) and open a new socket with it.
-async fn renew_signalling(client: &ApiClient, session_uuid: &str) -> Renewal {
+async fn renew_signalling(client: &ApiClient, session_uuid: &str, epoch: &str) -> Renewal {
     let body = match client.join_session(session_uuid).await {
         Ok(body) => body,
         Err(error) if error.is_device_rejected() => {
@@ -1579,7 +1590,9 @@ async fn renew_signalling(client: &ApiClient, session_uuid: &str) -> Renewal {
         }
     };
 
-    match SignallingSocket::connect(&fresh.signalling_url, &fresh.signalling_token).await {
+    match SignallingSocket::connect_as(&fresh.signalling_url, &fresh.signalling_token, Some(epoch))
+        .await
+    {
         Ok(socket) => Renewal::Fresh(Box::new(socket), fresh.signalling_expires_at),
         Err(error) => {
             tracing::debug!(%error, "the renewed signalling connection failed");

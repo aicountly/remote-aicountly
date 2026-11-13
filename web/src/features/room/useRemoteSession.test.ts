@@ -57,7 +57,9 @@ vi.mock('../../services/api/remote', () => ({
 
 vi.mock('../../ice-kit/index.js', () => ({ probeRelay: vi.fn() }))
 
-const { useRemoteSession } = await import('./useRemoteSession')
+const { useRemoteSession, effectiveControlState } = await import('./useRemoteSession')
+
+type SessionControlStateForTest = import('../../types/remote').SessionControlState
 
 /** A fresh object on every call, exactly as the API returns it. */
 function sessionRecord(status: string, isHost: boolean) {
@@ -337,5 +339,46 @@ describe('useRemoteSession — somebody the server no longer admits', () => {
     const [uuids, since] = engines[0].dropUnadmitted.mock.calls.at(-1) as [string[], number]
     expect(uuids).toEqual(['p-2', 'p-3'])
     expect(askedAt).toContain(since)
+  })
+})
+
+describe('effectiveControlState', () => {
+  const control = (overrides: Partial<SessionControlStateForTest>) =>
+    ({
+      controllableHostUuid: 'host',
+      controllerUuid: null,
+      controllerName: null,
+      clipboardEnabled: false,
+      pendingRequests: [],
+      allowRemoteControl: true,
+      allowClipboardSync: false,
+      allowDeviceReboot: false,
+      restrictions: [],
+      ...overrides,
+    }) as SessionControlStateForTest
+
+  it('is GRANTED the moment the control read names this participant, whatever the session record still says', () => {
+    // The person at the computer pressed Allow. The session record is re-read every twenty-five
+    // seconds for a viewer; the control read is what knows.
+    expect(effectiveControlState('REQUESTED', control({ controllerUuid: 'me' }), 'me')).toBe('GRANTED')
+    expect(effectiveControlState('NONE', control({ controllerUuid: 'me' }), 'me')).toBe('GRANTED')
+  })
+
+  it('is REQUESTED while this participant is in the queue', () => {
+    const waiting = control({ pendingRequests: [{ participantUuid: 'me', displayName: 'Me', requestedAt: null }] })
+
+    expect(effectiveControlState('NONE', waiting, 'me')).toBe('REQUESTED')
+  })
+
+  it('drops a grant the control read no longer shows, and leaves an answer of no to the record', () => {
+    expect(effectiveControlState('GRANTED', control({}), 'me')).toBe('NONE')
+    expect(effectiveControlState('GRANTED', control({ controllerUuid: 'somebody-else' }), 'me')).toBe('NONE')
+    expect(effectiveControlState('DENIED', control({}), 'me')).toBe('DENIED')
+    expect(effectiveControlState('REVOKED', control({}), 'me')).toBe('REVOKED')
+  })
+
+  it('is the record’s until there is a control read, or for somebody with no participant', () => {
+    expect(effectiveControlState('GRANTED', null, 'me')).toBe('GRANTED')
+    expect(effectiveControlState('REQUESTED', control({ controllerUuid: 'me' }), null)).toBe('REQUESTED')
   })
 })

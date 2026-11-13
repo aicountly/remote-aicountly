@@ -447,6 +447,51 @@
   background: var(--bg-stage-raised);
 }
 
+/* The screens of the computer being controlled: beside the full screen button,
+   in the same quiet corner. */
+.stage__monitors {
+  position: absolute;
+  right: calc(var(--space-5) + 40px);
+  bottom: var(--space-5);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 32px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-stage);
+  border-radius: var(--radius-pill);
+  background: rgba(16, 20, 16, 0.82);
+  color: var(--text-stage);
+  backdrop-filter: blur(6px);
+}
+
+.stage__monitor {
+  min-width: 24px;
+  height: 22px;
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color var(--duration) var(--ease);
+}
+
+.stage__monitor:hover {
+  background: var(--bg-stage-raised);
+}
+
+.stage__monitor--active {
+  border-color: var(--border-stage);
+  background: var(--bg-stage-raised);
+  font-weight: 600;
+  cursor: default;
+}
+
 /* --- Side panel ----------------------------------------------------------- */
 
 .side-panel {

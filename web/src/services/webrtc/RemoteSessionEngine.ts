@@ -73,13 +73,13 @@ import {
   ControlSender,
   controlKeyFrom,
   decodeControlEnvelope,
-  modifiersFrom,
+  modifiersForKey,
   mouseButtonName,
 } from './remoteControl'
 // Aliased: this module already has a `PointerPosition`, and it is a different
 // thing — the annotation pointer carries a name and a colour, the control one
 // is a bare coordinate on the shared surface.
-import type { ControlKey, PointerPosition as ControlPoint } from './remoteControl'
+import type { ControlKey, MonitorDescription, PointerPosition as ControlPoint } from './remoteControl'
 import type { ChatMessage } from '../../types/remote'
 
 /** What the UI shows, in words a person understands (§49). */
@@ -206,6 +206,13 @@ export interface EngineSnapshot {
    * prompt is open, or the host never reported one.
    */
   secureDesktop: { active: boolean; reachable: boolean } | null
+  /**
+   * The displays of the computer that shares its own screen through the desktop app, and which one
+   * is on screen now. Empty until it says, and for a browser share. More than one means the person
+   * controlling can switch between them.
+   */
+  monitors: MonitorDescription[]
+  activeMonitorId: number | null
   network: NetworkStatus
   lastError: string | null
 }
@@ -395,6 +402,8 @@ export class RemoteSessionEngine {
     relayDenied: false,
     controllingPeerId: null,
     controlPaused: null,
+    monitors: [],
+    activeMonitorId: null,
     secureDesktop: null,
     network: {
       path: 'unknown',
@@ -458,12 +467,13 @@ export class RemoteSessionEngine {
     this.signalling = new RemoteSignallingClient({
       url: credentials.url,
       token: credentials.token,
+      expiresAt: credentials.expiresAt,
       refreshToken: async () => {
         const fresh = await fetchSignallingCredentials(this.options.sessionUuid)
         this.adoptIce(normalizeIceConfig(fresh))
         this.refresher?.start(this.ice)
 
-        return { url: fresh.url, token: fresh.token }
+        return { url: fresh.url, token: fresh.token, expiresAt: fresh.expiresAt }
       },
       onMessage: (message) => void this.handleSignal(message),
       onStatus: (status) => this.handleSignallingStatus(status),
@@ -822,8 +832,12 @@ export class RemoteSessionEngine {
 
     this.control = {
       peerId,
-      sender: new ControlSender(this.options.sessionUuid, this.options.participantUuid, (bytes) =>
-        entry.connection.sendControl(bytes),
+      // Numbered from the clock, so this sender is above every one before it: see ControlSender.
+      sender: new ControlSender(
+        this.options.sessionUuid,
+        this.options.participantUuid,
+        (bytes) => entry.connection.sendControl(bytes),
+        Date.now(),
       ),
     }
 
@@ -925,6 +939,15 @@ export class RemoteSessionEngine {
   sendControlKey(event: KeyboardEvent, pressed: boolean): boolean {
     if (!this.control || this.snapshot.controlPaused !== null) return false
 
+    // AltGr. Windows announces it as Control going down and then AltGraph, so by now the controlled
+    // computer is holding Ctrl for a key that is not Ctrl. Let it go, and send the characters AltGr
+    // composes without Ctrl and Alt (modifiersForKey) — they are typing, not shortcuts.
+    if (event.key === 'AltGraph') {
+      if (pressed) this.releaseControlKey({ k: 'ctrl' })
+
+      return true
+    }
+
     const key = controlKeyFrom(event)
     if (!key) return false
 
@@ -934,7 +957,43 @@ export class RemoteSessionEngine {
       this.heldKeys = this.heldKeys.filter((held) => !sameKey(held, key))
     }
 
-    return this.control.sender.key(key, pressed, modifiersFrom(event))
+    return this.control.sender.key(key, pressed, modifiersForKey(event))
+  }
+
+  /** Release one key on the controlled computer if this browser is holding it there. */
+  private releaseControlKey(key: ControlKey): void {
+    if (!this.control || !this.heldKeys.some((held) => sameKey(held, key))) return
+
+    this.heldKeys = this.heldKeys.filter((held) => !sameKey(held, key))
+    this.control.sender.key(key, false, { ctrl: false, alt: false, shift: false, meta: false })
+  }
+
+  /**
+   * Release every key this browser is holding on the controlled computer.
+   *
+   * For the moment the keyboard stops being this page's: Alt+Tab to another window, a click outside
+   * the remote screen. The key-up for whatever was held then goes to somebody else, and without this
+   * the controlled computer keeps Alt or Ctrl down — every later click and keystroke lands as a
+   * shortcut.
+   */
+  releaseControlKeys(): void {
+    if (!this.control) return
+
+    for (const key of this.heldKeys) {
+      this.control.sender.key(key, false, { ctrl: false, alt: false, shift: false, meta: false })
+    }
+
+    this.heldKeys = []
+  }
+
+  /** Ask the computer being controlled to show another of its displays. */
+  selectControlMonitor(monitorId: number): boolean {
+    if (!this.control) return false
+
+    // Whatever is held belongs to the screen being left.
+    this.releaseControlKeys()
+
+    return this.control.sender.selectMonitor(monitorId)
   }
 
   /** Push this browser's clipboard text to the machine being controlled. */
@@ -991,6 +1050,13 @@ export class RemoteSessionEngine {
     }
 
     if (envelope.m.type === 'monitor_layout') {
+      // A computer that shares its own screen says which of its displays is on screen, and can be
+      // asked for another. A companion's picture is its owner's browser share: which display that is
+      // was settled at the machine and is not the controller's to change.
+      if (!this.isCompanion(peerId) && Array.isArray(envelope.m.monitors)) {
+        this.patch({ monitors: envelope.m.monitors, activeMonitorId: envelope.m.active_monitor_id })
+      }
+
       this.options.onMonitorLayout?.(envelope.m.monitors, envelope.m.active_monitor_id)
     }
   }
@@ -1103,6 +1169,15 @@ export class RemoteSessionEngine {
       case 'peer-joined': {
         if (!message.peer) break
 
+        // The relay announces an arrival whenever a participant's socket is replaced, which is also
+        // what renewing a two-minute token looks like. The same page, on a connection that is up, has
+        // not arrived: it never left.
+        const known = this.peers.get(message.peer.participantUuid)
+        const continuing =
+          known !== undefined &&
+          known.epoch === (message.peer.epoch ?? null) &&
+          known.info.connectionState === 'connected'
+
         // A control companion is never offered anything on arrival: only a
         // viewer whose control is requested or granted connects to it.
         if (!this.notePeer(message.peer)) {
@@ -1110,6 +1185,10 @@ export class RemoteSessionEngine {
 
           break
         }
+
+        // Offering again to a connection that is already carrying the session renegotiated it for
+        // nothing, every time either side renewed its token.
+        if (continuing) break
 
         // We were here first, so we offer.
         await this.offerTo(message.peer.participantUuid)

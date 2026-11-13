@@ -77,6 +77,9 @@ export default function SessionRoomPage() {
     controllableHost,
     isControlling,
     controlPaused,
+    myControlState,
+    monitors,
+    activeMonitorId,
     actions,
   } = useRemoteSession({
     sessionUuid: uuid,
@@ -228,7 +231,7 @@ export default function SessionRoomPage() {
     hasControllableHost,
     allowedByPolicy: controlAllowedByPolicy,
     hasPermission: canRequestControl,
-    controlState: me?.controlState ?? null,
+    controlState: myControlState,
     isControlling,
   })
 
@@ -329,7 +332,7 @@ export default function SessionRoomPage() {
     ...(canAnswerControl
       ? (control?.pendingRequests ?? []).map((request) => `control-request:${request.participantUuid}`)
       : []),
-    ...(me?.controlState === 'DENIED' ? ['control-declined'] : []),
+    ...(myControlState === 'DENIED' ? ['control-declined'] : []),
     ...(shareIntent.phase !== 'idle' ? [`share:${shareIntent.phase}`] : []),
     ...(session.status === 'PAUSED' ? ['paused'] : []),
     ...(controlNotice ? [`notice:${controlNotice}`] : []),
@@ -494,6 +497,10 @@ export default function SessionRoomPage() {
           onControlScroll={actions.sendControlScroll}
           onControlKey={actions.sendControlKey}
           onControlClipboard={actions.sendControlClipboard}
+          onControlRelease={actions.releaseControlKeys}
+          monitors={monitors}
+          activeMonitorId={activeMonitorId}
+          onSelectMonitor={actions.selectControlMonitor}
           clipboardShared={control?.clipboardEnabled === true}
           fullscreenStatus={status}
           fullscreenBanners={banners}

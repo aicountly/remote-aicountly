@@ -283,6 +283,33 @@ pub fn connect_url(base: &str, token: &str) -> String {
     format!("{base}{separator}token={}", urlencode(token))
 }
 
+/// [`connect_url`], with this connection's epoch on it.
+///
+/// The epoch is an opaque value made once per run of a session and repeated
+/// on every renewal of its socket. The relay echoes it to the room, where it
+/// tells a browser two things apart that otherwise look the same: this
+/// computer renewing its room token (same epoch — the peer connection the
+/// browser holds is still the one to use) and this computer having started
+/// the session again (a new epoch — that peer connection is gone, and a new
+/// one is needed). It authorises nothing. An epoch the relay would not take
+/// (it accepts 1–64 of `A–Z a–z 0–9 _ -`) is left off rather than sent.
+pub fn connect_url_with_epoch(base: &str, token: &str, epoch: Option<&str>) -> String {
+    let url = connect_url(base, token);
+
+    match epoch {
+        Some(epoch)
+            if !epoch.is_empty()
+                && epoch.len() <= 64
+                && epoch
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-') =>
+        {
+            format!("{url}&epoch={epoch}")
+        }
+        _ => url,
+    }
+}
+
 /// Percent-encode everything that is not unreserved.
 ///
 /// A tiny encoder rather than a dependency: the input is a token this API
@@ -317,13 +344,23 @@ impl SignallingSocket {
     /// is nothing for a caller to get wrong and no way to ask for another
     /// machine's.
     pub async fn connect(url: &str, token: &str) -> Result<Self, SignallingError> {
+        Self::connect_as(url, token, None).await
+    }
+
+    /// [`Self::connect`], announcing `epoch` to the room. See
+    /// [`connect_url_with_epoch`].
+    pub async fn connect_as(
+        url: &str,
+        token: &str,
+        epoch: Option<&str>,
+    ) -> Result<Self, SignallingError> {
         if !is_permitted_endpoint(url) {
             return Err(SignallingError::Address(
                 "a signalling connection must use wss".into(),
             ));
         }
 
-        let target = connect_url(url, token);
+        let target = connect_url_with_epoch(url, token, epoch);
 
         // A TLS configuration that names its crypto provider. The default one
         // `connect_async` would ask rustls for does not exist in this binary,
@@ -492,6 +529,49 @@ mod tests {
     /// `control-hint` is a "poll now" nudge with an empty payload. It parses
     /// as itself — not as Unknown — so the companion can act on it, and it
     /// carries nothing that could grant anything.
+    /// The epoch rides after the token, and one the relay would refuse is
+    /// left off rather than sent.
+    #[test]
+    fn the_epoch_is_added_only_when_it_is_one_the_relay_takes() {
+        assert_eq!(
+            connect_url_with_epoch("wss://example.test/signal", "abc", Some("0f3a-run_1")),
+            "wss://example.test/signal?token=abc&epoch=0f3a-run_1"
+        );
+        assert_eq!(
+            connect_url_with_epoch("wss://example.test/signal", "abc", None),
+            "wss://example.test/signal?token=abc"
+        );
+        for refused in ["", "has space", "a&b=c", &"x".repeat(65)] {
+            assert_eq!(
+                connect_url_with_epoch("wss://example.test/signal", "abc", Some(refused)),
+                "wss://example.test/signal?token=abc",
+                "{refused:?}"
+            );
+        }
+    }
+
+    /// A peer's epoch is read when the relay sends one, and absent otherwise.
+    #[test]
+    fn a_peers_epoch_is_read_when_the_relay_sends_one() {
+        let with: Signal = parse(
+            r#"{"type":"peer-joined","from":"p","peer":{"participantUuid":"p","role":"VIEWER","name":"Sam","epoch":"pageone"}}"#,
+        )
+        .unwrap();
+        let Signal::PeerJoined { peer, .. } = with else {
+            panic!("a peer-joined");
+        };
+        assert_eq!(peer.epoch.as_deref(), Some("pageone"));
+
+        let without: Signal = parse(
+            r#"{"type":"peer-joined","from":"p","peer":{"participantUuid":"p","role":"VIEWER","name":"Sam"}}"#,
+        )
+        .unwrap();
+        let Signal::PeerJoined { peer, .. } = without else {
+            panic!("a peer-joined");
+        };
+        assert_eq!(peer.epoch, None);
+    }
+
     #[test]
     fn a_control_hint_parses_as_a_nudge_and_nothing_more() {
         assert_eq!(
