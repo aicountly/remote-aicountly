@@ -247,6 +247,14 @@ pub enum InputRefusedReason {
     /// administrator. Windows refuses input from an ordinary application into
     /// it; the person at the computer has to use that window themselves.
     ElevatedWindow,
+    /// Ctrl+Alt+Del was asked for and nothing on this computer may send it:
+    /// the person there did not agree to Windows' own prompts being answered,
+    /// so there is no helper to raise it.
+    SecureAttentionNotAllowed,
+    /// Ctrl+Alt+Del was asked for and Windows on this computer does not let
+    /// software raise it — its "software Secure Attention Sequence" policy,
+    /// which this application does not change.
+    SecureAttentionBlocked,
     /// The operating system refused, and did not say why.
     Refused,
 }
@@ -255,6 +263,12 @@ impl fmt::Display for InputRefusedReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::ElevatedWindow => "a window running as administrator is in front",
+            Self::SecureAttentionNotAllowed => {
+                "Ctrl+Alt+Del needs Windows' prompts to have been allowed"
+            }
+            Self::SecureAttentionBlocked => {
+                "Windows on this computer does not let software send Ctrl+Alt+Del"
+            }
             Self::Refused => "the computer refused the input",
         })
     }
@@ -494,6 +508,26 @@ mod tests {
                 reason: InputRefusedReason::Refused
             }
         );
+
+        // The names the room matches on: change one here and the room's
+        // sentence for it silently becomes the general one.
+        for (reason, name) in [
+            (InputRefusedReason::ElevatedWindow, "elevated_window"),
+            (
+                InputRefusedReason::SecureAttentionNotAllowed,
+                "secure_attention_not_allowed",
+            ),
+            (
+                InputRefusedReason::SecureAttentionBlocked,
+                "secure_attention_blocked",
+            ),
+            (InputRefusedReason::Refused, "refused"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(reason).expect("serialises"),
+                serde_json::Value::String(name.into())
+            );
+        }
     }
 
     #[test]

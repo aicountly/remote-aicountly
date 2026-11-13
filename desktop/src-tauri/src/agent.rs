@@ -193,6 +193,15 @@ impl RefusalNotice {
         }
     }
 
+    /// Something the controller asked for by name was not done, at `now`.
+    ///
+    /// Not paced: it answers one deliberate act rather than a stream of
+    /// events, and an answer that is sometimes dropped is no answer.
+    fn say(&mut self, reason: InputRefusedReason, now: Instant) {
+        self.pending = Some(reason);
+        self.last_sent = Some(now);
+    }
+
     fn take(&mut self) -> Option<InputRefusedReason> {
         self.pending.take()
     }
@@ -1534,20 +1543,44 @@ impl Agent {
         // sends the chord and a helper is connected, the helper is asked for
         // it. A helper is connected only while the person at the computer (or
         // its owner, for an unattended connection) agreed to the Secure
-        // Desktop being answered, so this opens nothing they did not. Without
-        // one the chord falls through and is injected like any other keys,
-        // which Windows ignores.
+        // Desktop being answered, so this opens nothing they did not.
+        //
+        // Where it cannot be raised the controller is told which of the two
+        // reasons it was, because the alternative is a menu item that does
+        // nothing and says nothing. The keys are not injected instead: Windows
+        // would not treat them as the sequence, and whatever is in front
+        // would be handed Ctrl+Alt+Delete as an ordinary shortcut.
         if let ControlMessage::Key(event) = &envelope.message {
-            if is_secure_attention(event) && self.secure_desktop_reachable() {
-                return Ok(
-                    if self.send_secure_desktop_input(
-                        aicountly_remote_service::HelperInput::SecureAttention,
-                    ) {
-                        Handled::Applied
-                    } else {
-                        Handled::Failed
-                    },
+            if is_secure_attention(event) {
+                let plan = secure_attention_plan(
+                    cfg!(target_os = "windows"),
+                    self.secure_desktop_reachable(),
+                    crate::secure_desktop::software_secure_attention_permitted,
                 );
+
+                match plan {
+                    SecureAttention::OrdinaryKeys => {}
+                    SecureAttention::Raise => {
+                        return Ok(
+                            if self.send_secure_desktop_input(
+                                aicountly_remote_service::HelperInput::SecureAttention,
+                            ) {
+                                Handled::Applied
+                            } else {
+                                Handled::Failed
+                            },
+                        );
+                    }
+                    SecureAttention::Refuse(reason) => {
+                        if let Ok(mut notice) = self.refusal_notice.lock() {
+                            notice.say(reason, Instant::now());
+                        }
+
+                        tracing::info!(%reason, "Ctrl+Alt+Del was asked for and not sent");
+
+                        return Ok(Handled::Ignored);
+                    }
+                }
             }
         }
 
@@ -1830,6 +1863,39 @@ fn is_secure_attention(event: &remote_protocol::KeyEvent) -> bool {
         && event.modifiers.alt
         && !event.modifiers.shift
         && !event.modifiers.meta
+}
+
+/// What to do with Ctrl+Alt+Del from the controller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SecureAttention {
+    /// This is not Windows: there is no such sequence, and the keys are keys.
+    OrdinaryKeys,
+    /// Ask the Secure Desktop helper to raise it.
+    Raise,
+    /// It cannot be raised here; tell the controller why.
+    Refuse(InputRefusedReason),
+}
+
+/// Decide it. `policy_permits` is only asked once a helper is connected,
+/// since without one the answer changes nothing.
+fn secure_attention_plan(
+    windows: bool,
+    helper_connected: bool,
+    policy_permits: impl FnOnce() -> bool,
+) -> SecureAttention {
+    if !windows {
+        return SecureAttention::OrdinaryKeys;
+    }
+
+    if !helper_connected {
+        return SecureAttention::Refuse(InputRefusedReason::SecureAttentionNotAllowed);
+    }
+
+    if !policy_permits() {
+        return SecureAttention::Refuse(InputRefusedReason::SecureAttentionBlocked);
+    }
+
+    SecureAttention::Raise
 }
 
 /// The display a hosted session shows: the primary one, else the first.
@@ -2848,6 +2914,59 @@ mod tests {
             notice.take(),
             Some(InputRefusedReason::ElevatedWindow),
             "still being refused a few seconds on: said again"
+        );
+    }
+
+    /// Ctrl+Alt+Del is raised only where it can be, and where it cannot the
+    /// controller learns which of the two reasons it was — one the person at
+    /// the computer can change by allowing control again with the box
+    /// ticked, the other only whoever administers that computer can.
+    #[test]
+    fn ctrl_alt_del_is_raised_refused_with_a_reason_or_left_as_keys() {
+        // Not Windows: there is no such sequence. The policy is not consulted.
+        assert_eq!(
+            secure_attention_plan(false, true, || panic!("not asked off Windows")),
+            SecureAttention::OrdinaryKeys
+        );
+
+        // Windows, but nobody agreed to its prompts being answered, so there
+        // is no helper. The policy is not consulted: it would change nothing.
+        assert_eq!(
+            secure_attention_plan(true, false, || panic!("not asked without a helper")),
+            SecureAttention::Refuse(InputRefusedReason::SecureAttentionNotAllowed)
+        );
+
+        // A helper, and Windows forbids software raising it.
+        assert_eq!(
+            secure_attention_plan(true, true, || false),
+            SecureAttention::Refuse(InputRefusedReason::SecureAttentionBlocked)
+        );
+
+        // A helper, and Windows permits it.
+        assert_eq!(
+            secure_attention_plan(true, true, || true),
+            SecureAttention::Raise
+        );
+    }
+
+    /// An answer to something the controller asked for by name is not paced
+    /// the way a stream of refused events is: said moments after another
+    /// notice, it still has to arrive.
+    #[test]
+    fn an_answer_to_one_deliberate_act_is_never_held_back() {
+        let mut notice = RefusalNotice::default();
+        let start = Instant::now();
+
+        notice.refused(InputRefusedReason::ElevatedWindow, start);
+        assert_eq!(notice.take(), Some(InputRefusedReason::ElevatedWindow));
+
+        notice.say(
+            InputRefusedReason::SecureAttentionNotAllowed,
+            start + Duration::from_millis(200),
+        );
+        assert_eq!(
+            notice.take(),
+            Some(InputRefusedReason::SecureAttentionNotAllowed)
         );
     }
 

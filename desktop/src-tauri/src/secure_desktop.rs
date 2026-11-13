@@ -46,6 +46,64 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// The gap between connection attempts.
 const CONNECT_RETRY: Duration = Duration::from_millis(100);
 
+/// Whether Windows on this computer lets a service raise Ctrl+Alt+Del.
+///
+/// `SendSAS` — the only way software raises the Secure Attention Sequence —
+/// works for a service only where the "Disable or enable software Secure
+/// Attention Sequence" policy says services may: `SoftwareSASGeneration`
+/// under `HKLM\…\Policies\System`, `1` (services) or `3` (services and Ease
+/// of Access applications). Unset, which is how Windows ships, means it does
+/// nothing at all. This application reads the policy and does not write it:
+/// changing what may raise the sequence on somebody's computer is a decision
+/// for whoever runs that computer, and is recorded as such in the readiness
+/// audit rather than made quietly by an installer.
+///
+/// Read so the controller can be told why nothing happened, instead of the
+/// helper being asked for something Windows will silently drop.
+#[must_use]
+pub fn software_secure_attention_permitted() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::core::w;
+        use windows::Win32::System::Registry::{
+            RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD,
+        };
+
+        let mut value = 0_u32;
+        let mut size = std::mem::size_of::<u32>() as u32;
+
+        // SAFETY: `value` and `size` are matched locals; `RegGetValueW` writes
+        // at most `size` bytes of a DWORD, which is what the flag restricts
+        // the read to.
+        let result = unsafe {
+            RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                w!(r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"),
+                w!("SoftwareSASGeneration"),
+                RRF_RT_REG_DWORD,
+                None,
+                Some(std::ptr::addr_of_mut!(value).cast()),
+                Some(&mut size),
+            )
+        };
+
+        result.is_ok() && services_may_raise_secure_attention(value)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
+/// Which values of `SoftwareSASGeneration` let a service raise the sequence:
+/// `1` is services, `3` is services and Ease of Access applications. `0` is
+/// nobody and `2` is Ease of Access applications only.
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+fn services_may_raise_secure_attention(policy: u32) -> bool {
+    matches!(policy, 1 | 3)
+}
+
 /// A live connection to a Secure Desktop helper.
 pub struct SecureDesktopHelper {
     /// The helper's most recent `State { active }`.
@@ -283,6 +341,21 @@ pub fn helper_input_from(message: &ControlMessage) -> Option<HelperInput> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only the two settings that name services let the helper raise
+    /// Ctrl+Alt+Del; unset reads as nothing at all and is refused before
+    /// this is asked.
+    #[test]
+    fn only_a_policy_that_names_services_lets_ctrl_alt_del_be_raised() {
+        assert!(!services_may_raise_secure_attention(0), "nobody");
+        assert!(services_may_raise_secure_attention(1), "services");
+        assert!(
+            !services_may_raise_secure_attention(2),
+            "Ease of Access only"
+        );
+        assert!(services_may_raise_secure_attention(3), "both");
+        assert!(!services_may_raise_secure_attention(4), "not a setting");
+    }
     use remote_protocol::{
         ClipboardDirection, ClipboardPayload, Key, KeyEvent, Modifiers, MouseButton, MouseEvent,
         PointerPosition, ScrollEvent,
