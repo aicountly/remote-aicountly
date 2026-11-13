@@ -536,6 +536,16 @@ where
             }
         }
 
+        // The computer refused the controller's input — a window running as
+        // administrator is in front. Say so, or their room goes on claiming
+        // control while nothing they do has any effect.
+        if let Some(reason) = agent.take_input_refusal() {
+            if let Some(bytes) = input_refused_bytes(session_uuid, &joined.participant_uuid, reason)
+            {
+                let _ = link.peer.send_control(&bytes).await;
+            }
+        }
+
         // The API has just been told what the person here decided. Nudge the
         // room, so the browser waiting on that answer reads it now.
         if agent.take_control_hint() {
@@ -1161,6 +1171,30 @@ fn secure_desktop_bytes(
         participant_uuid,
         sequence,
         remote_protocol::ControlMessage::SecureDesktop { active, reachable },
+    );
+
+    envelope.validate().ok()?;
+
+    serde_json::to_vec(&envelope).ok()
+}
+
+/// `input_refused { reason }`, in the same envelope as every other control
+/// message.
+fn input_refused_bytes(
+    session_uuid: &str,
+    participant_uuid: &str,
+    reason: remote_protocol::InputRefusedReason,
+) -> Option<Vec<u8>> {
+    let sequence = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(1);
+
+    let envelope = remote_protocol::ControlEnvelope::new(
+        session_uuid,
+        participant_uuid,
+        sequence,
+        remote_protocol::ControlMessage::InputRefused { reason },
     );
 
     envelope.validate().ok()?;

@@ -87,18 +87,28 @@
 //! choose Allow when it appears.
 //!
 //! The follow-up is an `SCStream` capture: it delivers on change, so a still
-//! desktop costs nothing; it draws the pointer (`showsCursor` — this file
-//! cannot: `CGDisplayCreateImage` never includes the cursor, whatever
-//! [`CaptureProfile::include_cursor`] says); it can capture a single window;
+//! desktop costs nothing; it draws the pointer's real shape (`showsCursor`
+//! — `CGDisplayCreateImage` never includes the cursor, so this file draws an
+//! arrow where the pointer is instead, when [`CaptureProfile::include_cursor`]
+//! asks for one: see `platform::pointer`); it can capture a single window;
 //! and it is the API Sequoia does not keep asking about. It is a larger
 //! change — Objective-C blocks, a dispatch queue, `CMSampleBuffer`s — and is
 //! deliberately not attempted here.
 //!
-//! # Frames are never stored
+//! # Frames are never stored — and a still desktop is not sent twice
 //!
 //! A [`Frame`] is produced, handed to the encoder and dropped. Nothing here
-//! keeps one — not even the previous frame for comparison, which is why a
-//! still desktop is paced rather than deduplicated.
+//! keeps one. What is kept between frames is a 64-bit [`fingerprint`] of the
+//! last one, and where the pointer was: a frame whose fingerprint and pointer
+//! match the one before is the same picture, and is not handed on at all. A
+//! desktop nobody is touching used to be read back, converted and encoded
+//! fifteen to thirty times a second all the same — most of a processor core
+//! on a Retina display, on the Mac of the person being helped, to send a
+//! picture the viewer already had. The read-back still happens (it is the
+//! only way to find out), the conversion and the encode do not. A viewer who
+//! needs the picture again — they have just connected, or lost a packet —
+//! gets it from the encoder, which holds what it last sent
+//! (`PeerSession::refresh_picture`).
 //!
 //! # What is decided here, and tested on every host
 //!
@@ -134,6 +144,13 @@ pub trait DisplaySource: Send + Sync {
     /// One frame of `display`, already BGRA. `Ok(None)` when macOS had no
     /// picture to give — the display is asleep, mid mode-change, or gone.
     fn grab(&self, display: u32, timestamp_us: u64) -> PlatformResult<Option<Frame>>;
+
+    /// Where the pointer is, in the layout's own global points. `None` when
+    /// that cannot be told, which leaves the picture without a pointer — as
+    /// every picture was before this existed.
+    fn pointer(&self) -> Option<(f64, f64)> {
+        None
+    }
 }
 
 /// The real displays, through Core Graphics. Off macOS every call refuses.
@@ -143,6 +160,18 @@ pub struct CoreGraphics;
 impl DisplaySource for CoreGraphics {
     fn layout(&self) -> PlatformResult<MonitorLayout> {
         super::display::current_layout()
+    }
+
+    fn pointer(&self) -> Option<(f64, f64)> {
+        #[cfg(target_os = "macos")]
+        {
+            imp::pointer()
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
     }
 
     fn may_record(&self) -> bool {
@@ -489,6 +518,10 @@ pub struct MacCapture<S: DisplaySource = CoreGraphics> {
     pacer: FramePacer,
     /// When the capture started, for the frames' timestamps.
     started: Option<Instant>,
+    /// What the last frame handed on looked like: its [`fingerprint`], and
+    /// where the pointer was drawn on it. A frame that matches is the same
+    /// picture and is not handed on again.
+    last_picture: Option<(u64, Option<(i64, i64)>)>,
 }
 
 impl Default for MacCapture {
@@ -517,6 +550,7 @@ impl<S: DisplaySource> MacCapture<S> {
             profile,
             pacer: FramePacer::for_profile(&profile),
             started: None,
+            last_picture: None,
         }
     }
 
@@ -531,6 +565,55 @@ impl<S: DisplaySource> MacCapture<S> {
             .map(|started| u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX))
             .unwrap_or(0)
     }
+
+    /// Where the pointer is in a frame of `display` — its pixel and the
+    /// frame's pixels per point — if it is on that display.
+    ///
+    /// Best effort throughout: a pointer that cannot be found, or a layout
+    /// that cannot be read this instant, means no pointer is drawn.
+    fn pointer_on(&self, display: u32, frame: &Frame) -> Option<(f64, f64, f64)> {
+        let pointer = self.source.pointer()?;
+        let layout = self.source.layout().ok()?;
+        let monitor = layout.find(display)?;
+
+        crate::platform::pointer::pointer_in_frame(monitor, frame.width, frame.height, pointer)
+    }
+}
+
+/// A 64-bit fingerprint of a frame's pixels and shape.
+///
+/// For telling "the same picture as a moment ago" from "something changed",
+/// and nothing else: every byte takes part, so a change of one pixel — a
+/// blinking caret, a clock's colon — changes it. It is not a cryptographic
+/// hash and is never sent anywhere. Eight bytes at a time through a
+/// multiply-and-rotate, which reads a Retina display's 24 MB in a few
+/// milliseconds — a fraction of what converting and encoding the same frame
+/// costs, and that is what a matching fingerprint saves.
+#[must_use]
+pub fn fingerprint(frame: &Frame) -> u64 {
+    const SEED: u64 = 0x9E37_79B9_7F4A_7C15;
+    const MULTIPLIER: u64 = 0x517C_C1B7_2722_0A95;
+
+    let mix = |hash: u64, word: u64| (hash.rotate_left(5) ^ word).wrapping_mul(MULTIPLIER);
+
+    let mut hash = SEED;
+    hash = mix(hash, u64::from(frame.width));
+    hash = mix(hash, u64::from(frame.height));
+    hash = mix(hash, frame.stride as u64);
+
+    let mut words = frame.data.chunks_exact(8);
+    for word in &mut words {
+        // `chunks_exact(8)` hands over exactly eight bytes.
+        let mut bytes = [0_u8; 8];
+        bytes.copy_from_slice(word);
+        hash = mix(hash, u64::from_le_bytes(bytes));
+    }
+
+    for byte in words.remainder() {
+        hash = mix(hash, u64::from(*byte));
+    }
+
+    hash
 }
 
 impl<S: DisplaySource> ScreenCaptureProvider for MacCapture<S> {
@@ -568,6 +651,9 @@ impl<S: DisplaySource> ScreenCaptureProvider for MacCapture<S> {
         self.profile = profile;
         self.pacer = FramePacer::for_profile(&profile);
         self.started = Some(Instant::now());
+        // Another display, or a capture started again: its first frame is
+        // news whatever it looks like.
+        self.last_picture = None;
 
         Ok(())
     }
@@ -579,6 +665,7 @@ impl<S: DisplaySource> ScreenCaptureProvider for MacCapture<S> {
         // release.
         self.display = None;
         self.started = None;
+        self.last_picture = None;
 
         Ok(())
     }
@@ -606,7 +693,41 @@ impl<S: DisplaySource> ScreenCaptureProvider for MacCapture<S> {
         let timestamp_us = self.timestamp_us();
 
         match self.source.grab(display, timestamp_us)? {
-            Some(frame) => Ok(Some(frame)),
+            Some(mut frame) => {
+                // Where the pointer will be drawn, in pixels of this frame —
+                // `None` when it is on another display, cannot be told, or is
+                // not wanted.
+                let pointer = if self.profile.include_cursor {
+                    self.pointer_on(display, &frame)
+                } else {
+                    None
+                };
+
+                // The same picture as last time, with the pointer where it
+                // was: nothing to send. Taken before the pointer is drawn, so
+                // the picture and the pointer are compared separately and a
+                // pointer that moved is always a new frame.
+                let picture = (
+                    fingerprint(&frame),
+                    pointer.map(|(x, y, _)| (x.floor() as i64, y.floor() as i64)),
+                );
+
+                if self.last_picture == Some(picture) {
+                    return Ok(None);
+                }
+
+                self.last_picture = Some(picture);
+
+                // The image never includes the pointer, so it is drawn in:
+                // without it the person helping cannot see where the person
+                // at the Mac is pointing, or where their own input has put
+                // the Mac's pointer (`platform::pointer`).
+                if let Some((x, y, scale)) = pointer {
+                    crate::platform::pointer::draw_pointer(&mut frame, x, y, scale);
+                }
+
+                Ok(Some(frame))
+            }
             None => {
                 // A display unplugged mid-session: follow the main display,
                 // and `monitors()` follows with it, so input lands on what
@@ -743,6 +864,22 @@ mod imp {
     }
 
     /// One BGRA frame of `display`, or `None` when macOS has no image of it.
+    /// Where the pointer is, in global display points (top-left origin) — the
+    /// space the display list and `CGEventPost` use.
+    ///
+    /// A new event carries the pointer's current location; this is how
+    /// `input.rs` reads it too. Creating one needs no permission and posts
+    /// nothing.
+    pub fn pointer() -> Option<(f64, f64)> {
+        use core_graphics::event::CGEvent;
+        use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+        let source = CGEventSource::new(CGEventSourceStateID::Private).ok()?;
+        let location = CGEvent::new(source).ok()?.location();
+
+        Some((location.x, location.y))
+    }
+
     pub fn grab(display: u32, timestamp_us: u64) -> PlatformResult<Option<Frame>> {
         let Some(image) = OwnedImage::of_display(display) else {
             return Ok(None);
@@ -834,6 +971,11 @@ mod tests {
         images: bool,
         /// Every grab: which display, at what timestamp.
         grabs: Vec<(u32, u64)>,
+        /// Where the pointer is, in global points, if it can be told.
+        pointer: Option<(f64, f64)>,
+        /// Whether the desktop is untouched: every picture the same. When it
+        /// is not — the default, a desktop in use — no two pictures match.
+        still: bool,
     }
 
     #[derive(Clone)]
@@ -846,6 +988,8 @@ mod tests {
                 may_record,
                 images: true,
                 grabs: Vec::new(),
+                pointer: None,
+                still: false,
             })))
         }
 
@@ -861,6 +1005,10 @@ mod tests {
 
         fn may_record(&self) -> bool {
             self.world().may_record
+        }
+
+        fn pointer(&self) -> Option<(f64, f64)> {
+            self.world().pointer
         }
 
         fn grab(&self, display: u32, timestamp_us: u64) -> PlatformResult<Option<Frame>> {
@@ -880,12 +1028,15 @@ mod tests {
             let height = (f64::from(monitor.height) * monitor.scale).round() as usize;
             let stride = width * 4 + 64;
 
-            bgra_frame(
-                &image(width, height, stride, NATIVE),
-                &vec![0; stride * height],
-                timestamp_us,
-            )
-            .map(Some)
+            let mut bytes = vec![0; stride * height];
+            if !world.still {
+                // A desktop in use: something has changed since the last
+                // picture. Its first two pixels carry which picture this is.
+                let tick = world.grabs.len() as u64;
+                bytes[..8].copy_from_slice(&tick.to_le_bytes());
+            }
+
+            bgra_frame(&image(width, height, stride, NATIVE), &bytes, timestamp_us).map(Some)
         }
     }
 
@@ -1312,6 +1463,178 @@ mod tests {
         assert_eq!(capture.monitors().unwrap().active_monitor_id, BUILTIN);
         wait_for_frame(&mut capture);
         assert_eq!(fake.world().grabs.last().unwrap().0, BUILTIN);
+    }
+
+    /// The four bytes of the frame's pixel at (`x`, `y`).
+    fn pixel_at(frame: &Frame, x: usize, y: usize) -> [u8; 4] {
+        let offset = y * frame.stride + x * 4;
+
+        [
+            frame.data[offset],
+            frame.data[offset + 1],
+            frame.data[offset + 2],
+            frame.data[offset + 3],
+        ]
+    }
+
+    /// **A desktop nobody is touching is not sent again.** The fake's picture
+    /// never changes, so after the first frame there is nothing to hand on —
+    /// however many times a frame falls due — until the pointer moves.
+    #[test]
+    fn a_still_desktop_is_sent_once_and_a_moved_pointer_is_a_new_frame() {
+        let fake = Fake::new(true);
+        fake.world().still = true;
+        // On the external display, which sits to the right of the built-in
+        // one and is a point to a pixel.
+        fake.world().pointer = Some((1512.0 + 400.0, 300.0));
+
+        let mut capture = MacCapture::with_source(fake.clone());
+        capture.start(EXTERNAL, quick()).unwrap();
+
+        wait_for_frame(&mut capture);
+
+        // Frames keep falling due and the display keeps being read…
+        let grabs_before = fake.world().grabs.len();
+        for _ in 0..10 {
+            assert!(
+                capture.next_frame().unwrap().is_none(),
+                "the same picture is not handed on twice"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            fake.world().grabs.len() > grabs_before,
+            "…because reading it is the only way to know it has not changed"
+        );
+
+        // The pointer moves by a point: that is a new picture.
+        fake.world().pointer = Some((1512.0 + 401.0, 300.0));
+        let moved = wait_for_frame(&mut capture);
+        assert_eq!(pixel_at(&moved, 401, 300), [0, 0, 0, 255]);
+
+        // Something on the desktop changes: so is that.
+        fake.world().still = false;
+        wait_for_frame(&mut capture);
+
+        // Starting the capture again sends its first frame whatever it shows.
+        fake.world().still = true;
+        capture.stop().unwrap();
+        capture.start(EXTERNAL, quick()).unwrap();
+        wait_for_frame(&mut capture);
+    }
+
+    /// The fingerprint changes when any byte does, or when the same bytes
+    /// are a different shape.
+    #[test]
+    fn a_fingerprint_changes_with_any_pixel_and_with_the_shape() {
+        let frame = |width: u32, height: u32, data: Vec<u8>| Frame {
+            width,
+            height,
+            stride: width as usize * 4,
+            format: PixelFormat::Bgra8,
+            timestamp_us: 0,
+            data,
+        };
+
+        let still = frame(4, 3, vec![7; 48]);
+        assert_eq!(fingerprint(&still), fingerprint(&frame(4, 3, vec![7; 48])));
+
+        // One byte, anywhere — the first, one in the middle, the last.
+        for index in [0, 21, 47] {
+            let mut changed = vec![7; 48];
+            changed[index] = 8;
+            assert_ne!(
+                fingerprint(&still),
+                fingerprint(&frame(4, 3, changed)),
+                "byte {index}"
+            );
+        }
+
+        // And one in a tail that does not fill a whole eight-byte word.
+        let odd = frame(1, 3, vec![7; 12]);
+        let mut tail = vec![7; 12];
+        tail[11] = 9;
+        assert_ne!(fingerprint(&odd), fingerprint(&frame(1, 3, tail)));
+
+        // The same bytes as a different shape are a different picture.
+        assert_ne!(fingerprint(&still), fingerprint(&frame(3, 4, vec![7; 48])));
+
+        // The timestamp is not part of the picture.
+        let later = Frame {
+            timestamp_us: 99,
+            ..frame(4, 3, vec![7; 48])
+        };
+        assert_eq!(fingerprint(&still), fingerprint(&later));
+    }
+
+    /// **The picture shows where the pointer is.** macOS's image leaves the
+    /// pointer out, so it is drawn in — at the pointer's own place, which on
+    /// a Retina display is twice as many pixels across as points.
+    #[test]
+    fn the_pointer_is_drawn_into_the_picture_where_it_is() {
+        let fake = Fake::new(true);
+        fake.world().still = true;
+        // 400 points across and 300 down the built-in Retina display.
+        fake.world().pointer = Some((400.0, 300.0));
+
+        let mut capture = MacCapture::with_source(fake.clone());
+        capture.start(BUILTIN, quick()).unwrap();
+        let frame = wait_for_frame(&mut capture);
+
+        // The fake's picture is all zeroes. The arrow's tip is opaque black
+        // at pixel (800, 600); its fill, a point right and three down, is
+        // white.
+        assert_eq!(pixel_at(&frame, 800, 600), [0, 0, 0, 255], "the tip");
+        assert_eq!(
+            pixel_at(&frame, 800 + 2, 600 + 6),
+            [255, 255, 255, 255],
+            "inside the arrow"
+        );
+        assert_eq!(pixel_at(&frame, 798, 600), [0, 0, 0, 0], "beside it");
+        assert_eq!(pixel_at(&frame, 100, 100), [0, 0, 0, 0], "well away");
+    }
+
+    /// A pointer on the other display is not in this display's picture, and a
+    /// profile that asks for no cursor gets none.
+    #[test]
+    fn no_pointer_is_drawn_when_it_is_elsewhere_or_not_wanted() {
+        let untouched = |frame: &Frame| frame.data.iter().all(|byte| *byte == 0);
+
+        // On the external display, to the right of the built-in one.
+        let fake = Fake::new(true);
+        fake.world().still = true;
+        fake.world().pointer = Some((1512.0 + 50.0, 50.0));
+        let mut capture = MacCapture::with_source(fake.clone());
+        capture.start(BUILTIN, quick()).unwrap();
+        assert!(untouched(&wait_for_frame(&mut capture)));
+
+        // And it is in the external display's own picture, at its own place.
+        capture.start(EXTERNAL, quick()).unwrap();
+        let external = wait_for_frame(&mut capture);
+        assert_eq!(pixel_at(&external, 50, 50), [0, 0, 0, 255]);
+
+        // Not wanted.
+        let fake = Fake::new(true);
+        fake.world().still = true;
+        fake.world().pointer = Some((400.0, 300.0));
+        let mut capture = MacCapture::with_source(fake.clone());
+        capture
+            .start(
+                BUILTIN,
+                CaptureProfile {
+                    include_cursor: false,
+                    ..quick()
+                },
+            )
+            .unwrap();
+        assert!(untouched(&wait_for_frame(&mut capture)));
+
+        // Not known: the picture is exactly what was captured.
+        let fake = Fake::new(true);
+        fake.world().still = true;
+        let mut capture = MacCapture::with_source(fake);
+        capture.start(BUILTIN, quick()).unwrap();
+        assert!(untouched(&wait_for_frame(&mut capture)));
     }
 
     #[test]

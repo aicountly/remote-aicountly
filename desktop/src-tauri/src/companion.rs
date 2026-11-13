@@ -1009,6 +1009,12 @@ impl<A: CompanionApi, F: PeerSessionFactory> Companion<'_, A, F> {
             Err(error) => tracing::warn!(%error, "the control channel could not be read"),
         }
 
+        // The computer refused the controller's input: say so, rather than
+        // leave their room claiming control while nothing happens.
+        if let Some(reason) = self.agent.take_input_refusal() {
+            replies.push(ControlMessage::InputRefused { reason });
+        }
+
         // Keep-alives the connection's own reader took through the gate.
         if let Ok(mut waiting) = self.pings.lock() {
             replies.extend(
