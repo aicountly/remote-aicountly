@@ -443,6 +443,46 @@ class SessionService
     }
 
     /**
+     * Close every session whose time ran out and that nobody has read since — the read that expires a
+     * session, made for the ones nobody is going to open again (`spark remote:sessions-sweep`).
+     *
+     * Each is closed by reading it, so it takes exactly the path a person opening it would have taken:
+     * marked expired, recorded on its timeline, its relay released, everybody in it and its control
+     * companion closed out. Oldest first, at most `$limit` a run. The lookup is over the live sessions
+     * only, which is what `remote_sessions_status_idx` holds.
+     *
+     * @return int how many it closed
+     */
+    public function sweepExpired(int $limit = 500): int
+    {
+        $overdue = $this->db->table('remote_sessions')
+            ->select('id')
+            ->whereNotIn('status', [
+                SessionStatus::ENDED,
+                SessionStatus::EXPIRED,
+                SessionStatus::FAILED,
+                SessionStatus::DECLINED,
+            ])
+            ->where('expires_at <', Clock::now())
+            ->orderBy('expires_at', 'ASC')
+            ->limit(max(1, $limit))
+            ->get()
+            ->getResultArray();
+
+        $closed = 0;
+
+        foreach ($overdue as $row) {
+            $session = $this->findById((int) $row['id']);
+
+            if ($session !== null && SessionStatus::isTerminal((string) $session['status'])) {
+                $closed++;
+            }
+        }
+
+        return $closed;
+    }
+
+    /**
      * What ending a session — by End or by expiry — closes with it: everybody still in it or waiting to be, its
      * control-companion link (recorded as ending), and every invitation that could still be redeemed.
      *

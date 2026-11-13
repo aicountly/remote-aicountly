@@ -254,8 +254,19 @@ impl CompanionEnd {
 
     /// Whether the API has to be told this machine left. When the API ended
     /// the link itself, or the session is gone, there is nothing to leave.
+    ///
+    /// An owner who went and did not come back is told: the API only knows
+    /// they left if their browser said so, and a browser that crashed, lost
+    /// its network or had its lid closed says nothing. The link then stayed
+    /// live on the server for as long as the session did — up to an hour —
+    /// and for all that time this computer was refused as "already in use in
+    /// another Remote session" when its owner started again and tried to link
+    /// it. This machine is the one that knows, so it says.
     fn needs_leave(&self) -> bool {
-        matches!(self, Self::LeftHere | Self::Stopped | Self::Disconnected)
+        matches!(
+            self,
+            Self::LeftHere | Self::Stopped | Self::Disconnected | Self::SharerLeft
+        )
     }
 }
 
@@ -2046,6 +2057,13 @@ mod tests {
 
         assert_eq!(outcome, CompanionEnd::SharerLeft);
         assert!(agent.state().active_companion().is_none());
+        // And the API is told. An owner whose browser crashed told it nothing,
+        // and the link left live there kept this computer "already in use in
+        // another Remote session" for as long as that session had left to run.
+        assert!(
+            world.lock().unwrap().left,
+            "the server has to hear that this machine left the link"
+        );
     }
 
     /// Make before break: about 30 s before the token expires the companion
@@ -2507,8 +2525,11 @@ mod tests {
 
         assert!(CompanionEnd::LeftHere.needs_leave());
         assert!(CompanionEnd::Stopped.needs_leave());
+        // The owner's browser vanished without telling the API: only this
+        // machine knows, and a link left live there keeps the computer
+        // "in use" for the rest of the session.
+        assert!(CompanionEnd::SharerLeft.needs_leave());
         assert!(!CompanionEnd::LinkEnded.needs_leave());
-        assert!(!CompanionEnd::SharerLeft.needs_leave());
         assert!(!CompanionEnd::SessionEnded.needs_leave());
     }
 }
