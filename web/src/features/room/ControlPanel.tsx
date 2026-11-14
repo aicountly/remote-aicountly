@@ -164,7 +164,7 @@ export default function ControlPanel({
 
 /**
  * Why there is nothing to control right now, when the reason is one a person
- * can act on — and whether the answer is the Windows app, which is linked when
+ * can act on — and whether the answer is the desktop app, which is linked when
  * it is offered (`desktopAgent`, remote.allowDesktopAgent) and said to be
  * coming soon when it is not.
  */
@@ -182,11 +182,11 @@ function unavailableMessage(
     default:
       return desktopAgent
         ? {
-            text: 'The computer in this session is a web browser, which cannot be controlled. Control needs AICOUNTLY Remote for Windows at that end.',
+            text: 'The other person is sharing from a web browser, and a browser cannot let anybody control the computer. For control, they need the AICOUNTLY Remote app (Windows or Mac) on that computer.',
             download: true,
           }
         : {
-            text: 'The computer in this session is a web browser, which cannot be controlled. Control needs AICOUNTLY Remote for Windows at that end, and it is coming soon.',
+            text: 'The other person is sharing from a web browser, and a browser cannot let anybody control the computer. Control needs the AICOUNTLY Remote app (Windows or Mac) on that computer, and it is coming soon.',
             download: false,
           }
   }
@@ -239,7 +239,7 @@ function ControlStatus({
       return (
         <p className="control__empty">
           {control?.allowRemoteControl === false
-            ? 'Remote control is not enabled for this organisation.'
+            ? 'Remote control is not enabled for this session.'
             : 'You do not have permission to request control of a computer.'}
         </p>
       )
@@ -248,8 +248,12 @@ function ControlStatus({
       return (
         <>
           <p className="control__empty">
-            {hostParticipant?.displayName ?? host?.name ?? 'This computer'} can be controlled with
-            permission from the person at it.
+            {/* A person's name, or a computer's: "Anita Sharma can be controlled" is not what is meant. */}
+            You can ask to control{' '}
+            {hostParticipant && hostParticipant.clientType !== 'DESKTOP_AGENT'
+              ? `${hostParticipant.displayName}’s computer`
+              : (hostParticipant?.displayName ?? host?.name ?? 'this computer')}
+            . Control starts only once it is allowed on that computer, and can be stopped there at any moment.
           </p>
           <button type="button" className="btn btn--primary btn--sm" onClick={onRequest} disabled={busy}>
             Request control

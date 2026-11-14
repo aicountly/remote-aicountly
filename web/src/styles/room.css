@@ -13,6 +13,10 @@
   height: 100dvh;
   background: var(--bg-stage);
   color: var(--text-stage);
+  /* On the dark stage the focus ring is a light green: the dark one used
+     everywhere else would be a dark ring on a dark room. */
+  --focus-ring-colour: #9be37f;
+  --focus-ring: 0 0 0 2px var(--bg-stage), 0 0 0 4px var(--focus-ring-colour);
 }
 
 .room--loading,
@@ -888,12 +892,12 @@
 }
 
 .tool-button--primary {
-  background: var(--aicountly-green);
+  background: var(--aicountly-green-darker);
   color: #fff;
 }
 
 .tool-button--primary:hover {
-  background: var(--aicountly-green-dark);
+  background: var(--aicountly-green-darkest);
   color: #fff;
 }
 
@@ -1414,10 +1418,13 @@
 
 /* --- Control panel -------------------------------------------------------- */
 
+/* Padded like the panels beside it: its text used to start against the panel's
+   left edge and its buttons ran to the right one. */
 .control {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  padding: var(--space-4);
 }
 
 .control__heading {
@@ -1544,6 +1551,23 @@
 }
 
 .control__active strong {
+  display: block;
+}
+
+/* "Ready" is not an alarm. It was drawn in the red box that says somebody is
+   controlling this computer, which is the one thing it is not saying. */
+.control__ready {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid rgba(127, 224, 92, 0.35);
+  border-radius: var(--radius-md);
+  background: rgba(37, 176, 3, 0.12);
+  color: #d5f5cb;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.control__ready strong {
   display: block;
 }
 

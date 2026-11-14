@@ -32,6 +32,8 @@ export default function SessionsPage() {
   const { bootstrap } = useRemote()
 
   const [sessions, setSessions] = useState<RemoteSession[]>([])
+  // Whether the history has been read at all. A failed read is not "No sessions yet".
+  const [loaded, setLoaded] = useState(false)
   const [total, setTotal] = useState(0)
   const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -46,6 +48,7 @@ export default function SessionsPage() {
       const { data, meta } = await fetchSessionHistory(next)
       setSessions(data ?? [])
       setTotal(Number(meta.total ?? 0))
+      setLoaded(true)
     } catch (err) {
       setError(err instanceof RemoteApiError ? err : new RemoteApiError('UNKNOWN', 'History could not be loaded.', 0))
     } finally {
@@ -73,7 +76,16 @@ export default function SessionsPage() {
           <p className="muted">Remote sessions you took part in.</p>
         </header>
 
-        {error ? <RestrictionNotice error={error} /> : null}
+        {error ? (
+          <RestrictionNotice
+            error={error}
+            action={
+              <button type="button" className="btn btn--secondary" onClick={() => void load({ ...filters, offset })}>
+                Try again
+              </button>
+            }
+          />
+        ) : null}
 
         {live.length > 0 ? (
           <section className="card">
@@ -109,7 +121,9 @@ export default function SessionsPage() {
           <div className="card__header">
             <div>
               <h2 className="card__title">History</h2>
-              <p className="card__subtitle">{total} session{total === 1 ? '' : 's'}</p>
+              <p className="card__subtitle">
+                {error && !loaded ? 'Not loaded.' : `${total} session${total === 1 ? '' : 's'}`}
+              </p>
             </div>
           </div>
 
@@ -212,6 +226,11 @@ export default function SessionsPage() {
               {[0, 1, 2, 3].map((index) => (
                 <div key={index} className="skeleton" style={{ height: 52 }} />
               ))}
+            </div>
+          ) : error && !loaded ? (
+            // Not read, so not known to be empty: the reason is above, with Try again.
+            <div className="card__body">
+              <p className="muted">Your sessions could not be loaded.</p>
             </div>
           ) : past.length === 0 ? (
             <div className="card__body">

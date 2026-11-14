@@ -85,7 +85,7 @@ video {
  * off mouse clicks while guaranteeing it for keyboard users (§63).
  */
 :focus-visible {
-  outline: 3px solid rgba(37, 176, 3, 0.35);
+  outline: 2px solid var(--focus-ring-colour);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
@@ -140,19 +140,19 @@ video {
 }
 
 .btn--primary {
-  background: var(--aicountly-green);
-  border-color: var(--aicountly-green);
+  background: var(--aicountly-green-darker);
+  border-color: var(--aicountly-green-darker);
   color: var(--text-inverse);
 }
 
 .btn--primary:hover:not(:disabled) {
-  background: var(--aicountly-green-dark);
-  border-color: var(--aicountly-green-dark);
+  background: var(--aicountly-green-darkest);
+  border-color: var(--aicountly-green-darkest);
   box-shadow: var(--shadow-sm);
 }
 
 .btn--primary:active:not(:disabled) {
-  background: var(--aicountly-green-darker);
+  background: var(--aicountly-green-darkest);
 }
 
 .btn--secondary {
@@ -295,7 +295,7 @@ video {
 .select:focus,
 .textarea:focus {
   outline: none;
-  border-color: var(--aicountly-green);
+  border-color: var(--focus-ring-colour);
   box-shadow: var(--focus-ring);
 }
 

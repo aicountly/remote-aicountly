@@ -450,11 +450,17 @@
 
 .shell__nav-footnote {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-2);
   padding: 0 var(--space-3);
   color: var(--text-muted);
   font-size: var(--text-xs);
+}
+
+/* The icon keeps its size when the sentence wraps; it was squeezed to a dot. */
+.shell__nav-footnote svg {
+  flex: none;
+  margin-top: 2px;
 }
 
 .shell__nav-foot {
@@ -812,6 +818,11 @@
   color: var(--text-muted);
 }
 
+/* Under the ways of sharing: what the one chosen means for control. */
+.share-control-hint {
+  margin-top: var(--space-3);
+}
+
 .checkbox-row {
   display: flex;
   align-items: flex-start;
@@ -990,7 +1001,7 @@
 .share-option__badge {
   padding: 0.05rem 0.45rem;
   border-radius: var(--radius-pill);
-  background: var(--aicountly-green);
+  background: var(--aicountly-green-darker);
   color: #fff;
   font-size: var(--text-xs);
   font-weight: 600;
@@ -1077,8 +1088,10 @@
   transition: transform var(--duration) var(--ease);
 }
 
+/* The white thumb has to stand out from the track it sits on (3:1 for a
+   control's parts); on the brand green it was 2.9:1. */
 .toggle__input:checked ~ .toggle__track {
-  background: var(--aicountly-green);
+  background: var(--aicountly-green-darker);
 }
 
 .toggle__input:checked ~ .toggle__track .toggle__thumb {

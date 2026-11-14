@@ -354,7 +354,7 @@ function SignedInShell() {
             {isDesktopApp() ? null : (
               <p className="shell__nav-footnote">
                 <ClipboardList size={13} aria-hidden="true" />
-                Browser assistance. No installation required.
+                Share and view in this browser. Nothing to install.
               </p>
             )}
             {/* Closes the phone's navigation drawer first, which would otherwise cover the banner. */}

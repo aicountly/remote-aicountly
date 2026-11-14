@@ -134,16 +134,16 @@ describe('CompanionPanel', () => {
 
     expect(screen.getByText(/the desktop app is coming soon/i)).toBeInTheDocument()
     expect(screen.getByText(/can point and draw on what you share/i)).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /download AICOUNTLY Remote for Windows/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /download the AICOUNTLY Remote app/i })).not.toBeInTheDocument()
   })
 
-  it('links the Windows app download, in a new tab, while the desktop agent is on', () => {
+  it('links the desktop app download, in a new tab, while the desktop agent is on', () => {
     desktop.agent = true
     render(
       <CompanionPanel sessionUuid="s-1" control={control()} isSharing busy={false} onLink={() => {}} onUnlink={() => {}} />,
     )
 
-    const download = screen.getByRole('link', { name: /^Download AICOUNTLY Remote for Windows/ })
+    const download = screen.getByRole('link', { name: /^Download the AICOUNTLY Remote app/ })
     expect(download).toHaveAttribute('href', 'https://aicountly.com/remote')
     // A link that replaced the page would leave the live session.
     expect(download).toHaveAttribute('target', '_blank')
@@ -166,7 +166,7 @@ describe('CompanionPanel', () => {
       await screen.findByText('No AICOUNTLY Remote desktop app is signed in for you. Open it on this computer, sign in and try again.'),
     ).toBeInTheDocument()
     expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /^Download AICOUNTLY Remote for Windows/ })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /^Download the AICOUNTLY Remote app/ })).toBeInTheDocument()
   })
 
   it('cannot be enabled before sharing', () => {

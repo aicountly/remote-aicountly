@@ -68,7 +68,7 @@ function outcomeNote(link: CompanionLink | null): string | null {
   return null
 }
 
-/** `desktopAgent`: the Windows app is offered (remote.allowDesktopAgent), so the panel links to it rather than saying it is coming soon. */
+/** `desktopAgent`: the desktop app is offered (remote.allowDesktopAgent), so the panel links to it rather than saying it is coming soon. */
 function restrictionMessage(restrictions: string[], desktopAgent: boolean): string {
   // What is being shared comes first: it is the one reason on this list the person can fix in the next
   // five seconds, and the server now refuses the link for it rather than making a companion nobody can use.
@@ -77,7 +77,7 @@ function restrictionMessage(restrictions: string[], desktopAgent: boolean): stri
     return 'Control works only when you share your entire screen, not a window or tab.'
   }
   if (restrictions.includes('CONTROL_ACCEPT_DENIED')) return 'You do not have permission to hand over control.'
-  if (restrictions.some((r) => r.startsWith('REMOTE_CONTROL'))) return 'Remote control is not enabled for this organisation.'
+  if (restrictions.some((r) => r.startsWith('REMOTE_CONTROL'))) return 'Remote control is not enabled for this session.'
   if (restrictions.includes('COMPANION_SCOPE')) return 'Control from your own computer is not available in this kind of session.'
 
   return desktopAgent
@@ -219,10 +219,8 @@ export default function CompanionPanel({
 
       {view === 'ready' ? (
         <>
-          <p className="control__active">
-            <span>
-              <strong>Ready.</strong> {deviceName} will carry control you allow.
-            </span>
+          <p className="control__ready">
+            <strong>Ready.</strong> {deviceName} will carry control you allow.
           </p>
           {stopButton('Turn off')}
         </>

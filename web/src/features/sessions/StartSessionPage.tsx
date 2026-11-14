@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowRight, Building2, Mic, ShieldCheck, User } from 'lucide-react'
 
-import { useRemote } from '../../app/RemoteProvider'
+import { useDesktopAgentEnabled, useRemote } from '../../app/RemoteProvider'
 import { createSession } from '../../services/api/remote'
 import { RemoteApiError } from '../../services/api/client'
 import { describeCaptureLimitation } from '../../services/browser/capabilities'
@@ -25,9 +25,37 @@ import { ORGANISATIONS_ENABLED } from '../../app/organisations'
  * No capture happens on this page. It creates the session and hands off to the
  * room, where the consent step and the browser picker live.
  */
+/**
+ * One sentence on what the chosen way of sharing means for control — only where control is
+ * something this person could allow at all, and never a promise the room cannot keep.
+ */
+export function controlHintFor({
+  shareMode,
+  controlOffered,
+  entireScreenAllowed,
+  inDesktopApp,
+}: {
+  shareMode: ShareMode
+  controlOffered: boolean
+  entireScreenAllowed: boolean
+  inDesktopApp: boolean
+}): string | null {
+  if (!controlOffered || !entireScreenAllowed) return null
+
+  if (shareMode !== 'ENTIRE_MONITOR') {
+    return 'Shared this way, a helper can look but cannot control this computer. To let them control it, choose Entire screen.'
+  }
+
+  return inDesktopApp
+    ? 'A helper can ask to control this computer. Nothing is controlled until you allow it, and you can stop it at any moment.'
+    : 'To let a helper control this computer, keep the AICOUNTLY Remote app open on it and turn on “Control from this computer” in the session. Nothing is controlled until you allow it.'
+}
+
 export default function StartSessionPage() {
-  const { bootstrap, policy, scopeType, companyId, capabilities, switchScope, can } = useRemote()
+  const { bootstrap, policy, scopeType, companyId, capabilities, switchScope, can, status, error: startupError, refresh } =
+    useRemote()
   const navigate = useNavigate()
+  const desktopAgent = useDesktopAgentEnabled()
 
   // Inside the desktop application the point of a session is usually to be
   // helped on this computer, and only an entire screen can be controlled from
@@ -49,6 +77,24 @@ export default function StartSessionPage() {
 
   const captureLimitation = describeCaptureLimitation(capabilities)
 
+  // Remote could not be loaded at all — offline, or the server having a bad moment. The page used
+  // to wait for a policy that was never going to arrive: a blank grey block, for as long as it was
+  // left open. It says so, as the dashboard does, and offers to try again.
+  if (status === 'error') {
+    return (
+      <div className="page">
+        <RestrictionNotice
+          error={startupError ?? new RemoteApiError('UNKNOWN', 'AICOUNTLY Remote could not be loaded.', 0)}
+          action={
+            <button type="button" className="btn btn--secondary" onClick={() => void refresh()}>
+              Try again
+            </button>
+          }
+        />
+      </div>
+    )
+  }
+
   if (!policy) {
     return (
       <div className="page">
@@ -66,7 +112,9 @@ export default function StartSessionPage() {
               policy.remoteEnabled ? 'SESSION_CREATE_DENIED' : 'COMPANY_REMOTE_DISABLED',
               policy.remoteEnabled
                 ? 'You do not have permission to start a Remote session.'
-                : `${policy.companyName ?? 'This organisation'} has turned off AICOUNTLY Remote.`,
+                : scopeType === 'PERSONAL'
+                  ? 'AICOUNTLY Remote is not available on this account.'
+                  : `${policy.companyName ?? 'This organisation'} has turned off AICOUNTLY Remote.`,
               403,
             )
           }
@@ -82,6 +130,13 @@ export default function StartSessionPage() {
 
   const allowedModes = policy.allowedShareModes
   const noModeAvailable = allowedModes.length === 0
+  const controlHint = controlHintFor({
+    shareMode,
+    // Control is something this deployment, this account and this person all have to allow.
+    controlOffered: desktopAgent && policy.allowRemoteControl && can(PERMISSIONS.CONTROL_ACCEPT),
+    entireScreenAllowed: allowedModes.includes('ENTIRE_MONITOR'),
+    inDesktopApp: isDesktopApp(),
+  })
 
   async function start() {
     setCreating(true)
@@ -193,8 +248,10 @@ export default function StartSessionPage() {
               <div className="notice notice--warning" role="status">
                 <p className="notice__title">No sharing options are available</p>
                 <p className="notice__body">
-                  {policy.companyName ?? 'Your organisation'} has not permitted any way of sharing for your
-                  account. You can still join a session and use chat.
+                  {scopeType === 'PERSONAL'
+                    ? 'Your account does not permit any way of sharing.'
+                    : `${policy.companyName ?? 'Your organisation'} has not permitted any way of sharing for your account.`}{' '}
+                  You can still join a session and use chat.
                 </p>
               </div>
             ) : (
@@ -205,6 +262,14 @@ export default function StartSessionPage() {
                 captureAvailable={!captureLimitation}
               />
             )}
+
+            {/* What is chosen here decides whether a helper can do more than look, and nothing said so:
+                somebody who wanted their computer fixed shared a window, and found out in the room. */}
+            {controlHint ? (
+              <p className="tiny muted share-control-hint" role="note">
+                {controlHint}
+              </p>
+            ) : null}
 
             {policy.allowMicrophone && can(PERMISSIONS.MICROPHONE_SHARE) ? (
               <label className="checkbox-row">

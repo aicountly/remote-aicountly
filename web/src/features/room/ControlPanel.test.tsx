@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import ControlPanel, { controlPhase } from './ControlPanel'
@@ -184,19 +184,19 @@ describe('ControlPanel', () => {
   it('says a browser cannot be controlled, and offers no button', () => {
     panel({ phase: 'unavailable', host: null, control: control({ controllableHostUuid: null }) })
 
-    expect(screen.getByText(/web browser, which cannot be controlled/i)).toBeInTheDocument()
+    expect(screen.getByText(/a browser cannot let anybody control the computer/i)).toBeInTheDocument()
     // The desktop agent is switched off: the web says the app is coming soon rather than sending anyone looking for it.
-    expect(screen.getByText(/AICOUNTLY Remote for Windows at that end, and it is coming soon/i)).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /download AICOUNTLY Remote for Windows/i })).not.toBeInTheDocument()
+    expect(screen.getByText(/AICOUNTLY Remote app \(Windows or Mac\) on that computer, and it is coming soon/i)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /download the AICOUNTLY Remote app/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /request control/i })).not.toBeInTheDocument()
   })
 
-  it('links the Windows app download for a browser host while the desktop agent is on', () => {
+  it('links the desktop app download for a browser host while the desktop agent is on', () => {
     desktop.agent = true
     panel({ phase: 'unavailable', host: null, control: control({ controllableHostUuid: null }) })
 
-    expect(screen.getByText(/web browser, which cannot be controlled/i)).toBeInTheDocument()
-    const download = screen.getByRole('link', { name: /^Download AICOUNTLY Remote for Windows/ })
+    expect(screen.getByText(/a browser cannot let anybody control the computer/i)).toBeInTheDocument()
+    const download = screen.getByRole('link', { name: /^Download the AICOUNTLY Remote app/ })
     expect(download).toHaveAttribute('href', 'https://aicountly.com/remote')
     expect(download).toHaveAttribute('target', '_blank')
     expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
@@ -208,13 +208,13 @@ describe('ControlPanel', () => {
     panel({ phase: 'unavailable', host: null, control: control({ controllableHostUuid: null, controlBlockedReason: 'NOT_SHARING' }) })
 
     expect(screen.getByText(/only while the screen is being shared/i)).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /download AICOUNTLY Remote for Windows/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /download the AICOUNTLY Remote app/i })).not.toBeInTheDocument()
   })
 
   it('names the organisation as the reason when policy is what says no', () => {
     panel({ phase: 'not-permitted', control: control({ allowRemoteControl: false }) })
 
-    expect(screen.getByText(/not enabled for this organisation/i)).toBeInTheDocument()
+    expect(screen.getByText(/not enabled for this session/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /request control/i })).not.toBeInTheDocument()
   })
 
@@ -230,6 +230,18 @@ describe('ControlPanel', () => {
     await userEvent.click(screen.getByRole('button', { name: /request control/i }))
 
     expect(onRequest).toHaveBeenCalledOnce()
+  })
+
+  it('names the computer as what is controlled, not the person', () => {
+    // A computer sharing through the desktop app is named as itself.
+    panel()
+    expect(screen.getByText(/You can ask to control WS-01\./)).toBeInTheDocument()
+    cleanup()
+
+    // A person sharing from a browser, with the app carrying control: it is their computer.
+    panel({ hostParticipant: participant({ displayName: 'Anita Sharma', clientType: 'BROWSER' }) })
+    expect(screen.getByText(/You can ask to control Anita Sharma’s computer\./)).toBeInTheDocument()
+    expect(screen.queryByText(/Anita Sharma can be controlled/)).not.toBeInTheDocument()
   })
 
   it('shows a persistent stop while control is live', async () => {

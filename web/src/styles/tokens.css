@@ -8,13 +8,24 @@
  * The palette is AICOUNTLY green on a very slightly warm neutral ground. It is
  * deliberately restrained: this is an application people use while something is
  * going wrong, so the interface should recede and the shared screen should not.
+ *
+ * Text has to be readable on what it sits on. White on the brand green is
+ * 2.9:1 — under the 4.5:1 ordinary-size text needs (WCAG 2.1 AA) — and it was
+ * the fill of every primary button. Anything that carries white text is
+ * `--aicountly-green-darker` (6.7:1); the brand green is for marks, dots,
+ * borders and, on the dark stage, links. The muted, warning and danger text
+ * colours are set for the same test against the surfaces they are used on,
+ * and the focus ring is a solid colour rather than a tint.
  */
 
 :root {
   /* --- Brand ------------------------------------------------------------ */
   --aicountly-green: #25b003;
-  --aicountly-green-dark: #1d8d03;
+  /* Green as text (links, the selected navigation item): 5.5:1 on white and
+     5.0:1 on the soft green it is most often on. It was 4.3:1 and 4.0:1. */
+  --aicountly-green-dark: #187a02;
   --aicountly-green-darker: #166b02;
+  --aicountly-green-darkest: #0f5201;
   --aicountly-green-soft: #edf9e9;
   --aicountly-green-border: #c6e8bb;
 
@@ -37,7 +48,8 @@
   /* --- Text ------------------------------------------------------------- */
   --text-primary: #172018;
   --text-secondary: #667068;
-  --text-muted: #8b948c;
+  /* 5.0:1 on white and 4.7:1 on the page background; it was 3.1:1. */
+  --text-muted: #68726a;
   --text-inverse: #ffffff;
 
   /* --- Lines ------------------------------------------------------------ */
@@ -45,11 +57,13 @@
   --border-strong: #cfd8cf;
 
   /* --- Semantic --------------------------------------------------------- */
-  --danger: #d92d20;
+  /* 5.1:1 as text on its soft background (was 4.5:1, on the line). */
+  --danger: #c8291d;
   --danger-soft: #fef3f2;
   --danger-border: #fbd5d1;
 
-  --warning: #b76e00;
+  /* 6.1:1 as text on its soft background (was 3.8:1). */
+  --warning: #8a5200;
   --warning-soft: #fffaeb;
   --warning-border: #fedf89;
 
@@ -105,7 +119,11 @@
   --sidebar-width: 232px;
   --content-max: 1180px;
 
-  --focus-ring: 0 0 0 3px rgba(37, 176, 3, 0.22);
+  /* Two rings: the surface's own colour, then a solid dark green — visible on
+     white, on a coloured button and beside one. It was a 22% tint of the
+     brand green, 1.3:1 against the page: there, and not to be seen. */
+  --focus-ring-colour: var(--aicountly-green-darker);
+  --focus-ring: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--focus-ring-colour);
 }
 
 /**

@@ -131,14 +131,22 @@ export default function SettingsPage() {
             <dl className="detail-list">
               <Row label="Product" value={`AICOUNTLY ${APP_NAME}`} />
               <Row label="Environment" value={APP_ENV} />
-              <Row label="Assistance type" value="Browser assistance — no installation required" />
+              <Row
+                label="Works in"
+                value={desktopAgent ? 'This browser, and the AICOUNTLY Remote app for Windows and Mac' : 'This browser — nothing to install'}
+              />
             </dl>
 
-            {/* §90 — honest about what browser V1 is, without advertising a
-                desktop product that does not exist yet. */}
+            {/* §90 — what the product is, said for the deployment it is on. This used to read "It does
+                not control your computer" on a deployment where a helper, once allowed, does exactly that. */}
             <p className="tiny muted about-note">
-              Remote currently supports attended browser assistance: someone shares a screen and someone else
-              views it, with permission. It does not control your computer.
+              {desktopAgent
+                ? 'In a browser, someone shares a screen and someone else views it. A browser can never let anybody ' +
+                  'control a computer: that needs the AICOUNTLY Remote app on the computer being helped, and the ' +
+                  'person at it is asked each time and can stop it at any moment. A computer with nobody at it can ' +
+                  'be reached only if its owner turned unattended access on.'
+                : 'Remote currently supports attended browser assistance: someone shares a screen and someone else ' +
+                  'views it, with permission. It does not control your computer.'}
             </p>
           </div>
         </section>
