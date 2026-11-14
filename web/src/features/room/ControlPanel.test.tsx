@@ -269,6 +269,10 @@ describe('ControlPanel', () => {
 
     expect(screen.getByText(/Priya is asking to control this computer/i)).toBeInTheDocument()
 
+    // Who to say yes to, before what control means: this is the screen a scam call ends at.
+    expect(screen.getByText(/Only allow this if you know Priya and asked them for help\./)).toBeInTheDocument()
+    expect(screen.getByText(/AICOUNTLY never calls or messages anybody to ask for control/)).toBeInTheDocument()
+
     // The clipboard is a separate tick, off unless it is ticked — control must
     // not silently start copying what is on the machine's clipboard (§59).
     const clipboard = screen.getByRole('checkbox', { name: /share the clipboard/i })

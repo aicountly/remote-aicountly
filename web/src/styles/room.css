@@ -1522,6 +1522,19 @@
   line-height: 1.55;
 }
 
+/* Who to say yes to. Above what control means, and not in the muted colour: it
+   is the one sentence on the card that is there to be read. */
+.control__caution {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid #ff8073;
+  border-radius: var(--radius-sm);
+  background: rgba(217, 45, 32, 0.12);
+  color: #ffd9d4;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
 .control__option {
   display: flex;
   align-items: flex-start;

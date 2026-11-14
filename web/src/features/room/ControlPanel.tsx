@@ -94,6 +94,13 @@ export default function ControlPanel({
                 <ShieldAlert size={15} aria-hidden="true" />
                 {request.displayName} is asking to control this computer
               </p>
+              {/* The same caution the desktop app gives. This is the screen a scam call ends at:
+                  somebody on the phone, saying they are from a bank or from support, asking the
+                  person to press Allow. */}
+              <p className="control__caution">
+                <strong>Only allow this if you know {request.displayName} and asked them for help.</strong>{' '}
+                AICOUNTLY never calls or messages anybody to ask for control of their computer.
+              </p>
               <p className="control__request-body">
                 They will be able to move the mouse, type, and open anything you can open. You can
                 stop it at any moment, and stopping does not need their agreement.

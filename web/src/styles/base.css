@@ -104,6 +104,34 @@ video {
   border: 0;
 }
 
+/* "Skip to content": off screen until the keyboard reaches it, then the first
+   thing on the page. */
+.skip-link {
+  position: absolute;
+  top: var(--space-2);
+  /* The top centre, where the header has nothing to press: in the corner it
+     lay over the phone's menu button for as long as it had focus. */
+  left: 50%;
+  z-index: 100;
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--aicountly-green-darker);
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: var(--shadow-md);
+  transform: translate(-50%, -200%);
+}
+
+.skip-link:focus {
+  transform: translate(-50%, 0);
+}
+
+/* The page itself takes focus from the skip link; it is not a control and gets no ring. */
+main:focus {
+  outline: none;
+}
+
 /* --- Buttons -------------------------------------------------------------- */
 
 .btn {

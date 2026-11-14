@@ -664,6 +664,8 @@ export default function SessionStage({
           <video
             ref={videoRef}
             className="stage__video"
+            // What a screen reader is told this is; a <video> with no name is "video", and nothing else.
+            aria-label={isViewingRemote ? 'The shared screen' : 'Your own screen, as the others see it'}
             autoPlay
             playsInline
             // Muted for the local preview only: hearing your own shared audio

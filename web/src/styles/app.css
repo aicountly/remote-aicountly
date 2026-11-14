@@ -1665,12 +1665,20 @@
     left: 0;
     z-index: 25;
     transform: translateX(-100%);
-    transition: transform var(--duration) var(--ease);
-    box-shadow: var(--shadow-md);
+    /* Off screen is not enough: its seven links were still in the keyboard's
+       path and read out by a screen reader, on a phone, with the menu shut.
+       Hidden once it has slid away; shown before it slides in. */
+    visibility: hidden;
+    transition:
+      transform var(--duration) var(--ease),
+      visibility 0s linear var(--duration);
   }
 
   .shell__nav--open {
     transform: translateX(0);
+    visibility: visible;
+    box-shadow: var(--shadow-md);
+    transition: transform var(--duration) var(--ease);
   }
 
   .shell__nav--open ~ .shell__nav-scrim {

@@ -407,7 +407,7 @@ describe('full screen in the room', () => {
     view.rerender(roomTree())
 
     expect(fullscreen.element).toBeNull()
-    expect(screen.getByRole('alertdialog', { name: 'Someone wants to join' })).toBeInTheDocument()
+    expect(screen.getByRole('alert', { name: 'Someone wants to join' })).toBeInTheDocument()
   })
 
   it('leaves full screen when the request for control is declined, rather than leave the viewer waiting', async () => {

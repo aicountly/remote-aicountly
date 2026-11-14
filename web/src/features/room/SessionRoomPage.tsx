@@ -613,7 +613,10 @@ export default function SessionRoomPage() {
       {/* The host's approval queue (§71). Nothing is transmitted until this is
           answered — the server will not issue a signalling token before it. */}
       {session.isHost && waiting.length > 0 ? (
-        <div className="approval-queue" role="alertdialog" aria-label="Someone wants to join">
+        // `alert`, so a screen reader says it when it appears. It was an `alertdialog`, which
+        // announces only when focus is moved into it — and focus is not moved: the person may be
+        // in the middle of typing a chat message.
+        <div className="approval-queue" role="alert" aria-label="Someone wants to join">
           {waiting.map((participant) => (
             <div key={participant.uuid} className="approval-queue__item">
               <div>
