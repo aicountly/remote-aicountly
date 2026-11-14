@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft,
-  Circle,
+  ArrowUpRight,
   Highlighter,
   Info,
   MessageSquare,
@@ -56,6 +56,15 @@ import { getGuestToken } from '../../services/api/client'
  */
 const DEFAULT_FILE_MAX_BYTES = 25 * 1024 * 1024
 
+/**
+ * Whether the side panel sits under the picture instead of beside it (a phone, a narrow window:
+ * the same width the stylesheet stacks at). There the People panel, open by default, took nearly
+ * half the screen from the picture somebody came to look at; it starts closed.
+ */
+function stacksUnderPicture(): boolean {
+  return typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 900px)').matches
+}
+
 export default function SessionRoomPage() {
   const { uuid = '' } = useParams()
   const navigate = useNavigate()
@@ -90,7 +99,7 @@ export default function SessionRoomPage() {
 
   const [panel, setPanel] = useState<
     'participants' | 'chat' | 'files' | 'control' | 'invite' | 'details' | 'security' | null
-  >('participants')
+  >(() => (stacksUnderPicture() ? null : 'participants'))
   const [annotationTool, setAnnotationTool] = useState<AnnotationTool>('none')
   const [pointerOn, setPointerOn] = useState(false)
   const [elapsed, setElapsed] = useState(0)
@@ -781,7 +790,7 @@ export default function SessionRoomPage() {
                 onClick={() => setAnnotationTool((tool) => (tool === 'pen' ? 'none' : 'pen'))}
               />
               <ToolbarButton
-                icon={<Circle size={18} />}
+                icon={<ArrowUpRight size={18} />}
                 label="Arrow"
                 active={annotationTool === 'arrow'}
                 onClick={() => setAnnotationTool((tool) => (tool === 'arrow' ? 'none' : 'arrow'))}

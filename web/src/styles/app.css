@@ -542,6 +542,11 @@
   gap: var(--space-4);
 }
 
+/* Where this browser cannot share a screen (a phone), joining is the first card. */
+.dashboard__actions--join-first .action-card--first {
+  order: -1;
+}
+
 .action-card {
   display: flex;
   flex-direction: column;
@@ -1527,10 +1532,21 @@
 }
 
 .modal__footer {
+  /* The buttons of a dialog, apart from each other and wrapping on a phone:
+     they stood edge to edge, two targets with nothing between them. */
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-3);
   padding: var(--space-4) var(--space-5);
   border-top: 1px solid var(--border);
   background: var(--bg-inset);
   border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+/* One row holding everything (Cancel on the left, the rest on the right) keeps the full width. */
+.modal__footer > .row {
+  flex: 1;
 }
 
 /* --- Guest page ----------------------------------------------------------- */
@@ -1767,6 +1783,8 @@
 .bullets {
   margin: var(--space-3) 0 0;
   padding-left: var(--space-5);
+  /* The reset takes the marker off every list; this one is called bullets and had none. */
+  list-style: disc;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);

@@ -300,7 +300,9 @@ export default function StartSessionPage() {
                 type="button"
                 className="btn btn--primary"
                 onClick={() => void start()}
-                disabled={creating || noModeAvailable}
+                // No way of sharing here at all (a phone's browser): a session started anyway is a
+                // room with no Share button in it.
+                disabled={creating || noModeAvailable || Boolean(captureLimitation)}
               >
                 {creating ? 'Creating session…' : 'Create session'}
                 <ArrowRight size={16} aria-hidden="true" />

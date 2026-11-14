@@ -64,7 +64,10 @@ export default function DashboardPage() {
   const firstName = (bootstrap?.user.displayName ?? '').split(' ')[0] || 'there'
 
   const captureLimitation = describeCaptureLimitation(capabilities)
-  const canShare = can(PERMISSIONS.SCREEN_SHARE) && (policy?.allowedShareModes.length ?? 0) > 0
+  const mayShare = can(PERMISSIONS.SCREEN_SHARE) && (policy?.allowedShareModes.length ?? 0) > 0
+  // Allowed to, and able to: a phone's browser cannot capture a screen at all. There, "Share my
+  // screen" used to be the highlighted first action, and led to a session with no Share button.
+  const canShare = mayShare && !captureLimitation
 
   // §39 — when the organisation has switched Remote off, say so properly rather
   // than showing buttons that will refuse.
@@ -87,8 +90,6 @@ export default function DashboardPage() {
   return (
     <div className="page">
       <div className="stack stack--lg">
-        <WelcomeCard />
-
         <header className="dashboard__intro">
           <h1>
             {greeting}, {firstName}
@@ -99,28 +100,36 @@ export default function DashboardPage() {
         {captureLimitation ? (
           <div className="notice notice--info" role="status">
             <p className="notice__title">Screen sharing isn’t available in this browser</p>
-            <p className="notice__body">
-              {captureLimitation} Joining a session, chatting and viewing a shared screen all still work.
-            </p>
+            {/* The sentence already says what still works where that is true; it was said twice. */}
+            <p className="notice__body">{captureLimitation}</p>
           </div>
         ) : null}
 
-        <div className="dashboard__actions">
+        {/* What this browser can do comes first: where it cannot share, joining leads. */}
+        <div className={canShare ? 'dashboard__actions' : 'dashboard__actions dashboard__actions--join-first'}>
           <button
             type="button"
-            className="action-card action-card--primary"
+            className={canShare ? 'action-card action-card--primary' : 'action-card'}
             onClick={() => navigate('/start')}
             disabled={!canShare}
-            aria-describedby={!canShare ? 'share-restricted' : undefined}
+            aria-describedby={!mayShare ? 'share-restricted' : undefined}
           >
             <MonitorUp size={20} aria-hidden="true" />
             <span className="action-card__label">Share my screen</span>
             <span className="action-card__hint">
-              {canShare ? 'Start a secure session someone can view' : 'Not permitted for your account'}
+              {canShare
+                ? 'Start a secure session someone can view'
+                : mayShare
+                  ? 'Not available in this browser'
+                  : 'Not permitted for your account'}
             </span>
           </button>
 
-          <button type="button" className="action-card" onClick={() => navigate('/join')}>
+          <button
+            type="button"
+            className={canShare ? 'action-card' : 'action-card action-card--primary action-card--first'}
+            onClick={() => navigate('/join')}
+          >
             <Link2 size={20} aria-hidden="true" />
             <span className="action-card__label">Join session</span>
             <span className="action-card__hint">Enter a session code or open an invitation</span>
@@ -137,11 +146,15 @@ export default function DashboardPage() {
           ) : null}
         </div>
 
-        {!canShare ? (
+        {!mayShare ? (
           <p id="share-restricted" className="sr-only">
-            Screen sharing is not permitted for your account in this organisation.
+            Screen sharing is not permitted for your account.
           </p>
         ) : null}
+
+        {/* After the greeting and the actions, not above them: it pushed "Join session" off a
+            phone's first screen, and put a second-level heading before the page's own. */}
+        <WelcomeCard />
 
         <section className="metric-row" aria-label="Remote activity">
           <Metric label="Active sessions" value={metrics?.activeSessions ?? 0} />
