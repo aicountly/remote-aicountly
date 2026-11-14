@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ComponentProps } from 'react'
 
-import SessionStage from './SessionStage'
+import SessionStage, { keyMenuFor } from './SessionStage'
 import { installFullscreen, replace } from '../../test/fullscreen'
 import type { EngineSnapshot } from '../../services/webrtc/RemoteSessionEngine'
 import type { Participant, SessionDetail } from '../../types/remote'
@@ -306,6 +306,43 @@ describe('the stage while controlling', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Keys' }))
     await userEvent.click(screen.getByRole('menuitem', { name: /Task Manager/ }))
     expect(onControlCombination).toHaveBeenLastCalledWith('task_manager')
+  })
+
+  /**
+   * The Windows list did other things on a Mac: "Run…" is ⌘R there, which reloads the page in front.
+   * A Mac is offered a Mac's keys.
+   */
+  it('offers a Mac its own keys, and a computer that has not said what it is the Windows ones', async () => {
+    const onControlCombination = vi.fn(() => true)
+    const view = render(stage(controllingProps({ onControlCombination, controlledPlatform: 'mac' })))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Keys' }))
+    const menu = screen.getByRole('menu', { name: 'Send keys to the remote computer' })
+
+    expect(within(menu).queryByRole('menuitem', { name: /Ctrl\+Alt\+Del/ })).not.toBeInTheDocument()
+    expect(within(menu).queryByRole('menuitem', { name: /Run…/ })).not.toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: /Spotlight search/ })).toBeInTheDocument()
+    // The Mac's own Control key: a helper on a PC keyboard cannot type it, because their Ctrl is sent as ⌘.
+    expect(within(menu).getByRole('menuitem', { name: /Interrupt/ })).toBeInTheDocument()
+
+    await userEvent.click(within(menu).getByRole('menuitem', { name: /Force Quit/ }))
+    expect(onControlCombination).toHaveBeenCalledWith('force_quit')
+
+    view.unmount()
+
+    // Windows, and a computer that has not said: the Windows list.
+    expect(keyMenuFor('pc').map((item) => item.name)).toContain('ctrl_alt_del')
+    expect(keyMenuFor(null)).toBe(keyMenuFor('pc'))
+    expect(keyMenuFor('mac').map((item) => item.name)).toEqual([
+      'force_quit',
+      'spotlight',
+      'switch_app',
+      'mission_control',
+      'close_window_mac',
+      'quit_app',
+      'interrupt',
+      'escape',
+    ])
   })
 
   it('offers no Keys menu to somebody who is only watching', () => {

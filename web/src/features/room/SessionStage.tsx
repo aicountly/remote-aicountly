@@ -7,6 +7,7 @@ import { normalisePointer } from '../../services/webrtc/remoteControl'
 import type {
   InputRefusedReason,
   KeyCombination,
+  KeyboardPlatform,
   MonitorDescription,
   PointerPosition as ControlPoint,
 } from '../../services/webrtc/remoteControl'
@@ -44,7 +45,9 @@ const NO_MONITORS: readonly MonitorDescription[] = []
  * web page at all — the helper's own computer takes them — and outside full screen neither do
  * Alt+Tab or Alt+F4. Named for what they do on the computer being controlled, with the keys beside.
  */
-const KEY_MENU: ReadonlyArray<{ name: KeyCombination; label: string; keys: string }> = [
+type KeyMenu = ReadonlyArray<{ name: KeyCombination; label: string; keys: string }>
+
+const KEY_MENU: KeyMenu = [
   { name: 'ctrl_alt_del', label: 'Ctrl+Alt+Del', keys: 'Sign-in and security screen (Windows)' },
   { name: 'task_manager', label: 'Task Manager', keys: 'Ctrl+Shift+Esc' },
   { name: 'start_menu', label: 'Start menu', keys: 'Windows key' },
@@ -56,6 +59,28 @@ const KEY_MENU: ReadonlyArray<{ name: KeyCombination; label: string; keys: strin
   { name: 'escape', label: 'Esc', keys: 'Escape' },
   { name: 'print_screen', label: 'Print Screen', keys: 'PrtSc' },
 ]
+
+/**
+ * The same for a Mac. The Windows list sent to a Mac did other things there — "Run…" was ⌘R, which
+ * reloads the page in front — so a Mac is offered its own: the ones macOS keeps from a web page
+ * (⌘Tab, ⌘Space, ⌘Q, ⌘W), the one that gets somebody out of a stuck app, and its Control key, which
+ * a helper on a PC keyboard cannot type because their Ctrl is sent as ⌘.
+ */
+const MAC_KEY_MENU: KeyMenu = [
+  { name: 'force_quit', label: 'Force Quit…', keys: '⌥⌘Esc' },
+  { name: 'spotlight', label: 'Spotlight search', keys: '⌘Space' },
+  { name: 'switch_app', label: 'Switch app', keys: '⌘Tab' },
+  { name: 'mission_control', label: 'Mission Control', keys: '⌃↑' },
+  { name: 'close_window_mac', label: 'Close window', keys: '⌘W' },
+  { name: 'quit_app', label: 'Quit app', keys: '⌘Q' },
+  { name: 'interrupt', label: 'Interrupt', keys: 'Control+C, in Terminal' },
+  { name: 'escape', label: 'Esc', keys: 'Escape' },
+]
+
+/** The Keys menu for the computer being controlled. One that has not said what it is gets the Windows list. */
+export function keyMenuFor(platform: KeyboardPlatform | null | undefined): KeyMenu {
+  return platform === 'mac' ? MAC_KEY_MENU : KEY_MENU
+}
 
 /**
  * Why the computer being controlled did not take something, in words the helper can act on.
@@ -131,6 +156,8 @@ interface Props {
   onControlClipboard?: (text: string) => boolean
   /** Send one of the key combinations the keyboard cannot hand over (the Keys menu). */
   onControlCombination?: (name: KeyCombination) => boolean
+  /** Which keyboard the controlled computer has: a Mac is offered a Mac's keys. */
+  controlledPlatform?: KeyboardPlatform | null
   /**
    * The keyboard stopped being the stage's — focus went to another window or
    * another part of the page. Whatever is held on the controlled computer is
@@ -185,6 +212,7 @@ export default function SessionStage({
   onControlKey,
   onControlClipboard,
   onControlCombination,
+  controlledPlatform = null,
   onControlRelease,
   monitors = NO_MONITORS,
   activeMonitorId = null,
@@ -778,7 +806,7 @@ export default function SessionStage({
                   }
                 }}
               >
-                {KEY_MENU.map((item) => (
+                {keyMenuFor(controlledPlatform).map((item) => (
                   <button
                     key={item.name}
                     type="button"

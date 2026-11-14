@@ -36,6 +36,7 @@ import type {
   SessionDetail,
   ShareMode,
 } from '../../types/remote'
+import { keyboardPlatformOf } from '../../services/webrtc/remoteControl'
 import type { KeyCombination, PointerPosition as ControlPoint } from '../../services/webrtc/remoteControl'
 
 /**
@@ -723,6 +724,19 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     engineRef.current?.setControlTarget(controllableHostUuid, myControlState)
   }, [controllableHostUuid, myControlState, engineLive])
 
+  // Which keyboard the controlled computer has — a Mac's or a PC's — from what
+  // it registered as. It decides which keys the room offers and whether ⌘ and
+  // Ctrl change places on the way (remoteControl.ts, `keyForPlatform`). Null
+  // when the session does not say, and then nothing is assumed.
+  const controlledOperatingSystem =
+    session?.participants.find((participant) => participant.uuid === (controllableHostUuid ?? hostPeerUuid))
+      ?.operatingSystem ?? null
+  const controlledPlatform = keyboardPlatformOf(controlledOperatingSystem)
+
+  useEffect(() => {
+    engineRef.current?.setControlledPlatform(controlledPlatform)
+  }, [controlledPlatform, engineLive])
+
   // Input flows only while the server says GRANTED *and* the channel is open.
   // Anything else — denied, revoked, never asked, the peer gone — stops it,
   // locally and without waiting for a round trip.
@@ -933,6 +947,8 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     refused,
     /** This participant's control state, from the freshest read (effectiveControlState). */
     myControlState,
+    /** Which keyboard the controlled computer has ("mac", "pc"), or null when the session does not say. */
+    controlledPlatform,
     /** The controlled computer's displays, and the one on screen. More than one can be switched between. */
     monitors: live?.monitors ?? [],
     activeMonitorId: live?.activeMonitorId ?? null,

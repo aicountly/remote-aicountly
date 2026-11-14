@@ -109,7 +109,8 @@ product.
 |---|---|---|
 | 4.1 | From the browser, start a session with the machine | The agent shows a session running, in the window **and** in the tray |
 | 4.2 | Look at the tray tooltip | It names the session and who is connected |
-| 4.3 | Browser: Request control | The agent shows a consent dialog naming **who**, **which organisation**, and what control means |
+| 4.3 | Browser: Request control | The agent shows a consent dialog naming **who** (and the organisation, when there is one), a red caution — only allow this if you know them and asked for help; AICOUNTLY never calls to ask for control — what control means, and how to stop it (the button, the tray icon, and the shortcut written out). The keyboard is on the dialog, not on either button: pressing Enter or Space straight away answers nothing. **Esc** is "Not now" |
+| 4.3a | Do 4.3 with the window on the **Remote** tab (where a signed-in computer opens) | The dialog takes the whole window — the embedded site is put away while the question waits — and **both buttons can be reached**. Before, the dialog was drawn under the site with its buttons below the bottom edge of a window that cannot scroll. Answer it: the site comes back |
 | 4.4 | Do nothing for a minute | No input reaches the machine. Move the mouse in the browser: the pointer does not move |
 | 4.5 | Agent: **Not now** | The browser says declined and offers to ask again. Still no input |
 | 4.6 | Request again → **Allow control** | The browser shows Controlling; the persistent banner appears |
@@ -160,12 +161,60 @@ not on a real machine. They are the first things to check on one.
 |---|---|---|
 | 4c.1 | Fresh install: App settings | "Share this computer's sound" is there and **off** |
 | 4c.2 | With it off, play a video on the machine during a session | The helper hears nothing. `agent.log` has no "sound is being shared" line |
-| 4c.3 | Switch it on, Save, play the video again | The helper hears it within a second or two — telephone quality, in step with the picture. `agent.log`: "this computer's sound is being shared" with the mixer's rate and channels |
+| 4c.3 | Switch it on (it saves at once and says **Saved** — there is no Save button for it), play the video again | The helper hears it within a second or two — telephone quality, in step with the picture. `agent.log`: "this computer's sound is being shared" with the mixer's rate and channels |
 | 4c.4 | Switch it off again **during** the session | The sound stops within a second; the picture carries on |
 | 4c.5 | Pause the video for ten seconds, then play | Sound resumes cleanly, not sped up or stretched |
 | 4c.6 | Unplug the headphones (or change the default output) mid-session | A gap of a couple of seconds, then sound again from the new device |
 | 4c.7 | Open the room from a pasted link in a new tab and touch nothing | The **picture** is there. The sound starts at the first click or key press |
 | 4c.8 | On a Mac | The setting is not offered: a Mac hosts without sound |
+
+### 4d. What the helper is told, and what they can reach
+
+The helper's room has a **Keys** button beside the full screen button while
+they are controlling: the combinations a browser keeps for itself or a keyboard
+cannot send.
+
+| # | Do | Expect |
+|---|---|---|
+| 4d.1 | While being controlled, open **Task Manager** (or any program started with "Run as administrator") and bring it to the front. Helper: click and type in it | Nothing happens in that window — Windows does not allow it — and **within a second the helper's room says so**, above the picture: a window that runs as administrator is in front, and the person there has to use it or close it. `agent.log`: "the operating system refused an injected input event" |
+| 4d.2 | Bring an ordinary window back to the front | The notice in the helper's room goes away within a few seconds, and input works again |
+| 4d.3 | Grant control with **Also let them answer Windows administrator prompts** ticked. Helper: **Keys → Ctrl+Alt+Del** | The Windows security screen (Lock / Switch user / Task Manager) appears on the computer and in the helper's picture, and the helper can choose from it. This needs the background service **and** Windows' own policy to allow a service to raise it (`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\SoftwareSASGeneration` = 1 or 3). The app reads that value and never changes it |
+| 4d.4 | The same on a computer where that policy value is absent or 0 (the default on a home PC) | Nothing happens on the computer, and the helper's room says **why**: "Ctrl+Alt+Del was not sent: Windows on that computer does not let an app send it. The person there can press it themselves." Record which case the test machine is |
+| 4d.5 | Grant control **without** that box. Helper: **Keys → Ctrl+Alt+Del** | Nothing happens on the computer — nothing is opened that the person did not agree to — and the helper's room says it can only be sent when that box was ticked |
+| 4d.6 | Helper: the other entries of the Keys menu — Task Manager, Start menu, Run…, File Explorer, Show the desktop, Switch window, Close window (on a spare window), Esc, Print Screen | Each does on the computer what it does at its own keyboard. None of them needs full screen |
+| 4d.7 | Grant control with **Also share the clipboard** ticked. Helper: copy a sentence in another tab, come back to the room, click into Notepad on the shared screen and press **Ctrl+V** (on a Mac helper, ⌘V) | The sentence the helper copied is pasted — not whatever was on that computer's clipboard. Before, the paste key arrived and the text did not |
+| 4d.8 | The same without the clipboard box | Ctrl+V pastes that computer's **own** clipboard. Nothing of the helper's is sent |
+| 4d.9 | Copy something on the controlled computer, then paste in a document on the helper's own computer | It is **not** there. The consent dialog promises "Nothing you copy here is sent to them", and that is how it is built: the clipboard goes one way |
+| 4d.10 | Helper on a **Mac**, controlling a Windows PC: in Notepad, ⌘A, ⌘C, ⌘V, ⌘Z; in File Explorer, ⌘-click two files | Select all, copy, paste and undo happen, and both files are selected: the helper's ⌘ is sent as Ctrl. Tapping ⌘ alone does **not** open the Start menu. The Windows key itself is in **Keys** (Start menu, Run…, File Explorer, Show the desktop). Before, ⌘V arrived as the Windows key and V and opened Windows' clipboard history |
+| 4d.11 | Helper on a Mac keyboard where a character needs **Option** — `#` on a British layout (⌥3), `@` on a German one (⌥L), `€` — typed into Notepad on the PC | **Known not to work yet**: the character is sent with Alt held and Windows does not type it. Record what arrives. Characters typed without Option are unaffected |
+
+### 4f. The window while somebody is connected
+
+| # | Do | Expect |
+|---|---|---|
+| 4f.1 | During a session, scroll the Settings tab, and switch between every tab | The green strip at the top never leaves: who is connected, whether they can **see** or are **controlling**, and **Stop control** / **End session**. It says "can see this computer's screen" before control is allowed and "is controlling this computer" after |
+| 4f.2 | Press **Stop control** while another button in the window is still working (press Check for updates first) | It stops at once. The stop buttons are never greyed out |
+| 4f.3 | Before anybody joins a help session, read the strip | "Waiting for someone to join — nobody is connected yet", not a claim that somebody can see the screen |
+| 4f.4 | Pull the network cable, then open **Get help** | A notice on every tab says this computer is not connected and why; **Get a code** is disabled rather than failing when pressed. Plug it back in: the notice goes without a restart |
+| 4f.5 | Make any action fail (Get a code with the server unreachable) | The message is the reason in words — not "Something went wrong." |
+| 4f.6 | Revoke the computer on the Computers page, then open the app | The sign-in screen says this computer was removed from the account and what signing in again does, instead of an unexplained sign-in screen |
+| 4f.7 | Share from a browser with **Control from this computer** on, then close the browser tab without ending the session | Within a minute the app says the sharer has gone and returns to idle, and a **new** help session can be started straight away. Before, the app never told the server it had left, and the computer stayed "busy" until the old session timed out |
+| 4f.8 | On a **Mac**: read the consent dialog and App settings | No "Windows administrator prompts" tick, no "Run as a Windows service" row and no sound switch; the stop shortcut is written with the Mac's keys (⌘⌥⇧S) and the dialog says "this Mac" |
+
+### 4e. A Mac being helped
+
+| # | Do | Expect |
+|---|---|---|
+| 4e.1 | Host a session from the Mac. Person at the Mac: move the pointer around | The helper sees an **arrow** move with it — on a Retina display, the same apparent size as on the Mac. Before, the Mac's picture had no pointer at all |
+| 4e.2 | Helper, with control: move the mouse | The arrow on the Mac's picture follows the helper's own pointer, tip to tip, in all four corners |
+| 4e.3 | With two displays: move the Mac's pointer onto the display that is **not** being shown | The arrow leaves the picture; it does not stick at the edge |
+| 4e.4 | Leave the Mac completely alone for a minute and watch Activity Monitor | AICOUNTLY Remote's CPU use falls to a few per cent — a still desktop is no longer converted and encoded for every frame. Move the pointer: the picture follows at once |
+| 4e.5 | While the desktop is still, join from a second browser profile after the first has left | The picture appears at once, not when something next moves |
+| 4e.6 | Double-click a file in Finder, ⌘-click two files, ⇧-click a range, ⌥-drag a file to copy it | Each does what it does at the Mac |
+| 4e.7 | Helper, controlling the Mac: open **Keys** | A Mac's list — Force Quit…, Spotlight search, Switch app, Mission Control, Close window, Quit app, Interrupt, Esc — not the Windows one (whose "Run…" was ⌘R on a Mac, which reloads the page in front). Try each: it does on the Mac what it says |
+| 4e.8 | Helper on a **Windows PC**, controlling the Mac: in TextEdit, Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+Z, Ctrl+S; in Finder, Ctrl-click two files | Select all, copy, paste, undo and save happen, and both files are selected: the helper's Ctrl is sent as ⌘. Before, each arrived as a Control chord and did nothing |
+| 4e.9 | The same helper: start `ping apple.com` in Terminal on the Mac, then **Keys → Interrupt** | It stops. Ctrl+C from the PC keyboard is ⌘C on the Mac (copy), so the Mac's own Control+C is in the menu |
+| 4e.10 | Helper on a Mac, controlling the Mac | Nothing is changed on the way: ⌘ is ⌘ and Control is Control |
 
 ## 5. Control that must be refused
 
@@ -221,13 +270,17 @@ not on a real machine. They are the first things to check on one.
 ## 9. The limits Windows imposes
 
 These are the tests that prove the product is honest. Each one **should** fail
-to do the thing.
+to do the thing — except where the person at the computer ticked **Also let
+them answer Windows administrator prompts**, which is the one way a helper is
+let through, and is checked both ways.
 
 | # | Do | Expect |
 |---|---|---|
-| 9.1 | While controlling, trigger a UAC prompt on the machine | The screen goes blank or freezes at the prompt. The agent says the Secure Desktop is in front. **No input reaches it** |
-| 9.2 | Lock the machine while controlling | Same |
-| 9.3 | Try to control an elevated application (an admin PowerShell) | Input is refused, and the message says why — higher integrity level |
+| 9.1 | Control granted **without** the administrator-prompts tick. Trigger a UAC prompt on the machine | The picture stops at the prompt. The helper's room says a Windows administrator prompt is open and to ask the person at the computer to answer it. **No input reaches it** |
+| 9.1a | The same with the tick, and the background service running | The helper **sees** the prompt and can answer it; the room says "You can answer it." Stop control: the next prompt is out of reach again |
+| 9.1b | With the tick but the background service stopped (`sc.exe stop AicountlyRemoteService`) | As 9.1: the tick alone opens nothing. The room says to ask the person at the computer |
+| 9.2 | Lock the machine while controlling, without the tick, then with it | Without: as 9.1. With: the lock screen is shown and can be typed into |
+| 9.3 | Try to control an elevated application (an admin PowerShell) | Input is refused — Windows does not let an ordinary program type into one running as administrator, with or without the tick — and the helper's room says why within a second (4d.1) |
 | 9.4 | Share a window with `WDA_EXCLUDEFROMCAPTURE` set | Black. That is the flag working |
 | 9.5 | Confirm nothing changed | UAC settings, Defender exclusions, the Secure Desktop setting: all as they were before installation |
 

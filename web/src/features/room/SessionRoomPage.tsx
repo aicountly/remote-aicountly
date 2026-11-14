@@ -78,6 +78,7 @@ export default function SessionRoomPage() {
     isControlling,
     controlPaused,
     myControlState,
+    controlledPlatform,
     monitors,
     activeMonitorId,
     actions,
@@ -146,7 +147,11 @@ export default function SessionRoomPage() {
   // the tab strip and the taskbar when the tab is not in front.
 
   const answersControl = !isGuest && (session?.isHost ?? false) && can(PERMISSIONS.CONTROL_ACCEPT)
-  const askingControl = answersControl ? (control?.pendingRequests ?? []) : []
+  // Never this person's own request: whoever connects to a computer with nobody at it owns that
+  // session, and asking again after stopping would otherwise be shown to them as a question to answer.
+  const askingControl = answersControl
+    ? (control?.pendingRequests ?? []).filter((request) => request.participantUuid !== session?.me?.uuid)
+    : []
   const askingControlKey = askingControl.map((request) => request.participantUuid).join(',')
   const askingToJoin = session?.isHost ? (session.waiting ?? []) : []
 
@@ -271,7 +276,8 @@ export default function SessionRoomPage() {
   const controlAllowedByPolicy = control?.allowRemoteControl === true
   const canRequestControl = !isGuest && can(PERMISSIONS.CONTROL_REQUEST)
   const canAnswerControl = !isGuest && session.isHost && can(PERMISSIONS.CONTROL_ACCEPT)
-  const pendingControl = control?.pendingRequests.length ?? 0
+  // Requests this person can answer. Their own is not one: it used to put a "1" on their own button.
+  const pendingControl = askingControl.length
 
   // The sharer may enable control from their own computer when nothing else in
   // the session can be controlled (a browser shares, not an agent).
@@ -664,6 +670,7 @@ export default function SessionRoomPage() {
           onControlKey={actions.sendControlKey}
           onControlClipboard={actions.sendControlClipboard}
           onControlCombination={actions.sendControlCombination}
+          controlledPlatform={controlledPlatform}
           onControlRelease={actions.releaseControlKeys}
           monitors={monitors}
           activeMonitorId={activeMonitorId}

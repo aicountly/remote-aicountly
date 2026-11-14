@@ -176,7 +176,10 @@ function RemoteControlPanel({
       phase={control.phase}
       control={control.control}
       host={control.host}
-      pending={control.control?.pendingRequests ?? []}
+      // A request is somebody else's to answer, never the asker's own.
+      pending={(control.control?.pendingRequests ?? []).filter(
+        (request) => request.participantUuid !== session.me?.uuid,
+      )}
       isHost={control.isHost}
       hostParticipant={hostParticipant}
       onRequest={control.onRequest}

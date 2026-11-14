@@ -74,16 +74,18 @@ import {
   KEY_COMBINATIONS,
   combinationEvents,
   controlKeyFrom,
+  keyForPlatform,
+  localKeyboardPlatform,
   decodeControlEnvelope,
   inputRefusedReason,
   modifiersForKey,
   mouseButtonName,
 } from './remoteControl'
-import type { InputRefusedReason, KeyCombination } from './remoteControl'
+import type { InputRefusedReason, KeyCombination, KeyboardPlatform } from './remoteControl'
 // Aliased: this module already has a `PointerPosition`, and it is a different
 // thing — the annotation pointer carries a name and a colour, the control one
 // is a bare coordinate on the shared surface.
-import type { ControlKey, MonitorDescription, PointerPosition as ControlPoint } from './remoteControl'
+import type { ControlKey, Modifiers, MonitorDescription, PointerPosition as ControlPoint } from './remoteControl'
 import type { ChatMessage } from '../../types/remote'
 
 /** What the UI shows, in words a person understands (§49). */
@@ -317,6 +319,9 @@ function percentOf(bytes: number, total: number): number {
  */
 const INPUT_REFUSED_SHOWN_MS = 6_500
 
+/** No modifier held: what a key-up sent to clear something carries. */
+const NO_MODIFIERS: Modifiers = { ctrl: false, alt: false, shift: false, meta: false }
+
 function sameKey(a: ControlKey, b: ControlKey): boolean {
   if (a.k !== b.k) return false
 
@@ -391,8 +396,14 @@ export class RemoteSessionEngine {
   /** The control sender for the peer being controlled, if any. */
   private control: { peerId: string; sender: ControlSender } | null = null
 
-  /** Keys this browser has pressed and not released on the remote machine. */
+  /** Keys this browser has pressed and not released on the remote machine — as that machine has them. */
   private heldKeys: ControlKey[] = []
+
+  /** Which keyboard the controlled computer has; null until the session says. See `keyForPlatform`. */
+  private controlledPlatform: KeyboardPlatform | null = null
+
+  /** Which keyboard this person is typing on. */
+  private readonly localPlatform: KeyboardPlatform = localKeyboardPlatform()
 
   /** Takes the "that computer refused it" notice down once the computer has stopped saying so. */
   private refusedTimer: ReturnType<typeof setTimeout> | null = null
@@ -982,13 +993,17 @@ export class RemoteSessionEngine {
     // computer is holding Ctrl for a key that is not Ctrl. Let it go, and send the characters AltGr
     // composes without Ctrl and Alt (modifiersForKey) — they are typing, not shortcuts.
     if (event.key === 'AltGraph') {
-      if (pressed) this.releaseControlKey({ k: 'ctrl' })
+      // Whatever that Ctrl was sent as: to a Mac, from a PC keyboard, it went as ⌘.
+      if (pressed) this.releaseControlKey(this.forControlledKeyboard({ k: 'ctrl' }, NO_MODIFIERS).key)
 
       return true
     }
 
-    const key = controlKeyFrom(event)
-    if (!key) return false
+    const typed = controlKeyFrom(event)
+    if (!typed) return false
+
+    // As the controlled computer should receive it: ⌘ and Ctrl change places between a Mac and a PC.
+    const { key, modifiers } = this.forControlledKeyboard(typed, modifiersForKey(event))
 
     if (pressed) {
       if (!this.heldKeys.some((held) => sameKey(held, key))) this.heldKeys.push(key)
@@ -996,7 +1011,23 @@ export class RemoteSessionEngine {
       this.heldKeys = this.heldKeys.filter((held) => !sameKey(held, key))
     }
 
-    return this.control.sender.key(key, pressed, modifiersForKey(event))
+    return this.control.sender.key(key, pressed, modifiers)
+  }
+
+  /**
+   * Say which keyboard the controlled computer has ("mac", "pc"), or null when the session does
+   * not know. Anything held is let go first: a key pressed under one reading and released under
+   * another would be left down on that computer.
+   */
+  setControlledPlatform(platform: KeyboardPlatform | null): void {
+    if (platform === this.controlledPlatform) return
+
+    this.releaseControlKeys()
+    this.controlledPlatform = platform
+  }
+
+  private forControlledKeyboard(key: ControlKey, modifiers: Modifiers): { key: ControlKey; modifiers: Modifiers } {
+    return keyForPlatform(key, modifiers, this.localPlatform, this.controlledPlatform)
   }
 
   /** Release one key on the controlled computer if this browser is holding it there. */
@@ -1004,7 +1035,7 @@ export class RemoteSessionEngine {
     if (!this.control || !this.heldKeys.some((held) => sameKey(held, key))) return
 
     this.heldKeys = this.heldKeys.filter((held) => !sameKey(held, key))
-    this.control.sender.key(key, false, { ctrl: false, alt: false, shift: false, meta: false })
+    this.control.sender.key(key, false, NO_MODIFIERS)
   }
 
   /**

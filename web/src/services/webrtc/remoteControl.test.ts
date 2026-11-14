@@ -6,6 +6,9 @@ import {
   ControlSender,
   KEY_COMBINATIONS,
   combinationEvents,
+  keyForPlatform,
+  keyboardPlatformOf,
+  localKeyboardPlatform,
   inputRefusedReason,
   modifiersForKey,
   MAX_CONTROL_MESSAGE_BYTES,
@@ -444,5 +447,93 @@ describe('inputRefusedReason', () => {
     expect(inputRefusedReason('a_reason_added_later')).toBe('refused')
     expect(inputRefusedReason(undefined)).toBe('refused')
     expect(inputRefusedReason(7)).toBe('refused')
+  })
+})
+
+/**
+ * Which keyboard each end has, and what a key becomes on the way between two different ones.
+ *
+ * The rule is one swap — the helper's "copy and paste" key for the controlled computer's — and
+ * nothing at all between two keyboards of the same kind, or to a computer that has not said.
+ */
+describe('keyboards', () => {
+  const none = { ctrl: false, alt: false, shift: false, meta: false }
+
+  it('reads the controlled computer’s keyboard from what it registered as', () => {
+    expect(keyboardPlatformOf('macOS')).toBe('mac')
+    expect(keyboardPlatformOf('Mac OS X')).toBe('mac')
+    expect(keyboardPlatformOf('Windows')).toBe('pc')
+    expect(keyboardPlatformOf('windows 11')).toBe('pc')
+
+    // Not said, or not one this page knows: nothing is assumed.
+    expect(keyboardPlatformOf(null)).toBeNull()
+    expect(keyboardPlatformOf(undefined)).toBeNull()
+    expect(keyboardPlatformOf('')).toBeNull()
+    expect(keyboardPlatformOf('Linux')).toBeNull()
+  })
+
+  it('reads the helper’s own keyboard from the browser', () => {
+    expect(localKeyboardPlatform({ platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' })).toBe('mac')
+    expect(localKeyboardPlatform({ platform: '', userAgent: 'Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X)' })).toBe('mac')
+    expect(localKeyboardPlatform({ platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36' })).toBe('pc')
+    expect(localKeyboardPlatform({ platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; Linux x86_64)' })).toBe('pc')
+    expect(localKeyboardPlatform(undefined)).toBe('pc')
+  })
+
+  it('sends a Mac helper’s ⌘ to a PC as Ctrl: the key, and the state a letter carries', () => {
+    expect(keyForPlatform({ k: 'meta' }, { ...none, meta: true }, 'mac', 'pc')).toEqual({
+      key: { k: 'ctrl' },
+      modifiers: { ...none, ctrl: true },
+    })
+    // ⌘V: what Windows would have read as the Windows key and V.
+    expect(keyForPlatform({ k: 'character', c: 'v' }, { ...none, meta: true }, 'mac', 'pc')).toEqual({
+      key: { k: 'character', c: 'v' },
+      modifiers: { ...none, ctrl: true },
+    })
+    // ⇧⌘Z keeps its Shift; the Mac keyboard's own Control stays Control.
+    expect(keyForPlatform({ k: 'character', c: 'Z' }, { ...none, meta: true, shift: true }, 'mac', 'pc').modifiers).toEqual({
+      ...none,
+      ctrl: true,
+      shift: true,
+    })
+    expect(keyForPlatform({ k: 'ctrl' }, { ...none, ctrl: true }, 'mac', 'pc')).toEqual({ key: { k: 'ctrl' }, modifiers: { ...none, ctrl: true } })
+  })
+
+  it('sends a PC helper’s Ctrl to a Mac as ⌘', () => {
+    expect(keyForPlatform({ k: 'ctrl' }, { ...none, ctrl: true }, 'pc', 'mac')).toEqual({
+      key: { k: 'meta' },
+      modifiers: { ...none, meta: true },
+    })
+    expect(keyForPlatform({ k: 'character', c: 'c' }, { ...none, ctrl: true }, 'pc', 'mac')).toEqual({
+      key: { k: 'character', c: 'c' },
+      modifiers: { ...none, meta: true },
+    })
+    // Alt is Option there already, and is left where it is.
+    expect(keyForPlatform({ k: 'alt' }, { ...none, alt: true }, 'pc', 'mac')).toEqual({ key: { k: 'alt' }, modifiers: { ...none, alt: true } })
+  })
+
+  it('changes nothing between two keyboards of the same kind, or to a computer that has not said', () => {
+    const key = { k: 'character', c: 'c' } as const
+    const held = { ...none, ctrl: true }
+
+    for (const [from, to] of [
+      ['pc', 'pc'],
+      ['mac', 'mac'],
+      ['pc', null],
+      ['mac', null],
+    ] as const) {
+      expect(keyForPlatform(key, held, from, to)).toEqual({ key, modifiers: held })
+      expect(keyForPlatform({ k: 'meta' }, { ...none, meta: true }, from, to).key).toEqual({ k: 'meta' })
+    }
+  })
+
+  it('never invents a modifier for plain typing', () => {
+    for (const [from, to] of [
+      ['pc', 'mac'],
+      ['mac', 'pc'],
+    ] as const) {
+      expect(keyForPlatform({ k: 'character', c: 'é' }, none, from, to)).toEqual({ key: { k: 'character', c: 'é' }, modifiers: none })
+      expect(keyForPlatform({ k: 'enter' }, { ...none, shift: true }, from, to).modifiers).toEqual({ ...none, shift: true })
+    }
   })
 })

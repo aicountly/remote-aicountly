@@ -215,6 +215,22 @@ describe('a request to control this person’s computer', () => {
     expect(screen.getByRole('button', { name: 'Allow control' })).toBeInTheDocument()
   })
 
+  it('is never this person’s own request, even when the session is theirs', () => {
+    // Connected to a computer with nobody at it: the session is the helper's, and so is the request.
+    room.session = { ...session, isHost: true, me: bala }
+    room.control = controlState({
+      pendingRequests: [{ participantUuid: 'p-helper', displayName: 'Bala', requestedAt: null }],
+    })
+    room.myControlState = 'REQUESTED'
+    renderRoom()
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Allow control' })).not.toBeInTheDocument()
+    expect(document.title).toBe('AICOUNTLY Remote')
+    // What they are told is that they are waiting.
+    expect(screen.getByRole('button', { name: 'Cancel request' })).toBeInTheDocument()
+  })
+
   it('is not shown to somebody who is not the one to answer it', () => {
     room.control = controlState({
       pendingRequests: [{ participantUuid: 'p-other', displayName: 'Chitra', requestedAt: null }],

@@ -67,6 +67,12 @@ export interface Participant {
   displayName: string;
   role: ParticipantRole;
   clientType: ClientType;
+  /**
+   * The operating system of a participant that is a computer running the
+   * desktop app ("Windows", "macOS"); null or absent for a person in a browser.
+   * It decides which keyboard the room talks to — see `keyboardPlatformOf`.
+   */
+  operatingSystem?: string | null;
   status: ParticipantStatus;
   isHost: boolean;
   isSharing: boolean;

@@ -311,6 +311,16 @@ export const KEY_COMBINATIONS = {
   close_window: [{ k: 'alt' }, { k: 'function', c: 4 }],
   escape: [{ k: 'escape' }],
   print_screen: [{ k: 'print_screen' }],
+
+  // A Mac's own. `meta` is Command there and `alt` is Option.
+  force_quit: [{ k: 'alt' }, { k: 'meta' }, { k: 'escape' }],
+  spotlight: [{ k: 'meta' }, { k: 'space' }],
+  switch_app: [{ k: 'meta' }, { k: 'tab' }],
+  mission_control: [{ k: 'ctrl' }, { k: 'arrow_up' }],
+  close_window_mac: [{ k: 'meta' }, { k: 'character', c: 'w' }],
+  quit_app: [{ k: 'meta' }, { k: 'character', c: 'q' }],
+  // A Mac's Control key, which a helper on a PC keyboard cannot type (see `keyForPlatform`).
+  interrupt: [{ k: 'ctrl' }, { k: 'character', c: 'c' }],
 } as const satisfies Record<string, readonly ControlKey[]>
 
 export type KeyCombination = keyof typeof KEY_COMBINATIONS
@@ -347,6 +357,71 @@ export function combinationEvents(
   }
 
   return events
+}
+
+/**
+ * The two kinds of keyboard: a Mac's, where ⌘ is the key that copies, pastes and selects all, and
+ * everybody else's (Windows, Linux, ChromeOS), where Ctrl is.
+ */
+export type KeyboardPlatform = 'mac' | 'pc'
+
+/**
+ * Which keyboard a computer has, from the operating system it registered with ("Windows", "macOS").
+ * Null when it did not say, or said something this page has not heard of: nothing is then assumed.
+ */
+export function keyboardPlatformOf(operatingSystem: string | null | undefined): KeyboardPlatform | null {
+  const name = (operatingSystem ?? '').trim().toLowerCase()
+
+  if (name.startsWith('mac') || name === 'darwin' || name === 'os x') return 'mac'
+  if (name.startsWith('win')) return 'pc'
+
+  return null
+}
+
+/** Which keyboard the person at this browser is typing on. */
+export function localKeyboardPlatform(
+  browser: { platform?: string; userAgent?: string } | undefined = typeof navigator === 'undefined' ? undefined : navigator,
+): KeyboardPlatform {
+  return /mac|iphone|ipad|ipod/i.test(`${browser?.platform ?? ''} ${browser?.userAgent ?? ''}`) ? 'mac' : 'pc'
+}
+
+/**
+ * A key as the controlled computer should receive it, when the helper's keyboard is the other kind.
+ *
+ * ⌘C on a Mac and Ctrl+C on a PC are the same act. Sent as typed, a Mac helper's ⌘C reaches Windows
+ * as the Windows key and C, and a PC helper's Ctrl+C reaches a Mac as a Control chord that copies
+ * nothing: copy, paste, cut, select all, undo and save, all dead, and ⌘V opening Windows' clipboard
+ * history instead of pasting. So the helper's key for those is sent as the controlled computer's key
+ * for them — ⌘ as Ctrl to a PC, Ctrl as ⌘ to a Mac — the key itself and the modifier state both.
+ * Clicks are covered by the same swap, because the computer reads a click's modifiers from the keys
+ * held on it: ⌘-click on a Mac and Ctrl-click on a PC both add to a selection.
+ *
+ * What it costs is the other meaning of that key. From a Mac the Windows key cannot be typed — it is
+ * in the room's Keys menu (Start menu, Run…, File Explorer, Show the desktop). From a PC a Mac's own
+ * Control key cannot; Interrupt and Mission Control are in the Mac's Keys menu.
+ *
+ * The same kind of keyboard at both ends, or a computer that has not said which it has: nothing is
+ * changed.
+ */
+export function keyForPlatform(
+  key: ControlKey,
+  modifiers: Modifiers,
+  from: KeyboardPlatform,
+  to: KeyboardPlatform | null,
+): { key: ControlKey; modifiers: Modifiers } {
+  if (to === null || from === to) return { key, modifiers }
+
+  if (from === 'mac') {
+    return {
+      key: key.k === 'meta' ? { k: 'ctrl' } : key,
+      modifiers: { ...modifiers, ctrl: modifiers.ctrl || modifiers.meta, meta: false },
+    }
+  }
+
+  return {
+    key: key.k === 'ctrl' ? { k: 'meta' } : key,
+    modifiers: { ...modifiers, meta: modifiers.meta || modifiers.ctrl, ctrl: false },
+  }
 }
 
 /**

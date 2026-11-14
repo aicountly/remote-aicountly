@@ -518,6 +518,73 @@ describe('control companions in the engine', () => {
     engine.dispose()
   })
 
+  /**
+   * ⌘C on a Mac and Ctrl+C on a PC are the same act. Sent as typed, a PC helper's Ctrl+C reached a
+   * Mac as a Control chord that copies nothing, and a Mac helper's ⌘V reached Windows as the Windows
+   * key and V. The helper's key for these goes as the controlled computer's.
+   */
+  it('sends Ctrl as ⌘ to a Mac from a PC keyboard, and leaves a PC and an unknown computer alone', async () => {
+    const { engine, signal } = await startEngine('b-viewer')
+
+    await signal({ type: 'joined', peers: [companionPeer] })
+    engine.setControlTarget('c-companion', 'GRANTED')
+    await flush()
+
+    const channel = FakePeerConnection.instances[0].channels[0]
+    channel.open()
+    expect(engine.startControlling('c-companion')).toBe(true)
+
+    type Sent = { type: string; key: { k: string; c?: string }; pressed: boolean; modifiers: Record<string, boolean> }
+    const sentSince = (from: number) =>
+      channel.sent.slice(from).map((frame) => JSON.parse(new TextDecoder().decode(frame as ArrayBuffer)).m as Sent)
+    const press = (key: string, pressed: boolean, modifiers: Partial<KeyboardEventInit> = {}) =>
+      engine.sendControlKey(new KeyboardEvent(pressed ? 'keydown' : 'keyup', { key, ...modifiers }), pressed)
+
+    const chord = () => {
+      const from = channel.sent.length
+      press('Control', true, { ctrlKey: true })
+      press('c', true, { ctrlKey: true })
+      press('c', false, { ctrlKey: true })
+      press('Control', false)
+
+      return sentSince(from)
+    }
+
+    // This browser is on a PC keyboard (jsdom is). The computer has not said what it is: as typed.
+    expect(chord().map((m) => `${m.pressed ? 'down' : 'up'}:${m.key.k}`)).toEqual(['down:ctrl', 'down:character', 'up:character', 'up:ctrl'])
+
+    // A Mac: Ctrl goes as ⌘, the key and the modifier state both.
+    engine.setControlledPlatform('mac')
+    const toMac = chord()
+    expect(toMac.map((m) => `${m.pressed ? 'down' : 'up'}:${m.key.k}`)).toEqual(['down:meta', 'down:character', 'up:character', 'up:meta'])
+    expect(toMac[1].key.c).toBe('c')
+    expect(toMac[1].modifiers).toEqual({ ctrl: false, alt: false, shift: false, meta: true })
+
+    // A Windows PC, from a PC keyboard: nothing to change.
+    engine.setControlledPlatform('pc')
+    const toPc = chord()
+    expect(toPc.map((m) => m.key.k)).toEqual(['ctrl', 'character', 'character', 'ctrl'])
+    expect(toPc[1].modifiers).toEqual({ ctrl: true, alt: false, shift: false, meta: false })
+
+    // Told which keyboard it is while a key is held: that key is let go as it was sent, not left down.
+    press('Control', true, { ctrlKey: true })
+    const from = channel.sent.length
+    engine.setControlledPlatform('mac')
+    expect(sentSince(from).map((m) => `${m.pressed ? 'down' : 'up'}:${m.key.k}`)).toEqual(['up:ctrl'])
+
+    // The menu's combinations are already in the controlled computer's own keys, and are not changed.
+    const menuFrom = channel.sent.length
+    expect(engine.sendControlCombination('interrupt')).toBe(true)
+    expect(sentSince(menuFrom).map((m) => `${m.pressed ? 'down' : 'up'}:${m.key.k}`)).toEqual([
+      'down:ctrl',
+      'down:character',
+      'up:character',
+      'up:ctrl',
+    ])
+
+    engine.dispose()
+  })
+
   it('sends no combination when nobody is being controlled', async () => {
     const { engine, signal } = await startEngine('b-viewer')
 
