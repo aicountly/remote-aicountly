@@ -38,6 +38,27 @@ describe('describeSession', () => {
       }),
     ).toBe('Unattended · Sam · controlled · 12 min')
   })
+
+  /** "Attended" and "Control companion" are the API's names for them, and nobody's. */
+  it('names a session the way the rest of the window does', () => {
+    const session = {
+      uuid: 's-2',
+      displayId: 'AR-2',
+      accessMode: 'ATTENDED',
+      role: 'HOST',
+      status: 'ENDED',
+      startedAt: null,
+      endedAt: null,
+      durationSeconds: null,
+      peers: [],
+      controlled: false,
+    }
+
+    expect(describeSession(session)).toBe('Help session · Nobody joined')
+    expect(describeSession({ ...session, role: 'COMPANION', peers: ['Priya'] })).toBe(
+      'Shared from the browser · Priya',
+    )
+  })
 })
 
 describe('ComputerHistory', () => {
@@ -62,7 +83,7 @@ describe('ComputerHistory', () => {
 
     render(<ComputerHistory recent={[]} />)
 
-    expect(await screen.findByText('Attended · Priya · 10 min')).toBeInTheDocument()
+    expect(await screen.findByText('Help session · Priya · 10 min')).toBeInTheDocument()
     expect(screen.getByText('Unattended access turned on · Priya')).toBeInTheDocument()
   })
 

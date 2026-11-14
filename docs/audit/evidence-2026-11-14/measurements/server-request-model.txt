@@ -1,0 +1,67 @@
+## Request model (req/s)
+
+| Endpoint | Caller and interval | (b) session | (c) idle PC |
+|---|---|---|---|
+| GET sessions/{id} | web host 4 s (2 s with a knock), helper 25 s, waiting room 1.5 s — W/features/room/useRemoteSession.ts:56-71 | 0.29 | |
+| GET sessions/{id}/control | web 15 s; 4 s while requested or granted — :79-82 | 0.13–0.50 | |
+| POST …/participants/{p}/presence | web 20 s — W/services/webrtc/RemoteSessionEngine.ts:244 | 0.10 | |
+| POST …/signalling-token | web ~90 s — W/services/signalling/RemoteSignallingClient.ts:98-114 | 0.022 | |
+| GET devices/me/sessions/{id}/control | desktop host or companion 3 s — D/src-tauri/src/session.rs:87 | +0.33 | |
+| GET devices/me/sessions/{id}/participants | "Get help" window 2 s — D/src/app/App.tsx:41,303 | +0.50 | |
+| POST devices/me/sessions/{id}/join | desktop renewal ~90 s — session.rs:1658 | +0.011 | |
+| GET devices/me | app 60 s — D/src-tauri/src/runtime.rs:342 | | 0.018 |
+| POST devices/me/presence | app 60 s (runtime.rs:547) and Windows service 60 s (D/agents/windows-service/src/service.rs:1097) | | 0.033 |
+| challenge + verify; presence-token | each process ~14 min; ~8.5 min — runtime.rs:69,692; service.rs:1143 | | 0.007 |
+| **Total** | (a) idle tab: **0** | **0.55** browser↔browser; **1.2** desktop-hosted with control | **0.058** (Mac 0.038) |
+
+100 / 1,000 / 10,000 sessions: 55–120 / 550–1,200 / 5,500–12,000 req/s, at 5–12 SQL statements per session-second. 10,000 idle PCs: 580 req/s, 3,500 SQL/s, 2M audit rows/day.
+
+SQL per request (personal scope; plus a new PostgreSQL connection each, B/Config/Database.php:40): sessions/{id} 8 SELECT; control 15–16 (`forSession` ×3, companion `sweep` ×2 — B/Domain/Session/ControlService.php:781-815); device control 17 + 4 cache-file operations (B/Domain/Device/DeviceSessionService.php:726-769); presence 6–7 + 1 UPDATE; devices/me 11 + lease-file rewrite; signalling-token 4–5 + 1 INSERT + lease-file rewrite. Duplicates, no N+1.
+
+Inline HTTP: portal `validatesession` (cached 60 s per key) and `userprofile` (6 h); `seskey` relay per tab every ~15 min (uncached); Manage directory on bootstrap (300 s per user, B/Domain/Directory/MembershipVerifier.php:124-168); `manage/v1/*` relay (uncached, no auth, no limit, up to 45 s — B/Config/Routes.php:67); Console database details (300 s).
+
+## First bottlenecks, in order
+
+1. **Per-IP limits: 4–60 machines per office.** Key: REMOTE_ADDR + bucket (B/Filters/RateLimitFilter.php:43,73-79; B/Config/App.php:195). `device-presence` 120/min = 60 Windows PCs; `device-control-state` = 6 hosted sessions; `device-session-participants` = 4; `device-challenge/verify` 20/min = 10 PCs booting together; `portal-relay` 30/min ≈ 10 sign-ins; `signalling-token` = 90 participants (Routes.php:50-55,170-172,246-260,292-294,315-320). Browser session, control and presence polls are unlimited. A 429 is retried from 1 s and re-runs devices/me (runtime.rs:568-573). Each allowed call costs 2 reads + 2 writes of cache files, non-atomic (CI4 Throttler.php:104-135).
+2. **Console outage: any load.** Once the 300 s file cache lapses, every request curls Console (2 s/4 s): the 15 s failure memo is a static, lost between requests (B/Support/ConsoleDatabaseDetails.php:223-246).
+3. **Worker pool: hundreds of sessions.** Assumption: 50 ms per request and W workers give 20·W req/s ≈ 36·W browser sessions or 16·W desktop-hosted (W=20: 730 or 330).
+4. **TURN lease book: ~1,500 sessions or ~2,400 idle PCs.** One JSON file under a blocking exclusive lock, rewritten per grant (K/FileLeaseStore.php:42-58,97; K/IceIssuer.php:104-111), by devices/me (B/Domain/Device/DevicePresenceService.php:167), signalling-token (B/Controllers/Api/V1/SignallingController.php:63) and device join. Measured: 9 ms per grant at 1,000 idle PCs, 44 ms at 4,000; thresholds computed from that. The agent never uses those servers (D/crates/remote-core/src/api.rs:400; session.rs:214), yet each idle PC is booked at 6 Mbit/s: measured `free_pool_full` by 70 idle PCs, so `enforce` would refuse free clients.
+5. **Portal coupling: thousands of browsers.** Identity cache 60 s (B/Domain/Auth/IdentityResolver.php:24): one inline call and one upsert per browser per minute, timeouts 8 s/15 s (B/Domain/Auth/PortalClient.php:22-23), failures not cached. A slow portal pins the pool, device traffic included.
+6. **Growth and scans: with time.** backend/bin/ops/jobs.txt has lifecycle and turn-probe jobs only: no purge (confirmed). Each session-hour writes 80 SIGNALLING_TOKEN_ISSUED rows (SignallingController.php:55-61); each session ~15 other events and 14 audit rows; each Windows PC 206 DEVICE_AUTHENTICATED rows a day (B/Domain/Device/DeviceAuthenticationService.php:184). Bootstrap runs four sequential scans plus a read of every non-terminal session (B/Domain/Session/SessionService.php:784-787,864-890): measured 0.4–0.6 s at 1M sessions. Device history too (B/Domain/Device/DeviceHistory.php:128-131,298-304): 106 ms and 85 ms.
+7. **No reaper.** Sessions expire only when read by id (SessionService.php:339-363,400-443); lists show raw status. The participants' 20 s heartbeat is read by nothing. `leave` has no keepalive (W/services/api/client.ts:294). A crashed sharer's companion never leaves (D/src-tauri/src/companion.rs:257-259): DEVICE_BUSY for up to 60 minutes (B/Domain/Device/CompanionService.php:240-261). Slow polls overlap (useRemoteSession.ts:209,287); a relay restart makes every participant re-mint within a second (RemoteSignallingClient.ts:86).
+
+## Small safe fixes
+
+1. DevicePresenceService.php:167 — return no TURN grant from devices/me (unused by the agent).
+2. ConsoleDatabaseDetails.php:238-243 — write the stale-use window into the cache file.
+3. RateLimitFilter.php:73-79 — key on the device uuid or identity id when authenticated; raise challenge/verify.
+4. SignallingController.php:55-63 — record the event once; skip the grant on renewals.
+5. jobs.txt — 5-minute job calling `findById()` on overdue non-terminal sessions.
+6. SessionService.php:784-787,864-874 — `id IN (… UNION …)` plus index `(initiator_user_id, created_at DESC)`: measured 128 → 0.7 ms. DeviceHistory: UNION plus `remote_participants(device_id)` (106 → 1 ms) and index `((metadata->>'deviceUuid'))` (85 → 0.5 ms).
+7. Web: in-flight guard on both polls; `keepalive` on leave; presence every 60 s; App.tsx:41 to 5 s.
+8. Per-request memo of `findByUser`, `forSession` and device `findByUuid`: 8→5, 15→9, 17→10 SELECTs.
+9. PortalClient.php:22-23 — 2 s/4 s.
+
+**Larger changes:** relay push instead of polling; lease counters (K/PdoLeaseStore.php:98-104 also loads every lease per grant); shared cache; PgBouncer; retention purge; identity stale-on-error (owner decision).
+
+## Checked and fine
+
+- Idle tab: no timers on dashboard, devices or sessions pages; only /support polls.
+- Poll lookups are indexed: measured 0.02–0.05 ms each; `pendingFor` 0.2 ms.
+- Guests and devices never call the portal; Manage is off personal paths.
+- Lists are capped (history and audit 100, devices 200, events and chat 200), except participants and invitations inside session detail.
+- Cron does no full-table work.
+- Device presence is timestamp-based; challenges and sign-in codes are swept on use.
+- The ICE refresher never fires on schedule; stats are local.
+
+## Could not determine from the code
+
+- PHP worker count, OPcache, PostgreSQL `max_connections`.
+- Whether REMOTE_ADDR is the visitor's behind Imunify360; if not, buckets are global.
+- Portal latency and its per-IP throttling.
+- The front server's WebSocket limit (one per participant and per idle PC).
+- Whether production uses the file lease store (inferred: `observe`, no ledger DSN in docs/production).
+
+Not present: a two-step filter (it is inside ApiAuthFilter, one SELECT), a presence table, dashboard or devices polling.
+
+Notes. Paths: `B`=backend/app, `K`=backend/lib/ice-kit/src, `W`=web/src, `D`=desktop. "Measured" = run here, outside the repo: the ice-kit under PHP 8.3 with production's TURN settings (bench/lease_bench.php), and a throwaway PostgreSQL 16 (sandbox binaries; deleted afterwards) with the migrations' DDL and 1M sessions, 2.3M participants, 1.5M audit rows (pg/plans.txt). CI4 internals: v4.7.4 source (composer.lock). No repository file was edited; `desktop/tests/MANUAL.md` shows an uncommitted change from 22:44 UTC that is not mine.

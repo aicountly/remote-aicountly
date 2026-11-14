@@ -157,6 +157,23 @@ final class Presenter
      * @param  array<string, mixed> $row
      * @return array<string, mixed>
      */
+    /**
+     * The operating system of a participant that is a computer running the
+     * desktop app, or null — for a person in a browser, always null.
+     *
+     * @param array<string, mixed> $row
+     */
+    private static function operatingSystemOf(array $row): ?string
+    {
+        if ((string) ($row['client_type'] ?? '') !== \App\Domain\Session\ClientCapabilities::CLIENT_DESKTOP_AGENT) {
+            return null;
+        }
+
+        $name = trim((string) ($row['os_name'] ?? ''));
+
+        return $name === '' ? null : $name;
+    }
+
     public static function participant(array $row, bool $includeAudit = false): array
     {
         $capabilities = $row['capabilities'] ?? '{}';
@@ -179,6 +196,12 @@ final class Presenter
             // what tells the UI the thing on the other side is a machine; it
             // still renders from `capabilities`, never from `clientType` (§51).
             'deviceUuid'      => $row['device_uuid'] ?? null,
+            // Which keyboard the computer on the other side has ("Windows",
+            // "macOS"), so the room can send a Mac its own shortcuts and offer
+            // it its own keys. What the computer said when it was registered —
+            // and only ever a computer: nothing here is read from, or says
+            // anything about, a person's browser.
+            'operatingSystem' => self::operatingSystemOf($row),
             'controlState'    => (string) ($row['control_state'] ?? 'NONE'),
             'clipboardEnabled' => self::bool($row['clipboard_enabled'] ?? false),
             'controlRequestedAt' => Clock::iso($row['control_requested_at'] ?? null),

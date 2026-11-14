@@ -153,8 +153,9 @@ export default function InvitePanel({ session, canInviteExternal }: Props) {
           </>
         ) : (
           <p className="invite__restricted">
-            {session.companyName ?? 'This organisation'} does not allow people outside AICOUNTLY to join
-            Remote sessions.
+            {session.companyId === null
+              ? 'Inviting people outside AICOUNTLY is not available on this account.'
+              : `${session.companyName ?? 'This organisation'} does not allow people outside AICOUNTLY to join Remote sessions.`}
           </p>
         )}
       </div>

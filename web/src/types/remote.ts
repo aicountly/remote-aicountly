@@ -67,6 +67,12 @@ export interface Participant {
   displayName: string;
   role: ParticipantRole;
   clientType: ClientType;
+  /**
+   * The operating system of a participant that is a computer running the
+   * desktop app ("Windows", "macOS"); null or absent for a person in a browser.
+   * It decides which keyboard the room talks to — see `keyboardPlatformOf`.
+   */
+  operatingSystem?: string | null;
   status: ParticipantStatus;
   isHost: boolean;
   isSharing: boolean;
@@ -640,9 +646,10 @@ export interface SignallingCredentials {
   expiresAt: string;
   participantUuid: string;
   role: ParticipantRole;
-  iceServers: RTCIceServer[];
-  /** False when no TURN is configured — the UI says so instead of hanging. */
-  relayAvailable: boolean;
+  /** The relay credentials to connect with. Absent from the answer to a renewal, which is the token alone. */
+  iceServers?: RTCIceServer[];
+  /** False when no TURN is configured — the UI says so instead of hanging. Absent from a renewal. */
+  relayAvailable?: boolean;
   /** The whole aicountly.ice/1 grant: expiry, refresh time, relay nodes. Absent from older APIs. */
   ice?: unknown;
 }

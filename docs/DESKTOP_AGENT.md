@@ -86,18 +86,27 @@ separated payload — never a permanent bearer token. See
 
 ### Policy
 
-The four switches, exactly as designed, all defaulting **off**:
+The four switches, exactly as designed, all defaulting **off** for an
+organisation:
 
 ```
 allow_remote_control          allow_unattended_access
 allow_clipboard_sync          allow_device_reboot
 ```
 
+A **personal account** — no organisation — is the exception, and the ordinary
+case today: control, unattended access and the clipboard are *permitted* by
+default (`CompanyPolicyDefaults::personal()`), because reaching your own
+computer is what the product is for; restarting stays off. Permitted is all it
+is: unattended access is still off on every computer until its owner turns it
+on there with a two-step code, and only that owner can then connect.
+
 with database CHECKs enforcing the dependencies — unattended access and reboot
 require remote control, so the data cannot hold a combination the resolver
 would have to interpret.
 
-The five permissions, all defaulting off:
+The five permissions, which follow those switches (off for an organisation
+until it allows them; on for a personal account):
 
 ```
 remote.control.request   remote.control.accept   remote.device.enrol
@@ -142,8 +151,9 @@ and defaulted to false. They are now the plan gate they were put there to be.
 ## How much of it is built
 
 **The whole server side, the whole browser side, and the machine's identity,
-policy, consent, session transport and lifecycle.** 653 automated tests across
-the five parts of the product.
+policy, consent, session transport and lifecycle.** The automated tests across
+the five parts of the product are counted in
+[desktop/TESTING.md](desktop/TESTING.md#the-numbers).
 
 **And the picture.** The agent captures the screen (Windows.Graphics.Capture on
 Windows, Core Graphics on a Mac), encodes it as H.264 with Cisco's OpenH264 binary (downloaded on the computer), and streams
@@ -157,7 +167,13 @@ it is deliberately at the end of that document rather than buried: a design
 document that describes intentions as though they were code is how a team
 discovers a gap at the wrong moment.
 
-**macOS and Linux are not built.** Every provider in
-`src-tauri/src/platform/macos/` returns `PlatformError::Unsupported`. The trait
-boundary is what would keep that work confined; the work has not been done, and
-nothing pretends it has.
+**macOS is built; Linux is not.** A Mac hosts a session (its own screen,
+through Core Graphics, with the Screen Recording permission), is controlled
+(CGEvent, with the Accessibility permission) and can be a control companion.
+It has no clipboard, sound, restart, background service or Secure Desktop, and
+each of those providers in `src-tauri/src/platform/macos/` returns
+`PlatformError::Unsupported` — so the window does not offer them on a Mac.
+None of the Mac's native calls has been run by anybody working in this
+repository; they are compiled and checked on a macOS runner and otherwise
+covered by hand (`desktop/tests/MANUAL.md` §4e). Linux has no platform module
+at all.

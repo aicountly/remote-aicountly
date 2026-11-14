@@ -32,6 +32,23 @@ import type {
   UpdateStarted,
 } from '../types/agent'
 
+/**
+ * What went wrong, as the sentence to show.
+ *
+ * A Rust command that fails rejects with **the sentence itself** — a plain
+ * string, which is what `Result<_, String>` becomes on this side — and not
+ * with an `Error`. Asking only for `Error.message` threw every one of those
+ * sentences away: "This computer is offline", "That address is not one
+ * AICOUNTLY Remote opens" and the rest all reached the person as "Something
+ * went wrong." `fallback` is for a failure that carries no words at all.
+ */
+export function describeError(caught: unknown, fallback: string): string {
+  if (typeof caught === 'string' && caught.trim() !== '') return caught
+  if (caught instanceof Error && caught.message.trim() !== '') return caught.message
+
+  return fallback
+}
+
 export function getState(): Promise<AgentState> {
   return invoke<AgentState>('get_state')
 }
@@ -274,6 +291,15 @@ export function portalAction(action: 'back' | 'reload' | 'open_in_browser' | 'si
 
 export function about(): Promise<About> {
   return invoke<About>('about')
+}
+
+/**
+ * Show the folder the log is written in, in Explorer or Finder — for the
+ * moment somebody is asked to send it. Nothing is read or sent: the person
+ * attaches the file themselves.
+ */
+export function showLogFolder(): Promise<void> {
+  return invoke<void>('show_log_folder')
 }
 
 /**

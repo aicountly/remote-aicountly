@@ -22,7 +22,13 @@ export function formatDuration(seconds: number | null): string | null {
 /** "Unattended · Sam · controlled · 12 min" */
 export function describeSession(session: HistorySession): string {
   const parts = [
-    session.accessMode === 'UNATTENDED' ? 'Unattended' : session.role === 'COMPANION' ? 'Control companion' : 'Attended',
+    // In the words the rest of the window uses: "Attended" and "Control
+    // companion" are the API's names for them, and nobody's.
+    session.accessMode === 'UNATTENDED'
+      ? 'Unattended'
+      : session.role === 'COMPANION'
+        ? 'Shared from the browser'
+        : 'Help session',
     session.peers.length > 0 ? session.peers.join(', ') : 'Nobody joined',
   ]
 

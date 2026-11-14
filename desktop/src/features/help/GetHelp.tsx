@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+
 import type { CodecView, HelpSession, HostedParticipant, HostedParticipants } from '../../types/agent'
 import { codecReady } from '../../types/agent'
 import { ScreenRecordingNotice } from '../permissions/ScreenRecordingNotice'
@@ -28,6 +30,8 @@ export function GetHelp({
   onEnd,
   codec = null,
   onOpenSettings,
+  remoteAddress = null,
+  offline = false,
   busy,
 }: {
   computerName: string
@@ -48,6 +52,14 @@ export function GetHelp({
    */
   codec?: CodecView | null
   onOpenSettings?: () => void
+  /**
+   * Where the helper types the code in a browser — `remote.aicountly.com` —
+   * so the person here can say it. "They type it under Join session" named a
+   * menu and not the place the menu is.
+   */
+  remoteAddress?: string | null
+  /** This computer cannot reach AICOUNTLY Remote right now, so no code can be made. */
+  offline?: boolean
   busy?: boolean
 }) {
   if (!canHost) {
@@ -84,11 +96,20 @@ export function GetHelp({
             <li>If they ask to use your mouse and keyboard, you decide. Stop them at any time.</li>
           </ol>
           <div className="how-it-works__actions">
-            <button type="button" className="btn btn--primary" onClick={onStart} disabled={busy}>
+            <button type="button" className="btn btn--primary" onClick={onStart} disabled={busy || offline}>
               Get a code
             </button>
           </div>
-          <p className="field__hint">Only give the code to somebody you know and expected to help you.</p>
+          {offline ? (
+            <p className="help__caution" role="status">
+              This {computerName} is not connected to AICOUNTLY Remote at the moment, so it cannot make a code. It
+              keeps trying by itself.
+            </p>
+          ) : null}
+          <p className="help__caution">
+            <strong>Only give the code to somebody you know and asked for help.</strong> AICOUNTLY never calls or
+            messages anybody to ask for it.
+          </p>
         </>
       ) : (
         <>
@@ -97,10 +118,27 @@ export function GetHelp({
             <span className="help__code-value">
               {help.sessionCode ? formatSessionCode(help.sessionCode) : help.displayId}
             </span>
+            {help.sessionCode ? (
+              <span className="help__code-actions">
+                <CopyCode code={help.sessionCode} />
+              </span>
+            ) : null}
             <span className="field__hint">
-              {hosting
-                ? 'Read it to the person helping you. They type it under Join session, or Connect → Help someone.'
-                : 'Starting the session on this computer…'}
+              {hosting ? (
+                <>
+                  Read it to the person helping you. They type it under <strong>Join session</strong>
+                  {remoteAddress ? (
+                    <>
+                      {' '}
+                      at <strong>{remoteAddress}</strong>
+                    </>
+                  ) : null}
+                  , or under <strong>Connect → Help someone</strong> in AICOUNTLY Remote on their own computer. The
+                  code stops working when you end the session.
+                </>
+              ) : (
+                `Starting the session on this ${computerName}…`
+              )}
             </span>
           </div>
 
@@ -123,13 +161,51 @@ export function GetHelp({
           <ParticipantList title="In the session" empty="Nobody else." people={participants?.joined ?? []} />
 
           <div className="how-it-works__actions">
-            <button type="button" className="btn btn--danger" onClick={onEnd} disabled={busy}>
-              End the session
+            {/* The same words as the button at the top of the window, which does the same thing. */}
+            <button type="button" className="btn btn--danger" onClick={onEnd}>
+              End session
             </button>
           </div>
         </>
       )}
     </section>
+  )
+}
+
+/**
+ * Copy the code, for sending it in a message rather than reading it out. Says
+ * so for a moment when it has, because a button that changes nothing on
+ * screen leaves somebody pressing it again.
+ */
+function CopyCode({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    if (!copied) return undefined
+
+    const timer = setTimeout(() => setCopied(false), 2_500)
+
+    return () => clearTimeout(timer)
+  }, [copied])
+
+  return (
+    <>
+      <button
+        type="button"
+        className="btn btn--secondary btn--small"
+        onClick={() => {
+          void navigator.clipboard?.writeText(formatSessionCode(code)).then(
+            () => setCopied(true),
+            () => setCopied(false),
+          )
+        }}
+      >
+        Copy code
+      </button>
+      <span className="saved" role="status">
+        {copied ? 'Copied' : ''}
+      </span>
+    </>
   )
 }
 
@@ -192,6 +268,10 @@ export function HelpAdmission({
       <p>
         If you let them in they see your screen. They have to ask before they use your mouse and keyboard.
         {waiting.length > 1 ? ` ${waiting.length - 1} more waiting.` : ''}
+      </p>
+      <p>
+        <strong>Only let in somebody you know and gave your code to.</strong> If you do not recognise the name, turn
+        them away.
       </p>
       <div className="session-banner__actions">
         <button type="button" className="btn btn--primary" onClick={() => onAnswer(first, true)} disabled={busy}>

@@ -17,6 +17,7 @@ import type { About, AgentConfig, CodecChoice, CodecStatus, CodecView } from '..
 
 const bridge = vi.hoisted(() => ({
   openUrl: vi.fn<(url: string) => Promise<void>>(),
+  showLogFolder: vi.fn<() => Promise<void>>(),
   codecStatus: vi.fn<() => Promise<CodecView>>(),
   onCodecChange: vi.fn<(handler: (codec: CodecView) => void) => Promise<() => void>>(),
   setCodecEnabled: vi.fn<(enabled: boolean) => Promise<CodecChoice>>(),
@@ -70,6 +71,7 @@ function about(overrides: Partial<About> = {}): About {
     supportsHosting: true,
     supportsCompanion: true,
     supportsSound: true,
+    supportsSecureDesktop: true,
     stopShortcut: 'Ctrl+Alt+Shift+S',
     keyStorage: 'Windows DPAPI (machine scope)',
     logFile: null,
@@ -93,6 +95,7 @@ let pushCodec: ((codec: CodecView) => void) | null = null
 beforeEach(() => {
   pushCodec = null
   bridge.openUrl.mockReset().mockResolvedValue(undefined)
+  bridge.showLogFolder.mockReset().mockResolvedValue(undefined)
   bridge.codecStatus.mockReset().mockResolvedValue(codec(READY))
   bridge.onCodecChange.mockReset().mockImplementation(async (handler) => {
     pushCodec = handler
@@ -165,20 +168,95 @@ describe('the Video codec section', () => {
   })
 
   /**
-   * Sound is the person at the computer's to switch on. It is saved with the rest of the form, and is not
-   * offered at all where the computer cannot send it.
+   * Sound is the person at the computer's to switch on, and off — and the sentence beside the switch
+   * promises that switching it off stops the sound at once. It used to wait for Save settings. It is
+   * saved the moment it is ticked or unticked, onto the settings as they were last saved: whatever
+   * else in the form is half typed is not saved with it.
    */
-  it('offers the sound switch, off, and saves it switched on', async () => {
+  it('offers the sound switch, off, and saves it the moment it is switched', async () => {
     const onSave = vi.fn()
     render(<SettingsPage config={CONFIG} about={about()} onSave={onSave} />)
 
     const sound = screen.getByRole('checkbox', { name: /Share this computer’s sound/ })
     expect(sound).not.toBeChecked()
 
+    // Something else in the form, changed and not saved.
+    await userEvent.selectOptions(screen.getByLabelText('Screen quality'), 'high_quality')
+
     await userEvent.click(sound)
+
+    expect(onSave).toHaveBeenCalledTimes(1)
+    expect(onSave).toHaveBeenLastCalledWith({ ...CONFIG, shareSound: true })
+
+    // And Save settings then saves the rest, with the switch as it now is.
     await userEvent.click(screen.getByRole('button', { name: 'Save settings' }))
 
-    expect(onSave).toHaveBeenLastCalledWith({ ...CONFIG, shareSound: true })
+    expect(onSave).toHaveBeenLastCalledWith({ ...CONFIG, captureQuality: 'high_quality', shareSound: true })
+  })
+
+  /** A button that changes nothing on screen leaves somebody wondering whether it did anything. */
+  it('says Saved once a save has gone through, and not when it has not', async () => {
+    const onSave = vi.fn<(config: AgentConfig) => Promise<boolean>>().mockResolvedValue(false)
+    render(<SettingsPage config={CONFIG} about={about()} onSave={onSave} />)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save settings' }))
+    expect(screen.queryByText('Saved')).not.toBeInTheDocument()
+
+    onSave.mockResolvedValue(true)
+    await userEvent.click(screen.getByRole('button', { name: 'Save settings' }))
+    expect(await screen.findByText('Saved')).toBeInTheDocument()
+  })
+
+  /** The address that signs the computer out when it is changed is not the first thing on the page. */
+  it('keeps the address this computer connects to under Advanced', () => {
+    render(<SettingsPage config={CONFIG} about={about()} onSave={vi.fn()} />)
+
+    const address = screen.getByLabelText('AICOUNTLY Remote address')
+
+    expect(address.closest('details')).not.toBeNull()
+    expect(address.closest('details')).not.toHaveAttribute('open')
+  })
+
+  /**
+   * A Mac shows its own screen and has neither Windows' prompts nor its background service, and was
+   * offered a setting for the first and told the second was "Not running".
+   */
+  it('offers a Mac nothing that is Windows’', () => {
+    const mac = about({
+      platform: 'macOS',
+      supportsSecureDesktop: false,
+      supportsSound: false,
+      service: { ...about().service, running: false, detail: 'the AICOUNTLY Remote background service is not running' },
+    })
+
+    const { rerender } = render(<SettingsPage config={CONFIG} about={mac} onSave={vi.fn()} />)
+
+    expect(screen.queryByText(/administrator prompts and the lock screen/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Background service')).not.toBeInTheDocument()
+    expect(screen.queryByText(/background service is not running/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Task Manager/)).not.toBeInTheDocument()
+    expect(screen.getByText(/in the menu bar/)).toBeInTheDocument()
+
+    rerender(<SettingsPage config={CONFIG} about={about()} onSave={vi.fn()} />)
+
+    expect(screen.getByText(/administrator prompts and the lock screen/)).toBeInTheDocument()
+    expect(screen.getByText('Background service')).toBeInTheDocument()
+    expect(screen.getByText(/Task Manager/)).toBeInTheDocument()
+  })
+
+  /** "Can you send me the log" used to mean finding a path by hand. */
+  it('opens the folder the log is in', async () => {
+    render(
+      <SettingsPage
+        config={CONFIG}
+        about={about({ logFile: 'C:\\ProgramData\\AICOUNTLY\\Remote\\logs\\agent.log' })}
+        onSave={vi.fn()}
+      />,
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: 'Open the folder' }))
+
+    expect(bridge.showLogFolder).toHaveBeenCalledOnce()
   })
 
   it('does not offer the sound switch on a computer that cannot send sound', () => {

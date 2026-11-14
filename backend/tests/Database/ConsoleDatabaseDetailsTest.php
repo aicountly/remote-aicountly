@@ -527,6 +527,103 @@ final class ConsoleDatabaseDetailsTest extends TestCase
         ];
     }
 
+    /**
+     * Every request is a new process, and what one process remembers is gone with it. An outage of Console used to be
+     * an outage of Remote: once the file was five minutes old every request stopped to call Console and waited out its
+     * timeout. The outage is left in the file, so for a few seconds no request - this one's process or any other -
+     * asks again.
+     */
+    public function testDuringAnOutageOneRequestAsksAndTheOnesAfterItDoNot(): void
+    {
+        $this->configure();
+        self::$console->control(['expect_key' => $this->key, 'data' => ['database_name' => 'cp_last_good', 'database_username' => 'cp_user']]);
+        ConsoleDatabaseDetails::resolve();
+        $this->ageCache(3600);
+
+        self::$console->control(['expect_key' => $this->key, 'status' => 503]);
+        self::$console->forgetRequests();
+
+        // Five requests, each a new process: only the file survives between them.
+        for ($request = 1; $request <= 5; $request++) {
+            ConsoleDatabaseDetails::resetForTesting(false);
+            $this->assertSame(['name' => 'cp_last_good', 'user' => 'cp_user'], ConsoleDatabaseDetails::resolve(), "Request {$request} carries on.");
+        }
+
+        $this->assertCount(1, self::$console->requests(), 'Console was asked once, not five times.');
+        $this->assertCount(1, $this->logged, 'And the outage was logged once.');
+
+        // Once the few seconds are up, the next request asks again - and when Console is back, that is the end of it.
+        $this->expireRetryMark();
+        self::$console->control(['expect_key' => $this->key, 'data' => ['database_name' => 'cp_back', 'database_username' => 'cp_user']]);
+        ConsoleDatabaseDetails::resetForTesting(false);
+
+        $this->assertSame('cp_back', ConsoleDatabaseDetails::resolve()['name']);
+        $this->assertCount(2, self::$console->requests());
+        $this->assertSame(
+            ['name', 'user', 'fetched_at'],
+            array_keys((array) json_decode((string) file_get_contents(ConsoleDatabaseDetails::cacheFilePath()), true)),
+            'A good answer leaves no mark behind.',
+        );
+    }
+
+    /**
+     * While one request is asking Console, the ones arriving behind it use the answer already there rather than
+     * asking too: the file says somebody is asking.
+     */
+    public function testARequestThatFindsAnotherAlreadyAskingDoesNotAskToo(): void
+    {
+        $this->configure();
+        self::$console->control(['expect_key' => $this->key, 'data' => ['database_name' => 'cp_last_good', 'database_username' => 'cp_user']]);
+        ConsoleDatabaseDetails::resolve();
+        $this->ageCache(3600);
+        self::$console->forgetRequests();
+
+        // As the file is left by a request that has just gone to ask.
+        $path = ConsoleDatabaseDetails::cacheFilePath();
+        $data = json_decode((string) file_get_contents($path), true);
+        $data['retry_at'] = time() + 5;
+        file_put_contents($path, json_encode($data));
+
+        $this->assertSame('cp_last_good', ConsoleDatabaseDetails::resolve()['name']);
+        $this->assertSame([], self::$console->requests(), 'It did not ask.');
+        $this->assertSame([], $this->logged, 'Nor is this an outage to report.');
+    }
+
+    /** Revoking a key has to stop Remote using it, whatever an earlier request left in the file. */
+    public function testARefusalIsNeverHiddenBehindTheMarkARequestLeft(): void
+    {
+        $this->configure();
+        self::$console->control(['expect_key' => $this->key]);
+        ConsoleDatabaseDetails::resolve();
+        $this->ageCache(3600);
+
+        self::$console->control(['expect_key' => 'the-key-was-rotated']);
+        self::$console->forgetRequests();
+
+        // Three requests, each a new process: every one of them hears the refusal for itself.
+        for ($request = 1; $request <= 3; $request++) {
+            ConsoleDatabaseDetails::resetForTesting(false);
+            $this->assertSame('console_key_rejected', $this->resolveFailure()->category, "Request {$request} is refused.");
+        }
+
+        $this->assertCount(3, self::$console->requests());
+    }
+
+    /** A mark further ahead than this class could have written is somebody else's, and is not believed. */
+    public function testAMarkFarInTheFutureDoesNotStopConsoleBeingAsked(): void
+    {
+        $this->configure();
+        self::$console->control(['expect_key' => $this->key, 'data' => ['database_name' => 'cp_current', 'database_username' => 'cp_user']]);
+
+        file_put_contents(
+            ConsoleDatabaseDetails::cacheFilePath(),
+            json_encode(['name' => 'cp_planted', 'user' => 'cp_user', 'fetched_at' => time() - 3600, 'retry_at' => time() + 86400]),
+        );
+
+        $this->assertSame('cp_current', ConsoleDatabaseDetails::resolve()['name']);
+        $this->assertCount(1, self::$console->requests());
+    }
+
     public function testAnUnreachableConsoleUsesTheLastGoodAnswerAndWithNoneItFails(): void
     {
         $this->configure();
@@ -815,6 +912,16 @@ final class ConsoleDatabaseDetailsTest extends TestCase
         $data['fetched_at'] = time() - $seconds;
         file_put_contents($path, json_encode($data));
         ConsoleDatabaseDetails::resetForTesting(false);
+    }
+
+    /** As the file is once the few seconds an outage is remembered for have passed. */
+    private function expireRetryMark(): void
+    {
+        $path = ConsoleDatabaseDetails::cacheFilePath();
+        $data = json_decode((string) file_get_contents($path), true);
+        $this->assertArrayHasKey('retry_at', $data, 'An outage leaves its mark in the file.');
+        $data['retry_at'] = time() - 1;
+        file_put_contents($path, json_encode($data));
     }
 
     private function seedCache(string $name, string $user, int $ageSeconds): void

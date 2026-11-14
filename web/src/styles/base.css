@@ -85,7 +85,7 @@ video {
  * off mouse clicks while guaranteeing it for keyboard users (§63).
  */
 :focus-visible {
-  outline: 3px solid rgba(37, 176, 3, 0.35);
+  outline: 2px solid var(--focus-ring-colour);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
@@ -102,6 +102,34 @@ video {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* "Skip to content": off screen until the keyboard reaches it, then the first
+   thing on the page. */
+.skip-link {
+  position: absolute;
+  top: var(--space-2);
+  /* The top centre, where the header has nothing to press: in the corner it
+     lay over the phone's menu button for as long as it had focus. */
+  left: 50%;
+  z-index: 100;
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--aicountly-green-darker);
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: var(--shadow-md);
+  transform: translate(-50%, -200%);
+}
+
+.skip-link:focus {
+  transform: translate(-50%, 0);
+}
+
+/* The page itself takes focus from the skip link; it is not a control and gets no ring. */
+main:focus {
+  outline: none;
 }
 
 /* --- Buttons -------------------------------------------------------------- */
@@ -140,19 +168,19 @@ video {
 }
 
 .btn--primary {
-  background: var(--aicountly-green);
-  border-color: var(--aicountly-green);
+  background: var(--aicountly-green-darker);
+  border-color: var(--aicountly-green-darker);
   color: var(--text-inverse);
 }
 
 .btn--primary:hover:not(:disabled) {
-  background: var(--aicountly-green-dark);
-  border-color: var(--aicountly-green-dark);
+  background: var(--aicountly-green-darkest);
+  border-color: var(--aicountly-green-darkest);
   box-shadow: var(--shadow-sm);
 }
 
 .btn--primary:active:not(:disabled) {
-  background: var(--aicountly-green-darker);
+  background: var(--aicountly-green-darkest);
 }
 
 .btn--secondary {
@@ -295,7 +323,7 @@ video {
 .select:focus,
 .textarea:focus {
   outline: none;
-  border-color: var(--aicountly-green);
+  border-color: var(--focus-ring-colour);
   box-shadow: var(--focus-ring);
 }
 

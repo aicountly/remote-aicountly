@@ -23,7 +23,11 @@ function describe(state: PermissionState): { tone: string; label: string } {
       // is nothing for a person to do, so this is not something to flag.
       return { tone: 'ready', label: 'Ready' }
     case 'needs_attention':
-      return { tone: 'attention', label: 'Needs attention' }
+      // What to do about it is on this screen wherever this can appear — the
+      // Accessibility and Screen Recording notices, the background service
+      // row in About — so the pill says what is the matter, not that
+      // something is.
+      return { tone: 'attention', label: 'Not set up yet' }
     case 'denied':
       return { tone: 'danger', label: 'Not allowed' }
     case 'unsupported':

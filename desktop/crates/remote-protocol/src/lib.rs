@@ -177,6 +177,26 @@ pub enum ControlMessage {
         /// Whether an authorised helper is forwarding it to the controller.
         reachable: bool,
     },
+    /// The agent telling the controller that the computer would not take the
+    /// input it was just sent.
+    ///
+    /// Control is granted, the gate admitted the event — and the operating
+    /// system refused it. On Windows that is nearly always a window running
+    /// as administrator in front (Task Manager, an installer): Windows lets
+    /// no ordinary application click or type into one. From the controller's
+    /// side that was silence: the room said "You are controlling this
+    /// computer" and nothing moved, with nothing to say why or what to do.
+    ///
+    /// Informational, like [`ControlMessage::ControlPaused`]: control is
+    /// still granted and nothing the controller may do changes. Sent at most
+    /// every few seconds while it keeps happening, so the controller's
+    /// browser shows the reason for as long as it is true and drops it when
+    /// the messages stop. A controller that does not know this message
+    /// ignores it.
+    InputRefused {
+        /// Machine reason, for the interface to explain.
+        reason: InputRefusedReason,
+    },
     /// Keep-alive, so a silent channel can be told from a dead one.
     Ping {
         /// Milliseconds since the controller's epoch; echoed back untouched.
@@ -216,6 +236,41 @@ impl fmt::Display for ControlEndReason {
         };
 
         f.write_str(text)
+    }
+}
+
+/// Why the computer would not take an input event it was sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputRefusedReason {
+    /// A window running with higher privileges is in front — one started as
+    /// administrator. Windows refuses input from an ordinary application into
+    /// it; the person at the computer has to use that window themselves.
+    ElevatedWindow,
+    /// Ctrl+Alt+Del was asked for and nothing on this computer may send it:
+    /// the person there did not agree to Windows' own prompts being answered,
+    /// so there is no helper to raise it.
+    SecureAttentionNotAllowed,
+    /// Ctrl+Alt+Del was asked for and Windows on this computer does not let
+    /// software raise it — its "software Secure Attention Sequence" policy,
+    /// which this application does not change.
+    SecureAttentionBlocked,
+    /// The operating system refused, and did not say why.
+    Refused,
+}
+
+impl fmt::Display for InputRefusedReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::ElevatedWindow => "a window running as administrator is in front",
+            Self::SecureAttentionNotAllowed => {
+                "Ctrl+Alt+Del needs Windows' prompts to have been allowed"
+            }
+            Self::SecureAttentionBlocked => {
+                "Windows on this computer does not let software send Ctrl+Alt+Del"
+            }
+            Self::Refused => "the computer refused the input",
+        })
     }
 }
 
@@ -351,6 +406,7 @@ impl ControlEnvelope {
             ControlMessage::SelectMonitor { .. }
             | ControlMessage::ControlEnded { .. }
             | ControlMessage::ControlPaused { .. }
+            | ControlMessage::InputRefused { .. }
             | ControlMessage::ControlResumed
             | ControlMessage::SecureDesktop { .. }
             | ControlMessage::Ping { .. }
@@ -423,6 +479,55 @@ mod tests {
 
     fn envelope(message: ControlMessage) -> ControlEnvelope {
         ControlEnvelope::new("session-uuid", "participant-uuid", 1, message)
+    }
+
+    /// `input_refused` on the wire, as the browser reads it: the reason is a
+    /// word the room turns into a sentence, and the message needs no grant —
+    /// it travels from the computer, and a controller sending one changes
+    /// nothing.
+    #[test]
+    fn input_refused_travels_as_a_reason_the_room_can_explain() {
+        let sent = envelope(ControlMessage::InputRefused {
+            reason: InputRefusedReason::ElevatedWindow,
+        });
+        assert!(sent.validate().is_ok());
+        assert!(!sent.is_input());
+
+        let wire: serde_json::Value =
+            serde_json::from_slice(&sent.encode().expect("encodes")).expect("json");
+        assert_eq!(wire["m"]["type"], "input_refused");
+        assert_eq!(wire["m"]["reason"], "elevated_window");
+
+        let back = ControlEnvelope::decode(
+            br#"{"v":1,"s":"session-uuid","p":"participant-uuid","n":7,"m":{"type":"input_refused","reason":"refused"}}"#,
+        )
+        .expect("decodes");
+        assert_eq!(
+            back.message,
+            ControlMessage::InputRefused {
+                reason: InputRefusedReason::Refused
+            }
+        );
+
+        // The names the room matches on: change one here and the room's
+        // sentence for it silently becomes the general one.
+        for (reason, name) in [
+            (InputRefusedReason::ElevatedWindow, "elevated_window"),
+            (
+                InputRefusedReason::SecureAttentionNotAllowed,
+                "secure_attention_not_allowed",
+            ),
+            (
+                InputRefusedReason::SecureAttentionBlocked,
+                "secure_attention_blocked",
+            ),
+            (InputRefusedReason::Refused, "refused"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(reason).expect("serialises"),
+                serde_json::Value::String(name.into())
+            );
+        }
     }
 
     #[test]

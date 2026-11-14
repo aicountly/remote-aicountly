@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement, ReactNode } from 'react'
-import { Maximize, Minimize, Monitor, MonitorOff, MousePointer2, ShieldCheck } from 'lucide-react'
+import { Keyboard, Maximize, Minimize, Monitor, MonitorOff, MousePointer2, ShieldCheck } from 'lucide-react'
 
 import type { AnnotationShape, EngineSnapshot } from '../../services/webrtc/RemoteSessionEngine'
 import { normalisePointer } from '../../services/webrtc/remoteControl'
-import type { MonitorDescription, PointerPosition as ControlPoint } from '../../services/webrtc/remoteControl'
+import type {
+  InputRefusedReason,
+  KeyCombination,
+  KeyboardPlatform,
+  MonitorDescription,
+  PointerPosition as ControlPoint,
+} from '../../services/webrtc/remoteControl'
 import type { SessionDetail } from '../../types/remote'
+import { formatSessionCode } from '../../utils/format'
 import { useFullscreen } from './useFullscreen'
 
 /**
@@ -30,6 +37,84 @@ const NOTHING: readonly string[] = []
 
 /** No displays reported: the same, for the switcher. */
 const NO_MONITORS: readonly MonitorDescription[] = []
+
+/**
+ * The key combinations the room can send for somebody, in the order its menu lists them.
+ *
+ * These are the ones a keyboard cannot hand over. Ctrl+Alt+Del and the Windows key never reach a
+ * web page at all — the helper's own computer takes them — and outside full screen neither do
+ * Alt+Tab or Alt+F4. Named for what they do on the computer being controlled, with the keys beside.
+ */
+type KeyMenu = ReadonlyArray<{ name: KeyCombination; label: string; keys: string }>
+
+const KEY_MENU: KeyMenu = [
+  { name: 'ctrl_alt_del', label: 'Ctrl+Alt+Del', keys: 'Sign-in and security screen (Windows)' },
+  { name: 'task_manager', label: 'Task Manager', keys: 'Ctrl+Shift+Esc' },
+  { name: 'start_menu', label: 'Start menu', keys: 'Windows key' },
+  { name: 'run_dialog', label: 'Run…', keys: 'Windows+R' },
+  { name: 'file_explorer', label: 'File Explorer', keys: 'Windows+E' },
+  { name: 'show_desktop', label: 'Show the desktop', keys: 'Windows+D' },
+  { name: 'switch_window', label: 'Switch window', keys: 'Alt+Tab' },
+  { name: 'close_window', label: 'Close window', keys: 'Alt+F4' },
+  { name: 'escape', label: 'Esc', keys: 'Escape' },
+  { name: 'print_screen', label: 'Print Screen', keys: 'PrtSc' },
+]
+
+/**
+ * The same for a Mac. The Windows list sent to a Mac did other things there — "Run…" was ⌘R, which
+ * reloads the page in front — so a Mac is offered its own: the ones macOS keeps from a web page
+ * (⌘Tab, ⌘Space, ⌘Q, ⌘W), the one that gets somebody out of a stuck app, and its Control key, which
+ * a helper on a PC keyboard cannot type because their Ctrl is sent as ⌘.
+ */
+const MAC_KEY_MENU: KeyMenu = [
+  { name: 'force_quit', label: 'Force Quit…', keys: '⌥⌘Esc' },
+  { name: 'spotlight', label: 'Spotlight search', keys: '⌘Space' },
+  { name: 'switch_app', label: 'Switch app', keys: '⌘Tab' },
+  { name: 'mission_control', label: 'Mission Control', keys: '⌃↑' },
+  { name: 'close_window_mac', label: 'Close window', keys: '⌘W' },
+  { name: 'quit_app', label: 'Quit app', keys: '⌘Q' },
+  { name: 'interrupt', label: 'Interrupt', keys: 'Control+C, in Terminal' },
+  { name: 'escape', label: 'Esc', keys: 'Escape' },
+]
+
+/** The Keys menu for the computer being controlled. One that has not said what it is gets the Windows list. */
+export function keyMenuFor(platform: KeyboardPlatform | null | undefined): KeyMenu {
+  return platform === 'mac' ? MAC_KEY_MENU : KEY_MENU
+}
+
+/**
+ * Why the computer being controlled did not take something, in words the helper can act on.
+ *
+ * Control was "granted" at both ends and nothing moved, and until the computer said why there was
+ * nothing to tell a refused click from a dead connection.
+ */
+export function inputRefusedMessage(reason: InputRefusedReason): string {
+  switch (reason) {
+    case 'elevated_window':
+      return 'That computer has a window in front that runs as administrator, and Windows will not let your clicks or typing into it. Ask the person there to use that window, or to close it.'
+    case 'secure_attention_not_allowed':
+      return 'Ctrl+Alt+Del was not sent. It can only be sent when the person at the computer allowed control in the AICOUNTLY Remote app with “Also let them answer Windows administrator prompts” ticked.'
+    case 'secure_attention_blocked':
+      return 'Ctrl+Alt+Del was not sent: Windows on that computer does not let an app send it. The person there can press it themselves.'
+    case 'refused':
+      return 'That computer did not take your last click or key. If it keeps happening, ask the person there to check that AICOUNTLY Remote is allowed to control it.'
+  }
+}
+
+/**
+ * Whether a key press is "paste": Ctrl+V, ⌘V, or Shift+Insert. With the clipboard shared, the
+ * helper's clipboard has to reach the other computer before the keys that paste it.
+ */
+export function isPasteKey(event: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }): boolean {
+  if (event.altKey) return false
+
+  if (event.key === 'Insert') return event.shiftKey && !event.ctrlKey && !event.metaKey
+
+  return (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v'
+}
+
+/** How long the paste key waits for the browser's `paste` event before it is sent without one. */
+const PASTE_WAIT_MS = 250
 
 /**
  * The Keyboard Lock API (Chrome and Edge, in full screen): with it, the keys a
@@ -69,6 +154,10 @@ interface Props {
   onControlScroll?: (deltaX: number, deltaY: number, position?: ControlPoint) => void
   onControlKey?: (event: KeyboardEvent, pressed: boolean) => boolean
   onControlClipboard?: (text: string) => boolean
+  /** Send one of the key combinations the keyboard cannot hand over (the Keys menu). */
+  onControlCombination?: (name: KeyCombination) => boolean
+  /** Which keyboard the controlled computer has: a Mac is offered a Mac's keys. */
+  controlledPlatform?: KeyboardPlatform | null
   /**
    * The keyboard stopped being the stage's — focus went to another window or
    * another part of the page. Whatever is held on the controlled computer is
@@ -122,6 +211,8 @@ export default function SessionStage({
   onControlScroll,
   onControlKey,
   onControlClipboard,
+  onControlCombination,
+  controlledPlatform = null,
   onControlRelease,
   monitors = NO_MONITORS,
   activeMonitorId = null,
@@ -315,13 +406,62 @@ export default function SessionStage({
     [controlPoint, onControlButton],
   )
 
+  // --- Paste ----------------------------------------------------------------
+  //
+  // With the clipboard shared, "paste" has to mean the helper's clipboard. The
+  // browser only hands a page its clipboard in a `paste` event, and it fires
+  // that event only if the key press that causes it is left alone — so the
+  // paste key is the one key whose default is not prevented and which is not
+  // sent at once. It is held until the `paste` event has delivered the text
+  // (or a moment has passed with none: an empty clipboard, a picture), and
+  // then sent, so the other computer receives the text first and the keys
+  // that paste it second.
+  //
+  // Preventing the default on every key, as the stage used to, meant the
+  // `paste` event never fired: the helper's text was never sent, and Ctrl+V
+  // pasted whatever the other computer already had on its own clipboard.
+  const heldPaste = useRef<{ event: KeyboardEvent; timer: ReturnType<typeof setTimeout> } | null>(null)
+
+  const sendHeldPaste = useCallback(() => {
+    const held = heldPaste.current
+    if (!held) return
+
+    clearTimeout(held.timer)
+    heldPaste.current = null
+    onControlKey?.(held.event, true)
+  }, [onControlKey])
+
   const handleControlKey = useCallback(
     (event: React.KeyboardEvent, pressed: boolean) => {
+      const native = event.nativeEvent
+
+      if (clipboardShared && onControlClipboard && isPasteKey(native)) {
+        if (pressed) {
+          // A key held down repeats; the first press is the one being waited on.
+          if (!heldPaste.current) {
+            heldPaste.current = { event: native, timer: setTimeout(sendHeldPaste, PASTE_WAIT_MS) }
+          }
+
+          return
+        }
+
+        // Released before the clipboard arrived: the press goes first, then this.
+        sendHeldPaste()
+      }
+
       // Tab would move focus out of the stage and Space would scroll the page,
       // and both are keys somebody controlling a computer means to send.
-      if (onControlKey?.(event.nativeEvent, pressed)) event.preventDefault()
+      if (onControlKey?.(native, pressed)) event.preventDefault()
     },
-    [onControlKey],
+    [onControlKey, onControlClipboard, clipboardShared, sendHeldPaste],
+  )
+
+  useEffect(
+    () => () => {
+      if (heldPaste.current) clearTimeout(heldPaste.current.timer)
+      heldPaste.current = null
+    },
+    [],
   )
 
   // Wheel is bound natively rather than through React, because React attaches
@@ -351,12 +491,36 @@ export default function SessionStage({
 
       const text = event.clipboardData?.getData('text/plain')
       if (text) onControlClipboard(text)
+
+      // The text first, then the keys that paste it (see `heldPaste`).
+      sendHeldPaste()
     }
 
     window.addEventListener('paste', onPaste)
 
     return () => window.removeEventListener('paste', onPaste)
-  }, [controlling, clipboardShared, onControlClipboard])
+  }, [controlling, clipboardShared, onControlClipboard, sendHeldPaste])
+
+  // --- The Keys menu ----------------------------------------------------------
+
+  const [keysOpen, setKeysOpen] = useState(false)
+
+  // Gone with control, so it is never left open over a screen nobody is controlling.
+  useEffect(() => {
+    if (!controlling) setKeysOpen(false)
+  }, [controlling])
+
+  const sendCombination = useCallback(
+    (name: KeyCombination) => {
+      onControlCombination?.(name)
+      setKeysOpen(false)
+
+      // Keys go to the remote computer only while the surface has focus, and
+      // choosing from the menu took it.
+      surfaceRef.current?.focus()
+    },
+    [onControlCombination],
+  )
 
   // --- Full screen -----------------------------------------------------------
   //
@@ -500,6 +664,8 @@ export default function SessionStage({
           <video
             ref={videoRef}
             className="stage__video"
+            // What a screen reader is told this is; a <video> with no name is "video", and nothing else.
+            aria-label={isViewingRemote ? 'The shared screen' : 'Your own screen, as the others see it'}
             autoPlay
             playsInline
             // Muted for the local preview only: hearing your own shared audio
@@ -510,24 +676,37 @@ export default function SessionStage({
 
           <AnnotationLayer shapes={shapes} />
 
-          {/* Somebody at the controlled machine is using it (owner decision 7):
-              their input wins, and nothing is sent until they stop. */}
-          {controlling && live?.controlPaused ? (
-            <p className="stage__paused" role="status">
-              Paused — someone is using that computer
-            </p>
-          ) : null}
+          {/* What the computer being controlled has to say, one under another. */}
+          {controlling && (live?.controlPaused || live?.secureDesktop || live?.inputRefused) ? (
+            <div className="stage__notices">
+              {/* Somebody at the controlled machine is using it (owner decision 7):
+                  their input wins, and nothing is sent until they stop. */}
+              {live.controlPaused ? (
+                <p className="stage__paused" role="status">
+                  Paused — someone is using that computer
+                </p>
+              ) : null}
 
-          {/* A Windows administrator prompt is open on the controlled machine
-              (the Secure Desktop). Say so, and whether it can be answered from
-              here, rather than leaving the controller looking at a frozen frame. */}
-          {controlling && live?.secureDesktop ? (
-            <p className="stage__paused" role="status">
-              A Windows administrator prompt is open on that computer.{' '}
-              {live.secureDesktop.reachable
-                ? 'You can answer it.'
-                : 'Ask the person at the computer to answer it.'}
-            </p>
+              {/* A Windows administrator prompt is open on the controlled machine
+                  (the Secure Desktop). Say so, and whether it can be answered from
+                  here, rather than leaving the controller looking at a frozen frame. */}
+              {live.secureDesktop ? (
+                <p className="stage__paused" role="status">
+                  A Windows administrator prompt is open on that computer.{' '}
+                  {live.secureDesktop.reachable
+                    ? 'You can answer it.'
+                    : 'Ask the person at the computer to answer it.'}
+                </p>
+              ) : null}
+
+              {/* The computer would not take something that was sent, and said why. Without
+                  this, control read as granted at both ends while nothing moved. */}
+              {live.inputRefused ? (
+                <p className="stage__paused stage__paused--refused" role="status">
+                  {inputRefusedMessage(live.inputRefused)}
+                </p>
+              ) : null}
+            </div>
           ) : null}
 
           {Object.entries(live?.pointers ?? {}).map(([peerId, pointer]) => (
@@ -549,22 +728,12 @@ export default function SessionStage({
           ))}
         </div>
       ) : (
-        <div className="stage__placeholder">
-          <MonitorOff size={30} aria-hidden="true" />
-          <p className="stage__placeholder-title">
-            {sharingParticipant
-              ? `Waiting for ${sharingParticipant.displayName}’s screen`
-              : 'No screen is being shared yet'}
-          </p>
-          <p className="stage__placeholder-body">
-            {session.isHost
-              ? 'Choose Share to pick what to show. Nothing is transmitted until you do.'
-              : 'The host has not started sharing. Chat is available in the meantime.'}
-          </p>
-        </div>
+        <StagePlaceholder session={session} sharingName={sharingParticipant?.displayName ?? null} />
       )}
 
-      {isViewingRemote && sharingParticipant ? (
+      {/* Not while controlling: it sits over the corner of the remote screen where the Start
+          button is, and a click on it was a click on this label, not on that computer. */}
+      {isViewingRemote && sharingParticipant && !controlling ? (
         <div className="stage__attribution">
           <ShieldCheck size={14} aria-hidden="true" />
           <span>
@@ -575,52 +744,173 @@ export default function SessionStage({
         </div>
       ) : null}
 
-      {/* The other screens of the computer being controlled. Shown only while
-          controlling — the computer switches for the person it gave control to —
-          and only when there is more than one to switch between. */}
-      {controlling && isViewingRemote && monitors.length > 1 && onSelectMonitor ? (
-        <div className="stage__monitors" role="group" aria-label="Screens of the remote computer">
-          <Monitor size={14} aria-hidden="true" />
-          {monitors.map((monitor, index) => {
-            const active = monitor.id === activeMonitorId
+      {/* Bottom right, in one row: the corner of a remote desktop least often aimed at. Siblings of
+          the surface, never inside it, so a click here is never a click on the remote screen. */}
+      <div className="stage__tools">
+        {/* The other screens of the computer being controlled. Shown only while
+            controlling — the computer switches for the person it gave control to —
+            and only when there is more than one to switch between. */}
+        {controlling && isViewingRemote && monitors.length > 1 && onSelectMonitor ? (
+          <div className="stage__monitors" role="group" aria-label="Screens of the remote computer">
+            <Monitor size={14} aria-hidden="true" />
+            {monitors.map((monitor, index) => {
+              const active = monitor.id === activeMonitorId
 
-            return (
-              <button
-                key={monitor.id}
-                type="button"
-                className={['stage__monitor', active ? 'stage__monitor--active' : ''].filter(Boolean).join(' ')}
-                aria-pressed={active}
-                title={`${monitor.name || `Screen ${index + 1}`} · ${monitor.width} × ${monitor.height}${
-                  monitor.primary ? ' · main screen' : ''
-                }`}
-                onClick={() => {
-                  if (!active) onSelectMonitor(monitor.id)
+              return (
+                <button
+                  key={monitor.id}
+                  type="button"
+                  className={['stage__monitor', active ? 'stage__monitor--active' : ''].filter(Boolean).join(' ')}
+                  aria-pressed={active}
+                  title={`${monitor.name || `Screen ${index + 1}`} · ${monitor.width} × ${monitor.height}${
+                    monitor.primary ? ' · main screen' : ''
+                  }`}
+                  onClick={() => {
+                    if (!active) onSelectMonitor(monitor.id)
 
-                  // Keys go to the remote computer only while the surface has
-                  // focus, and pressing this took it.
-                  surfaceRef.current?.focus()
+                    // Keys go to the remote computer only while the surface has
+                    // focus, and pressing this took it.
+                    surfaceRef.current?.focus()
+                  }}
+                >
+                  {index + 1}
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
+
+        {/* The keys a keyboard cannot hand over. Beside the screen switcher, and like it a sibling
+            of the surface: choosing from it must not be a click on the remote screen. */}
+        {controlling && isViewingRemote && onControlCombination ? (
+          <div className="stage__keys">
+            <button
+              type="button"
+              className="stage__keys-toggle"
+              aria-haspopup="menu"
+              aria-expanded={keysOpen}
+              onClick={() => setKeysOpen((open) => !open)}
+            >
+              <Keyboard size={14} aria-hidden="true" />
+              Keys
+            </button>
+
+            {keysOpen ? (
+              <div
+                className="stage__keys-menu"
+                role="menu"
+                aria-label="Send keys to the remote computer"
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    event.stopPropagation()
+                    setKeysOpen(false)
+                    surfaceRef.current?.focus()
+                  }
                 }}
               >
-                {index + 1}
-              </button>
-            )
-          })}
-        </div>
-      ) : null}
+                {keyMenuFor(controlledPlatform).map((item) => (
+                  <button
+                    key={item.name}
+                    type="button"
+                    role="menuitem"
+                    className="stage__keys-item"
+                    onClick={() => sendCombination(item.name)}
+                  >
+                    <span>{item.label}</span>
+                    <span className="stage__keys-hint">{item.keys}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
-      {/* A sibling of the surface, never inside it: a click here must not
-          reach the control handlers and become a click on the remote screen. */}
-      {offerFullscreen ? (
-        <button
-          type="button"
-          className="stage__fullscreen"
-          onClick={() => void toggleFullscreen()}
-          aria-label={fullscreen.active ? 'Exit full screen' : 'Full screen'}
-          title={fullscreen.active ? 'Exit full screen (Esc)' : 'Full screen'}
-        >
-          {fullscreen.active ? <Minimize size={16} aria-hidden="true" /> : <Maximize size={16} aria-hidden="true" />}
-        </button>
-      ) : null}
+        {/* A sibling of the surface, never inside it: a click here must not
+            reach the control handlers and become a click on the remote screen. */}
+        {offerFullscreen ? (
+          <button
+            type="button"
+            className="stage__fullscreen"
+            onClick={() => void toggleFullscreen()}
+            aria-label={fullscreen.active ? 'Exit full screen' : 'Full screen'}
+            title={fullscreen.active ? 'Exit full screen (Esc)' : 'Full screen'}
+          >
+            {fullscreen.active ? <Minimize size={16} aria-hidden="true" /> : <Maximize size={16} aria-hidden="true" />}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * What the stage says while there is no picture: who has to do what next.
+ *
+ * It used to say one thing to everybody — "No screen is being shared yet" — which told the person
+ * being helped nothing about the code they have to give, and told a helper still waiting to be let
+ * in that "chat is available" in a room they were not yet in.
+ */
+function StagePlaceholder({ session, sharingName }: { session: SessionDetail; sharingName: string | null }) {
+  const waitingToBeLetIn = session.me?.status === 'REQUESTED'
+  const alone = session.isHost && session.participants.filter((participant) => participant.uuid !== session.me?.uuid).length === 0
+
+  if (waitingToBeLetIn) {
+    return (
+      <div className="stage__placeholder">
+        <MonitorOff size={30} aria-hidden="true" />
+        <p className="stage__placeholder-title">Waiting to be let in</p>
+        <p className="stage__placeholder-body">
+          The person who started this session has been asked to let you in. Nothing is shown, and nothing can be
+          sent, until they do.
+        </p>
+      </div>
+    )
+  }
+
+  if (sharingName) {
+    return (
+      <div className="stage__placeholder">
+        <MonitorOff size={30} aria-hidden="true" />
+        <p className="stage__placeholder-title">Waiting for {sharingName}’s screen</p>
+        <p className="stage__placeholder-body">It appears here as soon as the connection is made.</p>
+      </div>
+    )
+  }
+
+  if (session.isHost) {
+    return (
+      <div className="stage__placeholder">
+        {/* The one thing the person being helped has to say out loud. It was a small badge in the
+            header, beside a session number in bolder type that is not the code. */}
+        {alone && session.sessionCode ? (
+          <>
+            <p className="stage__placeholder-label">Your session code</p>
+            <p className="stage__code mono" aria-label={`Session code ${formatSessionCode(session.sessionCode)}`}>
+              {formatSessionCode(session.sessionCode)}
+            </p>
+            <p className="stage__placeholder-body">
+              Tell this code to the person helping you. They type it under <strong>Join session</strong>, and you let
+              them in here.
+            </p>
+          </>
+        ) : (
+          <>
+            <MonitorOff size={30} aria-hidden="true" />
+            <p className="stage__placeholder-title">No screen is being shared yet</p>
+          </>
+        )}
+        <p className="stage__placeholder-body">
+          Choose <strong>Share</strong> below to pick what to show. Nothing is sent until you do.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="stage__placeholder">
+      <MonitorOff size={30} aria-hidden="true" />
+      <p className="stage__placeholder-title">No screen is being shared yet</p>
+      <p className="stage__placeholder-body">It appears here when the other person starts sharing.</p>
     </div>
   )
 }

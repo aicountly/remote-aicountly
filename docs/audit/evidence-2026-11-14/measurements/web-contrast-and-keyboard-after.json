@@ -1,0 +1,761 @@
+{
+ "lang": "en",
+ "title": "AICOUNTLY Remote",
+ "dashboardTabOrder": [
+  "a.skip-link \"Skip to content\" ring=6.27",
+  "button. \"AICOUNTLY apps\" ring=6.69",
+  "button.account-button \"Account menu for Anita Sharma\" ring=6.69",
+  "a.shell__nav-link \"Dashboard\" ring=6.69",
+  "a.shell__nav-link \"Start session\" ring=6.69",
+  "a.shell__nav-link \"Join session\" ring=6.69",
+  "a.shell__nav-link \"Support requests\" ring=6.69",
+  "a.shell__nav-link \"Sessions\" ring=6.69",
+  "a.shell__nav-link \"Computers\" ring=6.69",
+  "a.shell__nav-link \"Settings\" ring=6.69",
+  "button.btn \"Dismiss introduction\" ring=1",
+  "button.action-card \"Share my screenStart a secure session so\" ring=6.27",
+  "button.action-card \"Join sessionEnter a session code or open\" ring=6.27",
+  "button.action-card \"Request AICOUNTLY SupportFor your person\" ring=6.27"
+ ],
+ "dashboardFocusRings": [
+  {
+   "el": "a.skip-link",
+   "ring": "outline 2px rgb(22, 107, 2)",
+   "contrast": 6.27
+  },
+  {
+   "el": "button.",
+   "ring": "outline 2px rgb(22, 107, 2)",
+   "contrast": 6.69
+  },
+  {
+   "el": "button.account-button",
+   "ring": "outline 2px rgb(22, 107, 2)",
+   "contrast": 6.69
+  },
+  {
+   "el": "a.shell__nav-link",
+   "ring": "outline 2px rgb(22, 107, 2)",
+   "contrast": 6.69
+  },
+  {
+   "el": "a.shell__nav-link",
+   "ring": "outline 2px rgb(22, 107, 2)",
+   "contrast": 6.69
+  },
+  {
+   "el": "a.shell__nav-link",
+   "ring": "outline 2px rgb(22, 107, 2)",
+   "contrast": 6.69
+  },
+  {
+   "el": "a.shell__nav-link",
+   "ring": "outline 2px rgb(22, 107, 2)",
+   "contrast": 6.69
+  },
+  {
+   "el": "a.shell__nav-link",
+   "ring": "outline 2px rgb(22, 107, 2)",
+   "contrast": 6.69
+  },
+  {
+   "el": "a.shell__nav-link",
+   "ring": "outline 2px rgb(22, 107, 2)",
+   "contrast": 6.69
+  },
+  {
+   "el": "a.shell__nav-link",
+   "ring": "outline 2px rgb(22, 107, 2)",
+   "contrast": 6.69
+  },
+  {
+   "el": "button.btn",
+   "ring": "box-shadow rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+   "contrast": 1
+  },
+  {
+   "el": "button.action-card",
+   "ring": "outline 2px rgb(22, 107, 2)",
+   "contrast": 6.27
+  },
+  {
+   "el": "button.action-card",
+   "ring": "outline 2px rgb(22, 107, 2)",
+   "contrast": 6.27
+  },
+  {
+   "el": "button.action-card",
+   "ring": "outline 2px rgb(22, 107, 2)",
+   "contrast": 6.27
+  }
+ ],
+ "focusPrimaryCard": {
+  "element": "button.action-card",
+  "name": "Share my screenStart a secure session so",
+  "onScreen": true,
+  "rect": {
+   "x": 270,
+   "y": 328,
+   "w": 367,
+   "h": 129
+  },
+  "ring": "outline 2px rgb(22, 107, 2)",
+  "ringContrastAgainstSurroundings": 6.27
+ },
+ "focusButton": {
+  "element": "a.btn",
+  "name": "View all",
+  "onScreen": true,
+  "rect": {
+   "x": 1306,
+   "y": 647,
+   "w": 71,
+   "h": 32
+  },
+  "ring": "box-shadow rgba(255, 255, 255, 0.13) 0px 0px 0px 0.257746px, rgba(22, 107, 2, 0.13) 0px 0px 0px 0.515493px",
+  "ringContrastAgainstSurroundings": 1
+ },
+ "contrastDashboard": [
+  {
+   "style": "#667068 on #edf9e9 13px/400",
+   "chars": 206,
+   "ratio": 4.73,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Securely share your screen and get assis"
+   ],
+   "where": [
+    "p.welcome-card__body"
+   ]
+  },
+  {
+   "style": "#667068 on #ffffff 13px/400",
+   "chars": 152,
+   "ratio": 5.14,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Enter a session code or open an invitati",
+    "For your personal workspace"
+   ],
+   "where": [
+    "span.action-card__hint",
+    "p.card__subtitle",
+    "span.session-list__context"
+   ]
+  },
+  {
+   "style": "#667068 on #ffffff 12px/400",
+   "chars": 119,
+   "ratio": 5.14,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Active sessions",
+    "Support requests waiting"
+   ],
+   "where": [
+    "span.metric__label",
+    "span.tiny"
+   ]
+  },
+  {
+   "style": "#667068 on #ffffff 13px/520",
+   "chars": 66,
+   "ratio": 5.14,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Start session",
+    "Join session"
+   ],
+   "where": [
+    "span."
+   ]
+  },
+  {
+   "style": "#68726a on #ffffff 12px/400",
+   "chars": 51,
+   "ratio": 5,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Share and view in this browser. Nothing "
+   ],
+   "where": [
+    "p.shell__nav-footnote"
+   ]
+  },
+  {
+   "style": "#667068 on #f6f8f6 13px/400",
+   "chars": 39,
+   "ratio": 4.82,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Start a secure session someone can view"
+   ],
+   "where": [
+    "span.action-card__hint"
+   ]
+  },
+  {
+   "style": "#172018 on #ffffff 15px/620",
+   "chars": 37,
+   "ratio": 16.72,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Join session",
+    "Request AICOUNTLY Support"
+   ],
+   "where": [
+    "span.action-card__label"
+   ]
+  },
+  {
+   "style": "#667068 on #f6f8f6 14px/400",
+   "chars": 35,
+   "ratio": 4.82,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Secure assistance when you need it."
+   ],
+   "where": [
+    "p.muted"
+   ]
+  }
+ ],
+ "contrastLightPages": [
+  {
+   "style": "#667068 on #ffffff 12px/400",
+   "chars": 889,
+   "ratio": 5.14,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Active sessions",
+    "Support requests waiting"
+   ],
+   "where": [
+    "span.metric__label",
+    "p.tiny",
+    "span.checkbox-row__hint",
+    "p.field__hint"
+   ]
+  },
+  {
+   "style": "#667068 on #ffffff 13px/400",
+   "chars": 794,
+   "ratio": 5.14,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Enter a session code or open an invitati",
+    "For your personal workspace"
+   ],
+   "where": [
+    "span.action-card__hint",
+    "p.card__subtitle",
+    "p.empty-state__description",
+    "span.share-option__description"
+   ]
+  },
+  {
+   "style": "#166b02 on #edf9e9 12px/520",
+   "chars": 510,
+   "ratio": 6.16,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Use AICOUNTLY Remote",
+    "Start a session"
+   ],
+   "where": [
+    "li.permission-chip"
+   ]
+  },
+  {
+   "style": "#667068 on #f6f8f6 14px/400",
+   "chars": 493,
+   "ratio": 4.82,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Secure assistance when you need it."
+   ],
+   "where": [
+    "p.muted"
+   ]
+  },
+  {
+   "style": "#667068 on #ffffff 13px/520",
+   "chars": 391,
+   "ratio": 5.14,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Start session",
+    "Join session"
+   ],
+   "where": [
+    "span."
+   ]
+  },
+  {
+   "style": "#68726a on #ffffff 12px/400",
+   "chars": 380,
+   "ratio": 5,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Share and view in this browser. Nothing "
+   ],
+   "where": [
+    "p.shell__nav-footnote",
+    "dt."
+   ]
+  },
+  {
+   "style": "#172018 on #ffffff 13px/520",
+   "chars": 296,
+   "ratio": 16.72,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Anita Sharma",
+    "anita.sharma@example.com"
+   ],
+   "where": [
+    "dd.",
+    "p.capability__label"
+   ]
+  },
+  {
+   "style": "#172018 on #ffffff 14px/400",
+   "chars": 274,
+   "ratio": 16.72,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "With two-step verification on, a browser"
+   ],
+   "where": [
+    "p."
+   ]
+  },
+  {
+   "style": "#172018 on #ffffff 13px/400",
+   "chars": 257,
+   "ratio": 16.72,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Use my microphone"
+   ],
+   "where": [
+    "span.",
+    "dd.",
+    "dd.mono",
+    "td."
+   ]
+  },
+  {
+   "style": "#667068 on #edf9e9 13px/400",
+   "chars": 254,
+   "ratio": 4.73,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Securely share your screen and get assis"
+   ],
+   "where": [
+    "p.welcome-card__body",
+    "span.share-option__description"
+   ]
+  },
+  {
+   "style": "#667068 on #eff4ff 13px/400",
+   "chars": 250,
+   "ratio": 4.67,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "To connect to a computer with nobody at "
+   ],
+   "where": [
+    "p.notice__body"
+   ]
+  },
+  {
+   "style": "#172018 on #ffffff 17px/620",
+   "chars": 112,
+   "ratio": 16.72,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Recent sessions"
+   ],
+   "where": [
+    "h2.card__title"
+   ]
+  }
+ ],
+ "contrastLightFailures": [
+  {
+   "style": "#8bb581 on #166b02 15px/550",
+   "chars": 12,
+   "ratio": 2.87,
+   "needs": 4.5,
+   "pass": false,
+   "samples": [
+    "Join session"
+   ],
+   "where": [
+    "button.btn"
+   ]
+  }
+ ],
+ "dialogDevicesHistory": {
+  "role": "dialog",
+  "ariaModal": "true",
+  "labelled": "History of ANITA-OFFICE-PC",
+  "focusOnOpen": {
+   "element": "button.btn",
+   "name": "Close",
+   "onScreen": true,
+   "rect": {
+    "x": 1037,
+    "y": 348,
+    "w": 39,
+    "h": 32
+   },
+   "ring": "box-shadow rgb(255, 255, 255) 0px 0px 0px 2px, rgb(22, 107, 2) 0px 0px 0px 4px",
+   "ringContrastAgainstSurroundings": 1
+  },
+  "tabStaysInside": true,
+  "backgroundInert": false,
+  "closedOnEsc": true,
+  "focusReturnedToTrigger": true
+ },
+ "phoneTabOrder": [
+  "a.skip-link \"Skip to content\" onScreen=true",
+  "button.btn \"Open navigation\" onScreen=true",
+  "button. \"AICOUNTLY apps\" onScreen=true",
+  "button.account-button \"Account menu for Anita Sharma\" onScreen=true",
+  "button.btn \"Dismiss introduction\" onScreen=true",
+  "button.action-card \"Share my screenStart a secure session so\" onScreen=true",
+  "button.action-card \"Join sessionEnter a session code or open\" onScreen=true",
+  "button.action-card \"Request AICOUNTLY SupportFor your person\" onScreen=true",
+  "a.btn \"View all\" onScreen=true",
+  "a.btn \"Start a session\" onScreen=true",
+  "body \"undefined\" onScreen=undefined",
+  "a.skip-link \"Skip to content\" onScreen=true"
+ ],
+ "phoneOffscreenFocusStops": 1,
+ "phoneClosedNav": {
+  "visibility": "hidden",
+  "display": "flex",
+  "transform": "matrix(1, 0, 0, 1, -232, 0)",
+  "ariaHidden": null,
+  "inert": false,
+  "boxShadow": "none",
+  "right": 0
+ },
+ "phoneNavToggleOpenIcon": "lucide lucide-x",
+ "roomHeadings": [
+  "H2:Participants"
+ ],
+ "approvalQueue": {
+  "role": "alert",
+  "ariaModal": null,
+  "label": "Someone wants to join",
+  "focusMovedIntoIt": false,
+  "activeElement": "BODY",
+  "liveRegion": null
+ },
+ "roomTabOrder": [
+  "button.btn \"Leave session\" ring=1",
+  "button.room__code-copy \"Copy session code\" ring=9.59",
+  "button.btn \"Pause\" ring=1",
+  "button.btn \"End\" ring=1",
+  "button.btn \"Decline\" ring=1",
+  "button.btn \"Allow\" ring=1",
+  "button.btn \"Close panel\" ring=1",
+  "button.btn \"Decline\" ring=1",
+  "button.btn \"Allow\" ring=1",
+  "button.tool-button \"Share\" ring=11.03"
+ ],
+ "roomToolFocus": {
+  "element": "button.tool-button",
+  "name": "People1",
+  "onScreen": true,
+  "rect": {
+   "x": 940,
+   "y": 836,
+   "w": 62,
+   "h": 52
+  },
+  "ring": "outline 2px rgb(155, 227, 127)",
+  "ringContrastAgainstSurroundings": 11.03
+ },
+ "contrastRoom": [
+  {
+   "style": "#9aa79a on #191e19 11px/550",
+   "chars": 72,
+   "ratio": 6.74,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Mic off",
+    "Pointer"
+   ],
+   "where": [
+    "span.tool-button__label"
+   ]
+  },
+  {
+   "style": "#9aa79a on #101410 13px/400",
+   "chars": 63,
+   "ratio": 7.41,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Choose",
+    "below to pick what to show. Nothing is s"
+   ],
+   "where": [
+    "p.stage__placeholder-body"
+   ]
+  },
+  {
+   "style": "#9aa79a on #232a23 13px/400",
+   "chars": 52,
+   "ratio": 5.86,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "AICOUNTLY user",
+    "would like to"
+   ],
+   "where": [
+    "p.approval-queue__role"
+   ]
+  },
+  {
+   "style": "#9aa79a on #191e19 12px/400",
+   "chars": 48,
+   "ratio": 6.74,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Personal",
+    "Waiting for the other person"
+   ],
+   "where": [
+    "p.room__context",
+    "span.connection__label",
+    "p.participant__role"
+   ]
+  },
+  {
+   "style": "#eef2ee on #101410 15px/600",
+   "chars": 29,
+   "ratio": 16.44,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "No screen is being shared yet"
+   ],
+   "where": [
+    "p.stage__placeholder-title"
+   ]
+  },
+  {
+   "style": "#eef2ee on #191e19 13px/550",
+   "chars": 22,
+   "ratio": 14.96,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Anita Sharma",
+    "Ravi Kumar"
+   ],
+   "where": [
+    "p.participant__name"
+   ]
+  },
+  {
+   "style": "#eef2ee on #232a23 13px/550",
+   "chars": 14,
+   "ratio": 13.01,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Decline",
+    "Decline"
+   ],
+   "where": [
+    "button.btn"
+   ]
+  },
+  {
+   "style": "#9aa79a on #232a23 12px/400",
+   "chars": 12,
+   "ratio": 5.86,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Session code"
+   ],
+   "where": [
+    "span.room__code-label"
+   ]
+  },
+  {
+   "style": "#9aa79a on #191e19 13px/620",
+   "chars": 12,
+   "ratio": 6.74,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Participants"
+   ],
+   "where": [
+    "h2.side-panel__title"
+   ]
+  },
+  {
+   "style": "#eef2ee on #232a23 13px/620",
+   "chars": 11,
+   "ratio": 13.01,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "583 194 726"
+   ],
+   "where": [
+    "span.room__code-value"
+   ]
+  }
+ ],
+ "contrastRoomFailures": [],
+ "dialogShareConsent": {
+  "focusOnOpen": {
+   "element": "button.btn",
+   "name": "Close",
+   "onScreen": true,
+   "rect": {
+    "x": 937,
+    "y": 259,
+    "w": 39,
+    "h": 32
+   },
+   "ring": null,
+   "ringContrastAgainstSurroundings": null
+  },
+  "tabStaysInside": true,
+  "closedOnEsc": true,
+  "focusReturned": {
+   "element": "button.tool-button",
+   "name": "Share",
+   "onScreen": true,
+   "rect": {
+    "x": 16,
+    "y": 836,
+    "w": 62,
+    "h": 52
+   },
+   "ring": "outline 2px rgb(155, 227, 127)",
+   "ringContrastAgainstSurroundings": 11.03
+  }
+ },
+ "contrastRoomControlPanel": [
+  {
+   "style": "#9aa79a on #191e19 13px/400",
+   "chars": 143,
+   "ratio": 6.74,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "You can ask to control",
+    "Anita Sharma’s computer"
+   ],
+   "where": [
+    "p.control__empty"
+   ]
+  },
+  {
+   "style": "#ffffff on #166b02 13px/550",
+   "chars": 15,
+   "ratio": 6.69,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Request control"
+   ],
+   "where": [
+    "button.btn"
+   ]
+  },
+  {
+   "style": "#9aa79a on #191e19 13px/620",
+   "chars": 14,
+   "ratio": 6.74,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Remote control"
+   ],
+   "where": [
+    "h2.side-panel__title"
+   ]
+  },
+  {
+   "style": "#eef2ee on #191e19 13px/600",
+   "chars": 14,
+   "ratio": 14.96,
+   "needs": 4.5,
+   "pass": true,
+   "samples": [
+    "Remote control"
+   ],
+   "where": [
+    "h3.control__heading"
+   ]
+  }
+ ],
+ "controlPanelPadding": {
+  "controlPadding": "16px",
+  "bodyPadding": "0px",
+  "headingLeftInsideEdgePx": 17
+ },
+ "requestedPhase": {
+  "panelText": "Remote control Waiting for Anita Sharma to answer. Nothing is being sent until they do.",
+  "hasCancel": false,
+  "liveRegion": false,
+  "spinner": false,
+  "badgeOnOwnControlButton": null
+ },
+ "videoA11y": {
+  "ariaLabel": "The shared screen",
+  "title": null
+ },
+ "headingsByPage": {
+  "/": "H2 H1 H2 H3",
+  "/start": "H1",
+  "/join": "H1",
+  "/devices": "H1 H2",
+  "/sessions": "H1 H2",
+  "/settings": "H1 H2 H2 H2 H2 H2",
+  "/support": "H1 H2 H3"
+ },
+ "landmarks": {
+  "main": 1,
+  "nav": 1,
+  "header": 2,
+  "skipLink": true
+ }
+}

@@ -188,6 +188,11 @@ function SignedInShell() {
 
   return (
     <div className="shell">
+      {/* The first thing the keyboard reaches: past the header and the navigation, to the page. */}
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
+
       <header className="shell__header">
         <button
           type="button"
@@ -196,7 +201,7 @@ function SignedInShell() {
           aria-expanded={mobileNavOpen}
           aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
         >
-          {mobileNavOpen ? <Menu size={18} aria-hidden="true" /> : <Menu size={18} aria-hidden="true" />}
+          {mobileNavOpen ? <X size={18} aria-hidden="true" /> : <Menu size={18} aria-hidden="true" />}
         </button>
 
         {/*
@@ -354,7 +359,7 @@ function SignedInShell() {
             {isDesktopApp() ? null : (
               <p className="shell__nav-footnote">
                 <ClipboardList size={13} aria-hidden="true" />
-                Browser assistance. No installation required.
+                Share and view in this browser. Nothing to install.
               </p>
             )}
             {/* Closes the phone's navigation drawer first, which would otherwise cover the banner. */}
@@ -376,7 +381,7 @@ function SignedInShell() {
           </button>
         ) : null}
 
-        <main className="shell__main">
+        <main className="shell__main" id="main" tabIndex={-1}>
           <CompanyRestrictedBanner cmpId={companyId} />
           <Outlet />
         </main>

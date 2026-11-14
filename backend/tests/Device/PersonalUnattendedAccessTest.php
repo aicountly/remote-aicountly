@@ -44,6 +44,11 @@ final class PersonalUnattendedAccessTest extends RemoteTestCase
 
         $listing = $this->dataOf($this->getJson($this->asPerson($owner), 'devices'));
         $this->assertTrue($listing['canConnectUnattended'], 'the Computers page may offer it');
+        // The page shows "Allow unattended", "Turn off unattended" and "Remove" only where the listing says the
+        // person may manage what is listed. A person's own computers are theirs to manage — the service has
+        // always let them — and the listing said they could not, so the page offered none of the three and
+        // unattended access could not be switched on from it at all.
+        $this->assertTrue($listing['canManage'], 'and may offer to switch it on, off, or remove the computer: it is theirs');
         $this->assertTrue($listing['policy']['allowUnattendedAccess']);
         $this->assertFalse($listing['policy']['allowDeviceReboot'], 'restarting stays off');
 

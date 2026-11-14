@@ -243,8 +243,22 @@ export function markParticipantJoined(sessionUuid: string, participantUuid: stri
   })
 }
 
-export function leaveSession(sessionUuid: string, participantUuid: string): Promise<void> {
-  return apiFetch<void>(`/sessions/${sessionUuid}/participants/${participantUuid}/leave`, { method: 'POST' })
+/**
+ * Leave a session.
+ *
+ * `keepalive` is for the page going away — a tab closed, a navigation — where the browser cancels
+ * an ordinary request with the page that made it. Without it, closing the tab told the server
+ * nothing: the person stayed "joined" until the session expired.
+ */
+export function leaveSession(
+  sessionUuid: string,
+  participantUuid: string,
+  options: { keepalive?: boolean } = {},
+): Promise<void> {
+  return apiFetch<void>(`/sessions/${sessionUuid}/participants/${participantUuid}/leave`, {
+    method: 'POST',
+    keepalive: options.keepalive,
+  })
 }
 
 export function reportPresence(
@@ -261,8 +275,20 @@ export function reportPresence(
 
 // --- Signalling -------------------------------------------------------------
 
-export function fetchSignallingCredentials(sessionUuid: string): Promise<SignallingCredentials> {
-  return apiFetch<SignallingCredentials>(`/sessions/${sessionUuid}/signalling-token`, { method: 'POST', body: latencyBody() })
+/**
+ * A token for the session's room and, on entering it, the relay credentials to connect with.
+ *
+ * `renewal` is for replacing a token on a connection that is already up: the API then answers with
+ * the token alone — no relay credentials minted, no relay capacity booked.
+ */
+export function fetchSignallingCredentials(
+  sessionUuid: string,
+  options: { renewal?: boolean } = {},
+): Promise<SignallingCredentials> {
+  return apiFetch<SignallingCredentials>(`/sessions/${sessionUuid}/signalling-token`, {
+    method: 'POST',
+    body: options.renewal ? { ...latencyBody(), renewal: true } : latencyBody(),
+  })
 }
 
 /**

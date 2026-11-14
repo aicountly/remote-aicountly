@@ -43,6 +43,10 @@ pub struct About {
     /// Whether it can send what the computer is playing beside its screen.
     /// Where it cannot, the setting for it is not offered.
     pub supports_sound: bool,
+    /// Whether a controller can be let answer the operating system's own
+    /// prompts (Windows' administrator box and lock screen). Where it cannot,
+    /// neither the tick box in the consent dialog nor the setting is offered.
+    pub supports_secure_desktop: bool,
     /// The system-wide Stop control shortcut, as this platform writes it.
     pub stop_shortcut: String,
     /// Where the device key is kept — "Windows DPAPI (machine scope)".
@@ -722,6 +726,32 @@ pub fn open_url(agent: tauri::State<'_, Arc<Agent>>, url: String) -> Result<(), 
     open::that(&url).map_err(|error| error.to_string())
 }
 
+/// Show the folder this application writes its log in, in the file manager.
+///
+/// For the moment somebody is asked "can you send me the log": the About
+/// panel named the path and left the person to find it by hand. Nothing is
+/// read, copied or sent here — the person attaches the file themselves, which
+/// keeps a log something its owner hands over rather than something the
+/// application ships. The folder is this process's own, never one the web
+/// layer names.
+#[tauri::command]
+pub fn show_log_folder() -> Result<(), String> {
+    let folder = remote_core::log_path("agent")
+        .as_deref()
+        .and_then(log_folder)
+        .ok_or("This copy of AICOUNTLY Remote is not writing a log.")?;
+
+    open::that(folder).map_err(|error| error.to_string())
+}
+
+/// The folder a log file is in.
+fn log_folder(log_file: &std::path::Path) -> Option<std::path::PathBuf> {
+    log_file
+        .parent()
+        .filter(|folder| !folder.as_os_str().is_empty())
+        .map(std::path::Path::to_path_buf)
+}
+
 /// Whether a URL is one the agent will open.
 ///
 /// `https` only, and only under an origin this deployment was configured with.
@@ -947,6 +977,7 @@ pub fn about(agent: tauri::State<'_, Arc<Agent>>) -> About {
         supports_hosting: platform::supports_hosting(),
         supports_companion: platform::supports_companion(),
         supports_sound: platform::sound::supported(),
+        supports_secure_desktop: platform::supports_secure_desktop(),
         stop_shortcut: crate::stop_shortcut_label().to_owned(),
         key_storage: platform::secure_storage().describe().to_owned(),
         log_file: remote_core::log_path("agent").map(|path| path.display().to_string()),
@@ -982,6 +1013,17 @@ mod tests {
             "https://remote.aicountly.com/api/v1/remote/devices",
             &config()
         ));
+    }
+
+    /// The folder shown is the one the log file is in, and a bare file name
+    /// — which has no folder to show — opens nothing.
+    #[test]
+    fn the_log_folder_is_the_one_the_log_file_is_in() {
+        assert_eq!(
+            log_folder(std::path::Path::new("/var/log/aicountly/agent.log")),
+            Some(std::path::PathBuf::from("/var/log/aicountly"))
+        );
+        assert_eq!(log_folder(std::path::Path::new("agent.log")), None);
     }
 
     /// The About panel's link, and nothing that merely starts like it.

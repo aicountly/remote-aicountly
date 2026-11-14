@@ -34,48 +34,31 @@ export function SignInScreen({
   return (
     <section className="card">
       <h2 className="card__title">Sign in to AICOUNTLY</h2>
-      <p className="card__subtitle">
-        {revoked
-          ? 'This computer was signed out of AICOUNTLY Remote. Sign in again to start using it.'
-          : 'Sign in to let the people you approve connect to this computer.'}
-      </p>
 
       {/*
-        A hash of this computer's public key, shown so somebody can check that
-        the computer on their Computers page is this one — the same
-        "Key fingerprint" is shown there. It is not an address: nothing
-        connects to a computer by it, and calling it "this computer's ID"
-        invited people used to other remote-desktop tools to read it out to
-        somebody who could do nothing with it. Help starts from a session code
-        instead.
+        Signed out by somebody else — from the Computers page, or by an
+        administrator — is said as a notice, not as one grey sentence: the
+        person opened the application expecting it to work.
       */}
-      <div className="card__rows" style={{ marginTop: 'var(--space-4)' }}>
-        <div className="row">
-          <span className="row__label">Key fingerprint</span>
-          <span className="row__value row__value--mono">{deviceId ?? '—'}</span>
+      {revoked ? (
+        <div className="notice notice--warning" role="status" style={{ marginBottom: 'var(--space-4)' }}>
+          <p className="notice__title">This computer was signed out of AICOUNTLY Remote</p>
+          <p>
+            It was removed from the Computers page, by you from another computer or by an administrator. Nobody can
+            connect to it. Sign in again to use it.
+          </p>
         </div>
-      </div>
+      ) : (
+        <p className="card__subtitle">Sign in to let the people you approve connect to this computer.</p>
+      )}
 
-      <ol className="card__rows" style={{ marginTop: 'var(--space-4)' }}>
-        <li className="row">
-          <span className="row__label">1</span>
-          <span className="row__value">
-            The AICOUNTLY sign-in page opens in this window, where you sign in as you always do — or
-            in your browser, if you prefer.
-          </span>
+      <ol className="how-it-works__steps">
+        <li>
+          The AICOUNTLY sign-in page opens in this window, where you sign in as you always do — or in your browser,
+          if you prefer.
         </li>
-        <li className="row">
-          <span className="row__label">2</span>
-          <span className="row__value">
-            Check that the code on that page matches the one shown here, and confirm.
-          </span>
-        </li>
-        <li className="row">
-          <span className="row__label">3</span>
-          <span className="row__value">
-            This computer stays signed in. You will not be asked again.
-          </span>
-        </li>
+        <li>Check that the code on that page matches the one shown here, and confirm.</li>
+        <li>This computer stays signed in. You will not be asked again.</li>
       </ol>
 
       <div style={{ marginTop: 'var(--space-4)', display: 'flex', gap: 'var(--space-2)' }}>
@@ -88,6 +71,26 @@ export function SignInScreen({
         Nobody can connect to this computer until you sign in. Your password goes only to the
         AICOUNTLY sign-in page; this application never sees it.
       </p>
+
+      {/*
+        A hash of this computer's public key, shown so somebody can check that
+        the computer on their Computers page is this one — the same
+        "Key fingerprint" is shown there. It is not an address: nothing
+        connects to a computer by it, and calling it "this computer's ID"
+        invited people used to other remote-desktop tools to read it out to
+        somebody who could do nothing with it. Help starts from a session code
+        instead. Folded away, because it was the most prominent thing on a
+        screen whose one job is the button above.
+      */}
+      <details className="details">
+        <summary className="details__summary">Details for support</summary>
+        <div className="card__rows">
+          <div className="row">
+            <span className="row__label">Key fingerprint</span>
+            <span className="row__value row__value--mono">{deviceId ?? '—'}</span>
+          </div>
+        </div>
+      </details>
     </section>
   )
 }

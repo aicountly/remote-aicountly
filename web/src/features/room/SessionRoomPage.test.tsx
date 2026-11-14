@@ -139,12 +139,47 @@ describe('the room header', () => {
     actions.end.mockRejectedValue(
       new RemoteApiError('NETWORK_ERROR', 'We could not reach AICOUNTLY Remote. Check your connection.', 0),
     )
+    room.session = { ...session, isHost: true }
     renderRoom()
 
+    // Whoever started the session ends it in one click.
     await userEvent.click(screen.getByRole('button', { name: 'End' }))
 
     expect(actions.end).toHaveBeenCalledTimes(1)
     expect(await screen.findByText('We could not reach AICOUNTLY Remote. Check your connection.')).toBeInTheDocument()
+  })
+
+  /**
+   * Somebody who joined, and did not start the session: their End ends it for the person they are
+   * helping as well, so it is asked — and what they are offered first is Leave.
+   */
+  it('offers somebody who joined Leave, and asks before their End ends it for everyone', async () => {
+    actions.end.mockResolvedValue(undefined)
+    renderRoom()
+
+    await userEvent.click(screen.getByRole('button', { name: 'End' }))
+    expect(actions.end).not.toHaveBeenCalled()
+    expect(screen.getByText('End it for everyone?')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByText('End it for everyone?')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'End' }))
+    await userEvent.click(screen.getByRole('button', { name: 'End session' }))
+    expect(actions.end).toHaveBeenCalledTimes(1)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Leave' }))
+    expect(actions.leave).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText('left the room')).toBeInTheDocument()
+  })
+
+  /** Not let in yet: End was refused by the API, every time. */
+  it('offers somebody still waiting to be let in Leave only', () => {
+    room.session = { ...session, me: { ...knocking, role: 'VIEWER' } as Participant }
+    renderRoom()
+
+    expect(screen.queryByRole('button', { name: 'End' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Leave' })).toBeInTheDocument()
   })
 
   it('offers a guest Leave, not an End the API refuses them', async () => {
@@ -243,6 +278,7 @@ describe('full screen in the room', () => {
     controllingPeerId: null,
     controlPaused: null,
     secureDesktop: null,
+    inputRefused: null,
     monitors: [],
     activeMonitorId: null,
     network: {
@@ -371,7 +407,7 @@ describe('full screen in the room', () => {
     view.rerender(roomTree())
 
     expect(fullscreen.element).toBeNull()
-    expect(screen.getByRole('alertdialog', { name: 'Someone wants to join' })).toBeInTheDocument()
+    expect(screen.getByRole('alert', { name: 'Someone wants to join' })).toBeInTheDocument()
   })
 
   it('leaves full screen when the request for control is declined, rather than leave the viewer waiting', async () => {

@@ -11,11 +11,34 @@ const core = vi.hoisted(() => ({ invoke: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => core)
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn() }))
 
-const { checkForUpdate, codecStatus, installCodec, installUpdate, removeCodec, setCodecEnabled } =
+const { checkForUpdate, codecStatus, describeError, installCodec, installUpdate, removeCodec, setCodecEnabled } =
   await import('./tauri')
 
 beforeEach(() => {
   core.invoke.mockReset()
+})
+
+/**
+ * A Rust command that fails rejects with the sentence itself, as a string.
+ * Reading only `Error.message` turned every one of them into "Something went
+ * wrong."
+ */
+describe('describeError', () => {
+  it('keeps the sentence a Rust command failed with', () => {
+    expect(describeError('This computer is offline.', 'fallback')).toBe('This computer is offline.')
+  })
+
+  it('keeps an Error’s message too', () => {
+    expect(describeError(new Error('The window was closed.'), 'fallback')).toBe('The window was closed.')
+  })
+
+  it('falls back only when there are no words at all', () => {
+    expect(describeError('', 'That did not work.')).toBe('That did not work.')
+    expect(describeError('   ', 'That did not work.')).toBe('That did not work.')
+    expect(describeError(new Error(''), 'That did not work.')).toBe('That did not work.')
+    expect(describeError(undefined, 'That did not work.')).toBe('That did not work.')
+    expect(describeError({ code: 7 }, 'That did not work.')).toBe('That did not work.')
+  })
 })
 
 describe('checkForUpdate', () => {

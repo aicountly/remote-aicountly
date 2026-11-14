@@ -49,31 +49,31 @@ import { PERMISSIONS } from '../../types/remote'
 
 /**
  * With the desktop agent switched off (`remote.allowDesktopAgent = false`)
- * nothing here may read as an instruction to install the Windows app. Said
+ * nothing here may read as an instruction to install the desktop app. Said
  * wherever this page would otherwise send somebody looking for a download, with
  * what works today.
  */
 export function DesktopAppComingSoon() {
   return (
     <div className="notice notice--info" role="status">
-      <p className="notice__title">AICOUNTLY Remote for Windows is coming soon</p>
+      <p className="notice__title">The AICOUNTLY Remote app is coming soon</p>
       <p className="notice__body">
-        Registering a computer, controlling one with permission and unattended access need the Windows app,
-        which is not available to download yet. Until then Remote works in your browser: share your screen,
-        view someone else’s, chat, point, draw and send files.
+        Registering a computer, controlling one with permission and unattended access need the AICOUNTLY Remote
+        app for Windows or Mac, which is not available to download yet. Until then Remote works in your browser:
+        share your screen, view someone else’s, chat, point, draw and send files.
       </p>
     </div>
   )
 }
 
-/** The same place with the desktop agent on: what needs the Windows app, and where to get it. */
+/** The same place with the desktop agent on: what needs the desktop app, and where to get it. */
 export function DesktopAppDownloadNotice() {
   return (
     <div className="notice notice--info">
-      <p className="notice__title">Get AICOUNTLY Remote for Windows</p>
+      <p className="notice__title">Get the AICOUNTLY Remote app</p>
       <p className="notice__body">
-        Registering a computer, controlling one with permission and unattended access need the Windows app. Install
-        it on the computer and sign in with your AICOUNTLY account.
+        Registering a computer, controlling one with permission and unattended access need the AICOUNTLY Remote
+        app, for Windows or Mac. Install it on the computer and sign in with your AICOUNTLY account.
       </p>
       <p className="notice__body">
         <DesktopAppDownloadLink />
@@ -228,6 +228,8 @@ export default function DevicesPage() {
 
   const devices = listing?.devices ?? []
   const policy = listing?.policy
+  // Asked for and not answered: an error, which is not the same thing as an empty list.
+  const notLoaded = listing === null && !loading
   const canManage = listing?.canManage ?? false
   const canConnect = (listing?.canConnectUnattended ?? false) && can(PERMISSIONS.UNATTENDED_ACCESS)
 
@@ -238,15 +240,23 @@ export default function DevicesPage() {
           <h1>Computers</h1>
           <p className="muted">
             {personal
-              ? 'Your computers running AICOUNTLY Remote for Windows or Mac. Connect to one with nobody at it, see who has been on it, or remove it.'
-              : 'Machines running AICOUNTLY Remote for Windows that are registered to this organisation.'}
+              ? 'Your computers running the AICOUNTLY Remote app, for Windows or Mac. Connect to one with nobody at it, see who has been on it, or remove it.'
+              : 'Computers running the AICOUNTLY Remote app, for Windows or Mac, that are registered to this organisation.'}
           </p>
         </header>
 
         {error ? (
           <RestrictionNotice
             error={error}
-            action={error.code === 'TWO_STEP_SETUP_REQUIRED' ? <TwoStepSetupLink /> : undefined}
+            action={
+              error.code === 'TWO_STEP_SETUP_REQUIRED' ? (
+                <TwoStepSetupLink />
+              ) : notLoaded ? (
+                <button type="button" className="btn btn--secondary" onClick={() => void load()}>
+                  Try again
+                </button>
+              ) : undefined
+            }
           />
         ) : null}
 
@@ -258,7 +268,7 @@ export default function DevicesPage() {
           <UnattendedNeedsTwoStep />
         ) : null}
 
-        {!loading && devices.length === 0 ? <DesktopAppNotice /> : null}
+        {!loading && !notLoaded && devices.length === 0 ? <DesktopAppNotice /> : null}
 
         {policy && !policy.allowRemoteControl && devices.length > 0 ? (
           <div className="notice notice--info notice--row">
@@ -274,17 +284,21 @@ export default function DevicesPage() {
           <div className="card__header">
             <div>
               <h2 className="card__title">Registered computers</h2>
-              <p className="card__subtitle">{describeCount(devices)}</p>
+              <p className="card__subtitle">{notLoaded ? 'Not loaded.' : describeCount(devices)}</p>
             </div>
           </div>
 
           {loading ? (
             <p className="muted">Loading…</p>
+          ) : notLoaded ? (
+            // The list could not be read. Saying "No computers registered yet" here told somebody
+            // with three computers that they had none; the reason is above, with Try again.
+            <p className="muted">Your computers could not be loaded.</p>
           ) : devices.length === 0 ? (
             <EmptyState
               icon={<Laptop size={26} />}
               title="No computers registered yet"
-              description="A computer appears here once AICOUNTLY Remote for Windows is installed on it and signed in with an AICOUNTLY account."
+              description="A computer appears here once the AICOUNTLY Remote app, for Windows or Mac, is installed on it and signed in with an AICOUNTLY account."
             />
           ) : (
             <ul className="device-list">

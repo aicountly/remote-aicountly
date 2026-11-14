@@ -455,6 +455,15 @@ mod imp {
         item: GraphicsCaptureItem,
         /// The size the pool's buffers currently are.
         pool_size: SizeInt32,
+        /// The CPU-readable texture each frame is copied into before its
+        /// bytes are read, kept between frames.
+        ///
+        /// It used to be created afresh for every frame: an allocation the
+        /// size of the screen — eight megabytes at 1080p, thirty-three at 4K
+        /// — thirty times a second, on the machine somebody is trying to work
+        /// on. It is made once and made again only when the picture changes
+        /// size or format.
+        staging: Option<ID3D11Texture2D>,
         started: std::time::Instant,
         frames: AtomicU64,
         profile: CaptureProfile,
@@ -551,6 +560,7 @@ mod imp {
                     session,
                     item,
                     pool_size,
+                    staging: None,
                     started: std::time::Instant::now(),
                     frames: AtomicU64::new(0),
                     profile,
@@ -591,7 +601,8 @@ mod imp {
                 detail: error.message(),
             })?;
 
-            let texture = copy_to_staging(&self.device, &self.context, &surface)?;
+            let texture =
+                copy_to_staging(&self.device, &self.context, &surface, &mut self.staging)?;
 
             let bytes = read_staging(&self.context, &texture, profile)?;
 
@@ -628,6 +639,9 @@ mod imp {
                 })?;
 
             self.pool_size = size;
+            // The picture is a different size now; so is what it is read
+            // through.
+            self.staging = None;
 
             Ok(())
         }
@@ -759,10 +773,15 @@ mod imp {
     }
 
     /// Copy a GPU surface into a CPU-readable staging texture.
+    ///
+    /// `kept` is the staging texture from the previous frame. It is used
+    /// again when it is the same size and format as this frame's surface, and
+    /// replaced when it is not.
     fn copy_to_staging(
         device: &ID3D11Device,
         context: &ID3D11DeviceContext,
         surface: &windows::Graphics::DirectX::Direct3D11::IDirect3DSurface,
+        kept: &mut Option<ID3D11Texture2D>,
     ) -> PlatformResult<ID3D11Texture2D> {
         use windows::Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess;
 
@@ -784,26 +803,45 @@ mod imp {
             let mut description = D3D11_TEXTURE2D_DESC::default();
             source.GetDesc(&mut description);
 
-            let staging = D3D11_TEXTURE2D_DESC {
-                Usage: D3D11_USAGE_STAGING,
-                BindFlags: 0,
-                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-                MiscFlags: 0,
-                ..description
+            // The one from last time, if it still fits this picture.
+            let reusable = kept.as_ref().filter(|texture| {
+                let mut held = D3D11_TEXTURE2D_DESC::default();
+                texture.GetDesc(&mut held);
+
+                held.Width == description.Width
+                    && held.Height == description.Height
+                    && held.Format == description.Format
+            });
+
+            let texture = match reusable {
+                Some(texture) => texture.clone(),
+                None => {
+                    let staging = D3D11_TEXTURE2D_DESC {
+                        Usage: D3D11_USAGE_STAGING,
+                        BindFlags: 0,
+                        CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                        MiscFlags: 0,
+                        ..description
+                    };
+
+                    let mut created: Option<ID3D11Texture2D> = None;
+                    device
+                        .CreateTexture2D(&staging, None, Some(&mut created))
+                        .map_err(|error| PlatformError::Os {
+                            operation: "reading a captured frame",
+                            detail: error.message(),
+                        })?;
+
+                    let created = created.ok_or(PlatformError::Os {
+                        operation: "reading a captured frame",
+                        detail: "no staging texture was created".into(),
+                    })?;
+
+                    *kept = Some(created.clone());
+
+                    created
+                }
             };
-
-            let mut texture: Option<ID3D11Texture2D> = None;
-            device
-                .CreateTexture2D(&staging, None, Some(&mut texture))
-                .map_err(|error| PlatformError::Os {
-                    operation: "reading a captured frame",
-                    detail: error.message(),
-                })?;
-
-            let texture = texture.ok_or(PlatformError::Os {
-                operation: "reading a captured frame",
-                detail: "no staging texture was created".into(),
-            })?;
 
             context.CopyResource(&texture, &source);
 
@@ -834,8 +872,11 @@ mod imp {
             let stride = mapped.RowPitch as usize;
             let height = description.Height as usize;
 
-            let mut data = vec![0_u8; stride * height];
-            std::ptr::copy_nonoverlapping(mapped.pData as *const u8, data.as_mut_ptr(), data.len());
+            // One copy, straight from the mapping. This used to fill a
+            // buffer the size of the screen with zeroes first and then copy
+            // over them — every byte of every frame written twice.
+            let data =
+                std::slice::from_raw_parts(mapped.pData as *const u8, stride * height).to_vec();
 
             context.Unmap(texture, 0);
 

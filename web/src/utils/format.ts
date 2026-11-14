@@ -61,6 +61,16 @@ export function formatDuration(seconds: number | null | undefined): string {
 }
 
 /** `00:18:32` — the running clock in the session header. */
+/**
+ * A session code in the groups it is read out in: `123456789` and `123 456 789` both become
+ * `123 456 789`. Anything that is not nine digits is left as it came.
+ */
+export function formatSessionCode(code: string): string {
+  const digits = code.replace(/\D/g, '')
+
+  return digits.length === 9 ? digits.replace(/(\d{3})(?=\d)/g, '$1 ') : code
+}
+
 export function formatClock(seconds: number): string {
   const safe = Math.max(0, Math.floor(seconds))
   const hours = String(Math.floor(safe / 3600)).padStart(2, '0')
@@ -245,6 +255,27 @@ const EVENT_LABELS: Record<string, string> = {
   POLICY_UPDATED: 'Remote policy changed',
   PERMISSION_UPDATED: 'Remote permissions changed',
   SIGNALLING_TOKEN_ISSUED: 'Secure connection authorised',
+  FILE_TRANSFER_OFFERED: 'File offered',
+  FILE_TRANSFER_DECLINED: 'File declined',
+  // Remote control. These are the lines somebody reads a session's timeline for, and they were
+  // the ones with no wording: "control granted" in lower case, as the server names it.
+  CONTROL_REQUESTED: 'Asked to control the computer',
+  CONTROL_GRANTED: 'Control of the computer allowed',
+  CONTROL_DENIED: 'Control of the computer declined',
+  CONTROL_REVOKED: 'Control of the computer stopped',
+  CLIPBOARD_SYNCED: 'Clipboard text sent to the computer',
+  CONTROL_COMPANION_REQUESTED: 'Asked a computer to allow control while its screen is shared',
+  CONTROL_COMPANION_JOINED: 'The computer agreed to be controlled while its screen is shared',
+  CONTROL_COMPANION_DECLINED: 'The computer declined to be controlled',
+  CONTROL_COMPANION_READY: 'The computer is ready to be controlled',
+  CONTROL_COMPANION_ENDED: 'The computer stopped allowing control',
+  DEVICE_AUTH_FAILED: 'A computer failed to prove who it is',
+  DEVICE_AUTHENTICATED: 'A computer signed in',
+  UNATTENDED_SESSION_STARTED: 'Connected with nobody at the computer',
+  DEVICE_SESSION_STARTED: 'Help session started from the computer',
+  DEVICE_REBOOT_REQUESTED: 'Restart of the computer requested',
+  DESKTOP_SIGNIN_CONFIRMED: 'A computer was signed in to AICOUNTLY Remote',
+  DESKTOP_SIGNIN_DENIED: 'Signing a computer in was declined',
   DEVICE_ENROLLED: 'Device enrolled',
   DEVICE_UPDATED: 'Device changed',
   DEVICE_REVOKED: 'Device revoked',
@@ -270,13 +301,13 @@ export function describeEvent(eventType: string): string {
 /**
  * Permission names as sentences, for the administration matrix.
  *
- * `desktopAgent`: AICOUNTLY Remote for Windows is offered (remote.allowDesktopAgent).
+ * `desktopAgent`: the AICOUNTLY Remote desktop app is offered (remote.allowDesktopAgent).
  * The desktop permissions only mean something with it, so they say they need it —
  * and, while it is switched off, that it is coming soon rather than offering a
  * capability nobody can use.
  */
 export function describePermission(permission: string, desktopAgent = false): string {
-  const windowsApp = desktopAgent ? '(needs the Windows app)' : '(Windows app, coming soon)'
+  const desktopApp = desktopAgent ? '(needs the desktop app)' : '(desktop app, coming soon)'
   const labels: Record<string, string> = {
     'remote.access': 'Use AICOUNTLY Remote',
     'remote.session.create': 'Start a session',
@@ -304,11 +335,11 @@ export function describePermission(permission: string, desktopAgent = false): st
     'remote.audit.view': 'View the audit trail',
     'remote.policy.view': 'View Remote policy',
     'remote.policy.manage': 'Manage Remote policy',
-    'remote.control.request': `Request control of a computer ${windowsApp}`,
-    'remote.control.accept': `Let someone control your computer ${windowsApp}`,
-    'remote.device.enrol': `Register a computer ${windowsApp}`,
-    'remote.device.manage': `Manage registered computers ${windowsApp}`,
-    'remote.unattended.access': `Connect to a computer with nobody at it ${windowsApp}`,
+    'remote.control.request': `Request control of a computer ${desktopApp}`,
+    'remote.control.accept': `Let someone control your computer ${desktopApp}`,
+    'remote.device.enrol': `Register a computer ${desktopApp}`,
+    'remote.device.manage': `Manage registered computers ${desktopApp}`,
+    'remote.unattended.access': `Connect to a computer with nobody at it ${desktopApp}`,
   }
 
   return labels[permission] ?? permission

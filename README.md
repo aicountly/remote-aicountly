@@ -1,8 +1,8 @@
 # AICOUNTLY Remote
 
 Secure remote assistance for the AICOUNTLY platform. Someone shares a screen;
-someone else, with permission, watches it — and on a Windows machine running
-the desktop agent, controls it.
+someone else, with permission, watches it — and on a Windows PC or a Mac
+running the AICOUNTLY Remote app, controls it.
 
 | Environment | App | API |
 | --- | --- | --- |
@@ -28,20 +28,32 @@ the desktop agent, controls it.
   product; taken down during a live session. See
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#aicountly-connect)
 
-On a Windows machine with **AICOUNTLY Remote for Windows** installed:
+On a computer with the **AICOUNTLY Remote app** installed (Windows or Mac):
 
 - **Remote control**, after the person at the machine agrees — visible while it
   is running, and stoppable from the machine instantly, without the network
 - **Every screen of the machine** — with more than one display, whoever is
   controlling switches between them from the room
-- **Its sound**, beside its picture, when the person at the machine switches
-  that on in the app's settings — off by default, and off again at any moment
-  (telephone quality; not on a Mac — see
-  [docs/desktop/ARCHITECTURE.md](docs/desktop/ARCHITECTURE.md#what-is-built-and-what-is-not))
+- **The keys a browser keeps for itself**, from the room's Keys menu —
+  Ctrl+Alt+Del, the Start menu and Task Manager on Windows; Force Quit and
+  Spotlight on a Mac — and the helper's own copy-and-paste keys, whichever of
+  the two keyboards each end has
 - **Registered computers** with their own cryptographic identity, revocable
   server-side
 - **Unattended access** as its own deliberate, audited, revocable setting —
   never a remembered approval
+
+On Windows only:
+
+- **Its sound**, beside its picture, when the person at the machine switches
+  that on in the app's settings — off by default, and off again at any moment
+  (telephone quality — see
+  [docs/desktop/ARCHITECTURE.md](docs/desktop/ARCHITECTURE.md#what-is-built-and-what-is-not))
+- **The helper's clipboard**, pasted on the machine, when the person there
+  ticks it — one way only: nothing copied on the machine is sent to the helper
+- **Windows administrator prompts and the lock screen**, answered by the
+  helper only when the person at the machine ticked that as well
+- **Reachable before anybody signs in**, through the background service
 - **Restarting a machine**, separately authorised and recorded before it happens
 
 ## What it deliberately does not do
@@ -73,9 +85,10 @@ or unattended (your own computers, switched on per computer). A Mac uses Core
 Graphics capture and asks for Screen Recording. See
 [docs/desktop/ARCHITECTURE.md](docs/desktop/ARCHITECTURE.md#what-is-built-and-what-is-not).
 
-**There is no Linux agent.** On macOS the clipboard, restart and the background
-service are not built; every provider a platform does not have returns
-`Unsupported` rather than pretending.
+**There is no Linux agent.** On macOS the clipboard, sound, restart and the
+background service are not built; every provider a platform does not have
+returns `Unsupported` rather than pretending, and the app's window does not
+offer a Mac what a Mac cannot do.
 
 ## Layout
 
@@ -83,7 +96,7 @@ service are not built; every provider a platform does not have returns
 web/          React 19 + TypeScript + Vite. Builds to web/dist, deployed to the document root.
 backend/      CodeIgniter 4 API + PostgreSQL. Deployed to the api/ folder inside it.
 signalling/   Node WebSocket relay for WebRTC signalling. A long-running process.
-desktop/      AICOUNTLY Remote for Windows: React + Tauri 2 + Rust, and the Windows service.
+desktop/      The AICOUNTLY Remote app for Windows and macOS: React + Tauri 2 + Rust, and the Windows service.
 docs/         architecture, security, deployment, integration
 ```
 
@@ -132,12 +145,15 @@ is no local login to fake. See
 ## Tests
 
 ```bash
-cd backend    && vendor/bin/phpunit      # 211 — policy, tenant isolation, devices, control
-cd web        && npm test                # 104 — capture, capability gating, control input
-cd signalling && npm test                #  27 — tokens, rooms, device rooms, live relay
-cd desktop    && cargo test --workspace  # 432 — protocol, gate, identity, state, session, service, the installer
-cd desktop    && npm test                #  36 — the agent's own interface
+cd backend    && vendor/bin/phpunit      # 1,118 — policy, tenant isolation, devices, control, rate limits, the sweep
+cd web        && npm test                #   593 — 552 for the app (capture, capability gating, control input, the room) and 41 for the ICE kit
+cd signalling && npm test                #    46 — tokens, rooms, device rooms, live relay, the limits
+cd desktop    && cargo test --workspace  #   732 — protocol, gate, identity, state, session, service, the installer
+cd desktop    && npm test                #   137 — the app's own window
 ```
+
+Counted on 14 November 2026. Fifteen of the backend's are skipped without a
+TURN relay to talk to.
 
 The backend suite runs against a real PostgreSQL and applies the migrations
 itself. Every workflow is started by hand — none runs on a pull request or a
@@ -151,8 +167,8 @@ release. Neither deploys. The manual deploys call `ci.yml` first and the
 manual Windows release calls `desktop-ci.yml` first; the shipping job `needs:`
 it, so a red suite stops the deploy or release.
 
-What is **not** covered — no native Windows call has been executed on a
-Windows machine — is set out in
+What is **not** covered — no automated test presses a key, captures a screen
+or raises a Windows prompt on a real Windows PC or Mac — is set out in
 [docs/desktop/TESTING.md](docs/desktop/TESTING.md), and the manual pass that
 has to precede a release is `desktop/tests/MANUAL.md`.
 
@@ -251,13 +267,18 @@ push or merge. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 | --- | --- | --- |
 | Deploy to cPanel Production | `web/dist/` then `backend/` | document root, then `api/` inside it |
 | Deploy to cPanel Sandbox | `web/dist/` then `backend/` | document root, then `api/` inside it |
-| Release AICOUNTLY Remote for Windows | the desktop installers | a GitHub release — never cPanel |
+| Release AICOUNTLY Remote for Windows | the Windows installers | a GitHub release — never cPanel |
+| Release AICOUNTLY Remote for macOS | the Mac disk image | the same GitHub release |
+| Publish downloads | a release's files | downloads.aicountly.com, which the download page reads |
 | CI / Desktop CI | nothing — tests only | — |
 
-The Windows release takes a version and a channel (`sandbox`, `beta`,
-`production`), signs beta and production inside a protected GitHub Environment,
-and has no branch by which an unsigned artifact becomes a release. See
-[docs/desktop/WINDOWS_RELEASE.md](docs/desktop/WINDOWS_RELEASE.md).
+Each release takes a version and a channel (`sandbox`, `beta`, `production`)
+and signs beta and production inside a protected GitHub Environment **when a
+signing identity is configured**. None is yet, so the builds published so far
+were made with the workflows' `allow_unsigned` input: the release says so in
+its notes and carries an `UNSIGNED.txt`, Windows shows "Windows protected your
+PC" on first run, and the app does not offer an unsigned build as an in-app
+update. See [docs/desktop/WINDOWS_RELEASE.md](docs/desktop/WINDOWS_RELEASE.md).
 
 The deploy applies the pending database migrations itself, after the API
 upload (input `migrate`, default `apply`): `php spark remote:db-check` and

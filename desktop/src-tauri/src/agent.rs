@@ -25,8 +25,8 @@ use remote_device::{
     AgentCapabilities, DeviceDescription, PermissionSummary, PlatformProviders, PlatformResult,
 };
 use remote_protocol::{
-    ControlEnvelope, ControlGate, ControlMessage, ControlState, GateError, Monitor, MonitorLayout,
-    ProtocolError,
+    ControlEnvelope, ControlGate, ControlMessage, ControlState, GateError, InputRefusedReason,
+    Monitor, MonitorLayout, ProtocolError,
 };
 use remote_security::{DeviceKeypair, EnrolmentRecord, KeyError, StorageScope, DEVICE_KEY_ENTRY};
 
@@ -112,6 +112,15 @@ pub struct Agent {
     /// out the context that makes the refusal worth having.
     refused_injections: AtomicU64,
     last_injection_refusal_log: Mutex<Option<Instant>>,
+    /// A refusal the controller has not been told about yet, and when they
+    /// were last told.
+    ///
+    /// The log line above is for whoever reads the log afterwards. The person
+    /// who needs to know *now* is the one controlling: their room says "You
+    /// are controlling this computer" and their clicks do nothing. Whichever
+    /// loop owns the control channel takes this and sends `input_refused`, at
+    /// most every [`REFUSAL_NOTICE_INTERVAL`] while it keeps happening.
+    refusal_notice: Mutex<RefusalNotice>,
     /// How many admitted-or-refused control messages never reached the
     /// operating system for a reason that is not the platform refusing: the
     /// gate turned them away, or there was nowhere to put them.
@@ -141,6 +150,62 @@ pub struct Agent {
 /// How often a refused injection is written to the log. The count is exact;
 /// the log is a sample, so one stuck session cannot cost the whole file.
 const INJECTION_REFUSAL_LOG_INTERVAL: Duration = Duration::from_secs(10);
+
+/// How often the controller is told again that the computer is refusing
+/// their input, while it keeps refusing. Their browser shows the reason for a
+/// little longer than this after the last one, so a steady refusal reads as
+/// one steady notice rather than a flicker.
+const REFUSAL_NOTICE_INTERVAL: Duration = Duration::from_secs(3);
+
+/// What the controller is told when the operating system refuses input.
+///
+/// On Windows a refused `SendInput` is, in practice, UIPI: the window in
+/// front belongs to a process running with higher privileges than this
+/// application, which runs as the person who signed in. Elsewhere the cause
+/// is not known from the refusal itself.
+fn refusal_reason() -> InputRefusedReason {
+    if cfg!(target_os = "windows") {
+        InputRefusedReason::ElevatedWindow
+    } else {
+        InputRefusedReason::Refused
+    }
+}
+
+/// A refusal waiting to be told to the controller, paced.
+#[derive(Debug, Default)]
+struct RefusalNotice {
+    /// The reason not yet sent.
+    pending: Option<InputRefusedReason>,
+    /// When one was last handed over to be sent.
+    last_sent: Option<Instant>,
+}
+
+impl RefusalNotice {
+    /// The operating system refused an event at `now`.
+    fn refused(&mut self, reason: InputRefusedReason, now: Instant) {
+        let due = self
+            .last_sent
+            .is_none_or(|at| now.duration_since(at) >= REFUSAL_NOTICE_INTERVAL);
+
+        if due {
+            self.pending = Some(reason);
+            self.last_sent = Some(now);
+        }
+    }
+
+    /// Something the controller asked for by name was not done, at `now`.
+    ///
+    /// Not paced: it answers one deliberate act rather than a stream of
+    /// events, and an answer that is sometimes dropped is no answer.
+    fn say(&mut self, reason: InputRefusedReason, now: Instant) {
+        self.pending = Some(reason);
+        self.last_sent = Some(now);
+    }
+
+    fn take(&mut self) -> Option<InputRefusedReason> {
+        self.pending.take()
+    }
+}
 
 /// How many times a control decision is reported before giving up.
 const CONTROL_REPORT_ATTEMPTS: u32 = 4;
@@ -189,6 +254,7 @@ impl Agent {
             secure_desktop_consent: AtomicBool::new(false),
             refused_injections: AtomicU64::new(0),
             last_injection_refusal_log: Mutex::new(None),
+            refusal_notice: Mutex::new(RefusalNotice::default()),
             discarded_input: AtomicU64::new(0),
             last_discarded_input_log: Mutex::new(None),
             applied_input: AtomicU64::new(0),
@@ -640,6 +706,10 @@ impl Agent {
         self.secure_desktop_consent.store(false, Ordering::SeqCst);
         self.control_hint.store(false, Ordering::SeqCst);
         self.stop_notice.store(false, Ordering::SeqCst);
+
+        if let Ok(mut notice) = self.refusal_notice.lock() {
+            *notice = RefusalNotice::default();
+        }
 
         if let Ok(mut request) = self.monitor_request.lock() {
             *request = None;
@@ -1467,6 +1537,53 @@ impl Agent {
             return Ok(Handled::Pinged(nonce));
         }
 
+        // Ctrl+Alt+Del. Windows honours the Secure Attention Sequence from
+        // one place only — `SendSAS`, which the Secure Desktop helper can call
+        // and an injected key chord never reaches — so when the controller
+        // sends the chord and a helper is connected, the helper is asked for
+        // it. A helper is connected only while the person at the computer (or
+        // its owner, for an unattended connection) agreed to the Secure
+        // Desktop being answered, so this opens nothing they did not.
+        //
+        // Where it cannot be raised the controller is told which of the two
+        // reasons it was, because the alternative is a menu item that does
+        // nothing and says nothing. The keys are not injected instead: Windows
+        // would not treat them as the sequence, and whatever is in front
+        // would be handed Ctrl+Alt+Delete as an ordinary shortcut.
+        if let ControlMessage::Key(event) = &envelope.message {
+            if is_secure_attention(event) {
+                let plan = secure_attention_plan(
+                    cfg!(target_os = "windows"),
+                    self.secure_desktop_reachable(),
+                    crate::secure_desktop::software_secure_attention_permitted,
+                );
+
+                match plan {
+                    SecureAttention::OrdinaryKeys => {}
+                    SecureAttention::Raise => {
+                        return Ok(
+                            if self.send_secure_desktop_input(
+                                aicountly_remote_service::HelperInput::SecureAttention,
+                            ) {
+                                Handled::Applied
+                            } else {
+                                Handled::Failed
+                            },
+                        );
+                    }
+                    SecureAttention::Refuse(reason) => {
+                        if let Ok(mut notice) = self.refusal_notice.lock() {
+                            notice.say(reason, Instant::now());
+                        }
+
+                        tracing::info!(%reason, "Ctrl+Alt+Del was asked for and not sent");
+
+                        return Ok(Handled::Ignored);
+                    }
+                }
+            }
+        }
+
         // While the Secure Desktop is in front and a helper is forwarding it,
         // input goes to the helper rather than to `SendInput` — the app cannot
         // reach the Secure Desktop, the helper can. This is a change of
@@ -1591,6 +1708,12 @@ impl Agent {
     fn note_refused_injection(&self, error: &remote_device::PlatformError) {
         let total = self.refused_injections.fetch_add(1, Ordering::Relaxed) + 1;
 
+        // For the controller, now — separately from the log, which is paced
+        // for whoever reads it later.
+        if let Ok(mut notice) = self.refusal_notice.lock() {
+            notice.refused(refusal_reason(), Instant::now());
+        }
+
         let Ok(mut last) = self.last_injection_refusal_log.lock() else {
             return;
         };
@@ -1610,6 +1733,14 @@ impl Agent {
             "the operating system refused an injected input event; control looks granted at both \
              ends and nothing moves",
         );
+    }
+
+    /// The reason to give the controller for input the computer has just
+    /// refused, if there is one they have not been told. Taken: it is sent
+    /// once, and again only after [`REFUSAL_NOTICE_INTERVAL`] if the refusals
+    /// continue.
+    pub fn take_input_refusal(&self) -> Option<InputRefusedReason> {
+        self.refusal_notice.lock().ok()?.take()
     }
 
     /// How many input events the operating system refused in this session.
@@ -1720,6 +1851,51 @@ impl Agent {
             .and_then(|gate| gate.as_ref().map(ControlGate::rejected_count))
             .unwrap_or(0)
     }
+}
+
+/// Whether a key event is the controller pressing Ctrl+Alt+Del: Delete going
+/// down with Ctrl and Alt held, and nothing else that would make it another
+/// chord. The release, and Delete on its own, are ordinary keys.
+fn is_secure_attention(event: &remote_protocol::KeyEvent) -> bool {
+    event.pressed
+        && event.key == remote_protocol::Key::Delete
+        && event.modifiers.ctrl
+        && event.modifiers.alt
+        && !event.modifiers.shift
+        && !event.modifiers.meta
+}
+
+/// What to do with Ctrl+Alt+Del from the controller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SecureAttention {
+    /// This is not Windows: there is no such sequence, and the keys are keys.
+    OrdinaryKeys,
+    /// Ask the Secure Desktop helper to raise it.
+    Raise,
+    /// It cannot be raised here; tell the controller why.
+    Refuse(InputRefusedReason),
+}
+
+/// Decide it. `policy_permits` is only asked once a helper is connected,
+/// since without one the answer changes nothing.
+fn secure_attention_plan(
+    windows: bool,
+    helper_connected: bool,
+    policy_permits: impl FnOnce() -> bool,
+) -> SecureAttention {
+    if !windows {
+        return SecureAttention::OrdinaryKeys;
+    }
+
+    if !helper_connected {
+        return SecureAttention::Refuse(InputRefusedReason::SecureAttentionNotAllowed);
+    }
+
+    if !policy_permits() {
+        return SecureAttention::Refuse(InputRefusedReason::SecureAttentionBlocked);
+    }
+
+    SecureAttention::Raise
 }
 
 /// The display a hosted session shows: the primary one, else the first.
@@ -2641,6 +2817,171 @@ mod tests {
             .encode()
             .unwrap();
         assert_eq!(agent.handle_control(&ping), Ok(Handled::Pinged(9)));
+    }
+
+    /// Ctrl+Alt+Del is Delete going down with exactly Ctrl and Alt held.
+    #[test]
+    fn ctrl_alt_del_is_recognised_and_nothing_near_it_is() {
+        use remote_protocol::{Key, KeyEvent, Modifiers};
+
+        let chord = |key: Key, pressed: bool, ctrl: bool, alt: bool, shift: bool| KeyEvent {
+            key,
+            pressed,
+            modifiers: Modifiers {
+                ctrl,
+                alt,
+                shift,
+                meta: false,
+            },
+        };
+
+        assert!(is_secure_attention(&chord(
+            Key::Delete,
+            true,
+            true,
+            true,
+            false
+        )));
+
+        // The release, Delete alone, Ctrl+Delete, Ctrl+Alt+Shift+Delete and
+        // Ctrl+Alt with another key are all ordinary keys.
+        assert!(!is_secure_attention(&chord(
+            Key::Delete,
+            false,
+            true,
+            true,
+            false
+        )));
+        assert!(!is_secure_attention(&chord(
+            Key::Delete,
+            true,
+            false,
+            false,
+            false
+        )));
+        assert!(!is_secure_attention(&chord(
+            Key::Delete,
+            true,
+            true,
+            false,
+            false
+        )));
+        assert!(!is_secure_attention(&chord(
+            Key::Delete,
+            true,
+            true,
+            true,
+            true
+        )));
+        assert!(!is_secure_attention(&chord(
+            Key::Backspace,
+            true,
+            true,
+            true,
+            false
+        )));
+    }
+
+    /// The controller is told the moment the computer first refuses their
+    /// input, and then again only every few seconds while it goes on — input
+    /// arrives sixty times a second, and one notice per event would be a
+    /// flood on the very channel the input uses.
+    #[test]
+    fn a_refusal_is_told_at_once_and_then_only_every_few_seconds() {
+        let mut notice = RefusalNotice::default();
+        let start = Instant::now();
+
+        assert_eq!(notice.take(), None, "nothing refused, nothing to say");
+
+        notice.refused(InputRefusedReason::ElevatedWindow, start);
+        assert_eq!(notice.take(), Some(InputRefusedReason::ElevatedWindow));
+        assert_eq!(notice.take(), None, "said once");
+
+        // The next sixty events are refused too, within the same second.
+        for millis in (16..1_000).step_by(16) {
+            notice.refused(
+                InputRefusedReason::ElevatedWindow,
+                start + Duration::from_millis(millis),
+            );
+        }
+        assert_eq!(notice.take(), None, "not said again so soon");
+
+        notice.refused(
+            InputRefusedReason::ElevatedWindow,
+            start + REFUSAL_NOTICE_INTERVAL,
+        );
+        assert_eq!(
+            notice.take(),
+            Some(InputRefusedReason::ElevatedWindow),
+            "still being refused a few seconds on: said again"
+        );
+    }
+
+    /// Ctrl+Alt+Del is raised only where it can be, and where it cannot the
+    /// controller learns which of the two reasons it was — one the person at
+    /// the computer can change by allowing control again with the box
+    /// ticked, the other only whoever administers that computer can.
+    #[test]
+    fn ctrl_alt_del_is_raised_refused_with_a_reason_or_left_as_keys() {
+        // Not Windows: there is no such sequence. The policy is not consulted.
+        assert_eq!(
+            secure_attention_plan(false, true, || panic!("not asked off Windows")),
+            SecureAttention::OrdinaryKeys
+        );
+
+        // Windows, but nobody agreed to its prompts being answered, so there
+        // is no helper. The policy is not consulted: it would change nothing.
+        assert_eq!(
+            secure_attention_plan(true, false, || panic!("not asked without a helper")),
+            SecureAttention::Refuse(InputRefusedReason::SecureAttentionNotAllowed)
+        );
+
+        // A helper, and Windows forbids software raising it.
+        assert_eq!(
+            secure_attention_plan(true, true, || false),
+            SecureAttention::Refuse(InputRefusedReason::SecureAttentionBlocked)
+        );
+
+        // A helper, and Windows permits it.
+        assert_eq!(
+            secure_attention_plan(true, true, || true),
+            SecureAttention::Raise
+        );
+    }
+
+    /// An answer to something the controller asked for by name is not paced
+    /// the way a stream of refused events is: said moments after another
+    /// notice, it still has to arrive.
+    #[test]
+    fn an_answer_to_one_deliberate_act_is_never_held_back() {
+        let mut notice = RefusalNotice::default();
+        let start = Instant::now();
+
+        notice.refused(InputRefusedReason::ElevatedWindow, start);
+        assert_eq!(notice.take(), Some(InputRefusedReason::ElevatedWindow));
+
+        notice.say(
+            InputRefusedReason::SecureAttentionNotAllowed,
+            start + Duration::from_millis(200),
+        );
+        assert_eq!(
+            notice.take(),
+            Some(InputRefusedReason::SecureAttentionNotAllowed)
+        );
+    }
+
+    /// On Windows a refused injection is a window running as administrator in
+    /// front, and that is what the controller is told; elsewhere the cause is
+    /// not known from the refusal.
+    #[test]
+    fn the_reason_given_for_a_refusal_fits_the_platform() {
+        let expected = if cfg!(target_os = "windows") {
+            InputRefusedReason::ElevatedWindow
+        } else {
+            InputRefusedReason::Refused
+        };
+
+        assert_eq!(refusal_reason(), expected);
     }
 
     /// A hosted session shows this computer's own screen, so its controller

@@ -81,7 +81,38 @@ describe('the stage with no picture yet', () => {
 
     expect(screen.queryByText(/Waiting for Asha/)).not.toBeInTheDocument()
     expect(screen.getByText('No screen is being shared yet')).toBeInTheDocument()
-    expect(screen.getByText(/Choose Share to pick what to show/)).toBeInTheDocument()
+    expect(screen.getByText(/to pick what to show/)).toBeInTheDocument()
+  })
+
+  /**
+   * The code is the one thing the person being helped has to say out loud. It was a small badge in
+   * the header beside a session number in bolder type, and the empty stage never mentioned it.
+   */
+  it('shows the host their code, large, while nobody has joined', () => {
+    const host = participant({})
+    renderStage(session({ participants: [host], me: host, isHost: true, sessionCode: '583194726' }))
+
+    expect(screen.getByText('583 194 726')).toBeInTheDocument()
+    expect(screen.getByText(/Tell this code to the person helping you/)).toBeInTheDocument()
+  })
+
+  it('stops showing the code once somebody is in the session', () => {
+    const host = participant({})
+    const helper = participant({ uuid: 'p-helper', displayName: 'Bala', role: 'VIEWER', isHost: false })
+    renderStage(session({ participants: [host, helper], me: host, isHost: true, sessionCode: '583194726' }))
+
+    expect(screen.queryByText('583 194 726')).not.toBeInTheDocument()
+    expect(screen.getByText('No screen is being shared yet')).toBeInTheDocument()
+  })
+
+  /** Somebody not yet let in was told "No screen is being shared yet… Chat is available". */
+  it('tells somebody waiting to be let in that this is what they are waiting for', () => {
+    const waiting = participant({ uuid: 'p-helper', displayName: 'Bala', role: 'VIEWER', isHost: false, status: 'REQUESTED' })
+    renderStage(session({ participants: [], me: waiting }))
+
+    expect(screen.getByText('Waiting to be let in')).toBeInTheDocument()
+    expect(screen.queryByText(/Chat is available/)).not.toBeInTheDocument()
+    expect(screen.queryByText('No screen is being shared yet')).not.toBeInTheDocument()
   })
 
   it('tells a viewer whose screen is on its way', () => {

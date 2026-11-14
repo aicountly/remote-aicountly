@@ -70,7 +70,8 @@ desktop/
     src/session.rs      one session: join, negotiate, pump the control channel
     src/platform/       the ONLY place a native API is called
       windows/          capture, input, clipboard, DPAPI, service, power
-      macos/            the control companion: CGEvent input, display list, Keychain
+      macos/            capture (Core Graphics), CGEvent input, display list, Keychain,
+                        the Screen Recording and Accessibility permissions
   agents/
     windows-service/    the Session 0 half: SCM, named pipe, restart
   src/                  the agent's own React interface
@@ -86,7 +87,7 @@ the lookup tables around them — where a click lands, the virtual-key codes, th
 clipboard bounds — are tested on Linux as well. What only a Windows runner can
 check is `mod imp` itself, and that is what it compiles and clippy-checks.
 
-`cargo test --workspace` runs **713 Rust tests** on any host. The H.264 tests among
+`cargo test --workspace` runs **732 Rust tests** on any host. The H.264 tests among
 them encode with OpenH264 compiled from source (`remote-webrtc`'s test-only
 `bundled-openh264` feature); the application itself loads Cisco's binary.
 
@@ -95,23 +96,27 @@ them encode with OpenH264 compiled from source (`remote-webrtc`'s test-only
 `crates/remote-device/src/lib.rs` defines seven, and each platform implements
 them or says it cannot:
 
-| Trait | Windows | macOS (control companion) |
+| Trait | Windows | macOS |
 |---|---|---|
-| `ScreenCaptureProvider` | `Windows.Graphics.Capture` + D3D11 readback | the display list only (`CGGetActiveDisplayList`, `CGDisplayBounds`); capture refused |
+| `ScreenCaptureProvider` | `Windows.Graphics.Capture` + D3D11 readback | `CGDisplayCreateImage`, one frame per profile interval, refused without the Screen Recording permission; the pointer is drawn into the picture |
 | `InputProvider` | `SendInput`, absolute virtual-desktop coordinates | `CGEvent` from a private source at the HID tap, global points |
 | `ClipboardProvider` | `OpenClipboard` / `CF_UNICODETEXT`, text only | `Unsupported` (off for companions) |
 | `SecureStorageProvider` | DPAPI, machine scope, extra entropy | Keychain, after first unlock, this device only |
-| `SystemServiceProvider` | the SCM, and the named-pipe client | `Unsupported` (never unattended) |
+| `SystemServiceProvider` | the SCM, and the named-pipe client | `Unsupported` (no launch daemon: unattended only while the app is running and somebody is signed in) |
 | `DeviceInfoProvider` | `RtlGetVersion`, `COMPUTERNAME` | computer name, `kern.osproductversion`, macOS 13+ |
 | `PowerProvider` | delegates the restart to the service | `Unsupported` |
-| `PermissionsProvider` | the service and the Windows version | Accessibility (`AXIsProcessTrustedWithOptions`), read live |
+| `PermissionsProvider` | the service and the Windows version | Screen Recording (`CGPreflightScreenCaptureAccess`) and Accessibility (`AXIsProcessTrustedWithOptions`), read live |
 
 A platform can **host** (`platform::supports_hosting`: share its own screen and
-be controlled through it — Windows) or be a **control companion**
+be controlled through it) and be a **control companion**
 (`platform::supports_companion`: join a session its owner shares from Chrome or
-Edge, input-only — Windows and macOS). macOS is a companion and nothing else,
-and declares only `remote_control`; what it cannot do it refuses with
-`PlatformError::Unsupported` rather than pretending. The companion flow is
+Edge, input-only). Windows and macOS do both. A Mac declares `screen_share`,
+`remote_control` and `unattended_access` (`platform/macos/mod.rs`,
+`declared_capabilities`) and nothing else: it has no clipboard, no sound, no
+restart, no background service and no Secure Desktop
+(`platform::supports_secure_desktop` is Windows only), and what it cannot do it
+refuses with `PlatformError::Unsupported` rather than pretending — so the
+window offers a Mac none of those. The companion flow is
 `src-tauri/src/companion.rs`; the whole design, server side included, is
 [CONTROL_COMPANION.md](CONTROL_COMPANION.md).
 
@@ -200,7 +205,7 @@ gap at the wrong moment.
 
 **Built and tested**
 
-* the whole control protocol and the gate, with 58 tests;
+* the whole control protocol and the gate, with 81 tests;
 * device identity: keypair, canonical signed payload matching the PHP
   implementation byte for byte, DPAPI storage, enrolment, authentication;
 * the agent state machine, configuration, API client, backoff;
@@ -222,9 +227,9 @@ gap at the wrong moment.
   the API says the session is over;
 * the tray, the window and the consent screens;
 * the whole server side — devices, policy, control, unattended sessions,
-  presence rooms, audit — with 211 backend tests;
+  presence rooms, audit — with 1,118 backend tests;
 * the browser side — capability-driven control UI, input capture, the
-  Computers page — with 104 web tests.
+  Computers page — with 552 web tests.
 * the screen encoder: H.264 Constrained Baseline from **Cisco's own OpenH264
   binary**, which the application downloads from Cisco onto the person's
   computer, checks against a pinned SHA-256 and the `openh264` crate's list of

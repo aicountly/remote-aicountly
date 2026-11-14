@@ -312,11 +312,18 @@ $routes->group('v1/remote', ['namespace' => 'App\Controllers\Api\V1'], static fu
     // Unauthenticated by design — a nonce is worthless without the private key,
     // and the signature *is* the authentication. Both are rate-limited because
     // running them in a loop is the only load they can put on anything.
+    //
+    // Nobody is authenticated yet, so these two are counted against the address
+    // (RateLimitFilter) — and an office is one address. Each computer asks twice
+    // when it starts, once for the application and once for its background
+    // service, so twenty a minute was ten computers switched on together: the
+    // eleventh was refused and left to retry. 120 is sixty computers starting in
+    // the same minute, and still a ceiling on one source hammering.
     $routes->post('devices/auth/challenge', 'DeviceAgentController::challenge', [
-        'filter' => 'rate-limit:device-challenge,20,60',
+        'filter' => 'rate-limit:device-challenge,120,60',
     ]);
     $routes->post('devices/auth/verify', 'DeviceAgentController::verify', [
-        'filter' => 'rate-limit:device-verify,20,60',
+        'filter' => 'rate-limit:device-verify,120,60',
     ]);
 
     // --- Desktop-agent sign-in (docs/desktop/DEVICE_ENROLMENT.md) ----------

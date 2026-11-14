@@ -113,6 +113,8 @@ final class DeviceHostedSessionTest extends RemoteTestCase
         $this->assertSame('SHARER', $joined['participant']['role']);
         $this->assertTrue($joined['participant']['isHost']);
         $this->assertSame('DESKTOP_AGENT', $joined['participant']['clientType']);
+        // Which keyboard it has, as it registered: what tells the room to send a Mac a Mac's shortcuts.
+        $this->assertSame('Windows', $joined['participant']['operatingSystem']);
         $this->assertTrue($joined['participant']['capabilities']['remote_control']);
         $this->assertNotEmpty($joined['signalling']['token']);
         $hostUuid = (string) $joined['participant']['uuid'];
@@ -123,6 +125,7 @@ final class DeviceHostedSessionTest extends RemoteTestCase
         // 3. Ravi joins by the code and waits.
         $ravi = $this->helperJoinsByCode($uuid);
         $this->assertSame('REQUESTED', $ravi['status']);
+        $this->assertNull($ravi['operatingSystem'], 'nothing is said about a person\'s browser');
 
         $waiting = $this->dataOf($this->getJson($device, "devices/me/sessions/{$uuid}/participants"));
         $this->assertCount(1, $waiting['waiting']);

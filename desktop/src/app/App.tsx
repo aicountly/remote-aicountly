@@ -172,8 +172,14 @@ export default function App() {
     return () => clearInterval(timer)
   }, [session, companionActive, refresh])
 
+  // How many actions are in flight. Counted, because the stop buttons are
+  // never disabled and so one can start while another is still waiting on the
+  // server; the first to finish must not un-busy the window for the second.
+  const inFlight = useRef(0)
+
   const run = useCallback(
     async (action: () => Promise<unknown>) => {
+      inFlight.current += 1
       setBusy(true)
       setError(null)
 
@@ -181,9 +187,12 @@ export default function App() {
         await action()
         await refresh()
       } catch (caught) {
-        setError(caught instanceof Error ? caught.message : 'Something went wrong.')
+        // The Rust side's own sentence — see `describeError`. Every failure
+        // used to read "Something went wrong.", whatever had.
+        setError(bridge.describeError(caught, 'That did not work. Please try again.'))
       } finally {
-        setBusy(false)
+        inFlight.current -= 1
+        setBusy(inFlight.current > 0)
       }
     },
     [refresh],
@@ -469,7 +478,7 @@ export default function App() {
             setScreen('portal')
           } catch (caught) {
             if (!cancelled) {
-              setError(caught instanceof Error ? caught.message : 'Registration succeeded but could not be recorded here.')
+              setError(bridge.describeError(caught, 'Registration succeeded but could not be recorded here.'))
             }
           }
         } else if (outcome.status === 'denied' || outcome.status === 'expired') {
@@ -558,10 +567,31 @@ export default function App() {
   const needsScreenRecording =
     about?.platform === 'macOS' && permissions !== null && !isUsable(permissions.screen_capture)
 
+  // Something is waiting on the person at this computer: somebody asking to
+  // control it, somebody waiting to be let in, a link from the browser to
+  // confirm. Each is a card with its buttons at the bottom, and on the Remote
+  // tab the window cannot scroll (the portal is a native layer drawn over a
+  // fixed frame) — so with a banner and a notice above it, "Allow control"
+  // and "Not now" were below the bottom edge of the window with no way to
+  // reach them. While one of them is waiting the portal steps aside and the
+  // window is an ordinary scrolling page; it comes back, on the page it was
+  // on, the moment the question is answered.
+  const decisionWaiting =
+    session?.control.state === 'requested' ||
+    (hostingHelp && (participants?.waiting.length ?? 0) > 0) ||
+    companion?.phase === 'awaiting_confirmation' ||
+    companion?.phase === 'choosing_monitor'
+
   // The confirmation page, as a path on this deployment's portal.
   const confirmPath = signIn ? pathOf(signIn.start.verificationUriComplete) : null
   const portalMode =
-    (screen === 'portal' && !signedOut) || (screen === 'register' && signIn?.outcome === 'pending')
+    !decisionWaiting &&
+    ((screen === 'portal' && !signedOut) || (screen === 'register' && signIn?.outcome === 'pending'))
+
+  // Where a helper types a code in a browser: this deployment's own address.
+  const remoteAddress = config ? hostOf(config.apiBaseUrl) : null
+
+  const offline = state?.status.status === 'offline' ? state.status : null
 
   if (!state || !permissions) {
     return (
@@ -575,8 +605,9 @@ export default function App() {
 
   return (
     <div className={portalMode ? 'app app--portal' : 'app'}>
+      <div className="app__top">
       <header className="app__header">
-        <Brand version={state.agentVersion} build={about?.build ?? null} platform={about?.platform ?? null} />
+        <Brand />
 
         <nav className="app__nav">
           {/*
@@ -620,15 +651,29 @@ export default function App() {
         {portalMode && portalOnOwnPage ? <PortalTools /> : null}
       </header>
 
-      <main className="app__main">
-        {/* Above everything, on every screen. */}
+        {/*
+         * Above everything, on every screen, and still there when the page
+         * below is scrolled: who is connected, and the buttons that stop it.
+         */}
         <SessionBanner
           state={state}
+          computerName={computerName}
+          stopShortcut={about?.stopShortcut ?? null}
           onStopControl={stopControl}
           onEndSession={endSession}
-          busy={busy}
         />
 
+        {/* The companion's banner: who is controlling, and Stop. */}
+        <CompanionBanner
+          state={state}
+          computerName={computerName}
+          stopShortcut={about?.stopShortcut ?? null}
+          onStopControl={stopControl}
+          onLeave={leaveCompanion}
+        />
+      </div>
+
+      <main className="app__main">
         {/*
          * A session with no codec to encode the screen with sends no picture.
          * Said right under the banner, to the person at this computer, with
@@ -638,15 +683,23 @@ export default function App() {
           <CodecNotice codec={codec} context="session" onOpenSettings={() => setScreen('settings')} />
         ) : null}
 
-        {/* The companion's banner: who is controlling, and Stop. */}
-        <CompanionBanner
-          state={state}
-          computerName={computerName}
-          stopShortcut={about?.stopShortcut ?? null}
-          onStopControl={stopControl}
-          onLeave={leaveCompanion}
-          busy={busy}
-        />
+        {/*
+         * Not connected: said on every screen, with the reason the Rust side
+         * gives. It used to be one grey pill on one tab, and the screens that
+         * need a connection — Get help, Connect — simply failed.
+         */}
+        {!signedOut && offline ? (
+          <div className="notice notice--warning" role="status">
+            <p className="notice__title">This {computerName} is not connected to AICOUNTLY Remote</p>
+            <p>
+              {offline.reason ? `${sentence(offline.reason)} ` : ''}
+              Nobody can connect to it, and it cannot start a help session, until it is back.{' '}
+              {offline.retryable
+                ? 'It keeps trying by itself — check the internet connection if this stays.'
+                : 'Sign this computer out and in again under This computer if this stays.'}
+            </p>
+          </div>
+        ) : null}
 
         {companion && companion.phase === 'awaiting_confirmation' ? (
           <CompanionConfirm
@@ -683,10 +736,14 @@ export default function App() {
           <ControlRequest
             session={session}
             requesterName={session.control.requesterName || session.connectedName || 'Someone'}
+            computerName={computerName}
+            stopShortcut={about?.stopShortcut ?? null}
             clipboardAllowedByPolicy={allowed?.clipboard_sync ?? false}
             shareClipboard={shareClipboard}
             onShareClipboardChange={setShareClipboard}
-            secureDesktopSupported={about?.supportsHosting ?? false}
+            // Windows only. It used to follow "can host a session", which a
+            // Mac can — and a Mac was asked about Windows' prompts.
+            secureDesktopSupported={about?.supportsSecureDesktop ?? false}
             answerSecureDesktop={answerSecureDesktop}
             onAnswerSecureDesktopChange={setAnswerSecureDesktop}
             onAllow={grantControl}
@@ -736,7 +793,12 @@ export default function App() {
             ) : null}
           </>
         ) : screen === 'portal' && !signedOut ? (
-          <PortalView path={portalPath} navigateKey={portalHome} hidden={updatePrompt} signInPage={!portalOnOwnPage} />
+          <PortalView
+            path={portalPath}
+            navigateKey={portalHome}
+            hidden={updatePrompt || decisionWaiting}
+            signInPage={!portalOnOwnPage}
+          />
         ) : signedOut && screen !== 'settings' ? (
           <SignInScreen
             revoked={revoked}
@@ -764,6 +826,8 @@ export default function App() {
             onEnd={endHelp}
             codec={codec}
             onOpenSettings={() => setScreen('settings')}
+            remoteAddress={remoteAddress}
+            offline={offline !== null}
             busy={busy}
           />
         ) : screen === 'unattended' ? (
@@ -772,16 +836,23 @@ export default function App() {
             onEnable={enableUnattended}
             onDisable={disableUnattended}
             busy={busy}
-            error={error}
           />
         ) : screen === 'settings' && config ? (
           <SettingsPage
             config={config}
             about={about}
-            onSave={(next) => run(async () => setConfig(await bridge.saveConfiguration(next)))}
+            onSave={async (next) => {
+              let saved = false
+
+              await run(async () => {
+                setConfig(await bridge.saveConfiguration(next))
+                saved = true
+              })
+
+              return saved
+            }}
             onConfigChange={setConfig}
             busy={busy}
-            error={error}
           />
         ) : (
           <>
@@ -797,7 +868,27 @@ export default function App() {
               <ScreenRecordingNotice computerName={computerName} onOpen={openScreenRecording} busy={busy} />
             ) : null}
 
-            <DeviceCard state={state} onUnregister={unregister} busy={busy} />
+            {/*
+             * The thing most people open this application for, said on the
+             * screen that is about this computer: it used to be one of six
+             * tabs and mentioned nowhere else.
+             */}
+            {about?.supportsHosting && !session && !companion ? (
+              <section className="card" aria-labelledby="need-help-title">
+                <h2 className="card__title" id="need-help-title">
+                  Need help on this {computerName}?
+                </h2>
+                <p className="card__subtitle">
+                  Get a code, read it to the person helping you, and let them in. They see your screen, and use your
+                  mouse and keyboard only if you say so.
+                </p>
+                <button type="button" className="btn btn--primary" onClick={() => selectScreen('help')}>
+                  Get help
+                </button>
+              </section>
+            ) : null}
+
+            <DeviceCard state={state} computerName={computerName} onUnregister={unregister} busy={busy} />
 
             <PermissionsCard
               permissions={permissions}
@@ -856,6 +947,25 @@ function HowItWorks({
       </div>
     </section>
   )
+}
+
+/** `https://remote.aicountly.com/api` → `remote.aicountly.com`. */
+function hostOf(url: string): string | null {
+  try {
+    return new URL(url).host || null
+  } catch {
+    return null
+  }
+}
+
+/** A reason from the Rust side as a sentence: capitalised, and ended. */
+function sentence(reason: string): string {
+  const text = reason.trim()
+  if (!text) return ''
+
+  const capitalised = text.charAt(0).toUpperCase() + text.slice(1)
+
+  return /[.!?]$/.test(capitalised) ? capitalised : `${capitalised}.`
 }
 
 /** `https://remote.aicountly.com/desktop-signin?code=X` → `/desktop-signin?code=X`. */

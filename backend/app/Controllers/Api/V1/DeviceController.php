@@ -98,7 +98,14 @@ class DeviceController extends BaseApiController
                 $page['items'],
             ),
             'canEnrol'  => $policy->can(PermissionCatalog::DEVICE_ENROL),
-            'canManage' => $policy->can(PermissionCatalog::DEVICE_MANAGE),
+            // What the page shows its buttons from: "Allow unattended", "Turn off unattended", "Remove".
+            // A person's own computers are theirs to manage — DeviceService lets an owner do all three
+            // whatever permissions they hold, so that a lost laptop never waits for an administrator —
+            // and without an organisation chosen this list is exactly those. Only the organisation's
+            // list asks for the permission. Answering from the permission alone told every personal
+            // account it could manage nothing, the page offered none of the three, and unattended
+            // access could not be switched on from the one place it is switched on.
+            'canManage' => $companyId === null || $policy->can(PermissionCatalog::DEVICE_MANAGE),
             'canConnectUnattended' => $policy->allowUnattendedAccess
                 && $policy->can(PermissionCatalog::UNATTENDED_ACCESS),
             'policy' => [

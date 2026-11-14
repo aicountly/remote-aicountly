@@ -9,11 +9,15 @@ Three pieces deploy separately, because they are genuinely different things:
 | `signalling/` | nothing to build | a long-running Node process |
 
 Deployment is **manual only** — **Actions → pick a workflow → Run workflow**.
-Nothing deploys on push or merge. `.github/workflows/ci.yml` runs the tests on
-every pull request and every push to `main` but never deploys. Both deploy
-workflows run that full suite first: their first job calls `ci.yml` on the
-commit being deployed and the deploy job `needs:` it, so a red suite stops the
-deploy.
+Nothing deploys on push or merge, and nothing *runs* on push or merge either:
+every workflow, `.github/workflows/ci.yml` included, is started by hand or
+called by another workflow. Both deploy workflows run that full suite first:
+their first job calls `ci.yml` on the commit being deployed and the deploy job
+`needs:` it, so a red suite stops the deploy — unless the person starting the
+deploy switches its `run_ci_gate` input off, which exists so a suite that was
+already run locally before the merge is not paid for twice. A deploy started
+that way has no test gate of its own: whoever starts it is vouching for the
+commit.
 
 | Workflow | Target |
 |---|---|
@@ -362,6 +366,20 @@ REMOTE_SIGNALLING_TOKEN_SECRET   the same value as remote.signallingSecret
 REMOTE_SIGNAL_ALLOWED_ORIGINS    https://remote.aicountly.com
 ```
 
+Two more are optional: `REMOTE_SIGNAL_MAX_CONNECTIONS` (default 20000) and
+`REMOTE_SIGNAL_MAX_ROOM_MEMBERS` (default 64). **Check the first against the
+host's open-file limit.** Every connection is an open file and every registered
+computer holds one for as long as it is switched on, so the relay runs out of
+files long before it runs out of anything else: measured on four cores it held
+19,900 connections in about 200 MB with the processor idle, and the limit it
+met was the file one. It reads its own limit when it starts, keeps 64 files
+back, and logs the result — `listening on …, accepting up to N connections`.
+On a host with the usual limit of 1024 that is 960: have the limit raised
+(`LimitNOFILE=` in the service's unit, below) before there are a thousand
+computers. Above the ceiling a new connection is
+refused with 503 and a line is logged once a minute; rooms already open keep
+working and `/health` keeps answering.
+
 Leave `REMOTE_SIGNAL_HOST` and `REMOTE_SIGNAL_PORT` unset on cPanel. Passenger
 assigns the app a port through its own `PORT` variable and expects the app to
 listen on exactly that; `server.js` checks `PORT` before `REMOTE_SIGNAL_PORT`
@@ -408,6 +426,11 @@ EnvironmentFile=/srv/aicountly-remote/signalling/.env
 ExecStart=/usr/bin/node src/server.js
 Restart=always
 RestartSec=5
+# Every connection is an open file, and every signed-in computer holds one.
+# systemd's default is 1024, which makes the relay's ceiling 960 connections;
+# with this it is the relay's own default of 20000. The line it logs at start
+# ("accepting up to N connections") says which applies.
+LimitNOFILE=65536
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

@@ -36,7 +36,8 @@ import type {
   SessionDetail,
   ShareMode,
 } from '../../types/remote'
-import type { PointerPosition as ControlPoint } from '../../services/webrtc/remoteControl'
+import { keyboardPlatformOf } from '../../services/webrtc/remoteControl'
+import type { KeyCombination, PointerPosition as ControlPoint } from '../../services/webrtc/remoteControl'
 
 /**
  * The live session, as a hook.
@@ -110,6 +111,16 @@ export function effectiveControlState(
   return recorded === 'GRANTED' || recorded === 'REQUESTED' ? 'NONE' : recorded
 }
 
+/**
+ * Whether the API's answer to reading the session means this person is not part of it — as opposed
+ * to something that may pass. The host declined (`JOIN_DENIED`), they were removed or left
+ * (`NOT_ADMITTED`), or it is not a session they may see at all (404). Any other refusal — a step-up
+ * verification asked for, a rate limit — says nothing about whether they are in the room.
+ */
+export function isRefusal(error: RemoteApiError): boolean {
+  return error.status === 404 || error.code === 'JOIN_DENIED' || error.code === 'NOT_ADMITTED'
+}
+
 export type ShareIntentState =
   | { phase: 'idle' }
   | { phase: 'consenting'; shareMode: ShareMode }
@@ -132,6 +143,10 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
   const [live, setLive] = useState<EngineSnapshot | null>(null)
   const [ended, setEnded] = useState(false)
 
+  // The API has said this person is not part of the session (any more): turned away at the door,
+  // removed, or the session is not one they may see. Nothing further is asked.
+  const [refused, setRefused] = useState(false)
+
   const engineRef = useRef<RemoteSessionEngine | null>(null)
   const sessionRef = useRef<SessionDetail | null>(null)
   const mountedRef = useRef(true)
@@ -139,6 +154,11 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
   sessionRef.current = session
 
   // --- Session record ------------------------------------------------------
+
+  // One read of the session at a time from the timer. On a slow connection a read could take longer
+  // than the gap between two, and they piled up: the answers arrived out of order, and each one
+  // behind the first was a request the server did for nothing.
+  const pollingRef = useRef(false)
 
   const reload = useCallback(
     async (signal?: AbortSignal) => {
@@ -150,6 +170,7 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
 
         setSession(detail)
         setError(null)
+        setRefused(false)
 
         // Whoever the server no longer admits — left, declined, closed when the session expired — stops receiving
         // anything from this browser, even if their own browser never left the room (RemoteSessionEngine).
@@ -170,6 +191,17 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
             ? err
             : new RemoteApiError('UNKNOWN', 'This session could not be loaded.', 0),
         )
+
+        // A definite no — the host declined, this person was removed, the session is not theirs to
+        // see — is the end of the room for them, and the reason is what they are shown. The session
+        // read earlier is dropped with it: kept, the page went on showing "Waiting for the host to
+        // admit you" for ever to somebody the host had already turned away, asking again every
+        // second and a half and being refused each time. A failure that may pass (offline, a 5xx)
+        // keeps what is on screen.
+        if (err instanceof RemoteApiError && isRefusal(err)) {
+          setSession(null)
+          setRefused(true)
+        }
       } finally {
         if (mountedRef.current) setLoading(false)
       }
@@ -204,12 +236,19 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
         ? SESSION_POLL_MS
         : SESSION_POLL_IDLE_MS
   useEffect(() => {
-    if (ended) return
+    if (ended || refused) return
 
-    const interval = setInterval(() => void reload(), pollMs)
+    const interval = setInterval(() => {
+      if (pollingRef.current) return
+
+      pollingRef.current = true
+      void reload().finally(() => {
+        pollingRef.current = false
+      })
+    }, pollMs)
 
     return () => clearInterval(interval)
-  }, [reload, pollMs, ended])
+  }, [reload, pollMs, ended, refused])
 
   // --- Remote control state (§18, §51) -------------------------------------
   //
@@ -229,6 +268,9 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
 
   // Who was controlling and who was waiting at the last control read, to notice when that changes.
   const controlSeenRef = useRef<string | null>(null)
+
+  // One control read at a time from the timer, for the reason the session read has (pollingRef).
+  const controlPollingRef = useRef(false)
 
   const refreshControl = useCallback(async () => {
     if (isGuestParticipant) return
@@ -285,7 +327,14 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     void refreshControl()
 
     const interval = setInterval(
-      () => void refreshControl(),
+      () => {
+        if (controlPollingRef.current) return
+
+        controlPollingRef.current = true
+        void refreshControl().finally(() => {
+          controlPollingRef.current = false
+        })
+      },
       controlOutstanding ? CONTROL_POLL_ACTIVE_MS : CONTROL_POLL_IDLE_MS,
     )
 
@@ -371,17 +420,29 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
 
   // --- Chat ----------------------------------------------------------------
 
+  // The history, once for the session. Messages after that arrive over the data channel. It used to
+  // depend on the session record itself, which is a new object on every poll — so the whole history
+  // was fetched again every few seconds for as long as the room was open.
+  const chatSessionUuid = session?.uuid ?? null
+  const chatEnabled = session?.capabilities.chat ?? false
+
   useEffect(() => {
-    if (!session || !session.capabilities.chat) return
+    if (!chatSessionUuid || !chatEnabled) return
 
     void fetchMessages(sessionUuid)
       .then((history) => {
-        if (mountedRef.current) setMessages(history)
+        // Kept, not replaced: a message that arrived while the history was on its way is not in it.
+        if (mountedRef.current) {
+          setMessages((current) => [
+            ...history,
+            ...current.filter((message) => !history.some((earlier) => earlier.uuid === message.uuid)),
+          ])
+        }
       })
       .catch(() => {
         /* chat history is not worth failing the room over */
       })
-  }, [session?.uuid, session?.capabilities.chat, sessionUuid, session])
+  }, [chatSessionUuid, chatEnabled, sessionUuid])
 
   const sendChat = useCallback(
     async (body: string) => {
@@ -465,6 +526,10 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
       }
 
       setShareIntent({ phase: 'idle' })
+      // What can be controlled depends on what is shared. Left to the next timed read, the control
+      // panel went on saying "Share your entire screen to allow control" for up to fifteen seconds
+      // after an entire screen had been shared.
+      void refreshControl()
       await reload()
     } catch (err) {
       // Cancelling the browser picker is not an error worth a red panel.
@@ -482,14 +547,15 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
             : new RemoteApiError('UNKNOWN', 'Screen sharing could not start.', 0),
       })
     }
-  }, [shareIntent, policy, sessionUuid, reload])
+  }, [shareIntent, policy, sessionUuid, reload, refreshControl])
 
   const cancelShare = useCallback(() => setShareIntent({ phase: 'idle' }), [])
 
   const stopShare = useCallback(async () => {
     await engineRef.current?.stopSharing('USER_STOPPED')
+    void refreshControl()
     await reload()
-  }, [reload])
+  }, [reload, refreshControl])
 
   // --- Microphone ----------------------------------------------------------
 
@@ -557,15 +623,29 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     await reload()
   }, [sessionUuid, reload])
 
-  const leave = useCallback(async () => {
-    const participantUuid = sessionRef.current?.me?.uuid ?? guestParticipantUuid
-    if (participantUuid) {
-      await leaveSession(sessionUuid, participantUuid).catch(() => undefined)
-    }
+  /**
+   * Leave. `closing` is for the page going away (`pagehide`): the capture and the connections are
+   * stopped first, because nothing after an `await` is certain to run then, and the API is told
+   * with a request that outlives the page.
+   */
+  const leave = useCallback(
+    async (closing = false) => {
+      const participantUuid = sessionRef.current?.me?.uuid ?? guestParticipantUuid
 
-    engineRef.current?.dispose()
-    engineRef.current = null
-  }, [sessionUuid, guestParticipantUuid])
+      if (closing) {
+        engineRef.current?.dispose()
+        engineRef.current = null
+      }
+
+      if (participantUuid) {
+        await leaveSession(sessionUuid, participantUuid, { keepalive: closing }).catch(() => undefined)
+      }
+
+      engineRef.current?.dispose()
+      engineRef.current = null
+    },
+    [sessionUuid, guestParticipantUuid],
+  )
 
   const pause = useCallback(async () => {
     await pauseSession(sessionUuid)
@@ -644,6 +724,19 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     engineRef.current?.setControlTarget(controllableHostUuid, myControlState)
   }, [controllableHostUuid, myControlState, engineLive])
 
+  // Which keyboard the controlled computer has — a Mac's or a PC's — from what
+  // it registered as. It decides which keys the room offers and whether ⌘ and
+  // Ctrl change places on the way (remoteControl.ts, `keyForPlatform`). Null
+  // when the session does not say, and then nothing is assumed.
+  const controlledOperatingSystem =
+    session?.participants.find((participant) => participant.uuid === (controllableHostUuid ?? hostPeerUuid))
+      ?.operatingSystem ?? null
+  const controlledPlatform = keyboardPlatformOf(controlledOperatingSystem)
+
+  useEffect(() => {
+    engineRef.current?.setControlledPlatform(controlledPlatform)
+  }, [controlledPlatform, engineLive])
+
   // Input flows only while the server says GRANTED *and* the channel is open.
   // Anything else — denied, revoked, never asked, the peer gone — stops it,
   // locally and without waiting for a round trip.
@@ -675,8 +768,6 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
         engineRef.current?.sendControlHint()
 
         // And so does this page: each participant's own control state lives on the session record.
-        void reload()
-
         await reload()
       } catch (err) {
         if (mountedRef.current) {
@@ -780,7 +871,24 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     engineRef.current?.selectControlMonitor(monitorId)
   }, [])
 
+  /** Send a key combination the keyboard cannot hand over — Ctrl+Alt+Del, the Windows key and the rest. */
+  const sendControlCombination = useCallback(
+    (name: KeyCombination) => engineRef.current?.sendControlCombination(name) ?? false,
+    [],
+  )
+
   const dismissControlNotice = useCallback(() => setControlNotice(null), [])
+
+  /**
+   * Take back a request for control that has not been answered. The person asked is no longer
+   * asked: the question leaves their screen, and nothing is granted to somebody who has stopped
+   * waiting for it.
+   */
+  const cancelControlRequest = useCallback(() => {
+    if (!myParticipantUuid) return Promise.resolve()
+
+    return runControl(() => revokeControl(sessionUuid, myParticipantUuid))
+  }, [runControl, sessionUuid, myParticipantUuid])
 
   /** Link one of my own computers as a control companion, and tell it to look now. */
   const enableCompanion = useCallback(
@@ -835,8 +943,12 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
     controlPaused: live?.controlPaused ?? null,
     /** A Windows administrator prompt (the Secure Desktop) is open on the controlled machine. */
     secureDesktop: live?.secureDesktop ?? null,
+    /** The API said this person is not part of the session: `error` is why, and there is no session to show. */
+    refused,
     /** This participant's control state, from the freshest read (effectiveControlState). */
     myControlState,
+    /** Which keyboard the controlled computer has ("mac", "pc"), or null when the session does not say. */
+    controlledPlatform,
     /** The controlled computer's displays, and the one on screen. More than one can be switched between. */
     monitors: live?.monitors ?? [],
     activeMonitorId: live?.activeMonitorId ?? null,
@@ -868,6 +980,7 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
       allowControl,
       refuseControl,
       stopControl,
+      cancelControlRequest,
       dismissControlNotice,
       enableCompanion,
       disableCompanion,
@@ -878,6 +991,7 @@ export function useRemoteSession({ sessionUuid, policy, guestParticipantUuid }: 
       sendControlClipboard,
       releaseControlKeys,
       selectControlMonitor,
+      sendControlCombination,
       reconnect,
       checkRelay,
     },

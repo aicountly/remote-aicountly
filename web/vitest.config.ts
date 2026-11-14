@@ -12,6 +12,12 @@ import react from '@vitejs/plugin-react'
  */
 export default defineConfig({
   plugins: [react()],
+  // One test reads the server's list of event names (backend/app/Domain/Audit/EventType.php) to
+  // check that the web has wording for each. That file is outside this folder, which the test
+  // server refuses unless told otherwise. Tests only: the app build does not use this file.
+  server: {
+    fs: { allow: ['..'] },
+  },
   test: {
     environment: 'jsdom',
     globals: true,

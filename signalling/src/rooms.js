@@ -73,6 +73,26 @@ export class Rooms {
     return this.members(room).filter((m) => m.participant.participantUuid !== exceptParticipantUuid);
   }
 
+  /**
+   * Everybody in the room but one, without copying the member list — for a
+   * broadcast, which is made for every message relayed to a room.
+   *
+   * @returns {Generator<{socket: import('ws').WebSocket, participant: object}>}
+   */
+  *others(room, exceptParticipantUuid) {
+    const members = this.rooms.get(room);
+    if (!members) return;
+
+    for (const [participantUuid, member] of members) {
+      if (participantUuid !== exceptParticipantUuid) yield member;
+    }
+  }
+
+  /** How many are in the room. */
+  size(room) {
+    return this.rooms.get(room)?.size ?? 0;
+  }
+
   get roomCount() {
     return this.rooms.size;
   }

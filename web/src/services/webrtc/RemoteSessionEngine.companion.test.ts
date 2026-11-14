@@ -186,6 +186,7 @@ type Snapshot = {
   connection: string
   remoteStream: MediaStream | null
   controlPaused: string | null
+  inputRefused: string | null
   secureDesktop: { active: boolean; reachable: boolean } | null
   peers: Array<{ participantUuid: string }>
 }
@@ -422,6 +423,174 @@ describe('control companions in the engine', () => {
     // The prompt closes.
     deliver(envelope({ type: 'secure_desktop', active: false, reachable: false }))
     expect(latest().secureDesktop).toBeNull()
+
+    engine.dispose()
+  })
+
+  /**
+   * Control "granted" at both ends and nothing moving: the computer says why, and the engine holds
+   * the reason for as long as the computer goes on saying it.
+   */
+  it('shows why the computer refused something, and takes it down once it stops saying so', async () => {
+    const { engine, signal, latest } = await startEngine('b-viewer')
+
+    await signal({ type: 'joined', peers: [companionPeer] })
+    engine.setControlTarget('c-companion', 'GRANTED')
+    await flush()
+
+    const channel = FakePeerConnection.instances[0].channels[0]
+    channel.open()
+    expect(engine.startControlling('c-companion')).toBe(true)
+
+    const deliver = (frame: string) => channel.onmessage?.({ data: frame })
+
+    // Not from the computer being controlled: not believed.
+    deliver(envelope({ type: 'input_refused', reason: 'elevated_window' }, 'someone-else'))
+    expect(latest().inputRefused).toBeNull()
+
+    deliver(envelope({ type: 'input_refused', reason: 'elevated_window' }))
+    expect(latest().inputRefused).toBe('elevated_window')
+
+    // Said again three seconds on, as the agent does while it goes on: still up, not flickering.
+    vi.advanceTimersByTime(3_000)
+    deliver(envelope({ type: 'input_refused', reason: 'elevated_window' }))
+    vi.advanceTimersByTime(5_000)
+    expect(latest().inputRefused).toBe('elevated_window')
+
+    // And gone a little after it last said so.
+    vi.advanceTimersByTime(2_000)
+    expect(latest().inputRefused).toBeNull()
+
+    // A reason this page has not heard of is still a refusal.
+    deliver(envelope({ type: 'input_refused', reason: 'something_new' }))
+    expect(latest().inputRefused).toBe('refused')
+
+    // Stopping control takes it down at once.
+    engine.stopControlling()
+    expect(latest().inputRefused).toBeNull()
+
+    engine.dispose()
+  })
+
+  /**
+   * Ctrl+Alt+Del, as the room's menu sends it: the keys down in order, each carrying the modifiers
+   * held by then, and up again in reverse — so nothing is left held on the other computer.
+   */
+  it('sends a key combination as whole key presses and releases, leaving nothing held', async () => {
+    const { engine, signal } = await startEngine('b-viewer')
+
+    await signal({ type: 'joined', peers: [companionPeer] })
+    engine.setControlTarget('c-companion', 'GRANTED')
+    await flush()
+
+    const channel = FakePeerConnection.instances[0].channels[0]
+    channel.open()
+    expect(engine.startControlling('c-companion')).toBe(true)
+
+    const before = channel.sent.length
+    expect(engine.sendControlCombination('ctrl_alt_del')).toBe(true)
+
+    const keys = channel.sent
+      .slice(before)
+      .map((frame) => JSON.parse(new TextDecoder().decode(frame as ArrayBuffer)).m as {
+        type: string
+        key: { k: string }
+        pressed: boolean
+        modifiers: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean }
+      })
+
+    expect(keys.map((m) => `${m.pressed ? 'down' : 'up'}:${m.key.k}`)).toEqual([
+      'down:ctrl',
+      'down:alt',
+      'down:delete',
+      'up:delete',
+      'up:alt',
+      'up:ctrl',
+    ])
+    // What the computer reads Ctrl+Alt+Del from: Delete going down with Ctrl and Alt, and nothing else.
+    expect(keys[2].modifiers).toEqual({ ctrl: true, alt: true, shift: false, meta: false })
+    expect(keys.at(-1)?.modifiers).toEqual({ ctrl: false, alt: false, shift: false, meta: false })
+
+    // Paused: nothing is sent, and it says so.
+    channel.onmessage?.({ data: envelope({ type: 'control_paused', reason: 'local_input' }) })
+    expect(engine.sendControlCombination('start_menu')).toBe(false)
+
+    engine.dispose()
+  })
+
+  /**
+   * ⌘C on a Mac and Ctrl+C on a PC are the same act. Sent as typed, a PC helper's Ctrl+C reached a
+   * Mac as a Control chord that copies nothing, and a Mac helper's ⌘V reached Windows as the Windows
+   * key and V. The helper's key for these goes as the controlled computer's.
+   */
+  it('sends Ctrl as ⌘ to a Mac from a PC keyboard, and leaves a PC and an unknown computer alone', async () => {
+    const { engine, signal } = await startEngine('b-viewer')
+
+    await signal({ type: 'joined', peers: [companionPeer] })
+    engine.setControlTarget('c-companion', 'GRANTED')
+    await flush()
+
+    const channel = FakePeerConnection.instances[0].channels[0]
+    channel.open()
+    expect(engine.startControlling('c-companion')).toBe(true)
+
+    type Sent = { type: string; key: { k: string; c?: string }; pressed: boolean; modifiers: Record<string, boolean> }
+    const sentSince = (from: number) =>
+      channel.sent.slice(from).map((frame) => JSON.parse(new TextDecoder().decode(frame as ArrayBuffer)).m as Sent)
+    const press = (key: string, pressed: boolean, modifiers: Partial<KeyboardEventInit> = {}) =>
+      engine.sendControlKey(new KeyboardEvent(pressed ? 'keydown' : 'keyup', { key, ...modifiers }), pressed)
+
+    const chord = () => {
+      const from = channel.sent.length
+      press('Control', true, { ctrlKey: true })
+      press('c', true, { ctrlKey: true })
+      press('c', false, { ctrlKey: true })
+      press('Control', false)
+
+      return sentSince(from)
+    }
+
+    // This browser is on a PC keyboard (jsdom is). The computer has not said what it is: as typed.
+    expect(chord().map((m) => `${m.pressed ? 'down' : 'up'}:${m.key.k}`)).toEqual(['down:ctrl', 'down:character', 'up:character', 'up:ctrl'])
+
+    // A Mac: Ctrl goes as ⌘, the key and the modifier state both.
+    engine.setControlledPlatform('mac')
+    const toMac = chord()
+    expect(toMac.map((m) => `${m.pressed ? 'down' : 'up'}:${m.key.k}`)).toEqual(['down:meta', 'down:character', 'up:character', 'up:meta'])
+    expect(toMac[1].key.c).toBe('c')
+    expect(toMac[1].modifiers).toEqual({ ctrl: false, alt: false, shift: false, meta: true })
+
+    // A Windows PC, from a PC keyboard: nothing to change.
+    engine.setControlledPlatform('pc')
+    const toPc = chord()
+    expect(toPc.map((m) => m.key.k)).toEqual(['ctrl', 'character', 'character', 'ctrl'])
+    expect(toPc[1].modifiers).toEqual({ ctrl: true, alt: false, shift: false, meta: false })
+
+    // Told which keyboard it is while a key is held: that key is let go as it was sent, not left down.
+    press('Control', true, { ctrlKey: true })
+    const from = channel.sent.length
+    engine.setControlledPlatform('mac')
+    expect(sentSince(from).map((m) => `${m.pressed ? 'down' : 'up'}:${m.key.k}`)).toEqual(['up:ctrl'])
+
+    // The menu's combinations are already in the controlled computer's own keys, and are not changed.
+    const menuFrom = channel.sent.length
+    expect(engine.sendControlCombination('interrupt')).toBe(true)
+    expect(sentSince(menuFrom).map((m) => `${m.pressed ? 'down' : 'up'}:${m.key.k}`)).toEqual([
+      'down:ctrl',
+      'down:character',
+      'up:character',
+      'up:ctrl',
+    ])
+
+    engine.dispose()
+  })
+
+  it('sends no combination when nobody is being controlled', async () => {
+    const { engine, signal } = await startEngine('b-viewer')
+
+    await signal({ type: 'joined', peers: [companionPeer] })
+
+    expect(engine.sendControlCombination('ctrl_alt_del')).toBe(false)
 
     engine.dispose()
   })

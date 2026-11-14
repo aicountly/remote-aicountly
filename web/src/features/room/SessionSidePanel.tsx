@@ -176,7 +176,10 @@ function RemoteControlPanel({
       phase={control.phase}
       control={control.control}
       host={control.host}
-      pending={control.control?.pendingRequests ?? []}
+      // A request is somebody else's to answer, never the asker's own.
+      pending={(control.control?.pendingRequests ?? []).filter(
+        (request) => request.participantUuid !== session.me?.uuid,
+      )}
       isHost={control.isHost}
       hostParticipant={hostParticipant}
       onRequest={control.onRequest}
@@ -373,8 +376,12 @@ function DetailsPanel({ session }: { session: SessionDetail }) {
  * Every claim here is one the product actually delivers. There is no
  * "military-grade" anything, and where a guarantee is weaker than it looks —
  * an unverified sharing surface — it says so.
+ *
+ * It is said to whoever is reading it. Every line used to be addressed to the
+ * person sharing — "You chose what to share", "your screen" — and the helper
+ * looking at somebody else's screen read the same words.
  */
-function SecurityPanel({
+export function SecurityPanel({
   session,
   live,
   onCheckRelay,
@@ -384,26 +391,39 @@ function SecurityPanel({
   onCheckRelay?: () => Promise<RelayProbeResult | null>
 }) {
   const surfaceVerified = session.actualDisplaySurface !== null && session.actualDisplaySurface !== 'unknown'
+  // Whose screen it is: the one sharing now, or the one this session is for.
+  const sharing = session.me?.isSharing === true || session.me?.role === 'SHARER'
+  const personal = session.companyId === null
 
   return (
     <ul className="security-list">
       <SecurityItem
         good
         title="User-approved screen sharing"
-        body="You chose what to share in your browser’s own picker, and you can stop at any moment."
+        body={
+          sharing
+            ? 'You chose what to share, and you can stop at any moment.'
+            : 'The person sharing chose what to show, and can stop at any moment. You see only what they chose.'
+        }
       />
       <SecurityItem
         good
         title="Every viewer is admitted by the host"
-        body="Nobody receives your screen until you allow them into the session."
+        body={
+          session.isHost
+            ? sharing
+              ? 'Nobody receives your screen until you allow them into the session.'
+              : 'Nobody joins this session until you allow them in.'
+            : 'Nobody joins this session until the host allows them in.'
+        }
       />
       <SecurityItem
-        good={session.companyId !== null}
-        title="Company policy protected"
+        good={!personal}
+        title={personal ? 'Account limits apply' : 'Company policy protected'}
         body={
-          session.companyId !== null
-            ? `${session.companyName ?? 'Your organisation'} controls which sharing options are available in this session.`
-            : 'The sharing options here are the ones your AICOUNTLY account allows.'
+          personal
+            ? 'The sharing options here are the ones the host’s AICOUNTLY account allows.'
+            : `${session.companyName ?? 'The organisation'} controls which sharing options are available in this session.`
         }
       />
       <SecurityItem
@@ -411,14 +431,22 @@ function SecurityPanel({
         title={surfaceVerified ? 'Sharing surface verified' : 'Sharing surface not reported'}
         body={
           surfaceVerified
-            ? `Your browser confirmed you are sharing: ${describeSurface(session.actualDisplaySurface)}.`
-            : 'This browser does not report which surface was picked, so it could not be verified. Your organisation’s permitted sharing modes still apply.'
+            ? sharing
+              ? `Your browser confirmed you are sharing: ${describeSurface(session.actualDisplaySurface)}.`
+              : `The sharer’s browser confirmed what is being shared: ${describeSurface(session.actualDisplaySurface)}.`
+            : sharing
+              ? `This browser does not report which surface was picked, so it could not be verified. ${
+                  personal ? 'The sharing modes your account permits' : 'Your organisation’s permitted sharing modes'
+                } still apply.`
+              : 'What is being shared has not been reported, so it could not be verified.'
         }
       />
       <SecurityItem
         good
         title="Session activity is logged"
-        body="Who joined, what was shared and when it ended are recorded. The contents of your screen are not."
+        body={`Who joined, what was shared and when it ended are recorded. The contents of ${
+          sharing ? 'your screen' : 'the screen'
+        } are not.`}
       />
       <ConnectionPathItem live={live} />
       {onCheckRelay && live?.relayAvailable !== false ? <RelayCheck onCheck={onCheckRelay} /> : null}

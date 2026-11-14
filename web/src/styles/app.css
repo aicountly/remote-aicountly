@@ -450,11 +450,17 @@
 
 .shell__nav-footnote {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-2);
   padding: 0 var(--space-3);
   color: var(--text-muted);
   font-size: var(--text-xs);
+}
+
+/* The icon keeps its size when the sentence wraps; it was squeezed to a dot. */
+.shell__nav-footnote svg {
+  flex: none;
+  margin-top: 2px;
 }
 
 .shell__nav-foot {
@@ -534,6 +540,11 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
   gap: var(--space-4);
+}
+
+/* Where this browser cannot share a screen (a phone), joining is the first card. */
+.dashboard__actions--join-first .action-card--first {
+  order: -1;
 }
 
 .action-card {
@@ -812,6 +823,11 @@
   color: var(--text-muted);
 }
 
+/* Under the ways of sharing: what the one chosen means for control. */
+.share-control-hint {
+  margin-top: var(--space-3);
+}
+
 .checkbox-row {
   display: flex;
   align-items: flex-start;
@@ -990,7 +1006,7 @@
 .share-option__badge {
   padding: 0.05rem 0.45rem;
   border-radius: var(--radius-pill);
-  background: var(--aicountly-green);
+  background: var(--aicountly-green-darker);
   color: #fff;
   font-size: var(--text-xs);
   font-weight: 600;
@@ -1077,8 +1093,10 @@
   transition: transform var(--duration) var(--ease);
 }
 
+/* The white thumb has to stand out from the track it sits on (3:1 for a
+   control's parts); on the brand green it was 2.9:1. */
 .toggle__input:checked ~ .toggle__track {
-  background: var(--aicountly-green);
+  background: var(--aicountly-green-darker);
 }
 
 .toggle__input:checked ~ .toggle__track .toggle__thumb {
@@ -1514,10 +1532,21 @@
 }
 
 .modal__footer {
+  /* The buttons of a dialog, apart from each other and wrapping on a phone:
+     they stood edge to edge, two targets with nothing between them. */
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-3);
   padding: var(--space-4) var(--space-5);
   border-top: 1px solid var(--border);
   background: var(--bg-inset);
   border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+/* One row holding everything (Cancel on the left, the rest on the right) keeps the full width. */
+.modal__footer > .row {
+  flex: 1;
 }
 
 /* --- Guest page ----------------------------------------------------------- */
@@ -1652,12 +1681,20 @@
     left: 0;
     z-index: 25;
     transform: translateX(-100%);
-    transition: transform var(--duration) var(--ease);
-    box-shadow: var(--shadow-md);
+    /* Off screen is not enough: its seven links were still in the keyboard's
+       path and read out by a screen reader, on a phone, with the menu shut.
+       Hidden once it has slid away; shown before it slides in. */
+    visibility: hidden;
+    transition:
+      transform var(--duration) var(--ease),
+      visibility 0s linear var(--duration);
   }
 
   .shell__nav--open {
     transform: translateX(0);
+    visibility: visible;
+    box-shadow: var(--shadow-md);
+    transition: transform var(--duration) var(--ease);
   }
 
   .shell__nav--open ~ .shell__nav-scrim {
@@ -1746,6 +1783,8 @@
 .bullets {
   margin: var(--space-3) 0 0;
   padding-left: var(--space-5);
+  /* The reset takes the marker off every list; this one is called bullets and had none. */
+  list-style: disc;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);

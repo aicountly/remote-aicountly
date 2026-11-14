@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft,
-  Circle,
+  ArrowUpRight,
   Highlighter,
   Info,
   MessageSquare,
@@ -56,6 +56,15 @@ import { getGuestToken } from '../../services/api/client'
  */
 const DEFAULT_FILE_MAX_BYTES = 25 * 1024 * 1024
 
+/**
+ * Whether the side panel sits under the picture instead of beside it (a phone, a narrow window:
+ * the same width the stylesheet stacks at). There the People panel, open by default, took nearly
+ * half the screen from the picture somebody came to look at; it starts closed.
+ */
+function stacksUnderPicture(): boolean {
+  return typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 900px)').matches
+}
+
 export default function SessionRoomPage() {
   const { uuid = '' } = useParams()
   const navigate = useNavigate()
@@ -78,6 +87,7 @@ export default function SessionRoomPage() {
     isControlling,
     controlPaused,
     myControlState,
+    controlledPlatform,
     monitors,
     activeMonitorId,
     actions,
@@ -89,7 +99,7 @@ export default function SessionRoomPage() {
 
   const [panel, setPanel] = useState<
     'participants' | 'chat' | 'files' | 'control' | 'invite' | 'details' | 'security' | null
-  >('participants')
+  >(() => (stacksUnderPicture() ? null : 'participants'))
   const [annotationTool, setAnnotationTool] = useState<AnnotationTool>('none')
   const [pointerOn, setPointerOn] = useState(false)
   const [elapsed, setElapsed] = useState(0)
@@ -125,12 +135,65 @@ export default function SessionRoomPage() {
 
   // Leaving the page must not leave a capture running. `pagehide` fires in
   // cases `beforeunload` does not, including a mobile tab being discarded.
+  // `true`: the page is going, so the capture stops first and the API is told
+  // with a request that outlives the page (useRemoteSession `leave`).
   useEffect(() => {
-    const onHide = () => void actions.leave()
+    const onHide = () => void actions.leave(true)
     window.addEventListener('pagehide', onHide)
 
     return () => window.removeEventListener('pagehide', onHide)
   }, [actions])
+
+  // --- Things waiting on this person ---------------------------------------
+  //
+  // Somebody asking to control this person's computer, or to join their
+  // session, is a decision waiting on them — and they are very often not
+  // looking at this tab: they shared their screen and went back to whatever
+  // they need help with. A badge with a "1" on a toolbar button was the whole
+  // of the notification. The control panel now opens by itself with the
+  // question in it, the room says it in a strip above the picture, and the
+  // tab's title says it for as long as it is waiting, which is what shows in
+  // the tab strip and the taskbar when the tab is not in front.
+
+  const answersControl = !isGuest && (session?.isHost ?? false) && can(PERMISSIONS.CONTROL_ACCEPT)
+  // Never this person's own request: whoever connects to a computer with nobody at it owns that
+  // session, and asking again after stopping would otherwise be shown to them as a question to answer.
+  const askingControl = answersControl
+    ? (control?.pendingRequests ?? []).filter((request) => request.participantUuid !== session?.me?.uuid)
+    : []
+  const askingControlKey = askingControl.map((request) => request.participantUuid).join(',')
+  const askingToJoin = session?.isHost ? (session.waiting ?? []) : []
+
+  useEffect(() => {
+    if (askingControlKey) setPanel('control')
+  }, [askingControlKey])
+
+  const waitingTitle =
+    askingControl.length > 0
+      ? `${askingControl[0].displayName} is asking to control this computer`
+      : askingToJoin.length > 0
+        ? `${askingToJoin[0].displayName} wants to join`
+        : null
+
+  useEffect(() => {
+    if (!waitingTitle) return
+
+    const original = document.title
+    document.title = `● ${waitingTitle} — AICOUNTLY Remote`
+
+    return () => {
+      document.title = original
+    }
+  }, [waitingTitle])
+
+  // How long the session has left, once that is little. A session has a time limit, and at the
+  // limit it simply ended — "Remote session ended" in the middle of whatever was being done, with
+  // no warning to either person.
+  const minutesLeft = useMinutesLeft(session?.expiresAt ?? null)
+
+  // "End" pressed by somebody who did not start the session ends it for everybody in it, so it is
+  // asked twice.
+  const [confirmingEnd, setConfirmingEnd] = useState(false)
 
   if (loading) {
     return (
@@ -165,6 +228,10 @@ export default function SessionRoomPage() {
 
   const me = session.me
   const awaitingApproval = me?.status === 'REQUESTED'
+  // Whoever is at the computer in this session, for sentences about them.
+  const hostName =
+    session.participants.find((participant) => participant.isHost && participant.uuid !== me?.uuid)?.displayName ??
+    'the person at the computer'
 
   // Everything the toolbar can offer, gated once here rather than per button.
   const isSharing = live?.isSharing ?? false
@@ -218,7 +285,8 @@ export default function SessionRoomPage() {
   const controlAllowedByPolicy = control?.allowRemoteControl === true
   const canRequestControl = !isGuest && can(PERMISSIONS.CONTROL_REQUEST)
   const canAnswerControl = !isGuest && session.isHost && can(PERMISSIONS.CONTROL_ACCEPT)
-  const pendingControl = control?.pendingRequests.length ?? 0
+  // Requests this person can answer. Their own is not one: it used to put a "1" on their own button.
+  const pendingControl = askingControl.length
 
   // The sharer may enable control from their own computer when nothing else in
   // the session can be controlled (a browser shares, not an agent).
@@ -333,6 +401,7 @@ export default function SessionRoomPage() {
       ? (control?.pendingRequests ?? []).map((request) => `control-request:${request.participantUuid}`)
       : []),
     ...(myControlState === 'DENIED' ? ['control-declined'] : []),
+    ...(minutesLeft !== null ? ['ending-soon'] : []),
     ...(shareIntent.phase !== 'idle' ? [`share:${shareIntent.phase}`] : []),
     ...(session.status === 'PAUSED' ? ['paused'] : []),
     ...(controlNotice ? [`notice:${controlNotice}`] : []),
@@ -396,20 +465,21 @@ export default function SessionRoomPage() {
             )
           ) : null}
 
-          {isGuest ? (
-            // A guest cannot end somebody else's session — the API refuses a guest token there — so the
-            // button that always failed for them is the one that works: leaving.
+          {isGuest || awaitingApproval ? (
+            // A guest cannot end somebody else's session — the API refuses a guest token there — and
+            // neither can somebody who has not been let in yet: for both, the button that always
+            // failed is the one that works, which is leaving.
             <button
               type="button"
               className="btn btn--danger btn--sm"
               onClick={() => {
                 void actions.leave()
-                navigate('/')
+                navigate(isGuest ? '/' : '/sessions')
               }}
             >
               Leave
             </button>
-          ) : (
+          ) : session.isHost ? (
             <button
               type="button"
               className="btn btn--danger btn--sm"
@@ -419,6 +489,40 @@ export default function SessionRoomPage() {
             >
               End
             </button>
+          ) : confirmingEnd ? (
+            // Somebody who joined: ending ends it for the person they are helping too, so it is asked.
+            <>
+              <span className="room__confirm">End it for everyone?</span>
+              <button
+                type="button"
+                className="btn btn--danger btn--sm"
+                onClick={() => {
+                  setConfirmingEnd(false)
+                  void attempt(actions.end, 'The session could not be ended. Try again.')
+                }}
+              >
+                End session
+              </button>
+              <button type="button" className="btn btn--ghost btn--sm room__ghost" onClick={() => setConfirmingEnd(false)}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="btn btn--secondary btn--sm"
+                onClick={() => {
+                  void actions.leave()
+                  navigate('/sessions')
+                }}
+              >
+                Leave
+              </button>
+              <button type="button" className="btn btn--danger btn--sm" onClick={() => setConfirmingEnd(true)}>
+                End
+              </button>
+            </>
           )}
         </div>
       </header>
@@ -438,10 +542,90 @@ export default function SessionRoomPage() {
         </div>
       ) : null}
 
+      {/* The time limit, while there is still time to say goodbye or start another. */}
+      {minutesLeft !== null ? (
+        <div className="room__notice room__notice--ending" role="status">
+          This session reaches its time limit in {minutesLeft <= 1 ? 'under a minute' : `${minutesLeft} minutes`} and ends
+          then. To carry on, start a new session.
+        </div>
+      ) : null}
+
+      {/* Somebody is asking to control this person's computer. The answer is given in the Control
+          panel, which has opened; this is here so it cannot be missed, and for when it was closed. */}
+      {askingControl.length > 0 ? (
+        <div className="room__notice room__notice--ask" role="alert">
+          <span>
+            <strong>{askingControl[0].displayName}</strong> is asking to control this computer.
+            {askingControl.length > 1 ? ` ${askingControl.length - 1} more waiting.` : ''}
+          </span>
+          {panel !== 'control' ? (
+            <button type="button" className="btn btn--secondary btn--sm" onClick={() => setPanel('control')}>
+              Answer
+            </button>
+          ) : (
+            <span>Answer in the Control panel.</span>
+          )}
+        </div>
+      ) : null}
+
+      {/* This person asked for control and is waiting. It used to be said only inside a side panel:
+          with the panel closed there was a "1" on their own Control button and nothing else, no way to
+          take the request back, and a "no" from the other end was silent. */}
+      {!isControlling && myControlState === 'REQUESTED' ? (
+        <div className="room__notice room__notice--ask" role="status">
+          <span>
+            Waiting for <strong>{hostName}</strong> to answer your request to control their computer. Nothing is sent
+            until they do.
+          </span>
+          <button
+            type="button"
+            className="btn btn--secondary btn--sm"
+            onClick={() => void actions.cancelControlRequest()}
+            disabled={controlBusy}
+          >
+            Cancel request
+          </button>
+        </div>
+      ) : null}
+
+      {myControlState === 'DENIED' && canRequestControl && hasControllableHost ? (
+        <div className="room__notice room__notice--ask" role="status">
+          <span>
+            <strong>{hostName}</strong> said not now to your request to control their computer.
+          </span>
+          <button
+            type="button"
+            className="btn btn--secondary btn--sm"
+            onClick={() => void actions.askForControl()}
+            disabled={controlBusy}
+          >
+            Ask again
+          </button>
+        </div>
+      ) : null}
+
+      {/* Why control stopped, or why something about it could not be done: above the picture, where
+          the person is looking. It was a grey line under the toolbar. */}
+      {controlNotice ? (
+        <div className="room__notice room__notice--control" role="status">
+          <span>{controlNotice}</span>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm room__ghost"
+            onClick={actions.dismissControlNotice}
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
+
       {/* The host's approval queue (§71). Nothing is transmitted until this is
           answered — the server will not issue a signalling token before it. */}
       {session.isHost && waiting.length > 0 ? (
-        <div className="approval-queue" role="alertdialog" aria-label="Someone wants to join">
+        // `alert`, so a screen reader says it when it appears. It was an `alertdialog`, which
+        // announces only when focus is moved into it — and focus is not moved: the person may be
+        // in the middle of typing a chat message.
+        <div className="approval-queue" role="alert" aria-label="Someone wants to join">
           {waiting.map((participant) => (
             <div key={participant.uuid} className="approval-queue__item">
               <div>
@@ -497,6 +681,8 @@ export default function SessionRoomPage() {
           onControlScroll={actions.sendControlScroll}
           onControlKey={actions.sendControlKey}
           onControlClipboard={actions.sendControlClipboard}
+          onControlCombination={actions.sendControlCombination}
+          controlledPlatform={controlledPlatform}
           onControlRelease={actions.releaseControlKeys}
           monitors={monitors}
           activeMonitorId={activeMonitorId}
@@ -604,7 +790,7 @@ export default function SessionRoomPage() {
                 onClick={() => setAnnotationTool((tool) => (tool === 'pen' ? 'none' : 'pen'))}
               />
               <ToolbarButton
-                icon={<Circle size={18} />}
+                icon={<ArrowUpRight size={18} />}
                 label="Arrow"
                 active={annotationTool === 'arrow'}
                 onClick={() => setAnnotationTool((tool) => (tool === 'arrow' ? 'none' : 'arrow'))}
@@ -718,19 +904,6 @@ export default function SessionRoomPage() {
         </div>
       ) : null}
 
-      {controlNotice ? (
-        <div className="room__notice room__notice--control" role="status">
-          <span>{controlNotice}</span>
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm room__ghost"
-            onClick={actions.dismissControlNotice}
-          >
-            Dismiss
-          </button>
-        </div>
-      ) : null}
-
       {shareIntent.phase === 'error' ? (
         <div className="room__error-toast" role="alert">
           <RestrictionNotice
@@ -754,6 +927,39 @@ export default function SessionRoomPage() {
       ) : null}
     </div>
   )
+}
+
+/**
+ * Minutes until the session's time limit, once there are five or fewer; null before that, and for a
+ * session with no limit. Rounded up, so "1 minute" is never shown with ninety seconds to go.
+ */
+const ENDING_SOON_MINUTES = 5
+
+export function minutesUntil(expiresAt: string | null, now: number): number | null {
+  if (!expiresAt) return null
+
+  const expiry = Date.parse(expiresAt)
+  if (Number.isNaN(expiry)) return null
+
+  const minutes = Math.ceil((expiry - now) / 60_000)
+
+  return minutes <= ENDING_SOON_MINUTES ? Math.max(0, minutes) : null
+}
+
+function useMinutesLeft(expiresAt: string | null): number | null {
+  const [minutes, setMinutes] = useState<number | null>(() => minutesUntil(expiresAt, Date.now()))
+
+  useEffect(() => {
+    const tick = () => setMinutes(minutesUntil(expiresAt, Date.now()))
+
+    tick()
+    // Often enough that the warning appears within a few seconds of becoming true.
+    const timer = setInterval(tick, 15_000)
+
+    return () => clearInterval(timer)
+  }, [expiresAt])
+
+  return minutes
 }
 
 function ToolbarButton({

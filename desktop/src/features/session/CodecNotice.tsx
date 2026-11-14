@@ -72,11 +72,11 @@ function describe(codec: CodecView): { what: string; fix: Fix } | null {
       return null
     case 'disabled':
       return {
-        what: 'The video codec this computer’s screen is encoded with is switched off.',
+        what: 'The video codec that sends this computer’s screen is switched off.',
         fix: 'turn_on',
       }
     case 'not_installed':
-      return { what: 'The video codec this computer’s screen is encoded with is not on this computer.', fix: 'download' }
+      return { what: 'The video codec that sends this computer’s screen is not on this computer yet.', fix: 'download' }
     case 'downloading':
       return {
         what: 'The video codec is still being downloaded from Cisco. The picture starts as soon as it is ready.',

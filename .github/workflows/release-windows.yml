@@ -417,6 +417,12 @@ jobs:
           prerelease: ${{ inputs.channel == 'beta' }}
           draft: false
           files: desktop/release/*
+          # Added to what is there, not written over it. Windows and macOS
+          # built from one commit share a release, and whichever ran second
+          # used to replace the other's notes: the Mac's notes took the place
+          # of "This build is NOT code-signed", on a release that still
+          # carried the unsigned Windows installer.
+          append_body: true
           body: |
             AICOUNTLY Remote for Windows ${{ inputs.version }}, build ${{ steps.stamp.outputs.build }} (${{ inputs.channel }}).
 

@@ -206,9 +206,20 @@ which is where the signing secrets live and where required reviewers are
 configured. A job that cannot reach that environment cannot sign — the
 protection is GitHub's, not a check inside a script that somebody could edit.
 
-There is **no branch by which an unsigned artifact becomes a GitHub release**:
-the publish step is `if: inputs.channel != 'sandbox'`, and the sandbox channel
+An unsigned artifact becomes a GitHub release in **one way only, and by name**:
+the `allow_unsigned` input, added for the time before a signing identity
+exists. A build made with it says so in three places — the release notes
+("This build is NOT code-signed"), an `UNSIGNED.txt` among the assets, and
+`signed: false` in the manifest, which is what stops the app offering it as an
+in-app update. Every build published so far was made this way. Without that
+input the publish step is `if: inputs.channel != 'sandbox'`, the build is
+signed in the protected environment or the job fails, and the sandbox channel
 ships a file next to the installer saying what it is.
+
+Windows and macOS built from one commit share a release, and each workflow
+**adds** its notes to it (`append_body`) rather than replacing the other's —
+the release of build `202611132211` shows what happened before that: the Mac's
+notes took the place of the Windows warning.
 
 It touches neither cPanel deploy workflow. A desktop release does not go near
 the web deployment.

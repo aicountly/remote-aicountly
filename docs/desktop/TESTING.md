@@ -6,29 +6,30 @@ what is not covered at all.
 ## The numbers
 
 ```bash
-cd desktop    && cargo test --workspace   # 432 — protocol, gate, identity, state, session, service, the installer, the manifest
-cd desktop    && npm test                 #  36 — the agent's own interface
-cd backend    && vendor/bin/phpunit       # 228 — devices, policy, control, unattended, desktop sign-in
-cd web        && npm test                 # 294 — capability gating, control input, devices, desktop sign-in
-cd signalling && npm test                 #  31 — tokens, rooms, device rooms, live relay
+cd desktop    && cargo test --workspace   #   732 — protocol, gate, identity, state, session, service, the installer, the manifest
+cd desktop    && npm test                 #   137 — the app's own window
+cd backend    && vendor/bin/phpunit       # 1,118 — devices, policy, control, unattended, desktop sign-in, rate limits
+cd web        && npm test                 #   593 — 552 for the app (capability gating, control input, the room, devices) and 41 for the ICE kit
+cd signalling && npm test                 #    46 — tokens, rooms, device rooms, live relay, the limits
 ```
 
-**468 automated tests in `desktop/`** — 432 Rust and 36 for the interface —
-beside the backend, web and signalling suites above. The desktop, web and
-signalling figures are what those suites report on this commit; the backend's
-is what its own suite reports (it needs a PostgreSQL to run).
+**869 automated tests in `desktop/`** — 732 Rust and 137 for the window —
+beside the backend, web and signalling suites above. All five figures are what
+the suites reported on 14 November 2026, run on one Linux machine (the backend
+against a local PostgreSQL 16; fifteen of its tests are skipped without a TURN
+relay).
 
 The desktop split by crate:
 
 | | |
 |---|---|
-| `remote-protocol` | 79 — the wire format, the gate, clipboard bounds, monitors |
-| `remote-core` | 77 — configuration, the API client, signalling, backoff, the state machine, the log file |
-| `aicountly-remote-desktop` | 179 — the agent, its commands, the connection loop, the session, the platform layer's arithmetic, what the installer claims, and what the embedded Windows manifest becomes |
-| `aicountly-remote-service` | 35 — the IPC protocol, the pipe ACL, the service's decisions |
-| `remote-device` | 23 — capture profiles, capability declaration |
-| `remote-security` | 21 — keys, the canonical payload, storage, the enrolment record |
-| `remote-webrtc` | 18 — peer connection, data channels, a real SDP negotiation |
+| `aicountly-remote-desktop` | 307 — the agent, its commands, the connection loop, the session, the companion, the platform layer's arithmetic (139 of them, 44 under `windows/` and 69 under `macos/`), what the installer claims, and what the embedded Windows manifest becomes |
+| `remote-core` | 123 — configuration, the API client, signalling, backoff, the state machine, the update check, the log file |
+| `remote-webrtc` | 104 — peer connection, data channels, a real SDP negotiation, the H.264 encoder, sound (one more is a release-build measurement, run by hand; three browser-interop tests need Node and Chromium) |
+| `remote-protocol` | 81 — the wire format, the gate, clipboard bounds, monitors, the reasons input is refused |
+| `aicountly-remote-service` | 67 — the IPC protocol, the pipe ACL, the service's decisions, the Secure Desktop helper's protocol |
+| `remote-device` | 28 — capture profiles, capability declaration |
+| `remote-security` | 22 — keys, the canonical payload, storage, the enrolment record |
 
 ## Why so much of it runs on Linux
 
@@ -36,16 +37,18 @@ Everything that *decides* anything lives in `desktop/crates/` and in
 `agents/windows-service/src/machine.rs`, none of which calls a native API. That
 is not a happy accident — it is the reason for the split — and it means the
 control gate, the signed payload, the state machine, the backoff and the
-service's own decisions are all exercised on every push, on a fast runner,
-without a Windows machine anywhere.
+service's own decisions are all exercised on every run of the suite, on a fast
+runner or a developer's machine, without a Windows machine anywhere. (No
+workflow runs on a push any more: the suite runs when somebody starts it, and
+before a deploy or a release — see the README.)
 
 **`src-tauri/src/platform/windows/` runs on Linux too.** The module is not
 gated on the target: each file keeps its native calls in an inner
 `#[cfg(target_os = "windows")] mod imp` and refuses with `Unsupported`
-elsewhere, so the 53 tests covering where a click lands, the virtual-key table,
+elsewhere, so the 44 tests covering where a click lands, the virtual-key table,
 the extended-key set, wheel deltas, clipboard bounds, the IPC client, the
 display names a person picks a screen by and the storage refusal all run on
-every push. What a Linux runner genuinely cannot
+every host. What a Linux runner genuinely cannot
 check is the `imp` halves — `SendInput`, `Windows.Graphics.Capture`, DPAPI, the
 pipe, the SCM — and those are what the Windows CI job compiles and
 clippy-checks, and what `desktop/tests/MANUAL.md` covers by hand.
@@ -142,12 +145,15 @@ A shippable installer, and the one CI builds, comes from
 
 Read this rather than assuming the test count covers it.
 
-* **No native Windows call has been executed.** `SendInput`,
-  `Windows.Graphics.Capture`, DPAPI, the named pipe, the SCM registration and
-  the restart are compiled, clippy-clean and type-checked for the Windows
-  target, and none of them has run on a Windows machine in this work. The
-  arithmetic and the tables around them are tested — that is what the 53 tests
-  in `platform/` cover — but a passing `to_virtual_desktop` is not a
+* **No automated test executes a native Windows call that matters.**
+  `SendInput`, `Windows.Graphics.Capture`, WASAPI loopback, DPAPI, the named
+  pipe, the SCM registration, the Secure Desktop helper, `SendSAS`, the policy
+  read behind it and the restart are compiled, clippy-clean and type-checked
+  for the Windows target, built into installers on a Windows runner, and run
+  by people on their own PCs — and nothing in this repository records a
+  completed manual pass. The arithmetic and the tables around them are tested
+  — that is what the 44 tests under `platform/windows/` cover — but a passing
+  `to_virtual_desktop` is not a
   pointer that moved. `desktop/tests/MANUAL.md` is the pass
   that has to happen before a release, and it is not a formality.
 * **Media is tested up to a real browser decoder, not a real screen.** The
@@ -184,24 +190,25 @@ Read this rather than assuming the test count covers it.
   certificate chain. `verify.ps1` has been read, not exercised against a
   signature.
 * **macOS's native calls run only on a Mac.** The key table, coordinates,
-  display description, permission summary and keychain fallback rule are
-  tested on every host; `mod imp` (CGEvent, Keychain, Accessibility, display
-  list) is compiled and clippy-checked by the `macos` job in
-  `desktop-ci.yml`, and exercised only by hand — `desktop/tests/MANUAL.md`
-  and the steps in `desktop/scripts/macos/README.md`. The companion's loop is
-  tested against a fake API, relay and peer on a paused clock
-  (`src-tauri/src/companion.rs`).
+  display description, the pointer drawn into the picture, the frame pacing,
+  permission summary and keychain fallback rule are tested on every host (69
+  tests under `platform/macos/`); `mod imp` (Core Graphics capture, CGEvent,
+  Keychain, Screen Recording, Accessibility, display list) is compiled and
+  clippy-checked by the `macos` job in `desktop-ci.yml`, and exercised only by
+  hand — `desktop/tests/MANUAL.md` §4e and the steps in
+  `desktop/scripts/macos/README.md`. The companion's loop is tested against a
+  fake API, relay and peer on a paused clock (`src-tauri/src/companion.rs`).
 
 ## Adding a test
 
-Put it where it will run on every push:
+Put it where it will run on every host, every time the suite is run:
 
 1. Is it a decision? Then it belongs in `desktop/crates/` or in
    `agents/windows-service/src/machine.rs`, and it runs everywhere.
 2. Is it arithmetic — coordinates, scaling, a bound, a lookup table? It can
    live in `src-tauri/src/platform/`, including under `windows/`, as long as it
    is outside that file's `mod imp`. `describe_monitor`, `to_virtual_desktop`,
-   `virtual_key` and `wheel_delta` are all there, and all run on every push.
+   `virtual_key` and `wheel_delta` are all there, and all run on every host.
 3. Is it genuinely a native call? Then it is a manual test, and it goes in
    `desktop/tests/MANUAL.md` with what to do and what to expect.
 

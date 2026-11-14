@@ -51,24 +51,24 @@ export function PermissionsCard({
 
   return (
     <section className="card">
-      <h2 className="card__title">Permissions</h2>
+      <h2 className="card__title">What this computer can do</h2>
       <p className="card__subtitle">
-        A capability works only when this computer and your AICOUNTLY account both allow it.
+        Each of these works only when both this computer and your AICOUNTLY account allow it.
       </p>
 
       <div className="card__rows">
         <PermissionRow
-          label="Screen capture"
+          label="Show its screen"
           machine={permissions.screen_capture}
           organisation={allowed?.screen_share}
         />
         <PermissionRow
-          label="Remote control"
+          label="Be controlled (mouse and keyboard)"
           machine={permissions.input_injection}
           organisation={allowed?.remote_control}
         />
         <PermissionRow
-          label="Clipboard"
+          label="Share the clipboard"
           machine={permissions.clipboard}
           organisation={allowed?.clipboard_sync}
         />

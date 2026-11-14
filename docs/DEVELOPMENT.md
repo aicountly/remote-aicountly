@@ -209,10 +209,13 @@ a second time must fail with *"already been used"*.
 ## Tests
 
 ```bash
-cd backend    && vendor/bin/phpunit      # 106 tests — policy, isolation, HTTP
-cd web        && npm test                # 27 tests — capture, capability, UI gating
-cd signalling && npm test                # 16 tests — tokens, rooms, live relay
+cd backend    && vendor/bin/phpunit      # 1,118 tests — policy, isolation, HTTP, devices, control
+cd web        && npm test                # 593 tests — capture, capability, UI gating, the room, the ICE kit
+cd signalling && npm test                # 46 tests — tokens, rooms, live relay, the limits
 ```
+
+(As of 14 November 2026; the desktop app's suites are in
+[desktop/TESTING.md](desktop/TESTING.md).)
 
 The backend suite needs the `aicountly_remote_test` database and runs the
 migrations itself. It uses a real PostgreSQL because the schema depends on
