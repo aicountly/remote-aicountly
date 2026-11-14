@@ -156,6 +156,11 @@ interface ApiOptions {
   /** Skip authentication entirely — only the anonymous invitation redemption. */
   anonymous?: boolean
   signal?: AbortSignal
+  /**
+   * Let the request outlive the page that made it — for the one call made as the page goes away
+   * (leaving a session on `pagehide`), which a browser otherwise cancels with the page.
+   */
+  keepalive?: boolean
 }
 
 interface ApiEnvelope<T> {
@@ -255,7 +260,7 @@ export function apiFetch<T>(path: string, options: ApiOptions = {}): Promise<T> 
 }
 
 async function apiFetchOnce<T>(path: string, options: ApiOptions = {}): Promise<T> {
-  const { method = 'GET', body, withLaunchContext = false, anonymous = false, signal } = options
+  const { method = 'GET', body, withLaunchContext = false, anonymous = false, signal, keepalive = false } = options
 
   const requestId = newRequestId()
   const headers: Record<string, string> = { Accept: 'application/json', 'X-Request-Id': requestId }
@@ -296,6 +301,7 @@ async function apiFetchOnce<T>(path: string, options: ApiOptions = {}): Promise<
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
+      ...(keepalive ? { keepalive: true } : {}),
     })
   } catch (error) {
     if (signal?.aborted) {

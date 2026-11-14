@@ -114,6 +114,10 @@ export type ControlMessage =
   // is up; `reachable` is whether an authorised helper is forwarding it, so the controller can
   // answer it rather than only being told to ask the person at the computer.
   | { type: 'secure_desktop'; active: boolean; reachable: boolean }
+  // Agent → browser, additive within protocol version 1: the computer would not take something it
+  // was sent, and why (`InputRefusedReason`). Sent when it first happens and then every few seconds
+  // while it goes on; a browser that does not know the message ignores it.
+  | { type: 'input_refused'; reason: string }
   | { type: 'reboot'; session_uuid: string }
   | { type: 'ping'; nonce: number }
   | { type: 'pong'; nonce: number }
@@ -269,6 +273,80 @@ export function controlKeyFrom(event: { key: string }): ControlKey | null {
   }
 
   return null
+}
+
+/**
+ * Why the controlled computer would not take something. Must equal `remote_protocol::InputRefusedReason`.
+ * Anything else is read as `refused`: a reason this page has not heard of is still a refusal.
+ */
+export type InputRefusedReason =
+  | 'elevated_window'
+  | 'secure_attention_not_allowed'
+  | 'secure_attention_blocked'
+  | 'refused'
+
+export function inputRefusedReason(reason: unknown): InputRefusedReason {
+  return reason === 'elevated_window' ||
+    reason === 'secure_attention_not_allowed' ||
+    reason === 'secure_attention_blocked'
+    ? reason
+    : 'refused'
+}
+
+/**
+ * A key combination sent as one act — from the room's menu, for the ones a browser will not hand
+ * over from the keyboard: the operating system keeps Ctrl+Alt+Del, the Windows key and Alt+Tab for
+ * itself, and outside full screen a browser keeps more.
+ *
+ * The keys in the order they are pressed; they are released in the reverse order.
+ */
+export const KEY_COMBINATIONS = {
+  ctrl_alt_del: [{ k: 'ctrl' }, { k: 'alt' }, { k: 'delete' }],
+  task_manager: [{ k: 'ctrl' }, { k: 'shift' }, { k: 'escape' }],
+  start_menu: [{ k: 'meta' }],
+  run_dialog: [{ k: 'meta' }, { k: 'character', c: 'r' }],
+  show_desktop: [{ k: 'meta' }, { k: 'character', c: 'd' }],
+  file_explorer: [{ k: 'meta' }, { k: 'character', c: 'e' }],
+  switch_window: [{ k: 'alt' }, { k: 'tab' }],
+  close_window: [{ k: 'alt' }, { k: 'function', c: 4 }],
+  escape: [{ k: 'escape' }],
+  print_screen: [{ k: 'print_screen' }],
+} as const satisfies Record<string, readonly ControlKey[]>
+
+export type KeyCombination = keyof typeof KEY_COMBINATIONS
+
+/** The modifier a key is, if it is one. */
+function modifierOf(key: ControlKey): keyof Modifiers | null {
+  return key.k === 'ctrl' || key.k === 'alt' || key.k === 'shift' || key.k === 'meta' ? key.k : null
+}
+
+/**
+ * The key events of a combination, in order: each key down carrying the modifiers held by then
+ * (its own included, as a browser's `keydown` does), then each key up in reverse carrying what is
+ * still held. This is what the controlled computer reads Ctrl+Alt+Del from — Delete going down with
+ * Ctrl and Alt set.
+ */
+export function combinationEvents(
+  keys: readonly ControlKey[],
+): Array<{ key: ControlKey; pressed: boolean; modifiers: Modifiers }> {
+  const held: Modifiers = { ctrl: false, alt: false, shift: false, meta: false }
+  const events: Array<{ key: ControlKey; pressed: boolean; modifiers: Modifiers }> = []
+
+  for (const key of keys) {
+    const modifier = modifierOf(key)
+    if (modifier) held[modifier] = true
+
+    events.push({ key, pressed: true, modifiers: { ...held } })
+  }
+
+  for (const key of [...keys].reverse()) {
+    const modifier = modifierOf(key)
+    if (modifier) held[modifier] = false
+
+    events.push({ key, pressed: false, modifiers: { ...held } })
+  }
+
+  return events
 }
 
 /**

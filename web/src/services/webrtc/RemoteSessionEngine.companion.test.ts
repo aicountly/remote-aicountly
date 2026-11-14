@@ -186,6 +186,7 @@ type Snapshot = {
   connection: string
   remoteStream: MediaStream | null
   controlPaused: string | null
+  inputRefused: string | null
   secureDesktop: { active: boolean; reachable: boolean } | null
   peers: Array<{ participantUuid: string }>
 }
@@ -422,6 +423,107 @@ describe('control companions in the engine', () => {
     // The prompt closes.
     deliver(envelope({ type: 'secure_desktop', active: false, reachable: false }))
     expect(latest().secureDesktop).toBeNull()
+
+    engine.dispose()
+  })
+
+  /**
+   * Control "granted" at both ends and nothing moving: the computer says why, and the engine holds
+   * the reason for as long as the computer goes on saying it.
+   */
+  it('shows why the computer refused something, and takes it down once it stops saying so', async () => {
+    const { engine, signal, latest } = await startEngine('b-viewer')
+
+    await signal({ type: 'joined', peers: [companionPeer] })
+    engine.setControlTarget('c-companion', 'GRANTED')
+    await flush()
+
+    const channel = FakePeerConnection.instances[0].channels[0]
+    channel.open()
+    expect(engine.startControlling('c-companion')).toBe(true)
+
+    const deliver = (frame: string) => channel.onmessage?.({ data: frame })
+
+    // Not from the computer being controlled: not believed.
+    deliver(envelope({ type: 'input_refused', reason: 'elevated_window' }, 'someone-else'))
+    expect(latest().inputRefused).toBeNull()
+
+    deliver(envelope({ type: 'input_refused', reason: 'elevated_window' }))
+    expect(latest().inputRefused).toBe('elevated_window')
+
+    // Said again three seconds on, as the agent does while it goes on: still up, not flickering.
+    vi.advanceTimersByTime(3_000)
+    deliver(envelope({ type: 'input_refused', reason: 'elevated_window' }))
+    vi.advanceTimersByTime(5_000)
+    expect(latest().inputRefused).toBe('elevated_window')
+
+    // And gone a little after it last said so.
+    vi.advanceTimersByTime(2_000)
+    expect(latest().inputRefused).toBeNull()
+
+    // A reason this page has not heard of is still a refusal.
+    deliver(envelope({ type: 'input_refused', reason: 'something_new' }))
+    expect(latest().inputRefused).toBe('refused')
+
+    // Stopping control takes it down at once.
+    engine.stopControlling()
+    expect(latest().inputRefused).toBeNull()
+
+    engine.dispose()
+  })
+
+  /**
+   * Ctrl+Alt+Del, as the room's menu sends it: the keys down in order, each carrying the modifiers
+   * held by then, and up again in reverse — so nothing is left held on the other computer.
+   */
+  it('sends a key combination as whole key presses and releases, leaving nothing held', async () => {
+    const { engine, signal } = await startEngine('b-viewer')
+
+    await signal({ type: 'joined', peers: [companionPeer] })
+    engine.setControlTarget('c-companion', 'GRANTED')
+    await flush()
+
+    const channel = FakePeerConnection.instances[0].channels[0]
+    channel.open()
+    expect(engine.startControlling('c-companion')).toBe(true)
+
+    const before = channel.sent.length
+    expect(engine.sendControlCombination('ctrl_alt_del')).toBe(true)
+
+    const keys = channel.sent
+      .slice(before)
+      .map((frame) => JSON.parse(new TextDecoder().decode(frame as ArrayBuffer)).m as {
+        type: string
+        key: { k: string }
+        pressed: boolean
+        modifiers: { ctrl: boolean; alt: boolean; shift: boolean; meta: boolean }
+      })
+
+    expect(keys.map((m) => `${m.pressed ? 'down' : 'up'}:${m.key.k}`)).toEqual([
+      'down:ctrl',
+      'down:alt',
+      'down:delete',
+      'up:delete',
+      'up:alt',
+      'up:ctrl',
+    ])
+    // What the computer reads Ctrl+Alt+Del from: Delete going down with Ctrl and Alt, and nothing else.
+    expect(keys[2].modifiers).toEqual({ ctrl: true, alt: true, shift: false, meta: false })
+    expect(keys.at(-1)?.modifiers).toEqual({ ctrl: false, alt: false, shift: false, meta: false })
+
+    // Paused: nothing is sent, and it says so.
+    channel.onmessage?.({ data: envelope({ type: 'control_paused', reason: 'local_input' }) })
+    expect(engine.sendControlCombination('start_menu')).toBe(false)
+
+    engine.dispose()
+  })
+
+  it('sends no combination when nobody is being controlled', async () => {
+    const { engine, signal } = await startEngine('b-viewer')
+
+    await signal({ type: 'joined', peers: [companionPeer] })
+
+    expect(engine.sendControlCombination('ctrl_alt_del')).toBe(false)
 
     engine.dispose()
   })

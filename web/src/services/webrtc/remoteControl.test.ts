@@ -4,6 +4,9 @@ import {
   CONTROL_CHANNEL_LABEL,
   CONTROL_PROTOCOL_VERSION,
   ControlSender,
+  KEY_COMBINATIONS,
+  combinationEvents,
+  inputRefusedReason,
   modifiersForKey,
   MAX_CONTROL_MESSAGE_BYTES,
   controlKeyFrom,
@@ -376,5 +379,70 @@ describe('modifiersForKey', () => {
       shift: false,
       meta: false,
     })
+  })
+})
+
+/**
+ * The combinations the room's Keys menu sends, as the events the agent receives.
+ */
+describe('key combinations', () => {
+  it('presses in order and releases in reverse, each event carrying what is held by then', () => {
+    const events = combinationEvents(KEY_COMBINATIONS.task_manager)
+
+    expect(events.map((event) => [event.pressed, event.key.k])).toEqual([
+      [true, 'ctrl'],
+      [true, 'shift'],
+      [true, 'escape'],
+      [false, 'escape'],
+      [false, 'shift'],
+      [false, 'ctrl'],
+    ])
+    // A modifier's own key-down already carries it, as a browser's does.
+    expect(events[0].modifiers).toEqual({ ctrl: true, alt: false, shift: false, meta: false })
+    expect(events[2].modifiers).toEqual({ ctrl: true, alt: false, shift: true, meta: false })
+    expect(events[3].modifiers).toEqual({ ctrl: true, alt: false, shift: true, meta: false })
+    expect(events[5].modifiers).toEqual({ ctrl: false, alt: false, shift: false, meta: false })
+  })
+
+  /** `remote_protocol`'s `is_secure_attention`: Delete going down with Ctrl and Alt, and neither Shift nor the Windows key. */
+  it('sends Ctrl+Alt+Del the way the agent recognises it', () => {
+    const press = combinationEvents(KEY_COMBINATIONS.ctrl_alt_del).find((event) => event.pressed && event.key.k === 'delete')
+
+    expect(press?.modifiers).toEqual({ ctrl: true, alt: true, shift: false, meta: false })
+  })
+
+  it('leaves every combination with nothing held', () => {
+    for (const keys of Object.values(KEY_COMBINATIONS)) {
+      const events = combinationEvents(keys)
+
+      expect(events).toHaveLength(keys.length * 2)
+      expect(events.at(-1)?.modifiers).toEqual({ ctrl: false, alt: false, shift: false, meta: false })
+      expect(events.filter((event) => event.pressed)).toHaveLength(keys.length)
+    }
+  })
+
+  it('names keys the protocol has names for, and characters in lower case', () => {
+    for (const keys of Object.values(KEY_COMBINATIONS)) {
+      for (const key of keys) {
+        if (key.k === 'character') expect(key.c).toMatch(/^[a-z]$/)
+        if (key.k === 'function') expect(key.c).toBeGreaterThanOrEqual(1)
+      }
+    }
+  })
+})
+
+/** Must equal `remote_protocol::InputRefusedReason`'s names; an unknown one is still a refusal. */
+describe('inputRefusedReason', () => {
+  it('reads the reasons the agent sends', () => {
+    expect(inputRefusedReason('elevated_window')).toBe('elevated_window')
+    expect(inputRefusedReason('secure_attention_not_allowed')).toBe('secure_attention_not_allowed')
+    expect(inputRefusedReason('secure_attention_blocked')).toBe('secure_attention_blocked')
+    expect(inputRefusedReason('refused')).toBe('refused')
+  })
+
+  it('reads anything else as refused, rather than as nothing', () => {
+    expect(inputRefusedReason('a_reason_added_later')).toBe('refused')
+    expect(inputRefusedReason(undefined)).toBe('refused')
+    expect(inputRefusedReason(7)).toBe('refused')
   })
 })

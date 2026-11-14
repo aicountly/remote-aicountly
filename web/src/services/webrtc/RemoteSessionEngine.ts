@@ -71,11 +71,15 @@ import { FileReceiver, FileSender, chunkCount, decodeChunk, safeFileName } from 
 import type { TransferView } from './fileTransfer'
 import {
   ControlSender,
+  KEY_COMBINATIONS,
+  combinationEvents,
   controlKeyFrom,
   decodeControlEnvelope,
+  inputRefusedReason,
   modifiersForKey,
   mouseButtonName,
 } from './remoteControl'
+import type { InputRefusedReason, KeyCombination } from './remoteControl'
 // Aliased: this module already has a `PointerPosition`, and it is a different
 // thing — the annotation pointer carries a name and a colour, the control one
 // is a bare coordinate on the shared surface.
@@ -207,6 +211,13 @@ export interface EngineSnapshot {
    */
   secureDesktop: { active: boolean; reachable: boolean } | null
   /**
+   * Why the controlled computer would not take something this browser sent — a window running as
+   * administrator in front, Ctrl+Alt+Del it may not raise — while that is so. The computer says it
+   * again every few seconds for as long as it goes on; this clears a little after it last said so.
+   * Without it both ends showed control as granted and nothing moved, with no reason anywhere.
+   */
+  inputRefused: InputRefusedReason | null
+  /**
    * The displays of the computer that shares its own screen through the desktop app, and which one
    * is on screen now. Empty until it says, and for a browser share. More than one means the person
    * controlling can switch between them.
@@ -299,6 +310,13 @@ function percentOf(bytes: number, total: number): number {
 }
 
 /** Whether two protocol keys are the same key. */
+/**
+ * How long "that computer refused it" stays up after the computer last said so. It says so every
+ * three seconds while it goes on, so this is two of those: one may be lost without the notice
+ * blinking, and it is gone soon after the refusals stop.
+ */
+const INPUT_REFUSED_SHOWN_MS = 6_500
+
 function sameKey(a: ControlKey, b: ControlKey): boolean {
   if (a.k !== b.k) return false
 
@@ -376,6 +394,9 @@ export class RemoteSessionEngine {
   /** Keys this browser has pressed and not released on the remote machine. */
   private heldKeys: ControlKey[] = []
 
+  /** Takes the "that computer refused it" notice down once the computer has stopped saying so. */
+  private refusedTimer: ReturnType<typeof setTimeout> | null = null
+
   /**
    * Control companions present in the room, known from signalling. They get a
    * peer connection only while they are `companionTarget`.
@@ -405,6 +426,7 @@ export class RemoteSessionEngine {
     monitors: [],
     activeMonitorId: null,
     secureDesktop: null,
+    inputRefused: null,
     network: {
       path: 'unknown',
       relayNode: null,
@@ -444,6 +466,8 @@ export class RemoteSessionEngine {
     try {
       credentials = await fetchSignallingCredentials(this.options.sessionUuid)
     } catch (error) {
+      if (this.disposed) return
+
       this.patch({
         connection: 'failed',
         lastError: error instanceof Error ? error.message : 'Could not start the secure connection.',
@@ -452,8 +476,12 @@ export class RemoteSessionEngine {
       return
     }
 
+    // Somebody who left while the token was on its way: `dispose()` has already run and found
+    // nothing to close, so a socket opened now would be one nobody ever closes.
+    if (this.disposed) return
+
     this.adoptIce(normalizeIceConfig(credentials))
-    this.patch({ relayAvailable: credentials.relayAvailable, relayDenied: this.ice.admission.outcome === 'denied' })
+    this.patch({ relayAvailable: credentials.relayAvailable === true, relayDenied: this.ice.admission.outcome === 'denied' })
 
     // Credentials are renewed before they expire, not when a relay starts
     // refusing them in the middle of somebody's session.
@@ -469,9 +497,17 @@ export class RemoteSessionEngine {
       token: credentials.token,
       expiresAt: credentials.expiresAt,
       refreshToken: async () => {
-        const fresh = await fetchSignallingCredentials(this.options.sessionUuid)
-        this.adoptIce(normalizeIceConfig(fresh))
-        this.refresher?.start(this.ice)
+        // A renewal: the token and nothing else. The relay credentials this page was given on
+        // entering are good for twenty minutes and are renewed by the refresher above, on their own
+        // schedule; asking for a set with every ninety-second token meant the server minted one and
+        // booked relay capacity each time, and restarted that schedule so it never once came due.
+        const fresh = await fetchSignallingCredentials(this.options.sessionUuid, { renewal: true })
+
+        // An API that does not know the short answer sends everything, as it always did.
+        if (Array.isArray(fresh.iceServers)) {
+          this.adoptIce(normalizeIceConfig(fresh))
+          this.refresher?.start(this.ice)
+        }
 
         return { url: fresh.url, token: fresh.token, expiresAt: fresh.expiresAt }
       },
@@ -866,7 +902,10 @@ export class RemoteSessionEngine {
     this.heldKeys = []
     this.control = null
 
-    this.patch({ controllingPeerId: null, controlPaused: null, secureDesktop: null })
+    if (this.refusedTimer) clearTimeout(this.refusedTimer)
+    this.refusedTimer = null
+
+    this.patch({ controllingPeerId: null, controlPaused: null, secureDesktop: null, inputRefused: null })
   }
 
   /**
@@ -986,6 +1025,25 @@ export class RemoteSessionEngine {
     this.heldKeys = []
   }
 
+  /**
+   * Send a key combination as one act — the room's menu for the keys a browser cannot hand over.
+   *
+   * Starts from a clean keyboard (whatever was held is let go first) and leaves one: every key it
+   * presses it releases, so nothing is left down on the other computer whatever happens next.
+   */
+  sendControlCombination(name: KeyCombination): boolean {
+    if (!this.control || this.snapshot.controlPaused !== null) return false
+
+    this.releaseControlKeys()
+
+    let sent = true
+    for (const event of combinationEvents(KEY_COMBINATIONS[name])) {
+      sent = this.control.sender.key(event.key, event.pressed, event.modifiers) && sent
+    }
+
+    return sent
+  }
+
   /** Ask the computer being controlled to show another of its displays. */
   selectControlMonitor(monitorId: number): boolean {
     if (!this.control) return false
@@ -1047,6 +1105,19 @@ export class RemoteSessionEngine {
           ? { active: true, reachable: Boolean(envelope.m.reachable) }
           : null,
       })
+    }
+
+    // The computer would not take something it was sent, and says why — once when it starts and
+    // every few seconds while it goes on (REFUSAL_NOTICE_INTERVAL in the agent, 3 s). Shown until a
+    // little after it last said so, so a steady refusal is one steady notice rather than a flicker.
+    if (envelope.m.type === 'input_refused' && this.control?.peerId === peerId) {
+      if (this.refusedTimer) clearTimeout(this.refusedTimer)
+
+      this.patch({ inputRefused: inputRefusedReason(envelope.m.reason) })
+      this.refusedTimer = setTimeout(() => {
+        this.refusedTimer = null
+        this.patch({ inputRefused: null })
+      }, INPUT_REFUSED_SHOWN_MS)
     }
 
     if (envelope.m.type === 'monitor_layout') {

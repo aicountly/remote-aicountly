@@ -33,6 +33,9 @@ vi.mock('../../services/webrtc/RemoteSessionEngine', () => ({
 
 const fetchSession = vi.fn()
 const endSession = vi.fn()
+const leaveSession = vi.fn(async (..._args: unknown[]) => undefined)
+const revokeControl = vi.fn(async (..._args: unknown[]) => ({ control: { pendingRequests: [] } }))
+const fetchMessages = vi.fn(async (..._args: unknown[]) => [] as unknown[])
 const fetchControlState = vi.fn(async (..._args: unknown[]) => ({ pendingRequests: [] }))
 
 vi.mock('../../services/api/remote', () => ({
@@ -42,22 +45,23 @@ vi.mock('../../services/api/remote', () => ({
   denyParticipant: vi.fn(),
   endSession: (...args: unknown[]) => endSession(...args),
   fetchControlState: (...args: unknown[]) => fetchControlState(...args),
-  fetchMessages: vi.fn().mockResolvedValue([]),
+  fetchMessages: (...args: unknown[]) => fetchMessages(...args),
   fetchSession: (...args: unknown[]) => fetchSession(...args),
   grantControl: vi.fn(),
-  leaveSession: vi.fn().mockResolvedValue(undefined),
+  leaveSession: (...args: unknown[]) => leaveSession(...args),
   pauseSession: vi.fn(),
   postMessage: vi.fn(),
   reportContextMismatch: vi.fn(),
   requestControl: vi.fn(),
   requestJoin: vi.fn(),
   resumeSession: vi.fn(),
-  revokeControl: vi.fn(),
+  revokeControl: (...args: unknown[]) => revokeControl(...args),
 }))
 
 vi.mock('../../ice-kit/index.js', () => ({ probeRelay: vi.fn() }))
 
-const { useRemoteSession, effectiveControlState } = await import('./useRemoteSession')
+const { useRemoteSession, effectiveControlState, isRefusal } = await import('./useRemoteSession')
+const { RemoteApiError } = await import('../../services/api/client')
 
 type SessionControlStateForTest = import('../../types/remote').SessionControlState
 
@@ -301,6 +305,186 @@ describe('useRemoteSession — the waiting room', () => {
     status = 'APPROVED'
     await flush(2_000)
     expect(fetchControlState).toHaveBeenCalled()
+  })
+})
+
+describe('useRemoteSession — somebody the host turned away', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    engines.length = 0
+    fetchSession.mockReset()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /**
+   * The host pressed Decline. The API then refuses this person the session — and the page, still
+   * holding the session it read before, went on saying "Waiting for the host to admit you" for ever,
+   * asking again every second and a half and being refused every time.
+   */
+  it('is told so, and stops asking, instead of waiting for ever', async () => {
+    let declined = false
+    fetchSession.mockImplementation(async () => {
+      if (declined) throw new RemoteApiError('JOIN_DENIED', 'The host declined your request to join this session.', 403)
+
+      return sessionRecord('REQUESTED', false)
+    })
+
+    const { result } = renderHook(() => useRemoteSession({ sessionUuid: 'sess-1', policy: null }))
+    await flush(2_000)
+    expect(result.current.session?.me?.status).toBe('REQUESTED')
+    expect(result.current.refused).toBe(false)
+
+    declined = true
+    await flush(2_000)
+
+    expect(result.current.session).toBeNull()
+    expect(result.current.refused).toBe(true)
+    expect(result.current.error?.code).toBe('JOIN_DENIED')
+
+    // And that is the end of the asking.
+    const asked = fetchSession.mock.calls.length
+    await flush(30_000)
+    expect(fetchSession.mock.calls.length).toBe(asked)
+  })
+
+  /** Offline, or the server having a bad moment, is not being turned away: what is on screen stays. */
+  it('keeps the room through a failure that may pass', async () => {
+    let failing = false
+    fetchSession.mockImplementation(async () => {
+      if (failing) throw new RemoteApiError('NETWORK_ERROR', 'We could not reach AICOUNTLY Remote.', 0)
+
+      return sessionRecord('JOINED', false)
+    })
+
+    const { result } = renderHook(() => useRemoteSession({ sessionUuid: 'sess-1', policy: null }))
+    await flush(1_000)
+
+    failing = true
+    await flush(30_000)
+
+    expect(result.current.session?.me?.status).toBe('JOINED')
+    expect(result.current.refused).toBe(false)
+    expect(result.current.error?.code).toBe('NETWORK_ERROR')
+
+    failing = false
+    await flush(30_000)
+    expect(result.current.error).toBeNull()
+  })
+
+  it('counts as a refusal only an answer that means this person is not in the session', () => {
+    expect(isRefusal(new RemoteApiError('JOIN_DENIED', 'declined', 403))).toBe(true)
+    expect(isRefusal(new RemoteApiError('NOT_ADMITTED', 'removed', 403))).toBe(true)
+    expect(isRefusal(new RemoteApiError('NOT_FOUND', 'no such session', 404))).toBe(true)
+
+    expect(isRefusal(new RemoteApiError('TWO_STEP_REQUIRED', 'verify', 403))).toBe(false)
+    expect(isRefusal(new RemoteApiError('RATE_LIMITED', 'slow down', 429))).toBe(false)
+    expect(isRefusal(new RemoteApiError('NETWORK_ERROR', 'offline', 0))).toBe(false)
+    expect(isRefusal(new RemoteApiError('UNKNOWN', 'oops', 500))).toBe(false)
+  })
+})
+
+describe('useRemoteSession — what the room asks the server for', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    engines.length = 0
+    fetchSession.mockReset()
+    fetchMessages.mockClear()
+    leaveSession.mockClear()
+    revokeControl.mockClear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /**
+   * On a slow connection a read took longer than the gap between two and they piled up: answers
+   * arriving out of order, and every one behind the first a request made for nothing.
+   */
+  it('reads the session one at a time, however slow the answer', async () => {
+    let answer: (() => void) | null = null
+    let asked = 0
+    fetchSession.mockImplementation(async () => {
+      asked += 1
+      if (asked === 1) return sessionRecord('JOINED', true)
+
+      // Every later read hangs until released.
+      await new Promise<void>((resolve) => {
+        answer = resolve
+      })
+
+      return sessionRecord('JOINED', true)
+    })
+
+    renderHook(() => useRemoteSession({ sessionUuid: 'sess-1', policy: null }))
+    await flush(100)
+    expect(asked).toBe(1)
+
+    // A host is read every four seconds: a minute is fifteen of them, and the first never answers.
+    for (let step = 0; step < 6; step += 1) await flush(10_000)
+    expect(asked).toBe(2)
+
+    // Answered: the next one is asked on the next tick, and only that one.
+    await act(async () => {
+      answer?.()
+      await vi.advanceTimersByTimeAsync(4_000)
+    })
+    expect(asked).toBe(3)
+  })
+
+  /** The whole chat history used to be fetched again after every poll of the session. */
+  it('fetches the chat history once, not after every read of the session', async () => {
+    fetchSession.mockImplementation(async () => ({ ...sessionRecord('JOINED', true), capabilities: { chat: true } }))
+
+    renderHook(() => useRemoteSession({ sessionUuid: 'sess-1', policy: null }))
+    // In steps: a render — and with it the host's four-second pace — only happens between them here.
+    for (let step = 0; step < 6; step += 1) await flush(10_000)
+
+    expect(fetchSession.mock.calls.length).toBeGreaterThan(5)
+    expect(fetchMessages).toHaveBeenCalledTimes(1)
+  })
+
+  /**
+   * Closing the tab told the server nothing — a browser cancels an ordinary request with the page
+   * that made it — so the person stayed "joined" until the session expired.
+   */
+  it('tells the server with a request that outlives the page when the page is going away', async () => {
+    fetchSession.mockImplementation(async () => sessionRecord('JOINED', false))
+
+    const { result } = renderHook(() => useRemoteSession({ sessionUuid: 'sess-1', policy: null }))
+    await flush(100)
+    expect(engines).toHaveLength(1)
+
+    await act(async () => {
+      await result.current.actions.leave(true)
+    })
+
+    expect(leaveSession).toHaveBeenCalledWith('sess-1', 'p-1', { keepalive: true })
+    expect(engines[0].dispose).toHaveBeenCalled()
+
+    // An ordinary leave — the button — is an ordinary request.
+    leaveSession.mockClear()
+    await act(async () => {
+      await result.current.actions.leave()
+    })
+    expect(leaveSession).toHaveBeenCalledWith('sess-1', 'p-1', { keepalive: false })
+  })
+
+  /** A request for control could not be taken back: the only way out was to wait for an answer. */
+  it('takes back this person’s own request for control', async () => {
+    fetchSession.mockImplementation(async () => sessionRecord('JOINED', false))
+
+    const { result } = renderHook(() => useRemoteSession({ sessionUuid: 'sess-1', policy: null }))
+    await flush(100)
+
+    await act(async () => {
+      await result.current.actions.cancelControlRequest()
+    })
+
+    expect(revokeControl).toHaveBeenCalledWith('sess-1', 'p-1')
   })
 })
 

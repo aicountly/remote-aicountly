@@ -640,9 +640,10 @@ export interface SignallingCredentials {
   expiresAt: string;
   participantUuid: string;
   role: ParticipantRole;
-  iceServers: RTCIceServer[];
-  /** False when no TURN is configured — the UI says so instead of hanging. */
-  relayAvailable: boolean;
+  /** The relay credentials to connect with. Absent from the answer to a renewal, which is the token alone. */
+  iceServers?: RTCIceServer[];
+  /** False when no TURN is configured — the UI says so instead of hanging. Absent from a renewal. */
+  relayAvailable?: boolean;
   /** The whole aicountly.ice/1 grant: expiry, refresh time, relay nodes. Absent from older APIs. */
   ice?: unknown;
 }

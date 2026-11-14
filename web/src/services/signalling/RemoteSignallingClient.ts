@@ -106,6 +106,20 @@ const MIN_RENEW_DELAY_MS = 5_000
 /** How long to wait before trying a renewal that failed again. */
 const RENEW_RETRY_MS = 5_000
 
+/**
+ * What the backoff is multiplied by, for one attempt (`random` in 0..1).
+ *
+ * The first attempt is spread widest. When the relay restarts — which every deploy does — every
+ * participant of every session loses their connection in the same instant, and each mints a new
+ * token before coming back: the first attempts all fell within a third of a second, which is every
+ * one of those API calls arriving together. Spread over about a second, the same calls arrive at a
+ * third of the rate; the connections carrying the picture and the control are not affected meanwhile,
+ * and later attempts are already spread by the backoff itself.
+ */
+export function reconnectSpread(attempt: number, random: number): number {
+  return attempt <= 1 ? 0.8 + random * 2.2 : 0.7 + random * 0.6
+}
+
 /** How long from now to replace the connection, given when its token expires. */
 export function renewDelayMs(expiresAt: string | null | undefined, now = Date.now()): number {
   const expiry = expiresAt ? Date.parse(expiresAt) : Number.NaN
@@ -414,7 +428,7 @@ export class RemoteSignallingClient {
     // Exponential backoff with jitter, so a signalling service coming back up
     // is not immediately flattened by every client returning at once.
     const backoff = Math.min(BASE_BACKOFF_MS * 2 ** (this.attempts - 1), MAX_BACKOFF_MS)
-    const delay = backoff * (0.7 + Math.random() * 0.6)
+    const delay = backoff * reconnectSpread(this.attempts, Math.random())
 
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null

@@ -61,6 +61,16 @@ export function formatDuration(seconds: number | null | undefined): string {
 }
 
 /** `00:18:32` — the running clock in the session header. */
+/**
+ * A session code in the groups it is read out in: `123456789` and `123 456 789` both become
+ * `123 456 789`. Anything that is not nine digits is left as it came.
+ */
+export function formatSessionCode(code: string): string {
+  const digits = code.replace(/\D/g, '')
+
+  return digits.length === 9 ? digits.replace(/(\d{3})(?=\d)/g, '$1 ') : code
+}
+
 export function formatClock(seconds: number): string {
   const safe = Math.max(0, Math.floor(seconds))
   const hours = String(Math.floor(safe / 3600)).padStart(2, '0')

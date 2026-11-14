@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { RemoteSignallingClient, renewDelayMs } from './RemoteSignallingClient'
+import { RemoteSignallingClient, reconnectSpread, renewDelayMs } from './RemoteSignallingClient'
 
 /**
  * How the room's socket presents its token. A URL is what reverse proxies log,
@@ -230,12 +230,34 @@ describe('RemoteSignallingClient', () => {
       const [first] = FakeSocket.instances
 
       first.onclose?.({ code: 4003 })
-      await vi.advanceTimersByTimeAsync(1_000)
+      // The first attempt is spread over about a second and a half (reconnectSpread).
+      await vi.advanceTimersByTimeAsync(2_000)
 
       expect(refreshToken).toHaveBeenCalledTimes(1)
       expect(FakeSocket.instances).toHaveLength(2)
 
       client.close()
+    })
+  })
+
+  /**
+   * When the relay restarts, every participant of every session loses their connection in the same
+   * instant and mints a new token before coming back. The first attempts all fell inside a third
+   * of a second.
+   */
+  describe('the spread of a reconnect', () => {
+    it('spreads the first attempt widest, from four tenths of a second to a second and a half', () => {
+      expect(reconnectSpread(1, 0)).toBeCloseTo(0.8)
+      expect(reconnectSpread(1, 1)).toBeCloseTo(3)
+      // 500 ms base: 400 ms to 1,500 ms.
+      expect(500 * reconnectSpread(1, 0)).toBeCloseTo(400)
+      expect(500 * reconnectSpread(1, 1)).toBeCloseTo(1_500)
+    })
+
+    it('leaves later attempts to the backoff, jittered as before', () => {
+      expect(reconnectSpread(2, 0)).toBeCloseTo(0.7)
+      expect(reconnectSpread(2, 1)).toBeCloseTo(1.3)
+      expect(reconnectSpread(5, 0.5)).toBeCloseTo(1)
     })
   })
 })
