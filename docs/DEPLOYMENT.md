@@ -9,11 +9,15 @@ Three pieces deploy separately, because they are genuinely different things:
 | `signalling/` | nothing to build | a long-running Node process |
 
 Deployment is **manual only** — **Actions → pick a workflow → Run workflow**.
-Nothing deploys on push or merge. `.github/workflows/ci.yml` runs the tests on
-every pull request and every push to `main` but never deploys. Both deploy
-workflows run that full suite first: their first job calls `ci.yml` on the
-commit being deployed and the deploy job `needs:` it, so a red suite stops the
-deploy.
+Nothing deploys on push or merge, and nothing *runs* on push or merge either:
+every workflow, `.github/workflows/ci.yml` included, is started by hand or
+called by another workflow. Both deploy workflows run that full suite first:
+their first job calls `ci.yml` on the commit being deployed and the deploy job
+`needs:` it, so a red suite stops the deploy — unless the person starting the
+deploy switches its `run_ci_gate` input off, which exists so a suite that was
+already run locally before the merge is not paid for twice. A deploy started
+that way has no test gate of its own: whoever starts it is vouching for the
+commit.
 
 | Workflow | Target |
 |---|---|

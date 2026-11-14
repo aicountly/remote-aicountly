@@ -451,8 +451,12 @@ jobs:
           prerelease: ${{ inputs.channel == 'beta' }}
           draft: false
           files: desktop/release/*
+          # Added to what is there, not written over it: see the same line in
+          # release-windows.yml. Each platform's notes say whether that
+          # platform's build is signed, and both have to survive.
+          append_body: true
           body: |
-            AICOUNTLY Remote ${{ inputs.version }}, build ${{ steps.stamp.outputs.build }} (${{ inputs.channel }}).
+            AICOUNTLY Remote for macOS ${{ inputs.version }}, build ${{ steps.stamp.outputs.build }} (${{ inputs.channel }}).
 
             ${{ inputs.allow_unsigned && 'macOS: **NOT signed with a Developer ID certificate and NOT notarised.** macOS blocks the first launch; allow it from System Settings > Privacy & Security. See UNSIGNED-macos.txt in the assets. Verify a download against `SHA256SUMS-macos.txt`.' || 'macOS: signed with a Developer ID certificate and notarised by Apple, so it opens from a download without a security warning. Verify a download against `SHA256SUMS-macos.txt`, and check the notarisation with `xcrun stapler validate Aicountly-Remote-*.dmg`.' }}
 

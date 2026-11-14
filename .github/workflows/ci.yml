@@ -1,9 +1,11 @@
 # ---------------------------------------------------------------------------
 # Continuous integration for AICOUNTLY Remote.
 #
-# Runs on every pull request and every push to main, and on demand. It does NOT
-# deploy — deployment stays manual, through the two workflow_dispatch workflows,
-# and each of them calls this workflow first (workflow_call) so a red suite
+# Runs on demand, and when a deploy calls it. It does not run on a pull request
+# or a push (the suites are run locally before a merge, to save Actions
+# minutes). It does NOT deploy — deployment stays manual, through the two
+# workflow_dispatch workflows, and each of them calls this workflow first
+# (workflow_call, unless its run_ci_gate input is switched off) so a red suite
 # blocks the deploy.
 #
 # Three independent jobs so a frontend type error does not hide a backend test

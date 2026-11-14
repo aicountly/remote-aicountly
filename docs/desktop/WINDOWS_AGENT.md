@@ -118,10 +118,24 @@ coordinates normalised into the 0..65535 virtual-desktop space — which is the
 only way to land a click correctly on a multi-monitor, mixed-DPI desktop where
 one screen is to the left of another and at a different scale.
 
-Keys are injected as **Unicode** (`KEYEVENTF_UNICODE`) from the character the
+Text is injected as **Unicode** (`KEYEVENTF_UNICODE`) from the character the
 person meant, not from a scan code. A French keyboard controlling a US one
 produces the character that was typed rather than the one in that physical
 position.
+
+A **shortcut is a key, not a character**, and goes the other way: a character
+that arrives with Ctrl, Alt or the Windows key held is pressed as its virtual
+key (`character_plan`, `platform/windows/input.rs`), because Windows delivers a
+Unicode injection as text and no application reads "copy" from text. Ctrl and
+Alt together with a symbol is the exception — that is AltGr on the helper's
+keyboard composing `@` or `€` — and is typed.
+
+Which key the helper pressed for "copy" depends on *their* keyboard. A helper
+on a Mac presses ⌘, and the room sends it as Ctrl to a Windows computer
+(`keyForPlatform`, `web/src/services/webrtc/remoteControl.ts`); the Windows key
+itself is in the room's Keys menu. One thing is known not to work: a character
+a Mac helper types with **Option** (`#` on a British Mac layout, `@` on a
+German one) arrives with Alt held and is not typed.
 
 Every message goes through `ControlGate::admit()` first. There is no other path
 from the network to `SendInput`, and there is no API anywhere in the agent for
@@ -229,11 +243,25 @@ ask the person at the computer.
 
 ### Ctrl+Alt+Del
 
-The helper's viewer may send Secure Attention. The service raises it with
-`SendSAS`, loaded dynamically from `sas.dll`, which works for a service only
-when the `SoftwareSASGeneration` policy permits services to. The policy is not
-changed; if it forbids it, the request does nothing rather than a setting being
-written to force it.
+The helper's room has a **Keys** menu, and Ctrl+Alt+Del is in it (a browser is
+never given those keys). The agent recognises it and asks the service's helper
+to raise Secure Attention with `SendSAS`, loaded dynamically from `sas.dll` —
+which works for a service only when the `SoftwareSASGeneration` policy permits
+services to (the value 1 or 3; absent or 0 on an ordinary home PC).
+
+The policy is read, never written. Three outcomes, and the helper is told
+which (`InputRefusedReason`, shown above the picture in the room):
+
+* the person at the computer did not tick **Also let them answer Windows
+  administrator prompts** — nothing is sent, and the room says it can only be
+  sent when that was ticked;
+* it was ticked but the policy does not let a service raise it — nothing is
+  sent, and the room says Windows on that computer does not allow it and the
+  person there can press it themselves;
+* it was ticked and the policy allows it — the security screen appears.
+
+Whether an installer should set that policy is an owner decision recorded in
+the readiness audit; today nothing does.
 
 ## The other three things Windows will not let this do
 

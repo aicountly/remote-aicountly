@@ -59,10 +59,12 @@ not let it do, is [desktop/SECURITY.md](desktop/SECURITY.md).
   service and the TURN server.
 * **A browser cannot be controlled.** The browser client shares and views;
   annotations are overlays and change nothing on the sharer's machine. Control
-  requires the AICOUNTLY Remote application on the computer being controlled
-  — on Windows or a Mac, as the *control companion* of the screen its owner
-  shares from the browser (desktop/CONTROL_COMPANION.md) — and the interface
-  says so rather than offering a button that would be refused.
+  requires the AICOUNTLY Remote application on the computer being controlled,
+  on Windows or a Mac — either hosting the session itself (it shares its own
+  screen: a session started from the app, or an unattended connection), or as
+  the *control companion* of the screen its owner shares from the browser
+  (desktop/CONTROL_COMPANION.md) — and the interface says so rather than
+  offering a button that would be refused.
 * **A UAC prompt can be answered remotely only with explicit consent, and
   without weakening UAC.** The Windows Secure Desktop is a boundary the app
   cannot cross; the per-machine service crosses it the supported way, as a
@@ -354,7 +356,13 @@ appropriate. The SPA's own CSP ships with the web build in
 `web/public/.htaccess` and must permit the app's scripts and its WebSocket —
 and the AICOUNTLY Connect widget's origins (`connect.aicountly.com`,
 `connect.gh.aicountly.com`) in `script-src`, `style-src`, `img-src` and
-`connect-src`, nothing wider. The widget authenticates with Remote's ses_key as
+`connect-src`. `script-src` is that list and nothing wider. **`connect-src` is
+wider than it needs to be**: besides the named origins it allows any `https:`
+and any `wss:` origin, which was the simple way to let one build reach each
+environment's signalling service and Google Analytics. A page script could
+therefore send data to any HTTPS host; naming the signalling and analytics
+hosts instead is an open hardening item (docs/audit/PUBLIC_READINESS_AUDIT.md).
+The widget authenticates with Remote's ses_key as
 a Bearer to Connect only, renders in its own shadow root, and is destroyed for
 the duration of a live session (see ARCHITECTURE.md § AICOUNTLY Connect).
 
@@ -410,6 +418,21 @@ the invitation token with `:token` — and the product name as the page title;
 never a user id, a name, an e-mail address or free text. Nothing is loaded while
 the address bar holds the sign-in hand-off, an invitation link or another
 credential, and no banner is shown there.
+
+**There is a second pipeline, and the banner does not govern it.** AICOUNTLY's
+own estate analytics (`web/src/analytics/estateAnalytics.ts`, started from
+`web/src/main.tsx`) records a page view for every navigation of a signed-in
+person, whatever they chose in the banner and before they have chosen. The
+browser sends only a masked path (`/room/:id`, never a query or a token) and a
+random session id to Remote's own API (`POST /v1/remote/analytics/collect`);
+the server attaches the signed-in person's user uuid and forwards the batch to
+analytics.aicountly.org. No company, no name, no e-mail address and no screen
+content is recorded; a guest and a registered computer record nothing. It also
+runs inside the desktop application's embedded portal. Whether first-party
+telemetry tied to a user id may run without a choice is a question for
+AICOUNTLY's counsel under the DPDP Act and, for visitors from the EU, the
+ePrivacy rules — it is listed as an owner decision in the readiness audit, and
+the code has one switch for it (`initEstateAnalytics()` in `main.tsx`).
 
 ---
 

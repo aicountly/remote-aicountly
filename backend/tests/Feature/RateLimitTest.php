@@ -28,6 +28,27 @@ final class RateLimitTest extends RemoteTestCase
     use DeviceApiRequests;
     use FeatureTestTrait;
 
+    /**
+     * The throttler gives tokens back as time passes — two a second on a budget of 120 a minute — so
+     * on a busy machine a loop of calls can be handed tokens faster than it uses them, and "the 121st
+     * is refused" is then a statement about how fast this machine is. The clock is held still: what
+     * is under test is whose budget a call is counted against.
+     */
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        service('throttler')->setTestTime(time());
+    }
+
+    protected function tearDown(): void
+    {
+        // A throttler with a stopped clock must not be the one the next test class is given.
+        \Config\Services::resetSingle('throttler');
+
+        parent::tearDown();
+    }
+
     public function testEachComputerHasItsOwnBudgetBehindOneAddress(): void
     {
         $owner = $this->makeIdentity('Office Owner');
