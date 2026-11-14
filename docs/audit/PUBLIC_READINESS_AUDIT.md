@@ -176,6 +176,7 @@ decision or somebody outside this repository, and one — the test on real machi
 | `b1797f0` | **Two kinds of keyboard**: ⌘ and Ctrl change places between a Mac and a PC, and a Mac gets its own Keys menu. The server tells the room which the computer is. A person is never shown their own request as a question to answer. The manual test plan is brought up to what is built. | `remoteControl.ts` (`keyForPlatform`); `Presenter.php` (`operatingSystem`); `desktop/tests/MANUAL.md` |
 | `ab638b5`, `822cdac` | **Documents corrected** (Appendix A). **Both platforms' release notes are kept** on a shared release. One test that depended on how fast the machine was is made exact. | `README.md`; `docs/`; `release-windows.yml`; `release-macos.yml`; `RateLimitTest.php` |
 | `ee7ac93` | **The browser's consent prompt warns about scams** too. A skip link, a phone menu that leaves the keyboard's path when shut, a join request that a screen reader announces, a name for the shared screen. | `ControlPanel.tsx`; `AppShell.tsx`; `SessionRoomPage.tsx`; `SessionStage.tsx` |
+| `d813ec7` | **The second button on the app's coloured strip** passes the contrast test; "End session" measured 4.49:1 on the amber strip of an unattended connection. | `desktop/src/styles/app.css` |
 | `4332973` | **A phone** is offered Join first, cannot create a session it could not share in, sees the whole toolbar, and gets the picture rather than the People list. | `DashboardPage.tsx`; `StartSessionPage.tsx`; `room.css` |
 
 ### 2.2 PR #116 — live since 13 November
