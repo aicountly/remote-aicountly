@@ -863,7 +863,6 @@ mod imp {
         }
     }
 
-    /// One BGRA frame of `display`, or `None` when macOS has no image of it.
     /// Where the pointer is, in global display points (top-left origin) — the
     /// space the display list and `CGEventPost` use.
     ///
@@ -880,6 +879,7 @@ mod imp {
         Some((location.x, location.y))
     }
 
+    /// One BGRA frame of `display`, or `None` when macOS has no image of it.
     pub fn grab(display: u32, timestamp_us: u64) -> PlatformResult<Option<Frame>> {
         let Some(image) = OwnedImage::of_display(display) else {
             return Ok(None);

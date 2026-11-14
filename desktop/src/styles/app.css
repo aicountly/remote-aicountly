@@ -433,14 +433,18 @@ kbd {
 
 /* On the banner. 12% white rather than 16%: on the amber of an unattended
    session the lighter fill left its white label at 4.49:1. */
+/* A button on a coloured strip: outlined, and a shade darker than the strip.
+   It was a shade lighter, which took the white text on the amber strip to
+   4.49:1 — and lighter still when hovered. Darker, it is 8:1 or better on
+   both strips, hovered or not. */
 .btn--inverse {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.18);
   color: var(--text-inverse);
-  border-color: rgba(255, 255, 255, 0.45);
+  border-color: rgba(255, 255, 255, 0.55);
 }
 
 .btn--inverse:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.26);
+  background: rgba(0, 0, 0, 0.32);
 }
 
 /* Stop control: the one solid button on the banner, so it is the first thing
