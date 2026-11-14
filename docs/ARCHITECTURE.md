@@ -54,10 +54,16 @@ pipeline".
 
 The desktop agent talks to the same API over HTTPS and the same signalling
 service over WSS. It authenticates as a **device** rather than as a person —
-Ed25519 proof of possession, a credential that lasts minutes — so nothing it
-holds is a user's credential and nothing it can reach is a user's data. It is
-released through its own manual workflow and never through the cPanel
-deployment.
+Ed25519 proof of possession, a credential that lasts minutes — so nothing the
+agent itself holds is a user's credential and nothing it can reach with its
+own identity is a user's data. One thing in the application is the person's:
+the window's **Remote** tab is the web app, signed in as them, and the sign-in
+hand-off delivers the person's portal `auth_token` to that embedded page
+(`DesktopSignInService`; it lives in the web view's storage, as it would in a
+browser, and the hand-off must be opened with the enrolled machine's own
+credential — the older code-only redemption is accepted until 31 December
+2026). It is released through its own manual workflow and never through the
+cPanel deployment.
 
 **Media never touches AICOUNTLY infrastructure.** Video and audio go directly
 between the two peers — two browsers, or a browser and a Windows agent — or
