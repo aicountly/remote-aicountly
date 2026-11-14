@@ -1,0 +1,298 @@
+{
+ "label": "prod",
+ "base": "http://localhost:5183",
+ "when": "2026-11-13T23:11:07.464Z",
+ "dashboard-first-run": {
+  "runs": 5,
+  "median": {
+   "firstPaint": 44,
+   "firstContentfulPaint": 92,
+   "bootScreen": 79,
+   "shellFrame": 251,
+   "skeleton": 251,
+   "dashboardMeaningful": 551,
+   "domContentLoaded": 73,
+   "cls": 0.0026
+  },
+  "all": [
+   {
+    "fcp": 88,
+    "dashboard": 548,
+    "cls": 0.0026
+   },
+   {
+    "fcp": 112,
+    "dashboard": 566,
+    "cls": 0.0026
+   },
+   {
+    "fcp": 92,
+    "dashboard": 551,
+    "cls": 0.0051
+   },
+   {
+    "fcp": 92,
+    "dashboard": 544,
+    "cls": 0.0026
+   },
+   {
+    "fcp": 96,
+    "dashboard": 557,
+    "cls": 0.0026
+   }
+  ],
+  "jsRequests": 9,
+  "cssRequests": 1,
+  "resourceCount": 53,
+  "transferKb": 233,
+  "decodedKb": 594,
+  "api": [
+   "78ms POST /global/seskey 200",
+   "286ms GET /global/user/logo 404",
+   "288ms GET /v1/remote/bootstrap 200"
+  ],
+  "apiDuplicates": {},
+  "external": [
+   "266ms https://console.aicountly.org/api/product-icons/manifest",
+   "445ms https://connect.gh.aicountly.com/embed/v1/loader.js"
+  ],
+  "shifts": [
+   {
+    "t": 265,
+    "value": 0.0002,
+    "sources": [
+     "span.shell__product 18→18"
+    ]
+   },
+   {
+    "t": 281,
+    "value": 0,
+    "sources": [
+     "span.shell__product 18→18"
+    ]
+   },
+   {
+    "t": 449,
+    "value": 0.0015,
+    "sources": [
+     "li. 198→237",
+     "li. 237→313",
+     "div.account-menu 7→7"
+    ]
+   },
+   {
+    "t": 568,
+    "value": 0.0009,
+    "sources": [
+     "div.shell__nav-foot 799→884"
+    ]
+   }
+  ]
+ },
+ "dashboard-recent": {
+  "runs": 5,
+  "median": {
+   "firstPaint": 44,
+   "firstContentfulPaint": 84,
+   "bootScreen": 72,
+   "shellFrame": 239,
+   "skeleton": 239,
+   "dashboardMeaningful": 540,
+   "domContentLoaded": 67,
+   "cls": 0.002
+  },
+  "all": [
+   {
+    "fcp": 84,
+    "dashboard": 538,
+    "cls": 0.002
+   },
+   {
+    "fcp": 92,
+    "dashboard": 540,
+    "cls": 0.002
+   },
+   {
+    "fcp": 80,
+    "dashboard": 537,
+    "cls": 0.002
+   },
+   {
+    "fcp": 76,
+    "dashboard": 540,
+    "cls": 0.002
+   },
+   {
+    "fcp": 92,
+    "dashboard": 551,
+    "cls": 0.002
+   }
+  ],
+  "jsRequests": 9,
+  "cssRequests": 1,
+  "resourceCount": 53,
+  "transferKb": 236,
+  "decodedKb": 597,
+  "api": [
+   "76ms POST /global/seskey 200",
+   "272ms GET /global/user/logo 404",
+   "272ms GET /v1/remote/bootstrap 200"
+  ],
+  "apiDuplicates": {},
+  "external": [
+   "260ms https://console.aicountly.org/api/product-icons/manifest",
+   "441ms https://connect.gh.aicountly.com/embed/v1/loader.js"
+  ],
+  "shifts": [
+   {
+    "t": 259,
+    "value": 0.0002,
+    "sources": [
+     "span.shell__product 18→18"
+    ]
+   },
+   {
+    "t": 275,
+    "value": 0,
+    "sources": [
+     "span.shell__product 18→18"
+    ]
+   },
+   {
+    "t": 427,
+    "value": 0.0015,
+    "sources": [
+     "li. 198→237",
+     "li. 237→313",
+     "div.account-menu 7→7"
+    ]
+   },
+   {
+    "t": 550,
+    "value": 0.0003,
+    "sources": [
+     "div.shell__nav-foot 799→824"
+    ]
+   }
+  ]
+ },
+ "room-host": {
+  "marks": {
+   "boot": 68,
+   "skeleton": 231,
+   "roomLoading": 530,
+   "room": 692
+  },
+  "cls": 0.0012,
+  "shifts": [
+   {
+    "t": 708,
+    "value": 0.0002,
+    "sources": [
+     "div.room__status 25→25"
+    ]
+   },
+   {
+    "t": 855,
+    "value": 0.0009,
+    "sources": [
+     "div.room__toolbar-group 836→836"
+    ]
+   },
+   {
+    "t": 938,
+    "value": 0.0001,
+    "sources": [
+     "div.room__status 25→25",
+     "span.connection__dot 30→30"
+    ]
+   }
+  ],
+  "paint": {
+   "first-paint": 40,
+   "first-contentful-paint": 80
+  },
+  "sockets": 1,
+  "status": "Waiting for the other person Waiting for the other person to join.",
+  "hasPicture": false,
+  "api": [
+   "71ms POST /global/seskey 200",
+   "241ms GET /v1/remote/bootstrap 200",
+   "533ms GET /v1/remote/sessions/:s 200",
+   "695ms GET /v1/remote/sessions/:s/control 200",
+   "696ms POST /v1/remote/sessions/:s/signalling-token 200",
+   "697ms GET /v1/remote/sessions/:s/messages 200",
+   "934ms POST /v1/remote/sessions/:s/participants/:me/joined 200",
+   "4695ms GET /v1/remote/sessions/:s 200",
+   "4849ms GET /v1/remote/sessions/:s/messages 200",
+   "8695ms GET /v1/remote/sessions/:s 200",
+   "8850ms GET /v1/remote/sessions/:s/messages 200"
+  ],
+  "apiCount": 11,
+  "apiDuplicates": {
+   "GET /v1/remote/sessions/:s": 3,
+   "GET /v1/remote/sessions/:s/messages": 3
+  }
+ },
+ "room-helper": {
+  "marks": {
+   "boot": 70,
+   "skeleton": 232,
+   "roomLoading": 533,
+   "room": 693
+  },
+  "cls": 0.1546,
+  "shifts": [
+   {
+    "t": 712,
+    "value": 0.0003,
+    "sources": [
+     "div.room__status 24→24",
+     "span.connection__dot 30→30"
+    ]
+   },
+   {
+    "t": 1103,
+    "value": 0.1541,
+    "sources": [
+     "div.stage__surface 387→85",
+     "div.room__status 24→24"
+    ]
+   },
+   {
+    "t": 2857,
+    "value": 0.0001,
+    "sources": [
+     "div.room__status 24→24"
+    ]
+   },
+   {
+    "t": 6855,
+    "value": 0.0001,
+    "sources": [
+     "div.room__status 24→24"
+    ]
+   }
+  ],
+  "paint": {
+   "first-paint": 40,
+   "first-contentful-paint": 88
+  },
+  "sockets": 1,
+  "status": "Connected · 1 ms · 3 fps Connected. 00:01:09",
+  "hasPicture": true,
+  "api": [
+   "74ms POST /global/seskey 200",
+   "244ms GET /v1/remote/bootstrap 200",
+   "536ms GET /v1/remote/sessions/:s 200",
+   "697ms GET /v1/remote/sessions/:s/control 200",
+   "697ms POST /v1/remote/sessions/:s/signalling-token 200",
+   "697ms GET /v1/remote/sessions/:s/messages 200",
+   "940ms POST /v1/remote/sessions/:s/participants/:me/joined 200",
+   "1119ms POST /v1/remote/sessions/:s/participants/:me/presence 200",
+   "1122ms POST /v1/remote/sessions/:s/connectivity-report 200"
+  ],
+  "apiCount": 9,
+  "apiDuplicates": {}
+ }
+}

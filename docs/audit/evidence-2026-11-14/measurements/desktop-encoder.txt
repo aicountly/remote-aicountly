@@ -1,0 +1,18 @@
+  convert alone            n=150  mean   4.57 ms  p50   4.26 ms  p95   7.18 ms  max   9.08 ms
+  P-frame, convert+encode  n=105  mean  25.51 ms  p50  23.81 ms  p95  32.50 ms  max  41.42 ms
+  IDR, convert+encode      n=3    mean  51.07 ms  p50  37.35 ms  p95  87.60 ms  max  87.60 ms
+  108 encoded, 42 skipped by rate control, 2242 kbit/s produced
+3024x1964 BGRA -> 1920x1246 H.264, 4306 kbit/s target
+  convert alone            n=150  mean  21.77 ms  p50  20.28 ms  p95  33.81 ms  max  36.41 ms
+  P-frame, convert+encode  n=116  mean  47.23 ms  p50  44.00 ms  p95  66.48 ms  max  81.00 ms
+  IDR, convert+encode      n=3    mean  55.51 ms  p50  46.96 ms  p95  72.66 ms  max  72.66 ms
+  119 encoded, 31 skipped by rate control, 2329 kbit/s produced
+3840x2160 BGRA -> 1920x1080 H.264, 3732 kbit/s target
+  convert alone            n=150  mean  21.66 ms  p50  20.49 ms  p95  30.30 ms  max  37.85 ms
+  P-frame, convert+encode  n=130  mean  42.44 ms  p50  40.28 ms  p95  56.98 ms  max  66.14 ms
+  IDR, convert+encode      n=3    mean  61.18 ms  p50  63.96 ms  p95  73.97 ms  max  73.97 ms
+  133 encoded, 17 skipped by rate control, 1214 kbit/s produced
+test video::h264::tests::encoding_fits_the_frame_interval ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 104 filtered out; finished in 31.87s
+

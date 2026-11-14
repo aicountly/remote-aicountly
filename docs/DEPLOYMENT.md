@@ -375,7 +375,8 @@ files long before it runs out of anything else: measured on four cores it held
 met was the file one. It reads its own limit when it starts, keeps 64 files
 back, and logs the result — `listening on …, accepting up to N connections`.
 On a host with the usual limit of 1024 that is 960: have the limit raised
-before there are a thousand computers. Above the ceiling a new connection is
+(`LimitNOFILE=` in the service's unit, below) before there are a thousand
+computers. Above the ceiling a new connection is
 refused with 503 and a line is logged once a minute; rooms already open keep
 working and `/health` keeps answering.
 
@@ -425,6 +426,11 @@ EnvironmentFile=/srv/aicountly-remote/signalling/.env
 ExecStart=/usr/bin/node src/server.js
 Restart=always
 RestartSec=5
+# Every connection is an open file, and every signed-in computer holds one.
+# systemd's default is 1024, which makes the relay's ceiling 960 connections;
+# with this it is the relay's own default of 20000. The line it logs at start
+# ("accepting up to N connections") says which applies.
+LimitNOFILE=65536
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

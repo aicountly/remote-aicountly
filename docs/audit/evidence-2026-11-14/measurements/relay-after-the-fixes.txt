@@ -1,0 +1,90 @@
+===== crashurl
+GET /signal: reply "HTTP/1.1 401 Unauthorized"; relay exited null; 100 sockets -> still open 100, lost {}
+GET /signal//: reply "HTTP/1.1 404 Not found"; relay exited null; 100 sockets -> still open 100, lost {}
+GET //: reply "HTTP/1.1 400 Bad request"; relay exited null; 100 sockets -> still open 100, lost {}
+GET //[: reply "HTTP/1.1 400 Bad request"; relay exited null; 100 sockets -> still open 100, lost {}
+
+result file: relay-load/results/crashurl-2026-11-14T01-07-50-074Z.json
+exit 0
+===== ratelimit
+threshold: 245 directed messages in 0.5 s: scheduled 245, sent 245, closed no; mate saw {"slot":1,"received":246,"types":{"joined":1,"ice-candidate":245}}
+two-person connect: offer + 40 candidates in 1 s: scheduled 41, sent 41, closed no; mate saw {"slot":1,"received":42,"types":{"joined":1,"offer":1,"ice-candidate":40}}
+pointer only at the 50 ms throttle for 25 s: scheduled 500, sent 500, closed no; mate saw {"slot":1,"received":501,"types":{"joined":1}}
+pointer at 20/s + offer + 30 candidates in the same window: scheduled 511, sent 511, closed no; mate saw {"slot":1,"received":512,"types":{"joined":1,"offer":1,"ice-candidate":30}}
+pointer at 20/s + offer + 38 candidates in the same window: scheduled 519, sent 519, closed no; mate saw {"slot":1,"received":520,"types":{"joined":1,"offer":1,"ice-candidate":38}}
+pointer at 20/s + offer + 40 candidates in the same window: scheduled 521, sent 521, closed no; mate saw {"slot":1,"received":522,"types":{"joined":1,"offer":1,"ice-candidate":40}}
+pointer at 20/s + offer + 45 candidates in the same window: scheduled 526, sent 526, closed no; mate saw {"slot":1,"received":527,"types":{"joined":1,"offer":1,"ice-candidate":45}}
+newcomer joins 5 peers: 5 answers + 5 x 40 candidates in 1.5 s: scheduled 205, sent 205, closed no; mate saw {"slot":0,"received":47,"types":{"joined":1,"peer-joined":5,"answer":1,"ice-candidate":40}}
+newcomer joins 6 peers: 6 answers + 6 x 40 candidates in 1.5 s: scheduled 246, sent 246, closed no; mate saw {"slot":0,"received":48,"types":{"joined":1,"peer-joined":6,"answer":1,"ice-candidate":40}}
+newcomer joins 7 peers: 7 answers + 7 x 30 candidates in 1.5 s: scheduled 217, sent 217, closed no; mate saw {"slot":0,"received":39,"types":{"joined":1,"peer-joined":7,"answer":1,"ice-candidate":30}}
+newcomer joins 8 peers: 8 answers + 8 x 30 candidates in 1.5 s: scheduled 248, sent 248, closed no; mate saw {"slot":0,"received":40,"types":{"joined":1,"peer-joined":8,"answer":1,"ice-candidate":30}}
+
+result file: relay-load/results/ratelimit-2026-11-14T01-10-24-741Z.json
+exit 0
+===== slowconsumer 80
+
+result file: relay-load/results/slowconsumer-2026-11-14T01-10-56-537Z.json
+
+=== slow consumer: one stalled recipient, sender at 5.29 MB/s within the rate limit ===
+relay RSS before 73.1 MB -> peak 94.1 MB at +2 s -> 90.2 MB at the end
+heartbeats at + s; recipient: {"slot":1,"open":true,"received":1,"receivedMb":0,"types":{"joined":1},"closed":null}
+rss (s, MB): 0:73.1 5:92.2 10:92.2 15:89.3 20:90.1
+canary during: p50 0.63 p95 0.79 p99 0.81 max 0.81; relay main 3.46%
+exit 0
+===== fanout 50 --big
+
+result file: relay-load/results/fanout-50-2026-11-14T01-12-03-643Z.json
+
+=== fanout K=50: 995 msg/s in -> 48767 msg/s out (100% of expected) ===
+idle: relay main 0.99%; canary p50 0.73 p95 0.93 p99 2.69 max 3.1
+storm: relay main 38.95% all 40% (peak 1 s 48.87%), wait 24.5 ms; 7.77 us/delivery; canary p50 0.48 p95 2.82 p99 3.87 max 4.87; in-room p50 0.76/1.45 p99 4.92/6.66; rss peak 84 MB 
+one 250 KB chat into the room: 4 ms relay CPU each, worst 200 ms slice 11.8 ms; canary max 4 ms
+250 KB x 22/s for 8 s from ONE socket: relay main 5.24%; canary during p50 0.56 p95 0.85 p99 5.07 max 5.07 (n=39); incl. drain max 5.07; rss peak 103.5 MB; delivered 94/2056 MB; sender {"id":5,"name":"g0","sent":42,"closed":4008,"seconds":1.9}
+exit 0
+===== fdlimit 1024
+
+result file: relay-load/results/fdlimit-2026-11-14T01-12-13-231Z.json
+
+=== fd limit 1024 ===
+node lifts soft 1024 to: {"nofileSoft":20000,"nofileHard":20000}
+attempted 1224: opened 958, failed 266 in 556 ms; client errors {"Unexpected server response: 503":266}; relay fds 982; relay alive true
+/health at the ceiling: ok 20, failed 0; canary still relaying: n=45 p99 3.12; relay log: ["[remote-signal] listening on 127.0.0.1:8791, accepting up to 960 connections","[remote-signal] refusing new connections: 960 are open and the limit is 960. Raise the open-file limit of this process (ulimit -n) and REMOTE_SIGNAL_MAX_CONNECTIONS."]
+after closing: health ok 5, connections 2
+exit 0
+===== capacity 10000
+[capacity 10000] connected 10000/10000 in 1737 ms (failed 0)
+
+result file: relay-load/results/capacity-10000-2026-11-14T01-14-49-533Z.json
+
+=== capacity N=10000 (10000 connected, loadavg 0.12/0.64/1.02 -> 0.61/0.53/0.91) ===
+connect: 1737 ms wall, 5757/s, relay main-thread CPU 1179.6 ms = 0.118 ms/conn, failed 0
+memory: empty 71.7 MB -> 143.4 MB RSS (7.3 KB/socket), fds 10024
+idle 10 s between heartbeats: main 0.68% / all threads 0.7% / stat 0.7%; canary p50 0.68 p95 0.9 p99 1.85 max 2.97 ms
+full 30 s cycle incl. heartbeat: main 1.33% all 1.67%
+idle 10 s, probe silent, no heartbeat: main 0% / all threads 0% / stat 0% (0 ms in 9.99 s, 7.4 s after a heartbeat); empty relay with probe: 0.97%
+heartbeat: +197.8 ms main CPU, worst 200 ms slice 132.9 ms, canary max 14.78 ms (n=64, >5ms 4) 
+heartbeat: +136.7 ms main CPU, worst 200 ms slice 116.2 ms, canary max 11.1 ms (n=64, >5ms 2) 
+empty canary: p50 0.65 p95 0.82 p99 1.01 max 6.82; /health empty p50 0.64 ms -> loaded p50 0.72 p99 2.09 ms
+active 5% (250 rooms, 3053 msg/s): rtt p50 0.24 p95 0.53 p99 1.52 max 18.26 ms, lost 0; relay main 14.68%; canary p95 0.59 p99 0.92 max 12.33; client loop p99 1.03
+  synchronised: rtt p50 1.69 p95 7.06 p99 10.02 max 15.44 ms, lost 0; relay peak 1 s 47.67%; canary p99 6.38 max 7.85; client loop max 6.62
+shutdown: 647 ms, client close codes {"1001":9500}, peer-left seen 0
+exit 0
+===== capacity 19900
+[capacity 19900] connected 19900/19900 in 6961 ms (failed 0)
+
+result file: relay-load/results/capacity-19900-2026-11-14T01-17-26-859Z.json
+
+=== capacity N=19900 (19900 connected, loadavg 0.61/0.53/0.91 -> 0.46/0.49/0.83) ===
+connect: 6961 ms wall, 2859/s, relay main-thread CPU 2573 ms = 0.129 ms/conn, failed 0
+memory: empty 71.6 MB -> 192 MB RSS (6.2 KB/socket), fds 19924
+idle 10 s between heartbeats: main 0.64% / all threads 0.66% / stat 0.7%; canary p50 0.65 p95 0.8 p99 0.92 max 1.31 ms
+full 30 s cycle incl. heartbeat: main 1.95% all 2.79%
+idle 10 s, probe silent, no heartbeat: main 0% / all threads 0% / stat 0% (0 ms in 9.99 s, 7.4 s after a heartbeat); empty relay with probe: 0.94%
+heartbeat: +331.2 ms main CPU, worst 200 ms slice 178.6 ms, canary max 19.15 ms (n=64, >5ms 6) 
+heartbeat: +277.8 ms main CPU, worst 200 ms slice 146.9 ms, canary max 25.93 ms (n=64, >5ms 6) 
+empty canary: p50 0.76 p95 0.98 p99 1.72 max 2.22; /health empty p50 0.59 ms -> loaded p50 0.54 p99 1.74 ms
+active 5% (498 rooms, 6082 msg/s): rtt p50 0.2 p95 0.58 p99 5.13 max 38.2 ms, lost 0; relay main 24.98%; canary p95 0.69 p99 6.43 max 13.61; client loop p99 1.04/1.03
+  synchronised: rtt p50 4.18 p95 18.87 p99 42.26 max 58.42 ms, lost 0; relay peak 1 s 78.99%; canary p99 30.8 max 41.72; client loop max 3.12/3.12
+shutdown: 1671 ms, client close codes {"1001":18904}, peer-left seen 0
+exit 0
+ALLDONE

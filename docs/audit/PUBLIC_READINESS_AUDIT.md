@@ -2,286 +2,310 @@
 
 | | |
 |---|---|
-| Date | 30 October 2026, brought up to date on 1 November 2026 |
+| Date | 14 November 2026. This is the third pass: the first was 30 October, brought up to date on 1 November. |
 | Written for | The owner |
-| Code audited | Release branch `claude/clever-dirac-x9bs7d`, first at `7274918` (line numbers refer to it), then brought up to date for everything the same release fixed afterwards: those items are marked **Fixed in this release** and listed in §2. Updated on 1 November 2026 for PRs #92 and #93 (`main` at `4e0d7e2`, live in production, desktop build `202611010121` on the downloads page): §0 is the summary of what is done and what remains. |
-| Scope | Personal AICOUNTLY accounts only. By the owner's decision, Remote has no link to companies or organisations for now. Windows code signing is left out, except where something depends on it (the OV certificate from SSL.com is in validation). |
+| Asked for | A re-run of the audit covering four things — taking control of a person's computer, how friendly and easy the screens are, speed, and how far it scales — and a fix for every gap and leftover that could be fixed. |
+| Code audited | Two things, kept apart throughout. **Live:** `main` at `972a9fb` (PR #116), deployed to production on 13 November and built into desktop build `202611132211`. **Not live:** branch `claude/nifty-ramanujan-mic1cd`, the commits listed in §2.1, which is where everything this pass fixed is. Nothing on the branch has been merged, deployed or released. |
+| Scope | Personal AICOUNTLY accounts only. By the owner's decision, Remote has no link to companies or organisations for now. Code signing is left out, except where something depends on it. |
+| How it was checked | By reading the code; by five separate inspections (every earlier finding re-checked against `972a9fb`; the server's request load; a load test of the signalling relay; every screen of the web app, and of the desktop app's window, drawn in a real browser at desktop and phone size and photographed); and by the automated tests, run on one Linux machine. **Nothing was run on a real Windows PC or Mac.** §0 says what that leaves unproven. |
 | Effort | **S** = up to 2 days · **M** = up to 2 weeks · **L** = up to 6 weeks · **XL** = longer, or a dependency decision is needed first |
 | Competitors | The AnyDesk, TeamViewer and UltraViewer columns come from general knowledge, **as commonly advertised. Verify before quoting publicly.** |
 
-Every statement about AICOUNTLY Remote cites the code as `file:line`. Where a file name is unique in the repository, only
-the name is given. The folders are:
-
-| Folder | Files cited by name |
-|---|---|
-| `backend/app/Domain/Device/` | `CompanionService.php`, `DeviceSessionService.php` |
-| `backend/app/Domain/Policy/` | `EffectivePolicyResolver.php`, `EffectivePolicy.php`, `CompanyPolicyDefaults.php` |
-| `backend/app/Domain/Session/`, `…/Audit/` | `JoinService.php`, `SessionService.php`, `ChatService.php`, `AuditService.php` |
-| `backend/app/Config/`, `…/Filters/`, `…/Libraries/` | `Remote.php`, `Routes.php`, `App.php`, `Cache.php`, `RateLimitFilter.php`, `CompanyLifecycle.php` |
-| `backend/app/Database/Seeds/`, `backend/bin/ops/` | `RemotePlatformDefaultsSeeder.php`, `jobs.txt` |
-| `desktop/src-tauri/src/` | `session.rs`, `agent.rs`, `companion.rs`, `runtime.rs`, `src-tauri/src/lib.rs`, `commands/mod.rs`, `portal.rs` |
-| `desktop/src-tauri/src/platform/` | `windows/capture.rs`, `windows/input.rs`, `macos/permissions.rs` |
-| `desktop/crates/remote-core/src/` | `update.rs`, `logging.rs`, `remote-core/src/lib.rs` |
-| `desktop/agents/windows-service/src/` | `service/storage.rs` |
-| `desktop/src-tauri/`, `desktop/installers/windows/` | `tauri.conf.json`, `windows-app-manifest.xml`, `hooks.nsh` |
-| `desktop/src/` | `app/App.tsx`, `features/device/SignInScreen.tsx`, `features/settings/SettingsPage.tsx` (called "desktop `SettingsPage.tsx`"), `features/update/Updates.tsx` |
-| `web/src/features/room/`, `…/sessions/` | `CompanionPanel.tsx`, `ControlPanel.tsx`, `SessionRoomPage.tsx`, `StartSessionPage.tsx` |
-| `web/src/app/`, `web/src/services/`, `web/src/utils/` | `RemoteProvider.tsx`, `AppShell.tsx`, `router.tsx`, `webrtc/screenCapture.ts`, `webrtc/RemotePeerConnection.ts`, `webrtc/remoteControl.ts`, `api/remote.ts`, `analytics.ts` |
-| `.github/workflows/`, `desktop/scripts/` | `release-windows.yml`, `deploy-production.yml`, `ci.yml`, `make-manifest.mjs` |
+Statements about the code cite the file and, where it helps, the function. Line numbers are given only where the
+earlier re-check recorded them against `972a9fb`; a file this pass changed is cited by name and function instead.
 
 ---
 
-## 0. Status at a glance (1 November 2026)
+## 0. Status at a glance (14 November 2026)
 
-**Live now** — production runs `4e0d7e2` (both migrations applied: `EntitleUnattendedAccessByDefault`,
-`AddRemoteTwoStepVerification`), and the downloads page serves Windows and Mac build `202611010121` (unsigned).
-`php spark remote:two-step status` on the server reports the key derived from `remote.signallingSecret` and "can seal
-new secrets: yes".
+### Live now
 
-| Done | Since | Was |
+* **Production** runs `972a9fb` (deploy run 67, 13 November 22:13 UTC). Its test gate was switched off at the owner's
+  request; the suites were run locally first.
+* **The desktop app**: GitHub release `desktop-v1.0.0-beta-b202611132211` holds the Windows and Mac build
+  `202611132211`. **Both are unsigned.** `publish-downloads.yml` was not run in this work, so check on the downloads page
+  which build it offers.
+* That release's notes mention only the Mac build. The Windows installer in it is unsigned too, and its warning was
+  written over (fixed for future releases, §2.1; this one can be corrected by hand).
+
+### Fixed in this pass — on the branch, not live
+
+| Area | What was wrong | Now | Commit |
+|---|---|---|---|
+| Control | When Windows refused the helper's clicks (a window running as administrator in front), the helper was told nothing: control read as granted at both ends and nothing moved. | The helper's room says why, above the picture, within a second. | `34c07c6` |
+| Control | Ctrl+Alt+Del could not be sent at all. Nor could the Windows key, Alt+Tab or Task Manager outside full screen, or in Firefox and Safari. | A **Keys** menu in the room sends them. When Ctrl+Alt+Del cannot be sent, the helper is told which of two reasons applies. | `b08100f`, `9c397c7` |
+| Control | With the clipboard shared, Ctrl+V pasted what was already on the computer, not what the helper had copied. | The helper's text is sent ahead of the paste key. | `9c397c7` |
+| Control | The room treated every computer as a Windows PC talking to a Windows PC. A Mac helper's ⌘C and ⌘V reached Windows as the Windows key and a letter; a PC helper's Ctrl+C did nothing on a Mac; the Keys menu sent Windows shortcuts to a Mac. | ⌘ and Ctrl change places between the two kinds of keyboard, and a Mac gets a Mac's Keys menu. | `b1797f0` |
+| Control | A Mac's picture had no mouse pointer in it, and a Mac whose screen was not changing still converted and encoded every frame. | The pointer is drawn into the picture; a still screen costs almost nothing. | `34c07c6` |
+| Control | The Mac app offered "answer Windows administrator prompts" and other Windows-only settings. | Not offered on a Mac. | `3a29d6e` |
+| Control | If the person sharing closed their browser, the app carrying control never told the server it had left. The computer stayed "busy" for up to an hour. | The app leaves, and a job on the server closes any session nobody came back to. | `54dfcfe` |
+| Desktop window | The Allow / Not now buttons could be below the bottom of a window that cannot scroll. Every failure read "Something went wrong." Stop control was greyed out while anything else was loading. Nothing warned about scams. | Fixed: of the 16 defects found, 14 outright and 2 partly (§7.2). | `3a29d6e` |
+| Web app | A request to control your computer was a "1" on a toolbar button. A declined helper waited for ever. An error looked like an empty list. Primary buttons failed the contrast test. Half the room's toolbar was off screen on a phone. | Fixed: of the 18 defects found, 14 outright and 3 partly; 1 is an owner decision (§7.3). | `9c397c7`, `2ce447a`, `ee7ac93`, `4332973` |
+| Scale | Rate limits were counted per office address: 60 PCs, or 4 help sessions, in one office used up a budget. Every idle PC booked relay capacity it never used. An outage of Console became an outage of Remote. Sessions were never closed unless somebody looked at them. | Limits follow the computer or the person. Idle PCs book nothing. Console's last answer is reused while it is down. A five-minute job closes overdue sessions. | `a135c92`, `8f1c9ad`, `465108f`, `54dfcfe` |
+| Relay | One malformed request crashed the signalling relay and dropped everybody (it could be sent only from the server itself, not through the public address). One slow reader cost 400 MB in a minute. A burst of ordinary messages got a helper disconnected. Nothing capped connections. | All six reproduced defects fixed, and re-measured (§9.3). | `810688f` |
+| Deploy | A deploy deleted the files the previous version of the web app was still loading. | Kept for 30 days. | `5758e4f` |
+| Documents | The README and eight other documents described a Windows-only, companion-only product with test counts from several releases ago. | Corrected (Appendix A). | `ab638b5`, `822cdac` |
+
+### Still to do before a public launch
+
+The P0 list in §6.1 has not got shorter. Each item needs a decision, a certificate or somebody outside this repository
+before code can close it:
+
+1. A signed update path (P0-1) — waits for the certificates.
+2. Terms, a privacy notice for Remote and an EULA (P0-2) — counsel.
+3. A retention schedule and the job that deletes on it (P0-3) — needs the schedule decided.
+4. Reporting and suspending somebody who abuses it (P0-4). The warnings are now in place; the rest is not.
+5. Operations: monitoring, backups, a second server (P0-5).
+6. Positioning (P0-6), pricing and relay admission (P0-7).
+7. Analytics without consent (P0-9), which has grown: a second pipeline now records every signed-in page view whatever the
+   person answered.
+8. **A recorded test on real machines.** Listed separately below because it is the largest risk in this document.
+
+### Not proven on a real computer
+
+Every item below is built and passes its tests on Linux, and the Windows code is checked by a Windows compiler. None
+has been run on a real computer as part of this work, and no completed manual pass is recorded anywhere in the
+repository.
+
+* **Everything PR #116 changed** (live now): the session surviving past two minutes, control arriving within a second,
+  keyboard shortcuts, two screens, sound. `desktop/tests/MANUAL.md` §4a–4c.
+* **Everything this pass changed in the desktop app**: the refused-input notice, Ctrl+Alt+Del through the service
+  (`SendSAS` and the registry read that decides whether it may be sent), the Mac's pointer in the picture, the window's
+  new layout. `MANUAL.md` §4d–4f.
+* **The two-keyboard swap** between a Mac and a Windows PC, in both directions (`MANUAL.md` 4d.10, 4e.8–4e.10).
+* The earlier list still stands: the Secure Desktop helper on Windows 10 and 11, the Cisco codec download behind a
+  proxy, hosting and unattended access on a Mac, macOS 15's repeated Screen Recording question, two-step verification
+  with a real authenticator.
+
+The first thing to do with this audit is to run `desktop/tests/MANUAL.md` on one Windows PC and one Mac and write down
+what happened. It is about half a day.
+
+### Decisions only the owner can make
+
+| # | Decision | Why it is yours |
 |---|---|---|
-| The app sends its own picture (H.264) on Windows and Mac, and a Mac can host | PR #92 | P1-1 |
-| **Get help** ("give your code") from the app; **Connect → Help someone** by code | PR #92 | — |
-| Unattended access to your own computers, per computer, owner only | PR #92 | P1-3 |
-| Your computers: count registered/online, Connect, history of connections and changes, remove | PR #92 | — |
-| The H.264 encoder is Cisco's own OpenH264 binary, downloaded on each computer, under Cisco's licence conditions | PR #93 | P0-10 |
-| Windows administrator prompts (UAC), the Ctrl+Alt+Del screen and the lock screen can be seen and answered, with the person's consent | PR #93 | P1-2 (Secure Desktop part) |
-| Remote's own two-step verification, required for unattended access | PR #93 | P1-9 (Remote's part) |
-| A personal computer answers only to its owner; rename/suspend from the web works again | PR #92 | — |
-
-**Remaining before a public launch (P0, §6.1):** a signed update path (P0-1); Terms, a Remote privacy notice and an
-EULA, which must also carry Cisco's licence text (P0-2); a retention schedule (P0-3); scam and abuse handling (P0-4);
-operations — CI on pull requests, monitoring, backups, a second signalling process (P0-5); positioning (P0-6); pricing
-and TURN admission (P0-7); and, where they apply, relays outside India (P0-8) and analytics consent (P0-9). Before paid
-plans, counsel's view on whether the H.264 pool's content-provider licence applies (P0-10).
-
-**Remaining to verify on real machines** — none of these has run outside CI:
-
-* the Secure Desktop helper on Windows 10 and 11 (§11, steps 40–45);
-* the Cisco codec download: Cisco's HTTPS certificate, a corporate proxy (the app honours only `HTTP(S)_PROXY`, not the
-  WinHTTP setting), Defender and Smart App Control, and the notarised Mac build loading Cisco's dylib (§11, step 46);
-* hosting, Get help and unattended access on Windows and a Mac (§11, steps 33–39);
-* macOS 15: `CGDisplayCreateImage` is deprecated and Sequoia re-asks about screen recording.
-* two-step verification with a real authenticator app, sign-in and unattended step-up (§11, step 47).
-
-**Remaining features (P1/P2):** elevated windows on the ordinary desktop (Task Manager, an installer's own window)
-still refuse input — that needs `uiAccess` and a signed build (P1-2); connect by computer ID (P1-4); clipboard during
-control (P1-5); warning before the 60-minute limit (P1-6); crash reporting (P1-7); a security contact (P1-10); rate
-limits per account (P1-11); a hardware encoder or an encode thread of its own (P1-1); ScreenCaptureKit on macOS 14+;
-a special-keys menu that also sends Ctrl+Alt+Del to the helper (P2-13); and the portal's own second factor, which belongs
-to the portal team (P1-9).
-
-**What people must do after this deploy:** anyone who had already switched unattended access on must turn on two-step
-verification before connecting again (the Computers page says how). A lost phone with lost recovery codes is reset by
-support with `php spark remote:two-step reset <uuid|email> --reason "…"`, after confirming who it is.
+| 1 | Merge the branch, deploy, restart signalling, release a new desktop build, publish it. | Nothing above is live until this is done (§14). |
+| 2 | Signing: the Windows OV certificate (in validation) and an Apple Developer ID. | Blocks P0-1, SmartScreen and Gatekeeper trust, and elevated windows (P1-2b). |
+| 3 | Terms, privacy notice, EULA, retention periods. | Counsel (§12). |
+| 4 | Analytics: whether Google Analytics may load before the person chooses, and whether AICOUNTLY's own analytics may run without a choice at all. | Law, not code. One switch each (P0-9). |
+| 5 | Whether an installer may set the Windows policy that lets Ctrl+Alt+Del be sent. | It changes a security setting on somebody's PC. Today nothing does, and Ctrl+Alt+Del works only where the policy already allows it. |
+| 6 | Whether what is copied on the helped computer may travel to the helper. | The consent dialog promises it does not. Built one way only. |
+| 7 | Whether the web's Start page should begin on **Entire screen** instead of Safe Share. | Safe Share is the private default; Entire screen is the only one that can be controlled. A sentence now says so (§7.3). |
+| 8 | Which tab the desktop app opens on: **Remote** (today) or **Get help**. | Left as designed. |
+| 9 | Pricing, the free tier, and switching relay admission from watching to refusing. | P0-7. |
+| 10 | A security contact address. | P1-10. |
+| 11 | Six facts about the server that cannot be read from the code (§9.6). | They decide the real capacity. |
 
 ---
 
 ## 1. Verdict
 
-### Office pilot: go, with conditions
+### Scorecard
 
-Remote is ready for a supervised office pilot of **help between personal accounts**, in two ways. **From the app:**
-the person chooses **Get help**, reads out a code, lets the helper in and grants control; the app streams its own screen.
-Or, to their own computer, **unattended**. **From the browser:** the person shares their entire screen and links their
-own computer as the control companion, which carries the input. Either way the helper needs only a browser, and the
-person approves every request.
+| What was asked | Verdict | In one sentence |
+|---|---|---|
+| Taking control of a person's computer | **Ready for the pilot. Not proven on real machines.** | Mouse, keyboard, shortcuts, two screens, sound, Ctrl+Alt+Del, paste and both keyboards are built and tested in code on Windows and Mac; what is missing is somebody trying them on real ones. |
+| Friendly screens | **Good, after this pass.** | 34 defects were found across the desktop window and the web app; 28 are fixed outright, 5 partly, and 1 is an owner decision. |
+| Easy to use | **Good for the common path, fair on a phone.** | Being helped is 7 clicks after sign-in and helping is 2 clicks and nine digits; a phone can join, watch and chat but not share. |
+| Speed | **Good.** | The web app is usable in under a second, the relay adds under a millisecond, and the app encodes a 1080p screen inside its 33 ms budget on a modest 4-core machine. A 4K or Retina screen manages about 21–23 frames a second. |
+| Scale | **Hundreds of sessions at once on today's single server; not thousands.** | The relay is not the limit — it held 19,900 connections in 200 MB. The API is, because the room asks it for news every few seconds. What stood in the way of the first few hundred is fixed; what stands in the way of the first few thousand is listed in §9.5. |
+| Security | **Sound design, two open gaps.** | Consent, the local stop and short-lived credentials are right; the update path trusts its download host (P0-1) and the installers are unsigned. |
+| Legal and operations | **Not ready.** | No Terms, no retention, no monitoring, one server. Unchanged since 1 November. |
 
-Both conditions for starting are met:
+### Office pilot: go, with two conditions
 
-1. ~~Production runs this release's backend and web.~~ **Done**: `4e0d7e2` is live, with both migrations applied.
-2. **Every pilot computer runs build `202611010121` or later.** App settings → About shows the 12-digit Build, not
-   "Local build" (desktop `SettingsPage.tsx`).
+1. **Merge the branch, deploy it, and install a build made from it** (§14). Otherwise the pilot tests screens this audit
+   has already replaced.
+2. **Run `desktop/tests/MANUAL.md` on one Windows PC and one Mac first**, before giving it to the pilot group.
 
-The parallel fixes this list used to wait on — signing a computer out revokes it on the server, uninstall cleans up,
-the whole web is personal-only — are all in this release (§2).
+Tell the pilot group these limits (details in §5.2):
 
-Tell the pilot group these limits before they start (details in §5.2):
-
-* A UAC prompt, the Ctrl+Alt+Del screen or the lock screen can be answered only if the person ticked **Also let them
-  answer Windows administrator prompts** (for unattended connections, the switch in App settings), and only with the
-  background service installed. Otherwise the room says "Ask the person at the computer to answer it". Elevated windows
-  on the ordinary desktop (Task Manager, an installer's own window) still refuse the helper's input.
+* A window running as administrator (Task Manager, an installer) does not take the helper's clicks. The helper is now
+  told so.
+* A Windows administrator prompt, the Ctrl+Alt+Del screen and the lock screen can be answered only if the person ticked
+  **Also let them answer Windows administrator prompts**, and only with the background service installed.
+* Ctrl+Alt+Del works only on a PC whose Windows policy allows a program to send it. On an ordinary home PC it does not,
+  and the room says so.
+* The clipboard goes one way, helper to computer, on Windows only, and only when the person ticked it.
+* A helper on a Mac cannot type a character that needs the Option key (`#` on a British keyboard, `@` on a German one)
+  into a Windows PC.
 * Unattended access needs two-step verification on the account.
-* The app downloads Cisco's video codec a few seconds after its first start; without it the helper sees no picture.
-* Control works only while the whole screen is shared and the app is open on that computer. Inside the app, Start
-  session and the room's Share button both propose Entire screen; in a plain browser, choose **Entire screen** on Start
-  session.
-* The clipboard does not work during control.
-* A session stops at 60 minutes, with no warning.
-* Files can be at most 25 MB.
-* Only one screen is shared at a time.
-* The Windows key and Alt+Tab cannot be sent, nor Ctrl+Alt+Del from the browser.
+* A session stops at 60 minutes. The room now warns five minutes before; it cannot be extended.
+* Files can be at most 25 MB, and only between two browsers: the desktop app neither sends nor receives one.
+* When the desktop app shares its own screen, one helper connects at a time, and there is no chat on that computer.
 * The installers are unsigned, so Windows and macOS will warn about them.
 
 ### Public launch: not yet
 
-People who compare AICOUNTLY Remote with AnyDesk, TeamViewer or UltraViewer expect three things. All three are now
-built; none has yet been tested on real machines (§11, steps 33–47):
-
-* ~~a desktop app that sends its own picture~~ — built: H.264 from the app on Windows and Mac, and **Get help** ("give
-  your code") hosted by the app itself;
-* ~~unattended access to their own computers~~ — built: per computer, owner only, recorded;
-* ~~a way through UAC prompts~~ — built for the Secure Desktop (UAC, Ctrl+Alt+Del, the lock screen), with consent, through
-  the background service; elevated windows on the ordinary desktop still need `uiAccess` and signing (P1-2).
-
-These P0 blockers must be fixed first (§6.1):
-
-1. **Updates run whatever the download host serves.** The size and SHA-256 are checked, but they come from that same
-   host. Nothing checks a signature before the installer runs.
-2. **There are no Terms, no privacy notice for Remote and no EULA**, in the web, the app or the installer.
-3. **Nothing is ever deleted on a schedule.** Chat text, IP addresses and user agents are kept for ever. Nothing in the
-   product can delete the audit rows of personal sessions.
-4. **There is no handling of abuse or scams.** At scale, that is the first thing remote-control tools get used for.
-5. **Operations are not ready for the public.**
-   * Production deploys skip the tests unless someone ticks a box.
-   * CI no longer runs on pull requests.
-   * This repository shows no monitoring or alerting.
-   * Everything runs on one server, and signalling is a single process that keeps all its state in memory.
-6. **Positioning needs a decision.** Native video, unattended access and UAC prompts now exist, but are untested on
-   real machines and the builds are unsigned. Launch only after the pilot has run steps 33–47, and say plainly that
-   elevated windows on the ordinary desktop are not yet reachable (P1-2).
-7. **Pricing and free-tier limits are not decided.** TURN admission only observes and refuses nobody. Its capacity
-   figures are placeholders, and the relays are shared with Connect.
-
-8. ~~The H.264 encoder needs a patent licence, or Cisco's own binary~~ — done: Cisco's binary (P0-10). Before paid plans,
-   ask counsel whether the pool's content-provider licence applies.
-
-Two more are blockers only in some cases. If you market outside India, you need relays near those users. If you serve
-the EU, analytics must not load before consent.
+Remote control itself is no longer the reason. The reasons are the eight items listed in §0, of which six need a
+decision or somebody outside this repository, and one — the test on real machines — needs half a day.
 
 **What is already strong:**
 
-* Nothing is sent before the host admits a person (`docs/SECURITY.md:13-16`).
-* Control needs consent at the computer and again for each request. It stops locally, with no network round trip
-  (`docs/desktop/ARCHITECTURE.md:153-164`).
+* Nothing is sent before the host admits a person.
+* Control needs consent at the computer for each request. It stops locally, with no network round trip, from a button
+  that is never disabled, a tray icon and a keyboard shortcut.
+* The person is told who is asking, warned to allow only somebody they know, and shown what control means — in the app
+  and, since this pass, in the browser.
 * Screen content and file contents are never stored. When a relay is needed, it forwards them encrypted and cannot read
   them.
-* Device keys never leave the computer.
-* Device, signalling and TURN credentials are all short-lived.
-* The documentation is mostly honest about its limits.
-
-Rough effort: the P0 items take 4–6 weeks of focused work, not counting the signing dependency. The features needed to
-match the competitors take a quarter or more.
+* Device keys never leave the computer. Device, signalling and TURN credentials are all short-lived.
+* The helper is told the truth when something does not work, in words they can act on.
+* 2,626 automated tests pass (§11).
 
 ---
 
-## 2. What this release changed
+## 2. What changed since the last audit
 
-**Cisco's codec, administrator prompts, two-step verification** (PR #93, `4e0d7e2`, build `202611010121`):
+### 2.1 This pass — on the branch, not live
 
-| Change | Where |
+| Commit | What it does | Where |
+|---|---|---|
+| `34c07c6` | **The computer says when it refuses input.** A new message, `input_refused`, tells the helper's room why: a window running as administrator is in front, or the computer would not take a click. **A Mac's picture shows its pointer**, drawn in at the right size on a Retina display. **A still Mac screen is not converted and encoded again** for every frame; Windows stops allocating a new buffer per frame. (The commit message calls that buffer "WASAPI-era"; it belongs to Windows.Graphics.Capture. The code is right.) | `remote-protocol` (`InputRefusedReason`); `agent.rs`; `session.rs`; `companion.rs`; `platform/pointer.rs`; `platform/macos/capture.rs`; `platform/windows/capture.rs` |
+| `b08100f` | **Ctrl+Alt+Del is routed to the service's helper**, which raises it with `SendSAS` — only when the person ticked the administrator-prompts box. The app reads the Windows policy that decides whether a program may send it and never changes it. When it cannot be sent, the helper is told which reason applies. | `agent.rs` (`secure_attention_plan`); `secure_desktop.rs` (`software_secure_attention_permitted`) |
+| `3a29d6e` | **The desktop window.** A question waiting for the person takes the whole window on the Remote tab, so its buttons can always be reached. Failures show the reason. Stop buttons are never disabled. The strip at the top stays in view and says in words whether the other person can see or is controlling. Scam warnings on the consent, admit and companion dialogs. Text that failed the contrast test is darker. A notice on every tab when the computer is offline. A Mac is offered nothing a Mac cannot do. | `desktop/src/` (20 files); `platform/mod.rs` (`supports_secure_desktop`); `commands/mod.rs` (`show_log_folder`) |
+| `5758e4f` | **A deploy keeps the previous version's files** for 30 days, so a page loaded before the deploy can still fetch its parts. | `deploy-production.yml`; `deploy-sandbox.yml` |
+| `a135c92` | **Rate limits follow the caller**: a computer, a signed-in person or a guest each has their own budget. Only a call nobody has authenticated yet is counted against its address. The two sign-in steps a computer makes at start-up went from 20 to 120 a minute. | `RateLimitFilter.php`; `Routes.php`; `RateLimitTest.php` |
+| `8f1c9ad` | **Idle computers and token renewals book no relay capacity.** A computer's check-in used to be handed relay credentials it never used, and booked 6 Mbit/s for them. Entering a room is recorded once, not once every 90 seconds. | `DevicePresenceService.php`; `SignallingController.php` |
+| `465108f` | **An outage of Console is not an outage of Remote.** While Console is down, its last answer is reused and one request in a while tries again, instead of every request waiting on it. | `ConsoleDatabaseDetails.php` |
+| `54dfcfe` | **Sessions past their time are closed by a job** every five minutes (`remote:sessions-sweep`), which also frees a computer left "busy" in one. The app carrying control leaves when its sharer disappears. | `RemoteSessionsSweep.php`; `SessionService::sweepExpired`; `jobs.txt`; `companion.rs` |
+| `ad15c69` | **A personal account can manage its own computers** from the Computers page. The page promised Remove and offered no button. | `DeviceController.php` |
+| `810688f` | **The relay**: a malformed request gets a 400 instead of crashing it; a burst is dropped instead of disconnecting the sender; a reader that stops reading is cut off at 1 MB; rooms are capped at 64 and connections at a ceiling below the open-file limit; the heartbeat no longer stalls everybody. | `signalling/src/server.js`; `rooms.js` |
+| `9c397c7` | **The room.** A request for control is a strip above the picture, opens the Control panel and changes the tab's title. The helper's own request can be cancelled, and a "no" is said. A helper has Leave beside End, and a helper's End asks first. A warning five minutes before the time limit. The **Keys** menu. Paste. The session code is shown large to a host waiting alone. | `web/src/features/room/`; `services/webrtc/` |
+| `2ce447a` | **The web app's colours pass the contrast test**, an error is no longer shown as an empty list, the timeline has words for all the server's events, and wording that said "Windows" or "this organisation" where neither was true is corrected. | `web/src/styles/`; `features/devices`, `sessions`, `settings`; `utils/format.ts` |
+| `b1797f0` | **Two kinds of keyboard**: ⌘ and Ctrl change places between a Mac and a PC, and a Mac gets its own Keys menu. The server tells the room which the computer is. A person is never shown their own request as a question to answer. The manual test plan is brought up to what is built. | `remoteControl.ts` (`keyForPlatform`); `Presenter.php` (`operatingSystem`); `desktop/tests/MANUAL.md` |
+| `ab638b5`, `822cdac` | **Documents corrected** (Appendix A). **Both platforms' release notes are kept** on a shared release. One test that depended on how fast the machine was is made exact. | `README.md`; `docs/`; `release-windows.yml`; `release-macos.yml`; `RateLimitTest.php` |
+| `ee7ac93` | **The browser's consent prompt warns about scams** too. A skip link, a phone menu that leaves the keyboard's path when shut, a join request that a screen reader announces, a name for the shared screen. | `ControlPanel.tsx`; `AppShell.tsx`; `SessionRoomPage.tsx`; `SessionStage.tsx` |
+| `4332973` | **A phone** is offered Join first, cannot create a session it could not share in, sees the whole toolbar, and gets the picture rather than the People list. | `DashboardPage.tsx`; `StartSessionPage.tsx`; `room.css` |
+
+### 2.2 PR #116 — live since 13 November
+
+"Make remote control work: input, reconnects, shortcuts, two screens, sound." Each line was a fault found by reading the
+code and reproduced in a test.
+
+| Fault | Now |
 |---|---|
-| **Cisco's own OpenH264 binary**, loaded at run time with `libloading`: each computer downloads OpenH264 2.6.0 from Cisco's server, checks its SHA-256 on every load, and keeps it in a per-user folder. App settings → Video codec switches it off and on beside "OpenH264 Video Codec provided by Cisco Systems, Inc."; About → Third-party licences shows Cisco's licence text. The app ships no encoder of its own; Desktop CI fails if one ever reaches it. NASM is no longer installed on the build machines. | `remote-webrtc/src/video/cisco.rs`, `codec.rs`; `commands/codec.rs`; `VideoCodec.tsx`; `desktop/legal/OPENH264_BINARY_LICENSE.txt`; `docs/legal/OPENH264.md`; `desktop-ci.yml` |
-| **The Secure Desktop**: with consent, the service starts a SYSTEM helper on `winsta0\winlogon` in the console session, which captures it with GDI and injects with `SendInput`; the app sends its frames while a prompt is in front and routes gate-admitted input to it. The service refuses a requester that is not the installed app, not in the console session, or not in a session it knows; unattended use needs its own switch. The room is told with `secure_desktop {active, reachable}`. | `agents/windows-service/src/secure_desktop/`; `src-tauri/src/secure_desktop.rs`; `session.rs`; `agent.rs`; `ControlRequest.tsx`; `remote-protocol`; web `SessionStage` |
-| (The two-step row below also landed in this PR.) | — |
+| A help session ended about two minutes in: the browser's room token expired and the relay announced the helper as gone. | The token is renewed before it expires; a departure is waited out for a minute. |
+| The picture froze the moment the control channel opened. | It keeps moving. |
+| After **Allow control**, the helper could wait 25 seconds. | A second or two. |
+| The pointer paused every three seconds. | Smooth. |
+| Every keyboard shortcut was dead: Ctrl+C was typed as the letter c. | A letter typed with Ctrl, Alt or the Windows key held is pressed as a key. |
+| A key held while the helper switched windows stayed down on the other computer. | Released. |
+| One screen only. | Whoever is controlling switches between the computer's displays. |
+| No sound. | On Windows, the computer's sound beside its picture, when the person switches it on. Telephone quality. |
+| An unattended session that was over kept being rejoined by the computer. | The computer ends it when its viewer has gone. |
+| Clicks on a Mac ignored ⌘, ⇧ and ⌥. | They are honoured. |
 
-**Hosting, unattended access, your computers** (PR #92, `ded84f1`, build `202610311052`):
+### 2.3 Between the audits — pull requests #94 to #115
 
-| Change | Where |
+Twenty-two pull requests by others. The ones that changed a finding in this document:
+
+| Change | Finding |
 |---|---|
-| **The app sends its own picture**: capture once the peer connection is up, H.264 (OpenH264) at the profile's rate, stepping down and back up with the link, stopped on every exit. | `remote-webrtc/src/video/`; `session.rs` `CapturePump`; `agent.rs` `start_capture` |
-| **A Mac hosts**: Core Graphics capture, the Screen Recording permission asked for where it is needed. | `platform/macos/capture.rs`, `permissions.rs`; `ScreenRecordingNotice.tsx` |
-| **Get help ("give your code")** from the app: an attended session in the owner's name naming this computer; the person admits each helper in the app (asked on every screen) and grants control as in any session. | `DeviceSessionService` (`devices/me/sessions`…); `commands/computers.rs`; `GetHelp.tsx` |
-| **Unattended access to your own computers**, per computer with a confirmation, owner only. | `CompanyPolicyDefaults::personal()`; migration `EntitleUnattendedAccessByDefault`; `PersonalUnattendedAccessTest` |
-| **Your computers**: how many are registered and online, Connect, and each computer's history (connections and changes), in the web and the app; remove a computer from the web. | `DevicesPage.tsx` `describeCount`, `DeviceHistory.tsx`, `ConnectDevicePage.tsx`; desktop `YourComputers.tsx`, `ComputerHistory.tsx`; `DeviceHistory.php` |
-| A personal computer answers only to its owner (a platform-wide `remote.device.manage` no longer reaches it); renaming or suspending a computer from the web works again. | `DeviceService::findForUser`; `DeviceController::update` |
-| **Remote's own two-step verification** (P1-9): an authenticator app (TOTP) and ten one-time recovery codes, turned on in Settings. With it on, a browser must pass it before any signed-in call but bootstrap and the two-step routes; switching unattended access on needs a code from the last ten minutes, and connecting needs a verified browser. The secret is sealed at rest under a key derived from `remote.signallingSecret`. | `Domain/TwoStep/`; `ApiAuthFilter.php`; migration `AddRemoteTwoStepVerification`; `DeviceService::enableUnattended`; `DeviceSessionService::startUnattended`; web `features/twoStep/`, `TwoStepSettings.tsx`; `docs/SECURITY.md` "Two-step verification" |
-
-Done in `8cefb42` / `7274918`:
-
-| Change | Where |
-|---|---|
-| **Every build has a number**: the commit time, UTC, `yyyyMMddHHmm`. It is in the binary, the installer's file name, the GitHub release (one release per build, pinned to the built commit) and the in-app update check. A later build of the same version is offered, and it can never be served from a cache under the old name. Installers are served `immutable` for a year, which is why reinstalling "the latest" 1.0.0 kept installing the old build. | `remote-core/src/lib.rs:47-58`; `release-windows.yml:156-185`, `:331`, `:405-406`; `make-manifest.mjs:75-76`; `update.rs:190-216`, `:269-271` |
-| **Personal accounts can be helped.** A personal session can link its owner's own computer as the control companion. | `CompanionService.php:95-107`, `:171-181`, `:958-974` |
-| A personal account may share an entire screen and request control. The person at the computer still confirms the link and grants each request. | `EffectivePolicyResolver.php:318-338` |
-| Personal devices are no longer "not found" in personal sessions. | `DeviceSessionService.php:470-476` |
-| The macOS app reopens when its Dock icon is clicked. | `src-tauri/src/lib.rs:285-303` |
-| Desktop window: dark chrome of its own; the build in the header, About and update prompts; a "Getting help on this computer" card; no organisation wording; the Unattended access tab only where it can be used. | `App.tsx:438`, `:460`, `:630`; desktop `SettingsPage.tsx:118-122`; `Updates.tsx:123-124`, `:155-156` |
-| Inside the app, the web portal is always personal. Its Start page starts on "Entire screen" (the room's Share button does not follow it yet: P1-13). It hides the organisation switcher and the session-context card. | `RemoteProvider.tsx:123-134`; `AppShell.tsx:204`; `StartSessionPage.tsx:36`, `:130` |
-| New tests for the personal-account fixes and for build numbering. | `backend/tests/Device/ControlCompanionTest.php` (3 new), `backend/tests/Policy/EffectivePolicyResolverTest.php` (2 new); build comparison in `update.rs:689-1007`; `desktop/scripts/make-manifest.test.mjs` |
-
-**Fixed in this release, after the first draft of this audit:**
-
-| Change | Where |
-|---|---|
-| **The whole web is personal-only.** One switch, `ORGANISATIONS_ENABLED = false`, hides the organisation switcher, the session-context choice, the administration pages and Users & Access (their routes go to the dashboard), and the organisation filters and columns. A launch context from another product is taken out of the address but no longer sent. The API's company scope is left dormant (P2-12). | `web/src/app/organisations.ts`; `RemoteProvider.tsx`; `AppShell.tsx`; `router.tsx` |
-| **Sign this computer out revokes it on the server**, with the machine's own credential (`POST /v1/remote/devices/me/revoke`), through the same revocation as the console's. Best effort, bounded at 20 seconds. | `DeviceAgentController.php`; `DeviceService.php`; `commands/mod.rs` (`unregister_device`) |
-| **A removed computer that is signed in again reconnects without a restart.** The connection loop used to end at the first sight of a revoked device. | `runtime.rs` (`run`) |
-| **Uninstall removes the logs folder**, by name and without a recursive delete, which would follow a planted junction as an administrator. | `hooks.nsh` |
-| **The room's Share button proposes what Start session chose** (P1-13). | `proposedShareMode.ts`; `SessionRoomPage.tsx` |
-| **Full screen for the viewer, and the round trip and frame rate** beside the connection state. Fit-versus-actual-size was not built: it would break the click mapping. | `SessionStage.tsx`; `useFullscreen.ts`; `ConnectionIndicator.tsx`; `RemotePeerConnection.ts` |
-| **A screen that fails says so, and a page that outlived a deploy reloads itself once** (P1-8). | `components/ui/RouteError.tsx`; `router.tsx` |
-| **"This computer's ID" is now "Key fingerprint"**, as the Computers page calls it (P1-4, the rename). | `SignInScreen.tsx` |
-| **The clipboard sentence says which way it goes** (P2-10). | `ControlPanel.tsx` |
-| **The desktop About card links the privacy policy.** | desktop `SettingsPage.tsx`; `commands/mod.rs` |
-| **The documents in the appendix are corrected** (P1-12). | `README.md`, `docs/SECURITY.md`, `docs/desktop/ARCHITECTURE.md`, `docs/desktop/CONTROL_COMPANION.md`, `docs/DATABASE.md`, `Remote.php` |
+| A production deploy runs the test suite unless it is switched off (`2d3a020`). | P0-5, partly |
+| The app does not offer a build the publisher marked unsigned as an in-app update (`3306e31`). | P0-1, partly |
+| A desktop sign-in must be opened with the enrolled computer's own credential, and the approval page shows which computer is asking (`2d48b3b`, `1175b70`). The older way is still accepted until 31 December 2026. | §10 |
+| AICOUNTLY's own analytics was added to the web app (`ff3a475`, `923d4eb`). | P0-9, worse |
+| A maintenance page that can be switched on from the server (`7337b4e`). | §11 |
+| A page refresh keeps the person's seat in the session (`1d0667b`). | — |
 
 ---
 
 ## 3. How remote control works today (checked in the code)
 
+There are two ways a computer is controlled, and the helper needs only a browser for both.
+
 ```text
- Person being helped (A)                                        Helper (B)
- ┌────────────────────────────────────┐   screen video     ┌──────────────────────┐
- │ Chrome/Edge, or the app's Remote   │ ── peer to peer ─▶ │ any browser, signed  │
- │ tab: shares the ENTIRE screen      │    (or via TURN)   │ in to AICOUNTLY      │
- │   │ "Enable control from this      │                    │                      │
- │   ▼  computer" → confirm in the app│   input only       │ "Request control"    │
- │ AICOUNTLY Remote app, same computer│ ◀─ data channel ── │                      │
- │ (control companion)                │                    │                      │
- └────────────────────────────────────┘                    └──────────────────────┘
+ A. The app shares its own screen — "Get help" (attended), or unattended access to your own computer
+
+ Person being helped                                             Helper
+ ┌──────────────────────────────────┐  screen (H.264), sound   ┌───────────────────────┐
+ │ AICOUNTLY Remote app             │ ───── peer to peer ────▶ │ any browser, signed   │
+ │ Windows or Mac                   │      (or via TURN)       │ in to AICOUNTLY       │
+ │ consent dialog · Stop control    │ ◀──── data channel ───── │ mouse, keyboard, the  │
+ └──────────────────────────────────┘  input, helper's paste   │ Keys menu, paste      │
+                                                               └───────────────────────┘
+
+ B. A browser shares, the app carries control — the "control companion"
+
+ ┌──────────────────────────────────┐  screen (browser's own)  ┌───────────────────────┐
+ │ Chrome or Edge shares the ENTIRE │ ───── peer to peer ────▶ │ any browser           │
+ │ screen; the app on the same      │ ◀──── data channel ───── │                       │
+ │ computer carries the input       │        input only        │                       │
+ └──────────────────────────────────┘                          └───────────────────────┘
 ```
 
-* **The picture** comes from the browser's own screen capture: ideally 15 fps, at most 30 fps
-  (`screenCapture.ts:84-88`). The browser's default encoder settings are used; nothing sets a codec or bitrate
-  (`RemotePeerConnection.ts:274`).
-* **The input** goes through the companion, and only while all of these hold (`CompanionService.php:44-52`):
-  * the session is a personal one or a company's (never a support session);
-  * A is the joined host and is sharing an entire screen;
-  * the device is A's own, active and online;
-  * someone confirmed the link on that computer within 5 minutes;
-  * the companion has matched the monitor;
-  * A granted this request.
-* **Stopping.** The control gate is local. It can be closed with the shortcut (Ctrl+Alt+Shift+S on Windows, ⌘⌥⇧S on
-  a Mac: `src-tauri/src/lib.rs:47-58`), the banner or the tray icon. Any real mouse or keyboard use at the computer pauses
-  the helper. Their input resumes after 1.5 seconds without local input (`companion.rs:63`).
-* **The app now hosts too** (since PR #92). It captures the screen (Windows.Graphics.Capture; Core Graphics on a Mac),
-  encodes it with Cisco's OpenH264 and streams it, for a help session started in the app (**Get help**) or an unattended
-  connection to the owner's own computer (`session.rs` `CapturePump`, `runtime.rs`). Input goes through the same local
-  gate as the companion's. On a Mac, hosting needs Screen Recording and Accessibility; the clipboard, a background service
-  and restarts are still not supported there.
-* **The Secure Desktop** (since PR #93): while a UAC prompt, Ctrl+Alt+Del or the lock screen is in front and the person
-  consented, the picture and the input go through the service's helper (`secure_desktop.rs`).
+* **The picture.** In A the app captures the screen (Windows.Graphics.Capture; Core Graphics on a Mac), scales anything
+  larger than 1080p down to it, and encodes H.264 with Cisco's OpenH264 at up to 30 frames a second
+  (`remote-webrtc/src/video/`; `session.rs` `CapturePump`). In B the picture is the browser's own capture.
+* **Who may send input.** In A: the person admitted the helper, the helper asked, and the person pressed **Allow
+  control** in the app — or the computer's owner switched unattended access on for that computer, with a two-step code.
+  In B, all of these hold (`CompanionService.php`): the session is personal, the person is the joined host and is
+  sharing an entire screen, the computer is their own and online, somebody confirmed the link on that computer within
+  five minutes, the companion matched the screen, and the person granted this request.
+* **The gate is local.** Input is admitted or dropped inside the app (`ControlGate`), not on the server. While a request
+  is waiting for an answer nothing is admitted at all, so a helper cannot click the app's own **Allow** button.
+* **Stopping.** The **Stop control** button at the top of the app's window (never disabled, on every tab), the tray or
+  menu-bar icon, or the shortcut (Ctrl+Alt+Shift+S; ⌘⌥⇧S on a Mac). It takes effect on the computer at once, with or
+  without a network. In way B, any real mouse or keyboard use at the computer also pauses the helper, whose input
+  resumes 1.5 seconds after the person stops (`companion.rs`). In way A it does not: both can move the pointer, as in
+  other remote-control tools, and the person stops it with the button or the shortcut.
+* **What the helper's keyboard sends** (`web/src/services/webrtc/remoteControl.ts`):
+  * Ordinary typing goes as the character that was typed, so a French keyboard controlling a US one types what was meant.
+  * A letter typed with Ctrl, Alt or the Windows key held goes as that key, so shortcuts work.
+  * A helper on a Mac has ⌘ sent as Ctrl to a Windows PC; a helper on Windows or Linux has Ctrl sent as ⌘ to a Mac
+    (`keyForPlatform`). The same kind of keyboard at both ends, or a computer that has not said what it is: nothing is
+    changed.
+  * In full screen, Chrome and Edge hand the room the whole keyboard, so Alt+Tab, the Windows key and Esc go to the
+    other computer. Firefox and Safari cannot.
+  * The **Keys** menu sends what no keyboard can hand over: on Windows, Ctrl+Alt+Del, Task Manager, the Start menu, Run,
+    File Explorer, Show the desktop, Switch window, Close window, Esc and Print Screen; on a Mac, Force Quit, Spotlight,
+    Switch app, Mission Control, Close window, Quit app, Interrupt and Esc (`SessionStage.tsx`, `keyMenuFor`).
+* **Paste.** Where the person ticked **Also share the clipboard** (Windows, way A only), the text the helper copied is
+  sent ahead of their paste key. Nothing copied on the computer travels back.
+* **Screens.** In A, the app tells the room its displays, and whoever is controlling switches between them. In B the
+  browser shares one screen and there is nothing to switch.
+* **Sound.** In A, on Windows, when the person switched **Share this computer's sound** on. Off by default; telephone
+  quality (G.711).
+* **Windows prompts.** While an administrator prompt, the Ctrl+Alt+Del screen or the lock screen is in front, and the
+  person ticked the box for it, the picture and the input go through a helper process started by the background
+  service (`secure_desktop.rs`). **Ctrl+Alt+Del** from the Keys menu goes the same way and is raised with `SendSAS`.
+* **What the helper is told**, above the picture: in way B, that somebody at the computer is using it (paused); that a Windows
+  prompt is open, and whether they can answer it; that a window running as administrator would not take their click;
+  that Ctrl+Alt+Del was not sent, and which of two reasons applies; that control ended, and why.
 
 ---
 
 ## 4. Capability matrix
 
-The AICOUNTLY column describes this release, checked in the code. The three competitor columns are **as commonly
+The AICOUNTLY column describes the branch, checked in the code. The three competitor columns are **as commonly
 advertised. Verify before quoting publicly.**
 
 | Capability | AICOUNTLY Remote | AnyDesk | TeamViewer | UltraViewer |
 |---|---|---|---|---|
-| Connect by ID or code | A 9-digit session code, and the host admits each person (`Remote.php:217`, `JoinService.php:29`). The app's **Get help** gives that code from the computer itself and admits the helper there; **Connect → Help someone** joins by it. Your own computers are connected to from a list, not by an ID (`ConnectScreen.tsx`). | Yes. A permanent ID or alias. | Yes. ID and password. | Yes. ID and password. |
-| Attended control | Yes, on Windows and Mac, two ways: the app hosts and streams its own screen (H.264, `session.rs` `CapturePump`), or the browser shares the whole screen and the app carries the input (companion). Admitting and control are separate consents. | Yes | Yes | Yes |
-| Unattended access | Yes, to **your own** computers: switched on per computer with a confirmation in Remote → Computers, only the owner can connect, every connection is recorded and shown on the machine (`DeviceSessionService::startUnattended`, `PersonalUnattendedAccessTest`). Needs Remote's own two-step verification: a code from the last ten minutes to switch it on, a verified browser to connect (`TwoStepUnattendedAccessTest`, P1-9). On a Mac it needs the app running and Screen Recording allowed. | Yes | Yes | Yes |
-| UAC and elevated windows | **UAC prompts, Ctrl+Alt+Del and the lock screen: yes, with consent** (a box in the control dialog; a separate switch for unattended), through the background service's helper on the Secure Desktop (PR #93; untested on a real PC). **Elevated windows on the ordinary desktop: no** — the app runs `asInvoker` and Windows refuses its input (UIPI); that needs `uiAccess` and a signed build (P1-2). | Yes, when installed | Yes, when installed | Usually yes when installed (verify) |
-| Multi-monitor | One shared screen at a time, picked by the person in the browser. The helper cannot switch screens (`agent.rs:963-966`). | Yes. Switch, or show all. | Yes | Yes. Switch. |
-| File transfer | Browser to browser. The recipient must accept. 25 MB at most (`Remote.php:248`). | Yes, with a file manager | Yes | Yes |
-| Clipboard | No, not during companion control (`CompanionService.php:771`). | Text and files, both ways | Text and files | Text (files: verify) |
-| Chat | Yes, in the web | Yes | Yes | Yes, a main feature |
-| Annotations and whiteboard | A live pointer and annotation, in the web | Whiteboard | Yes | Not advertised (verify) |
-| Recording | No (`Remote.php:225`) | Yes, on paid plans | Yes | Not advertised (verify) |
-| Address book | Your own computers, with how many are registered and online, each one's connection history, and Remove, in the web and the app (`DevicesPage.tsx`, `YourComputers.tsx`) | Yes, on paid plans | Yes (Computers & Contacts) | A basic partner list (verify) |
+| Connect by ID or code | A 9-digit session code, and the host admits each person. The app's **Get help** gives the code from the computer itself; **Connect → Help someone** joins by it. Your own computers are connected to from a list, not by an ID. | Yes. A permanent ID or alias. | Yes. ID and password. | Yes. ID and password. |
+| Attended control | Yes, on Windows and Mac, two ways (§3). Admitting and control are separate consents. | Yes | Yes | Yes |
+| Unattended access | Yes, to **your own** computers: switched on per computer, owner only, every connection recorded and shown on the machine, behind two-step verification. On a Mac the app must be running and somebody signed in. | Yes | Yes | Yes |
+| UAC and elevated windows | **UAC prompts, Ctrl+Alt+Del and the lock screen: yes, with consent**, through the background service. **Windows running as administrator on the ordinary desktop: no** — Windows refuses the app's input there, and the helper is now told so. Needs `uiAccess` and a signed build (P1-2b). | Yes, when installed | Yes, when installed | Usually yes when installed (verify) |
+| Special keys | The Keys menu (§3), in every browser. Ctrl+Alt+Del only where the PC's Windows policy lets a program send it. The whole keyboard in full screen in Chrome and Edge. | Yes | Yes | Yes |
+| Mac and Windows together | Either can help or be helped. ⌘ and Ctrl change places. **Not yet:** a character a Mac helper types with Option. | Yes | Yes | Windows only (verify) |
+| Multi-monitor | When the app shares its own screen, the helper switches between the computer's displays once control is granted. One at a time; no "show all". Not when a browser shares. | Yes. Switch, or show all. | Yes | Yes. Switch. |
+| Sound | Windows, when the app shares its own screen and the person switched it on. Telephone quality. Not from a Mac. | Yes | Yes | Verify |
+| Clipboard | Text, helper to computer, Windows only, when the app shares its own screen and the person ticked it. Never computer to helper; never files; not through a companion. | Text and files, both ways | Text and files | Text (files: verify) |
+| File transfer | Browser to browser. The recipient must accept. 25 MB at most. The desktop app neither sends nor receives. | Yes, with a file manager | Yes | Yes |
+| Chat | Yes, between browsers. The desktop app's own window has no chat. | Yes | Yes | Yes, a main feature |
+| Annotations | A live pointer and drawing, in the web | Whiteboard | Yes | Not advertised (verify) |
+| Recording | No | Yes, on paid plans | Yes | Not advertised (verify) |
+| Address book | Your own computers, with how many are registered and online, each one's history, and Remove — in the web and the app | Yes, on paid plans | Yes | A basic partner list (verify) |
 | Wake-on-LAN | No | Yes, on paid plans | Yes | Not advertised (verify) |
-| Reboot and reconnect | No. The API call exists but no screen uses it (`api/remote.ts:512-518`), and it is off for personal accounts (`CompanyPolicyDefaults.php:199`). | Yes | Yes, including safe mode | Verify |
-| Mobile apps | None. A mobile browser can join, watch and chat, but cannot share (`docs/BROWSER_SUPPORT.md:56-64`). | iOS and Android | iOS and Android | Not offered (verify) |
-| Linux | Browser only: it can share and watch but cannot be controlled. There is no app: `desktop/src-tauri/src/platform/` has only `windows/` and `macos/`, and no Linux build is published (`update.rs:147-161`). | Yes | Yes | No |
-| **Access from a browser alone** | **Yes. This is the real advantage. The helper needs only a browser and an AICOUNTLY account. The person being helped needs a browser, and the app only if they want to be controlled.** | The app is normally needed at both ends (web client limited: verify) | Web client for connecting out only; the other end needs the app | No |
-| Two-factor sign-in | Remote's own two-step verification (authenticator app, recovery codes) on top of the AICOUNTLY sign-in, and required for unattended access. Whether the portal sign-in itself has a second factor is not visible in this repository. | Yes | Yes, plus trusted devices | Not advertised (verify) |
-| Audit | Personal accounts get session history and an event timeline. The full audit trail is for companies only (`EffectivePolicyResolver.php:250-258`). | Session logs, on paid plans | Connection reports, on paid plans | Basic history |
-| Pricing and free tier | Not decided. A built-in "Basic" plan applies (`EffectivePolicyResolver.php:525-535`). | Free for personal use; paid tiers | Free for personal use; paid tiers (dearer) | Free; low-cost paid tiers |
+| Reboot and reconnect | No. The API call exists but no screen uses it, and it is off for personal accounts. | Yes | Yes, including safe mode | Verify |
+| Mobile apps | None. A phone's browser can join, watch and chat; it cannot share, and control from it is taps only. | iOS and Android | iOS and Android | Not offered (verify) |
+| Linux | Browser only: it can share and watch but cannot be controlled. No app. | Yes | Yes | No |
+| **Access from a browser alone** | **Yes. This is the real advantage. The helper needs only a browser and an AICOUNTLY account.** | The app is normally needed at both ends (verify) | Web client for connecting out only | No |
+| Two-factor sign-in | Remote's own two-step verification, required for unattended access. Whether the portal sign-in has a second factor is not visible here. | Yes | Yes, plus trusted devices | Not advertised (verify) |
+| Told the truth when it fails | Yes: paused, a prompt is open, input refused, Ctrl+Alt+Del not sent, control ended — each in words. | — | — | — |
+| Audit | Session history and a timeline with every event in words. The full audit trail is for companies only. | Session logs, on paid plans | Connection reports, on paid plans | Basic history |
+| Pricing and free tier | Not decided. A built-in "Basic" plan applies. | Free for personal use; paid tiers | Free for personal use; paid tiers (dearer) | Free; low-cost paid tiers |
 
 ---
 
@@ -289,516 +313,681 @@ advertised. Verify before quoting publicly.**
 
 ### 5.1 Must be true before the pilot starts
 
-| # | Blocker | Why it matters | Where | Effort |
-|---|---|---|---|---|
-| PB-1 | ~~Deploy this release's backend and web to production.~~ **Done** (`4e0d7e2`). | Without it, linking a personal computer is refused (`COMPANION_SCOPE`), and personal devices are "not found" in personal sessions. | `CompanionService.php:139-144`, `:958-974`; `DeviceSessionService.php:470-476` | S |
-| PB-2 | ~~Publish numbered Windows and macOS builds.~~ **Done** (`202611010121`). Testers install only those. | Without a number, nobody can tell which build was tested. That was the old 1.0.0 cache problem. | `release-windows.yml:156-185`; desktop `SettingsPage.tsx:118-122` | S |
-| PB-3 | ~~The parallel fixes have landed.~~ **Fixed in this release** (§2). | — | — | Done |
-| PB-4 | Each tester has a personal AICOUNTLY account and has signed in. | Joining with a code needs a signed-in account (`Routes.php:278-279`). | — | S |
-| PB-5 | Check which guest-link entitlement production uses. | The built-in Basic plan says external guests are off (`EffectivePolicyResolver.php:529`). The platform-defaults seeder that `docs/DEPLOYMENT.md:278-282` tells you to run says they are on, with a 120-minute cap (`RemotePlatformDefaultsSeeder.php:29`). Whether guest links work depends on which row exists. | `remote_entitlements` row with `company_id IS NULL` | S |
-| PB-6 | A Mac build that Gatekeeper will open, and Accessibility granted on that Mac. | Without Accessibility, macOS drops every injected event (`macos/permissions.rs:3-9`). An ad-hoc-signed build has to be allowed in Privacy & Security (`docs/desktop/PUBLISHING.md:236-238`). | — | S |
+| # | Condition | Why | Effort |
+|---|---|---|---|
+| PB-1 | **Merge and deploy the branch** (web and API), and restart the signalling service. | Everything in §2.1 that is not in the desktop app. | S |
+| PB-2 | **Release a Windows and a Mac build from the merged commit**, and publish them. Testers install only those. | The desktop window's fixes, the refused-input notice, Ctrl+Alt+Del and the Mac's pointer are in the app, not the web. | S |
+| PB-3 | **Run `desktop/tests/MANUAL.md` §1–§9 on one Windows PC and one Mac**, and record the result. | Nothing in PR #116 or in this pass has run on a real computer (§0). | S (half a day) |
+| PB-4 | Each tester has a personal AICOUNTLY account and has signed in. | Joining with a code needs a signed-in account. | S |
+| PB-5 | Check which guest-link setting production uses. | The built-in Basic plan says external guests are off; the platform-defaults seeder says they are on, with a 120-minute cap (`RemotePlatformDefaultsSeeder.php:37`, `EffectivePolicyResolver.php:548-549`). Whether guest links work depends on which row exists. | S |
+| PB-6 | A Mac build that Gatekeeper will open, with Accessibility and Screen Recording granted. | Without them macOS drops every injected event and shows only the wallpaper. | S |
 
 ### 5.2 What to tell the pilot group
 
-| # | Caveat | What testers will see | Where |
-|---|---|---|---|
-| C-1 | **UAC prompts only with the box ticked; elevated windows not at all.** The UAC prompt, Ctrl+Alt+Del and the lock screen run on the Secure Desktop: the helper reaches them only if the person ticked **Also let them answer Windows administrator prompts** (unattended: the App settings switch) and the background service is installed. Elevated windows on the ordinary desktop (Task Manager, installers, admin consoles) still refuse input. | With the box ticked, the picture switches to the prompt and the room says "You can answer it". Without it, "Ask the person at the computer to answer it". In an elevated window, the helper's clicks do nothing. | `secure_desktop.rs`; `agents/windows-service/src/secure_desktop/`; `windows-app-manifest.xml:18`; `windows/input.rs` |
-| C-2 | **Control needs the entire screen.** In the app, Start session chooses "Entire screen" for you, and the room's **Share** button proposes what Start session chose. In Chrome or Edge, Start session begins on Safe Share (a browser tab): choose **Entire screen** there, or in the share dialog. | "Control works only when you share your entire screen". | `StartSessionPage.tsx:35-37`; `proposedShareMode.ts`; `CompanionPanel.tsx:49-57` |
-| C-3 | **No clipboard during control** (owner decision 3). | To pass text across, put it in the chat. The person at the computer can copy it from there. | `CompanionService.php:771`, `:805-820`; `docs/desktop/CONTROL_COMPANION.md:27-28` |
-| C-4 | **Sessions end 60 minutes after they start, with no warning and no way to extend.** | The room just ends. Start a new session. | `CompanyPolicyDefaults.php:200`; `SessionService.php:391-434` |
-| C-5 | **Files are 25 MB at most**, sent between the two browsers or portals. | Bigger files are refused before sending. | `Remote.php:248` |
-| C-6 | **One screen at a time.** The helper cannot switch screens. | To change screens, stop sharing and share again. The companion matches the new screen. | `agent.rs:963-966`; `docs/desktop/CONTROL_COMPANION.md:46-48` |
-| C-7 | **Special keys cannot be sent.** The helper's own computer catches the Windows key, Alt+Tab and Ctrl+Alt+Del. The web does not use the browser's keyboard-lock feature. | Those keys act on the helper's own computer. | No `navigator.keyboard.lock` in `web/src` |
-| C-8 | **Use computers with one Windows user each.** The device identity belongs to the whole machine: its key is protected with machine-scope DPAPI, and every local user can modify the folder it is in. | On a shared PC, every Windows account is the person who registered it. | `service/storage.rs:14-33`; `hooks.nsh:119-125` |
-| C-9 | **If you have registered more than one computer, pick the one you are sitting at.** The list shows all your online computers, and nothing checks that the one you pick is the one sharing. | The confirm prompt appears on the wrong computer, or the link expires after 5 minutes. | `CompanionService.php:100-118` |
-| C-10 | **On a Mac, sharing from the app's Remote tab has not been tested.** Whether WKWebView can share the screen depends on the macOS version. If the Remote tab says this browser cannot share, use **Open in browser** and share from Chrome. On ad-hoc-signed builds, expect macOS to forget the Accessibility permission after an update. Turn it off and on again. | "Sharing unavailable", or an update after which input does nothing. | `docs/desktop/PORTAL.md:76-77`; `macos/permissions.rs:3-9` |
-| C-11 | ~~Ignore "This computer's ID".~~ **Fixed in this release**: it is labelled "Key fingerprint", which is what it is. A helper still cannot connect by it (P1-4). | — | `SignInScreen.tsx` |
-| C-12 | **The office counts as one IP address for rate limits.** For example, 10 code attempts per minute are shared by the whole office. | Only matters if many people join at the same moment. | `Routes.php:278-279`; `RateLimitFilter.php:17-24` |
-| C-13 | **The installers are unsigned.** You will see "Windows protected your PC" and a Gatekeeper warning. Antivirus or IT policy may block them. | Note every warning you see. | `docs/desktop/PUBLISHING.md:232-238` |
-| C-14 | **The TURN relays are in India only** (Mumbai and Greater Noida). | A helper outside India is slower whenever the connection goes through a relay. | `docs/production/turn-production.remote.env:14`, `:20`, `:37` |
+| # | Caveat | What testers will see |
+|---|---|---|
+| C-1 | **Windows prompts only with the box ticked; windows running as administrator not at all.** | With the box ticked, the picture switches to the prompt and the room says "You can answer it". Without it, "Ask the person at the computer to answer it". In Task Manager or an installer's own window, the helper's clicks do nothing, and the room says a window running as administrator is in front. |
+| C-2 | **Control needs the entire screen.** In the app, Start session chooses it for you. In a browser, Start session begins on Safe Share, and now says underneath that a helper can look but not control, and what to choose instead. | "Shared this way, a helper can look but cannot control this computer." |
+| C-3 | **The clipboard goes one way.** Helper to computer, Windows only, when the app shares its own screen and the person ticked **Also share the clipboard**. Not through a companion, not on a Mac, never back to the helper. | To pass text the other way, read it out, or use the chat in a browser session. |
+| C-4 | **Sessions end 60 minutes after they start.** The room warns five minutes before. It cannot be extended. | "This session reaches its time limit in 5 minutes and ends then. To carry on, start a new session." |
+| C-5 | **Files are 25 MB at most**, between two browsers. | Bigger files are refused before sending. |
+| C-6 | **One screen at a time.** When the app shares, whoever is controlling switches screens with **1** and **2** beside the full screen button. When a browser shares, stop and share the other screen. | — |
+| C-7 | **Special keys come from the Keys menu.** In Chrome and Edge, full screen also sends Alt+Tab and the Windows key from the keyboard. | A **Keys** button beside full screen while controlling. |
+| C-8 | **Ctrl+Alt+Del works only where Windows allows it.** It needs the administrator-prompts box ticked, the background service, and a Windows policy that lets a program send it. An ordinary home PC does not have that policy. | "Ctrl+Alt+Del was not sent: Windows on that computer does not let an app send it. The person there can press it themselves." |
+| C-9 | **A Mac helper cannot type a character that needs the Option key** into a Windows PC (`#` on a British keyboard, `@` on a German one, `€`). | Nothing is typed. Characters typed without Option are fine. |
+| C-10 | **From a Mac keyboard the Windows key is in the Keys menu**, because ⌘ is sent as Ctrl. From a PC keyboard a Mac's own Control key is there too (**Interrupt**). | — |
+| C-11 | **When the app shares its own screen, one helper at a time**, and that computer has no chat and no file transfer. | A second helper waits until the first has gone. |
+| C-12 | **Sound is Windows only, off until switched on, and telephone quality.** | — |
+| C-13 | **Use computers with one Windows user each.** The computer's identity belongs to the whole machine. | On a shared PC, every Windows account is the person who registered it. |
+| C-14 | **If you have registered more than one computer, pick the one you are sitting at** when linking a companion. Nothing checks it. | The confirm prompt appears on the wrong computer. |
+| C-15 | **On a Mac, sharing from the app's Remote tab has not been tested.** If it says this browser cannot share, use **Get help** in the app instead, or share from Chrome. | — |
+| C-16 | **The installers are unsigned.** | "Windows protected your PC", and a Gatekeeper refusal on a Mac. Note every warning. |
+| C-17 | **The TURN relays are in India only.** | A helper abroad is slower whenever the connection goes through a relay. |
+
+The earlier caveat about an office sharing one rate limit is gone: limits now follow the computer or the person.
 
 ---
 
-## 6. Public launch: findings
+## 6. Findings
 
 **A dependency, not a finding:** code signing. Windows needs the OV certificate (SSL.com, in validation). macOS needs a
-Developer ID certificate and notarisation (`docs/desktop/PUBLISHING.md:183-196`). Signing unlocks four things:
-
-* SmartScreen trust. With OV, that trust still builds up over time with download volume.
-* The P0-1 signature check.
-* `uiAccess` and the other elevation work in P1-2. These need a signed binary.
-* macOS remembering the Accessibility permission across updates.
+Developer ID certificate and notarisation. Signing unlocks SmartScreen trust, the P0-1 signature check, `uiAccess` for
+elevated windows (P1-2b), and macOS remembering the Accessibility permission across updates.
 
 ### 6.1 P0: must be fixed before any public launch
 
-**P0-1. The update path trusts the download host completely.** **M** (the check is ready to switch on once signing exists)
-
-* *Why it matters.* The app reads `manifest.json` from `downloads.aicountly.com` and downloads the installer it names
-  from the same host. It checks the size and SHA-256 that the same manifest gives, then runs the file (`update.rs:23-27`,
-  `:36-40`, `:400-420`; `commands/mod.rs:748-756`). Anyone who can change files on that one host can make every installed
-  copy run their program. This product installs a LocalSystem service, and the app would tell the person the update was
-  verified.
-* *Fix.* Before `open::that`:
-  * On Windows, check the Authenticode signature (`WinVerifyTrust`) and that the signer is "Aicountly Interactive
-    Services Private Limited".
-  * On macOS, check the code signature and Team ID of the app inside the disk image.
-  * Sign the manifest itself with an offline Ed25519 key built into the app, so that one host can no longer vouch for
-    itself.
-
-**P0-2. No Terms, no Remote privacy notice and no EULA.** **M** to write, with counsel. **S** to put in place.
-
-* *Why it matters.* The only legal link anywhere is the general privacy policy, and it is reached only from the analytics
-  banner (`AnalyticsConsent.tsx:11`, `:50`). The installer has no licence page (`tauri.conf.json:60-67` sets none), and
-  the app links to nothing. A remote-control product needs, at minimum:
-  * terms that cover acceptable use and abuse;
-  * a notice that says what Remote stores: IP addresses, user agents, chat text, file names and device details;
-  * a grievance contact.
-* *Fix.* Add Terms, privacy and licence links in the web footer, on the app's sign-in screen and in About, and as a licence
-  page in the NSIS installer. Ask for acceptance at the first session.
-
-**P0-3. Data is never deleted on a schedule, and personal audit rows can never be deleted.** **M**
-
-* *Why it matters.* Remote keeps a lot of personal data:
-  * chat text (`ChatService.php:61-68`);
-  * IP addresses and user agents on sessions, participants, audit rows, devices and sign-in codes (`AuditService.php:192-193`;
-    the `ip` and `user_agent` columns in the migrations);
-  * file names and session history.
-
-  None of it is deleted on a schedule. The only jobs are the company lifecycle and the TURN probe (`jobs.txt`).
-  `docs/DATABASE.md:222` promises chat its "own retention", but nothing implements it. Closing an account deletes the
-  person's own personal sessions and devices, and anonymises their identity row (`CompanyLifecycle.php:230-283`). Two
-  things survive it:
-  * The audit rows of personal sessions. The trigger lets only the company purge delete audit rows
-    (`docs/DATABASE.md:202-207`).
-  * A helper's name, IP address and chat lines inside *other people's* sessions.
-* *Fix.* Set a retention period for each kind of data and add a nightly purge job. Delete or anonymise personal audit rows
-  after the retention period and when the account closes. Keep the 180-day logs that CERT-In requires (§10).
-
-**P0-4. No handling of abuse or scams.** **M**
-
-* *Why it matters.* Remote-control tools are the first tool in tech-support fraud. Today the host sees only the helper's
-  display name and the words "AICOUNTLY user" (`SessionRoomPage.tsx:412-418`). There is no warning, no way to report
-  someone and no way to block them.
-* *Fix.*
-  * Warn people the first time they grant control: "Only allow people you know. AICOUNTLY will never ask you to."
-  * Show the helper's verified e-mail address.
-  * Add "Report this person" in the room and on the session-ended screen.
-  * Let support suspend an account on the server side, and publish an abuse contact.
-
-**P0-5. Operations are not ready for the public.** **S** for CI. **M** for monitoring and backups.
-
-* *Why it matters.*
-  * Production deploys skip the test suite unless someone ticks a box (`deploy-production.yml:19-22`: `run_ci_gate`
-    defaults to false).
-  * CI no longer runs on pull requests (`ci.yml:16`), although the README still says it does.
-  * This repository shows no external uptime monitoring or paging for the API, signalling or TURN.
-  * Signalling is a single process that keeps its rooms in memory (`signalling/src/rooms.js:18`,
-    `signalling/src/server.js:122`) on one cPanel server (`docs/DEPLOYMENT.md:312-325`).
-  * No database backup or restore test is documented here.
-  * CERT-In requires a cyber incident to be reported within 6 hours, and you cannot report what you do not see.
-* *Fix.*
-  * Run CI on every pull request, and make the deploy gate default to on.
-  * Add uptime checks on `/api/health`, `/signal/health` and the TURN probe, with alerts that reach a person.
-  * Take nightly PostgreSQL backups and test a restore.
-  * Publish a status page, and write a one-page incident runbook.
-
-**P0-6. Positioning: say what it does and does not do.** **S** (a decision and the wording)
-
-* *Why it matters.* The app now hosts, reaches your own computers unattended and answers UAC prompts, but none of that
-  has run on a real machine yet, the builds are unsigned, elevated windows are not reachable, and there is no Linux control
-  and no mobile app (§4). Marketing that implies it matches AnyDesk or TeamViewer before the pilot proves it would mislead
-  people.
-* *Fix.* Run the pilot (§11, all steps), then launch with a fair comparison that names what is not there yet.
-
-**P0-7. Pricing and free-tier limits are not decided, and TURN admission only observes.** **M** for the decision and the limits. **L** with billing.
-
-* *Why it matters.*
-  * Entitlements fall back to a built-in Basic plan or a seeded row (`EffectivePolicyResolver.php:525-535`,
-    `RemotePlatformDefaultsSeeder.php:29`).
-  * The central licensing backend does not exist yet (`docs/LAUNCH_READINESS_TURN.md`, rows B4 and B8).
-  * TURN admission is `observe`: it keeps books and refuses nobody, and its capacity figures are placeholders
-    (`turn-production.remote.env:10-12`, `:27-30`).
-  * The same two relays carry Connect and the sandbox (`:27-28`). A free tier with no limits lets a few heavy users, or
-    abusers, use up what both products rely on.
-* *Fix.* Decide what is free. Enforce session limits per account. Measure relay capacity (runbook F1–F3), then switch
-  admission to `enforce`.
-
-**P0-8. TURN relays outside India.** **M** per region. P0 only if you market outside India; otherwise P1.
-
-* *Why it matters.* Both relays are in India (`turn-production.remote.env:14`). When a relay is needed, a user in Europe,
-  the Gulf or North America goes round the world.
-* *Fix.* Add a relay where the users are, before marketing there.
-
-**P0-9. Analytics loads before consent.** **S**. P0 if you serve the EU; otherwise P1.
-
-* *Why it matters.* Before anyone answers the banner, GA4 already loads "cookieless" (`analytics.ts:44`). It still sends
-  pings to Google, with the IP address and user agent. The banner says "nothing that identifies you"
-  (`web/src/components/AnalyticsConsent.tsx:38`).
-* *Fix.* Set `ANALYTICS_BEFORE_CHOICE = 'none'` and soften the banner's wording.
-
-**P0-10. ~~An H.264 patent licence for the encoder we ship.~~ Done: the app uses Cisco's binary.** Left: counsel's view on paid plans.
-
-* *What changed.* The app no longer compiles OpenH264. Each computer downloads Cisco's OpenH264 2.6.0 from Cisco's server,
-  checks its SHA-256 on every load and loads it at run time (`remote-webrtc/src/video/cisco.rs`). The four conditions of
-  Cisco's binary licence are met: separate download; a switch in App settings → Video codec; the sentence "OpenH264 Video
-  Codec provided by Cisco Systems, Inc." beside it; the full licence text in About → Third-party licences
-  ([docs/legal/OPENH264.md](../legal/OPENH264.md)). Desktop CI fails if the app's graph ever builds OpenH264 from source.
-* *Still to confirm with counsel.* Cisco's licence covers "uses in which it does not receive remuneration" and says content
-  providers may need their own licence from the pool (Via LA, via-la.com). That matters once plans are paid, not before.
-  It also does not cover patents outside the pool.
-
-### 6.2 P1: needed to compete credibly (the first quarter after launch)
-
-| # | Finding | Why it matters | Where | Effort |
+| # | Finding | Status on 14 November | What is left | Effort |
 |---|---|---|---|---|
-| P1-1 | ~~A video encoder in the app.~~ **Built in this release**: software H.264 (Cisco's OpenH264 binary since PR #93, Constrained Baseline) on Windows and Mac, with capture that follows the link, decoded by Chromium in `tests/browser_interop.rs`. Measured on a 4-core 2.1 GHz VM: 1080p 24 ms a frame (fits 30 fps), a Retina or 4K screen scaled to 1080p about 45–50 ms (about 20 fps). The encode holds up the session loop for that long, so control input waits up to one encode. Left: a hardware encoder (Media Foundation, VideoToolbox) or an encode thread of its own, ScreenCaptureKit on macOS 14+, and testing on real machines (§11). | — | `remote-webrtc/src/video/`; `session.rs` `CapturePump`; `platform/macos/capture.rs` | Done (hardware encoder: M) |
-| P1-2 | **UAC, elevated windows and the Secure Desktop.** ~~Tell the helper when the Secure Desktop is showing~~ and ~~reach it through the service~~: **built in PR #93** — the SYSTEM helper captures and injects on the Secure Desktop with the person's consent, and the room says whether the prompt can be answered. **Left:** (a) test it on Windows 10 and 11 (§11, steps 40–45); (b) elevated windows on the ordinary desktop, through `uiAccess="true"`, which Windows honours only for a signed binary installed under Program Files — so after the certificate; (c) tell the helper when an elevated window refused input (`Handled::Failed` is still not reported); (d) a browser button for Ctrl+Alt+Del — the helper already accepts it (P2-13). | IT support often means installing software, and installing software means UAC. | `agents/windows-service/src/secure_desktop/`; `secure_desktop.rs`; `windows-app-manifest.xml:18` | Secure Desktop done; `uiAccess` M after signing |
-| P1-3 | ~~Unattended access to your own computers.~~ **Built in this release**: off by default, switched on per computer with a confirmation, owner only, and behind Remote's own two-step verification (P1-9). | — | `CompanyPolicyDefaults::personal()`; `PermissionCatalog`; migration `EntitleUnattendedAccessByDefault` | Done |
-| P1-4 | **Connect by computer ID, and an address book.** A real ID that a helper can type to *ask* for a session, with the consent still at the computer. The rename to "Key fingerprint" is **fixed in this release**. | People used to other tools expect to read out an ID. | `SignInScreen.tsx`; `agent.rs:313-328` | Rename done; L to build |
-| P1-5 | **Clipboard during companion control**: text, both ways, only when ticked. | Pasting a command or a URL is everyday support work. | `CompanionService.php:771`; `docs/desktop/CONTROL_COMPANION.md:27-28` | M |
-| P1-6 | **Session continuity.** Warn before the time limit and allow extending it. Bring a session back after the helped computer restarts. Add an idle timeout. | Today a session simply ends at 60 minutes, and nothing brings it back after a restart. | `CompanyPolicyDefaults.php:200`; `SessionService.php:391-434`; the app's own reconnect window is 30 seconds (`session.rs:85-86`) | M |
-| P1-7 | **Crash reporting, and "Send logs to support".** | The logs exist only on the computer, at most 2 × 2 MB. A crash only writes a line to the log. The web reports no errors at all. | `logging.rs:19-22`, `:38-47`, `:131-138` | M |
-| P1-8 | ~~The web after a deploy.~~ **Fixed in this release**: the router has an error screen, and a screen whose code a deploy replaced reloads the new build once, by itself. Keeping the previous deploy's files for a day (`rsync --delete`, `deploy-production.yml:345`) would still be kinder to a request in flight. | — | `components/ui/RouteError.tsx`; `router.tsx` | Done (S to keep old files) |
-| P1-9 | **Two-factor sign-in.** ~~Require it before unattended access.~~ **Remote's own two-step verification is built in this release**: TOTP (RFC 6238) with ten one-time recovery codes, set up in Settings; with it on, every signed-in call but bootstrap and the two-step routes needs a verified browser (12 hours), wrong codes lock it for 15 minutes after five, a code works once; turning unattended access on needs a code from the last ten minutes, connecting needs a verified browser, and a person without it is sent to Settings. **Left:** (a) the AICOUNTLY portal's own second factor belongs to the portal team — Remote cannot see or require it; (b) Remote's step protects only people who turn it on: somebody holding the portal session of a person who has not could enrol their own authenticator first (audited, and it locks the real person out, so it is noticed), so making it compulsory for helpers needs the portal to vouch for who is enrolling. | Taking over a helper's account means reaching other people's screens. | `Domain/TwoStep/TwoStepService.php`; `ApiAuthFilter.php`; `DeviceService::enableUnattended`; `DeviceSessionService::startUnattended`; `docs/SECURITY.md` "Two-step verification"; the portal's: not in this repository | Remote's part done; the portal's: portal team (S–M) |
-| P1-10 | **A security contact.** SECURITY.md points to a contact that is never named. Add `/.well-known/security.txt`, a mailbox and a response time. | Researchers will look for remote-access tools. | `docs/SECURITY.md:305-308` | S |
-| P1-11 | **Rate limiting.** It is counted per IP address, in a file cache. `proxyIPs` is empty. | Offices behind one IP share a budget, and the limit is not shared between servers. Key signed-in calls on the account instead, and use a shared store. | `RateLimitFilter.php:17-24`, `:73-79`; `Cache.php:25`; `App.php:195` | M |
-| P1-12 | ~~Documents that now say the wrong thing.~~ **Fixed in this release** (see the appendix). | — | Appendix | Done |
-| P1-13 | ~~The room's Share button ignores the Start page.~~ **Fixed in this release**: it proposes the session's `requestedShareMode` while the policy allows it. | — | `proposedShareMode.ts`; `SessionRoomPage.tsx` | Done |
+| P0-1 | **The update path trusts the download host completely.** | **Partly.** The app checks the file's name, size and SHA-256, all from the same manifest. Since PR #108 a build marked unsigned is not offered in the app at all: the person is sent to the download page. So today no installed copy updates itself. | Before running an installer: check its Authenticode signature and signer on Windows, its code signature and Team ID on macOS. Sign the manifest with an offline key built into the app. `signed: true`, or a missing field, is still simply believed (`update.rs:275`, `:500`, `:515`). | M, after the certificates |
+| P0-2 | **No Terms, no privacy notice for Remote, no EULA** — in the web, the app or the installer. | **Open.** The only legal link is the general privacy policy. | Terms covering acceptable use and abuse; a notice of what Remote stores; a grievance contact; a licence page in the installer that reproduces Cisco's OpenH264 licence. Accept at the first session. | M with counsel; S to put in place |
+| P0-3 | **Nothing is deleted on a schedule**, and the audit rows of personal sessions can never be deleted. | **Open.** The new sweep job closes sessions; it deletes nothing. | A retention period for each kind of data and a nightly purge. Keep the 180-day logs CERT-In requires. | M |
+| P0-4 | **No handling of abuse or scams.** | **Partly.** The person is now warned at every point of consent — the app's control dialog, its admit prompt, its companion confirmation, **Get help**, and the browser's grant prompt: "Only allow this if you know … and asked them for help. AICOUNTLY never calls or messages anybody to ask for control." | The helper's verified e-mail address beside their name. "Report this person" in the room and on the ended screen. Suspending an account on the server. A published abuse contact. | M |
+| P0-5 | **Operations are not ready for the public.** | **Partly.** A production deploy runs the tests unless told not to. The relay no longer falls over on the six things the load test found. Sessions are closed by a job. A deploy keeps the previous version's files. | CI still runs only when started by hand; the sandbox deploy's test gate is off by default. No uptime monitoring or alerting. No database backup or restore test documented. No status page or runbook. One server; one signalling process holding its rooms in memory. | S for CI; M for the rest |
+| P0-6 | **Positioning: say what it does and does not do.** | **Open.** More is built, and still none of it is proven on real machines. | Run the pilot, then launch with a fair comparison that names what is not there (§4). | S |
+| P0-7 | **Pricing and free-tier limits are not decided, and TURN admission only watches.** | **Open.** One thing got safer: idle computers no longer book relay capacity, so switching admission to refuse would no longer turn away free users because 70 PCs were switched on. | Decide what is free. Limits per account. Measure relay capacity, then switch admission to `enforce`. | M; L with billing |
+| P0-8 | **TURN relays outside India.** P0 only if you market outside India. | **Open.** | A relay where the users are. | M per region |
+| P0-9 | **Analytics without consent.** P0 if you serve the EU; a DPDP question in India. | **Worse.** Google Analytics still loads "cookieless" before a choice (`analytics.ts:44`), and the banner still says "nothing that identifies you". And a second pipeline, AICOUNTLY's own, records a page view for every navigation of a signed-in person under their user id, whatever they answered and before they answer (`web/src/main.tsx`, `estateAnalytics.ts`, `AnalyticsCollectController.php`). It sends a masked path, never a token or a query. | Decide (owner decision 4). The switches are `ANALYTICS_BEFORE_CHOICE = 'none'` and the `initEstateAnalytics()` call. Soften the banner's wording. A retention rule for the second pipeline. | S once decided |
+| P0-10 | **An H.264 patent licence.** | **Done**: the app uses Cisco's binary. | Counsel's view on whether the pool's content-provider licence applies once plans are paid. | Counsel |
+| P0-11 | **No recorded test on a real Windows PC or Mac.** *New as a numbered finding.* | **Open.** | `desktop/tests/MANUAL.md`, both platforms, written down (§0). | S |
+
+### 6.2 P1: needed to compete credibly
+
+P1-12, P1-13 and P2-10 were closed in the earlier pass and are not repeated.
+
+| # | Finding | Status | What is left | Effort |
+|---|---|---|---|---|
+| P1-1 | A video encoder in the app. | **Built.** Input no longer waits for an encode. Measured again in §8. | A hardware encoder (Media Foundation, VideoToolbox) or a faster path for 4K and Retina screens; ScreenCaptureKit on macOS 14+. | M |
+| P1-2 | UAC, elevated windows and the Secure Desktop. | (a) test on Windows 10 and 11 — **open**. (b) elevated windows on the ordinary desktop through `uiAccess` — **open**, after signing. (c) tell the helper when an elevated window refused input — **done in this pass**. (d) Ctrl+Alt+Del — **done in this pass**, subject to the Windows policy. The earlier audit said "only the button is missing"; it needed a message, a rule and routing as well, and those are what was built. | (a), (b); owner decision 5. | M after signing |
+| P1-3 | Unattended access to your own computers. | **Done.** | — | — |
+| P1-4 | Connect by computer ID. | **Open.** Only the rename to "Key fingerprint" exists. | A real ID a helper can type to *ask* for a session, with the consent still at the computer. | L |
+| P1-5 | Clipboard. | **Partly.** Helper to computer, text, Windows, when the app shares — and the paste key now carries the helper's text (this pass). | Through a companion; on a Mac; computer to helper (owner decision 6); files. | M |
+| P1-6 | Session continuity. | **Partly.** A warning five minutes before the limit (this pass). A reloaded or dropped helper is waited for a minute (PR #116). | Extending a session. Coming back after the helped computer restarts. An idle timeout. | M |
+| P1-7 | Crash reporting, and "Send logs to support". | **Partly.** About now has **Open the folder** for the logs (this pass). | Sending them. Crash reports. The web reports no errors at all. | M |
+| P1-8 | The web after a deploy. | **Done** — the error screen and one reload earlier, the previous version's files kept in this pass. | — | — |
+| P1-9 | Two-factor sign-in. | Remote's part **done**. | The portal's own second factor (portal team). Making Remote's compulsory for helpers needs the portal to vouch for who is enrolling. | Portal team |
+| P1-10 | A security contact. | **Open.** No contact is named, there is no `security.txt`, and the deploy excludes `.well-known/`, so one placed there would not ship (`deploy-production.yml`). | A mailbox, a response time, the file, and the exclude removed. | S |
+| P1-11 | Rate limiting per IP address. | **Done for signed-in calls and computers** (this pass). | The counters live in files on one server; a second server would need a shared store. `proxyIPs` is empty: check that the address the API sees behind Imunify360 is the visitor's (§9.6). | S to check; M for a shared store |
+| P1-14 | **A Mac helper's Option-typed characters are not typed on Windows.** *New.* `#` on a British Mac keyboard, `@` on a German one, `€`, `₹`. The character arrives with Alt held, and Windows treats it as a shortcut. | **Open.** Characters typed without Option are unaffected. | Hold the Option key back until the next key shows whether it was a shortcut or a character. Needs a real Mac and PC to get right. | M |
+| P1-15 | **The room asks the server for news every few seconds.** *New.* 0.55 requests a second for each browser session, 1.2 with a desktop app in it (§9.1). This, not the relay, is what limits how many sessions one server carries. | **Open.** Guards against overlapping requests, and the fixes in §9.4, are done. | Have the relay tell the room when something changed, and ask the server only then. | L |
+| P1-16 | **Three database reads get slow as history grows.** *New.* At a million sessions the dashboard's first request takes 0.4–0.6 s, and a computer's history about 0.1 s. | **Open.** The fix was measured, not applied: a rewritten query and three indexes take them to under 1 ms each. | A migration: index `(initiator_user_id, created_at DESC)` on sessions, `(device_id)` on participants, and one on the audit table's device id. | S–M |
+| P1-17 | **The older desktop sign-in is still accepted.** *New.* A sign-in started without the computer's own credential is honoured until 31 December 2026 so that installed copies keep working (`DesktopSignInService.php`). | **Open, by design, with a date.** | Delete the constant and the `optional-device-auth` filter on that date. Make sure the builds people have installed are newer than PR #109 by then. | S |
 
 ### 6.3 P2: later
 
-| # | Finding | Where | Effort |
+| # | Finding | Status | Effort |
 |---|---|---|---|
-| P2-1 | Recording, with consent from both sides. | `Remote.php:225` | L |
-| P2-2 | Let the helper switch screens (`select_monitor` exists in the protocol but the web never sends it). | `remoteControl.ts:106`; `agent.rs:963-966` | M |
-| P2-3 | File transfer: a higher cap, folders, resuming, and sending from the app itself. | `Remote.php:248`; `docs/desktop/ARCHITECTURE.md:234-236` | M |
-| P2-4 | Wake-on-LAN, restart and reconnect (the restart API exists, but nothing calls it). | `api/remote.ts:512-518` | M–L, after P1-1 and P1-3 |
-| P2-5 | Mobile apps, and a companion for Linux. | `update.rs:147-161` | XL / L |
-| P2-6 | Languages (Hindi first) and an accessibility audit to WCAG 2.2 AA. The only language today is `en`. | `backend/app/Language/`; `web/index.html:2` | L |
-| P2-7 | Installer: a per-user option that needs no administrator rights, and more languages. It is per-machine and English-only today. | `tauri.conf.json:61-62` | M |
-| P2-8 | Narrow the web CSP. `connect-src` allows any `https:` and `wss:` address. | `web/public/.htaccess:107` | S |
-| P2-9 | Choose the right computer for the companion. Inside the app, pre-select the computer the portal is running on, and warn when there are several. | `CompanionService.php:100-118` | S–M |
-| P2-10 | ~~The false message "The clipboard is shared in both directions".~~ **Fixed in this release.** | `ControlPanel.tsx` | Done |
-| P2-11 | Shared PCs. Every Windows account on a PC acts as the person who registered it. Document this, or register per user for personal accounts. | `service/storage.rs:14-33`; `hooks.nsh:119-125` | M |
-| P2-12 | Make "personal only" true on the server too. The API still accepts company scope, the Manage relay and the lifecycle receivers. Put them behind a switch, or refuse them. | `Routes.php:57`, `:66`, `:298-306` | S–M |
-| P2-13 | A special-keys menu (Ctrl+Alt+Del, the Windows key, Alt+Tab) and keyboard lock in full screen. The Secure Desktop helper already accepts Ctrl+Alt+Del (`SendSAS`, where the `SoftwareSASGeneration` policy allows services); only the button is missing. | `web/src`; `secure_desktop/protocol.rs` | S–M |
-| P2-14 | Decide whether analytics should run inside the desktop app's portal. Today it does, banner included. | `analytics.ts` (no check for the app) | S |
+| P2-1 | Recording, with consent from both sides. | Open | L |
+| P2-2 | Let the helper switch screens. | **Done** when the app shares its own screen and control is granted. Left: through a companion; without control; showing all screens at once. | M |
+| P2-3 | File transfer: a higher cap, folders, resuming, and from the app itself. | Open | M |
+| P2-4 | Wake-on-LAN, restart and reconnect. | Open | M–L |
+| P2-5 | Mobile apps, and an app for Linux. | Open | XL / L |
+| P2-6 | Languages (Hindi first) and a full accessibility audit. | Open for languages. Accessibility: contrast, focus, a skip link, announcements and phone layout were measured and fixed in this pass (§7.5); a full WCAG 2.2 AA audit has not been done. | L |
+| P2-7 | Installer: a per-user option, and more languages. | Open | M |
+| P2-8 | Narrow the web's content security policy: `connect-src` allows any `https:` and `wss:` address. | Open; now stated honestly in `docs/SECURITY.md`. | S |
+| P2-9 | Choose the right computer for the companion. | Open | S–M |
+| P2-11 | Shared PCs: every Windows account on a PC acts as the person who registered it. | Open | M |
+| P2-12 | Make "personal only" true on the server too. | Open | S–M |
+| P2-13 | A special-keys menu and keyboard lock. | **Done** (PR #116 and this pass). | — |
+| P2-14 | Analytics inside the desktop app's embedded pages. | Open; both pipelines run there. Part of owner decision 4. | S |
+| P2-15 | *New.* The room's 20-second "I am here" call is read by nothing on the server. Drop it or use it. | Open | S |
+| P2-16 | *New.* The **Get help** window asks the server who is waiting every 2 seconds — the largest single source of requests in a session the app hosts. | Open | S |
+| P2-17 | *New.* Each API request repeats the same lookups: 8 database reads for a session, 15–16 for control, 17 for a computer's control. Remembering them within a request would make that 5, 9 and 10. | Open | S–M |
+| P2-18 | *New.* The portal is asked about each signed-in browser once a minute, waiting up to 8 and 15 seconds. A slow portal would hold up Remote, computers included. | Open. Shorter waits, and reusing the last answer while the portal is down, is an owner decision: it trades a minute of stale sign-in for staying up. | S |
+| P2-19 | *New.* The newest release's notes do not say its Windows installer is unsigned. | The workflows are fixed. That release needs its notes edited by hand. | S |
+| P2-20 | *New.* When the app shares its own screen it has no chat or file panel, and one helper connects at a time. | Open | M |
+| P2-21 | *New.* The shared company-access screens (Users & Access) still put white text on the brand green. They are a kit shared with other AICOUNTLY products and were not changed here. | Open | S, in the kit |
+| P2-22 | *New.* No dark theme; the system's preference is ignored. | Open | M |
+| P2-23 | *New.* A server message says "not enabled for this organisation" to a personal account. The web's own wording was fixed; the API's was not. | Open | S |
 
 ---
 
-## 7. Security and privacy
+## 7. Friendly and easy to use
+
+### 7.1 How it was checked
+
+Every screen was drawn in a real browser and photographed, before and after the fixes:
+
+* **The desktop app's window** at its default size (960×720) and its minimum (720×560), in each state it can be in:
+  first run, signed in, a help session, a request for control, being controlled, unattended, offline, removed, updating,
+  on Windows and as a Mac. 194 pictures.
+* **The web app** at 1440×900 and at a phone's 390×844, signed in as the person being helped and as the helper, with a
+  stand-in for the server and a real connection between two pages. 170 pictures.
+
+Colours were read from the drawn page and their contrast computed. The keyboard was walked through every page with Tab.
+Clicks were counted.
+
+**Not drawn:** the AICOUNTLY sign-in page (another product), the browser's own "choose what to share" window, the
+AICOUNTLY Connect launcher, the app's tray menu and title bar, and the web pages the app shows inside its window.
+
+### 7.2 The desktop app's window: 16 defects
+
+| # | What was wrong | Status |
+|---|---|---|
+| 1 | **The Allow / Not now buttons could not be reached.** The window opens on a tab that cannot scroll, and the consent dialog was drawn below its bottom edge — a 12-pixel sliver of the buttons at the default size, nothing at all in some states. | **Fixed.** A question waiting for the person takes the whole window until it is answered. Checked at both sizes. |
+| 2 | **Every failure said only "Something went wrong."** The reason the app had worked out was thrown away. | **Fixed.** The reason is shown. |
+| 3 | **Stop control and End session were greyed out** whenever anything else in the window was loading. | **Fixed.** They are never disabled. |
+| 4 | **The consent dialog**: no scam warning; the keyboard was not on it; Esc did nothing; a label and its explanation ran together; the stop shortcut was never mentioned. | **Fixed.** A red caution first, the keyboard on the dialog and on neither button, Esc is "Not now", the shortcut is written out. |
+| 5 | **Being controlled looked like being watched.** One green banner, one word different, and it scrolled out of sight. | **Fixed.** The strip stays at the top on every tab and says "… is controlling this computer" or "… can see this computer's screen"; Stop control is a solid white button. |
+| 6 | **Get help**: the banner said a session was active and somebody was viewing before anybody had joined; the code could not be copied; nothing said where the helper types it. | **Fixed.** |
+| 7 | **Home**: the header wrapped and clipped at the minimum size; **Get help** was the third of six small tabs; the first tab is the embedded site. | **Partly.** The header wraps cleanly, and "This computer" now has a card that leads to Get help. Which tab the window opens on is left as designed (owner decision 8). |
+| 8 | **Contrast**: banner text 2.9:1, its labels 2.5:1, primary buttons 2.9:1, small hints 2.9–3.1:1 — including the only scam warning. 27 text styles failed. | **Fixed.** Of 74 styles measured afterwards, only disabled buttons are under 4.5:1, and those are exempt. |
+| 9 | **Offline** was one grey pill on one tab; **removed** was the sign-in card with one grey sentence. | **Fixed.** A notice on every tab with the reason; **Get a code** is disabled rather than failing. |
+| 10 | **The Mac build spoke Windows**: it offered "answer Windows administrator prompts", mentioned Task Manager, and showed a background service as "Not running". | **Fixed.** |
+| 11 | **Jargon**: "This device", "Device ID", "Registration: Protected", "A capability works only when…", "Control companion". | **Fixed.** "This computer", with the technical details folded away for support. |
+| 12 | **Settings**: the first field was an editable server address; the sound switch promised "stops at once" and applied only on Save; nothing said "saved". | **Fixed.** The switch saves at once and says so; the address is under Advanced. |
+| 13 | The field for a helper's code showed 8 of its 11 characters. | **Fixed.** |
+| 14 | The update prompt did not take the keyboard, and Esc did nothing. | **Fixed.** |
+| 15 | First run: the steps were bold right-aligned rows, the key fingerprint was the most prominent thing on the screen, and there was nothing for somebody without an account. | **Partly.** Numbered steps; the fingerprint is folded away. Still nothing for somebody without an account. |
+| 16 | The dialog's name for a screen reader was "Someone is asking…" though the name was known; the banner announced itself every second. | **Fixed.** |
+
+**What already worked well, and was kept:** the admit and control prompts appear on every tab; both extra consents
+start unticked; "What allowing this means" names who, what, and that stopping needs nobody's agreement; the code is
+large and grouped 3-3-3; an unattended session has its own amber banner.
+
+### 7.3 The web app: 18 defects
+
+| # | What was wrong | Status |
+|---|---|---|
+| 1 | **A request to control your computer was invisible**: a "1" on a toolbar button. No strip, no change to the tab. | **Fixed.** A strip above the picture, the Control panel opens by itself, and the browser tab's title says who is asking. |
+| 2 | **While controlling, a label on the picture swallowed clicks**: a real click on the other computer's Start button sent nothing. | **Fixed.** The label goes while controlling. |
+| 3 | **The untouched first path shares a browser tab**, which cannot be controlled. | **Owner decision 7.** The default is unchanged; a sentence under the choices now says a helper can look but not control, and what to choose instead. |
+| 4 | **A declined helper waited for ever** on "Waiting for the host to admit you". | **Fixed.** They are told, and the page stops asking. |
+| 5 | **"Give me your code"**: it was 13 pixels high in the header, beside a bolder session number. | **Fixed.** A host waiting alone sees the code large, with what to do with it. |
+| 6 | A waiting helper saw three different statuses, and a red **End** that failed while waiting and, once admitted, ended the session for everybody without asking. | **Fixed.** One waiting message; a helper has **Leave**, and a helper's **End** asks first. |
+| 7 | Just after sharing the entire screen, the Control panel still said "Share your entire screen" for up to 15 seconds. | **Fixed.** It is asked again at once. |
+| 8 | **The helper's own request** was only in a side panel: no way to cancel it, a refusal was silent, and "control stopped" was a grey line under the toolbar. | **Fixed.** A strip with **Cancel request**; a refusal is said, with **Ask again**; notices sit above the picture. |
+| 9 | **On a phone**, which cannot share: "Share my screen" was the highlighted first action, under a welcome card and a notice that repeated itself; "Create session" still worked, into a room with no Share button. | **Fixed.** Join is first; sharing says "Not available in this browser"; Create session is disabled there. |
+| 10 | **Errors looked like empty lists**: a failed request showed "No computers registered yet" or "No sessions yet"; the Start page stayed a grey block. | **Fixed.** Each says it could not be loaded and offers **Try again**. |
+| 11 | A personal account got no **Remove** or unattended buttons on the Computers page, though the page promised them. | **Fixed** (a server fix). |
+| 12 | **Wording**: "It does not control your computer"; "No installation required"; "Anita Sharma can be controlled…"; the Security panel addressed a helper as the person sharing; "This organisation" on a personal account; "for Windows" in six places. | **Partly.** All of those are corrected. The person and their computer still go by more than one name each across the screens. |
+| 13 | The session timeline showed the server's own codes for 19 events, the control events among them. | **Fixed**, with a test that fails when the server gains an event the web has no words for. |
+| 14 | **Contrast and keyboard**: white on green 2.9:1; muted text 3.1:1; focus ring 1.3–1.5:1; a join request was not announced; a heading out of order. | **Fixed** (§7.5). |
+| 15 | The Control panel had no padding; the companion's "Ready" was in the red box that means "being controlled"; "HOST" and "…(control)" were cut short. | **Partly.** Padding and "Ready" are fixed; long names are still cut short in the People list. |
+| 16 | **The room on a phone**: a header 163 pixels tall; a toolbar that scrolled sideways, hiding seven of its buttons; 32-pixel buttons. | **Partly.** Every button is on screen and at least 44 pixels tall, and the picture has 551 pixels instead of 294. The header is still tall. |
+| 17 | Dialog buttons touching; a list with no bullets; the phone menu still in the keyboard's path when shut, and its button never an X; the Arrow tool's icon was a circle. | **Fixed.** |
+| 18 | The chat history was fetched again after every check of the session; leaving quickly could leave a connection open. | **Fixed.** |
+
+**What already worked well, and was kept:** the Join page is one field that takes the keyboard at once, groups the
+digits, and says the host must admit you; stopping is one red click in a pinned banner on both sides; the host's control
+prompt is plain and the clipboard is a separate, unticked box; no sideways scrolling at phone width; dialogs keep the
+keyboard inside, close on Esc and give the keyboard back; the status line uses words, never "WebRTC" or "TURN".
+
+### 7.4 How much a person has to do
+
+Counted after sign-in, on the web:
+
+| To | Clicks |
+|---|---|
+| Be helped (share your screen and let somebody in) | 4 in the app, 2 in the browser's own picker, 1 to allow the helper: **7** |
+| …and let them control the computer | 4 more, and 1 in the desktop app |
+| Help somebody | **2**, and the nine digits of the code |
+| …and control their computer | 2 more |
+
+From the desktop app, being helped is shorter: **Get help → Get a code**, read the code out, **Let them in**, **Allow
+control** — four clicks, and no picker.
+
+With the People panel open the picture takes 51% of a 1440×900 window; with it closed, 72%.
+
+### 7.5 Reading and keyboard, measured
+
+| | Before | After |
+|---|---|---|
+| Web, light pages: text styles under 4.5:1 | 8 | 1 (a disabled button, which is exempt) |
+| Web, the room: text styles under 4.5:1 | 3 | 0 |
+| Web, primary button (white on green) | 2.9:1 | 6.7:1 |
+| Web, focus ring against the page | 1.3–1.5:1 | 6.3–6.7:1 |
+| Web, focus ring in the dark room | 1.8:1 | 11:1 |
+| Web, phone: stops the keyboard makes on things that are off screen | 7 | 0 |
+| Web: a way past the header and menu | none | "Skip to content" |
+| Web: the shared screen's name for a screen reader | none | "The shared screen" |
+| Desktop window: text styles under 4.5:1 | 27 | 0 (disabled buttons aside) |
+
+### 7.6 Left
+
+* The two owner decisions (the Start page's default, the app's first tab).
+* A design pass on names: one word for the person, one for their computer, everywhere.
+* The room's header on a phone.
+* Somebody without an AICOUNTLY account meets a sign-in page and nothing else.
+* No dark theme. English only.
+* A full accessibility audit by somebody who uses a screen reader. What was measured here is what a machine can measure.
+
+---
+
+## 8. Speed
+
+Everything here was measured on one machine: four processor cores (Xeon, 2.1 GHz) and 16 GB, with no real network in
+between. Figures for a real laptop on a real connection will differ, and §8.5 lists what could not be measured at all.
+
+### 8.1 The web app
+
+The final build, in a real browser, with 150 ms added to every answer from the server. Median of five runs.
+
+| | |
+|---|---|
+| Something on the screen | 0.10 s |
+| Dashboard ready to use | 0.56 s |
+| Session room ready to use | 0.71 s |
+| How much the page jumps while loading (layout shift) | 0.002 on the dashboard. In a helper's room 0.001 — it was 0.15 before this pass, when the picture's arrival pushed the page about. |
+| Downloaded to show the dashboard | 233 kB, in 9 script files and 1 stylesheet |
+| The whole app | 755 kB of script (236 kB compressed) in 37 files, loaded a page at a time; the room is 147.5 kB (42 kB compressed) |
+| Calls to the server in the first 10 seconds | Dashboard 3. Room, as the person being helped, 9 (it was 11). Room, as the helper, 9. |
+
+A tab left open on the dashboard, Computers or Sessions makes no calls at all.
+
+### 8.2 The desktop app's picture
+
+The app's own encoder (OpenH264, built with its assembly code, as Cisco's binary is), in a release build, on the
+hardest case there is: a test picture in which every frame is different. A real desktop is far easier — most frames
+change a little or not at all, and an unchanged screen is not encoded.
+
+| Screen | Converting and encoding one frame | 95th percentile | What that allows |
+|---|---|---|---|
+| 1920×1080 | 25.5 ms | 32.5 ms | 30 frames a second, inside the 33 ms each frame has |
+| 3024×1964 (a Retina MacBook), scaled to 1920×1246 | 47.2 ms | 66.5 ms | About 21 a second |
+| 3840×2160 (4K), scaled to 1080p | 42.4 ms | 57.0 ms | About 23 a second |
+
+* Scaling a large screen down takes 22 ms of that on its own — half the cost. That, or a hardware encoder, is where a
+  smoother 4K or Retina picture would come from (P1-1).
+* About 20 frames a second is enough to help somebody. It is not enough to watch a video through.
+* The helper's mouse and keyboard no longer wait for a frame to finish encoding (PR #116).
+* A still screen costs nothing on Windows, and since this pass almost nothing on a Mac.
+
+### 8.3 The path a click takes
+
+Browser → data channel → the app's gate → the operating system. Pointer movement is sent at most once every 16 ms.
+Nothing on that path waits for the server or for the picture. **How long it takes from the helper's hand to the other
+screen has not been measured**: it needs two real computers and a real network. The pilot script's test is that any
+delay feels shorter than half a second.
+
+### 8.4 The relay and the server
+
+* The relay adds 0.2 ms to a message at the median and 0.6 ms at the 95th percentile, with 19,900 connections open
+  (§9.3).
+* Each lookup the room's regular calls make is indexed: 0.02–0.05 ms each in a database holding a million sessions.
+* How long the production server takes to answer a call was not measured. The sums in §9 assume 50 ms.
+
+### 8.5 Not measured
+
+Anything over a real network. Real laptops: processor use, battery, fan. The delay from hand to screen. What capturing
+costs on a real Mac. The production server's own response times.
+
+---
+
+## 9. Scale
+
+### 9.1 What one session asks of the server
+
+The room does not wait to be told that something changed. It asks, on a timer.
+
+| Who asks | What, and how often | Requests a second |
+|---|---|---|
+| Browser, person being helped | The session, every 4 s (2 s while somebody is waiting to be let in) | 0.25 |
+| Browser, helper | The session, every 25 s | 0.04 |
+| Both browsers together | Control, every 15 s each; every 4 s while control is asked for or granted | 0.13–0.50 |
+| Both browsers together | "I am here", every 20 s each (read by nothing — P2-15) | 0.10 |
+| Both browsers together | A new room token, every 90 s each | 0.02 |
+| Desktop app sharing its screen, or carrying control | Control, every 3 s | 0.33 |
+| Desktop app's **Get help** window | Who is waiting, every 2 s (P2-16) | 0.50 |
+| **One session between two browsers** | | **0.55** |
+| **One session with the desktop app in it, being controlled** | | **1.2** |
+| **One signed-in computer doing nothing** (a Mac: 0.04) | Check-in and presence, each once a minute, by the app and by the Windows service | **0.06** |
+
+Each of those requests makes between 5 and 17 database reads, and opens its own database connection.
+
+### 9.2 What that adds up to
+
+| At the same moment | Requests a second |
+|---|---|
+| 100 sessions | 55–120 |
+| 1,000 sessions | 550–1,200 |
+| 10,000 sessions | 5,500–12,000 |
+| 10,000 signed-in computers doing nothing | 580 — as much as 500 to 1,000 sessions |
+
+A PHP server answers as many requests at once as it has workers. If a request takes 50 ms and there are *W* workers,
+that is 20 × *W* requests a second: about 36 × *W* browser sessions, or 16 × *W* sessions with the desktop app in them.
+**With 20 workers, roughly 700 browser sessions or 300 with the app — on a server doing nothing else.** Both numbers
+in that sentence are assumptions: neither the worker count nor the response time can be read from the code (§9.6).
+
+So: **today's single server is good for hundreds of sessions at once, and the limit is the asking, not the relay or
+the media**, which goes directly between the two computers.
+
+### 9.3 The signalling relay, load-tested
+
+The relay as it is in the repository, driven by thousands of real connections on the same machine. "Before" is `main`
+(what production runs); "after" is the branch.
+
+| | Before | After |
+|---|---|---|
+| Most connections held | 19,900 (the test machine's own file limit) | 19,900 |
+| Memory at 19,900 | 193–218 MB | 192 MB |
+| Processor with 19,900 idle connections | 0% | 0% |
+| Delay added to a message, 5% of rooms busy (6,082 messages a second) | 0.12–0.15 ms median, 0.34–0.50 ms at the 95th percentile | 0.20 ms, 0.58 ms |
+| Processor at 6,082 messages a second | 17–21% of one core | 25% of one core |
+| Longest a message waited during the relay's 30-second check of every connection, at 10,000 / 19,900 | 32–82 ms / 195–346 ms | 11–15 ms / 19–26 ms |
+| One participant sending the largest allowed message as fast as allowed, into a room of 50 | 89% of the core; every other room delayed 0.26–0.76 s | 5% of the core; other rooms 0.6 ms median, 5 ms worst; the sender is cut off after 2 s |
+| A recipient that stops reading | 404 MB of memory in a minute | Memory flat at about 90 MB: what one sender may send in ten seconds is capped by size as well as by count, and a recipient more than 1 MB behind is cut off |
+| An ordinary burst — a helper's pointer while a connection is being set up; a newcomer to a room of 6 | The sender was disconnected, and the room told they had left | Delivered; nobody disconnected |
+| A request with a malformed address (`//`). It cannot arrive through the public address, only from a program on the same server. | The relay crashed; all 100 test connections dropped | Answered "400 Bad request"; all 100 stayed up |
+| Running out of open files (tested at a limit of 1,024) | New connections accepted and then reset, nothing logged, and the health check failed too | Refused with 503 at 960; a line in the log saying why; the health check answered 20 times out of 20 |
+| Restart with 10,000 connected | Everybody back 6.5 s after the stop signal | Not re-run; that code is unchanged |
+
+What the fixes cost: each message now takes about 41 millionths of a second of processor instead of about 30, because
+its size is counted and the recipient's backlog checked. One core still relays more than 20,000 messages a second, and
+a busy session sends a few a second.
+
+**The relay is not what limits Remote.** Its first real limit is the number of files the operating system lets it
+open: one per participant, and one per signed-in computer even when idle. With the common default of 1,024 that is 960
+connections. `docs/DEPLOYMENT.md` now shows the one line that raises it.
+
+### 9.4 What stood in the way of the first few hundred — fixed in this pass
+
+| Was | Now |
+|---|---|
+| **Rate limits were per office address.** One office ran out at 60 Windows PCs checking in, 10 PCs starting up together, 6 sessions hosted by the app, or 4 **Get help** windows open. | Per computer, per person, per guest. Only a call nobody has signed is counted against its address. |
+| **Every idle computer booked 6 Mbit/s of relay capacity** on each check-in, for credentials it never used. The book showed "free tier full" at 70 idle PCs; had admission been switched to refuse, it would have refused real sessions. Each booking also rewrote one shared file under a lock: 9 ms at 1,000 idle PCs, 44 ms at 4,000. | A check-in books nothing, and neither does renewing a room token. |
+| **Console down meant Remote down.** Five minutes after Console stopped answering, every request waited 2–4 seconds on it. | The last answer is reused; one request now and then tries again. |
+| **A room token renewed every 90 seconds wrote an audit row each time** — 80 rows an hour for every session. | One row when a participant enters the room. |
+| **Sessions were never closed** unless somebody looked at them, and a computer could stay "busy" in a dead one for an hour. | A job every five minutes. |
+| **A slow answer was asked for again** before it arrived, so a struggling server got more requests, not fewer. | One at a time. |
+| **Closing the tab did not say goodbye**: the request was cut off with the page. | It is sent in a way the browser completes after the page has gone. |
+| **A relay restart made every participant fetch a new token within the same third of a second.** | The first attempt is spread over about a second, a third of the rate. |
+
+### 9.5 What stands in the way of the next step — not done
+
+In the order they would be met.
+
+| # | Limit | When | What it takes |
+|---|---|---|---|
+| 1 | **The asking itself** (P1-15). | Hundreds of sessions at once. | Have the relay — which already carries a message the moment something happens — tell the room, and ask the server only then. The largest single gain, and the largest job (L). Before it: ask who is waiting every 5 s instead of 2 (P2-16), drop the unused "I am here" call (P2-15), remember lookups within a request (P2-17). All three are small. |
+| 2 | **The server's own capacity**: PHP workers, and a new database connection for every request. | The same. | Know the numbers (§9.6). A connection pooler in front of PostgreSQL. |
+| 3 | **The relay book**: one file, rewritten under a lock each time somebody enters a room, and slower the more sessions are open — 9 ms a booking with 1,000 entries in it, 44 ms with 4,000. | Thousands of sessions at once. It was hundreds before the idle bookings and renewals were taken out of it. | Counters in the database instead of a file (M). |
+| 4 | **The portal**: asked about each signed-in browser once a minute, waiting up to 8 and 15 seconds (P2-18). | Thousands of browsers, or one slow day at the portal. | Shorter waits; reuse the last answer while it is down. |
+| 5 | **History**: three reads that slow down as rows pile up (P1-16), and nothing ever deleted (P0-3). A Windows PC writes about 200 "authenticated" audit rows a day by itself: 10,000 PCs are 2 million rows a day. | Months of use. | Three indexes and a rewritten query; a retention job; fewer routine audit rows. |
+| 6 | **One of everything**: one server, one relay process with its rooms in memory, limits counted in files on that server. | When one server is not enough, or must not be a single point of failure. | A shared store for limits and rooms; then a second server. |
+
+### 9.6 What could not be told from the code
+
+These decide the real numbers. Each is a question for whoever runs the server.
+
+1. How many PHP workers the API has, and whether OPcache is on.
+2. PostgreSQL's `max_connections`.
+3. Whether the address the API sees is the visitor's or Imunify360's. If it is Imunify360's, the limits on unsigned
+   calls are shared by everybody.
+4. The open-file limit of the signalling process (`cat /proc/<pid>/limits`, or the line it logs at start).
+5. How many WebSocket connections the front server (Apache) will proxy at once.
+6. Whether production's relay book is the file or a database.
+
+---
+
+## 10. Security and privacy
 
 **What is good, and should stay:**
 
-* Nobody gets a signalling token before the host admits them (`docs/SECURITY.md:13-16`).
-* Control needs a confirmation at the computer and a grant in the browser for each request. The companion can stop control
-  but never grant it (`docs/desktop/CONTROL_COMPANION.md:25-26`, `:120-121`).
-* The input gate is local, and stopping needs no network (`docs/desktop/ARCHITECTURE.md:153-164`).
-* Device keys are Ed25519, kept in DPAPI on Windows or the Keychain on macOS. Device credentials last 15 minutes
-  (`Remote.php:98`), signalling tokens 2 minutes (`:78`), and TURN credentials are minted per session with HMAC
-  (`:160-166`).
+* Nobody gets a signalling token before the host admits them.
+* Control needs consent at the computer for each request. The companion can stop control but never grant it.
+* The input gate is local, and stopping needs no network.
+* While a request for control is waiting, the gate admits nothing: a helper who can already see the screen cannot click
+  the app's own **Allow** button. Switching unattended access on needs a two-step code from the last ten minutes, which
+  a helper does not have.
+* Device keys are Ed25519, kept in DPAPI on Windows or the Keychain on macOS. Device credentials last 15 minutes,
+  signalling tokens 2 minutes, and TURN credentials are minted per session.
 * The audit metadata is scrubbed of secrets. A session you may not see answers 404, not 403. The API headers are strict.
 * Screen content and file contents are never stored.
+* The room is told which operating system a **computer** runs, so it can send the right keys. It is told nothing about
+  a person's browser (`Presenter::operatingSystemOf`, with a test for both).
 
 **What needs work:**
 
-* **Updates** (P0-1).
-* **Not end-to-end against the operator.** Media is encrypted with DTLS-SRTP, but AICOUNTLY runs the signalling, so it
-  could in principle insert itself into a connection. SECURITY.md says so (`docs/SECURITY.md:52-55`). Say it publicly too,
-  and do not claim "end-to-end" in marketing.
-* **Two-factor sign-in.** Remote's own two-step verification is built, and unattended access needs it (P1-9). Whether the
-  portal sign-in has a second factor of its own is still unknown, and is the portal team's.
-* **Rate limiting** (P1-11).
+* **Updates** (P0-1). In-app installing is off while builds are unsigned, which removes the immediate danger and leaves
+  people updating by hand.
+* **Unsigned installers** (owner decision 2).
+* **Not end-to-end against the operator.** Media is encrypted in transit, but AICOUNTLY runs the signalling, so it could
+  in principle insert itself into a connection. `docs/SECURITY.md` says so. Do not claim "end-to-end" in marketing.
+* **The web app's own page holds the person's sign-in inside the desktop app.** The app's Remote tab is the web app
+  signed in as the person, and the sign-in hand-off delivers their portal token to it. The hand-off must now be opened
+  with the enrolled computer's credential; the older way is accepted until 31 December 2026 (P1-17).
+* **The content security policy** lets a page script send to any HTTPS address (P2-8).
+* **Rate limits** follow the caller now (P1-11). Whether the address the server sees is the visitor's, behind
+  Imunify360, could not be told from the code (§9.6); if it is not, the unauthenticated limits — sign-in steps, guest
+  links — are shared by everybody.
 * **The security contact** (P1-10).
-* **The CSP** (P2-8).
 * **Shared PCs** (P2-11).
 * **The Secure Desktop helper runs as SYSTEM.** It starts only for a session the service knows, at the installed app's
-  request, in the console session, after the person's consent (or the owner's unattended switch); it talks only over a
-  pipe whose DACL admits SYSTEM and the session's user, and stops when control stops. What remains: a process already
-  running as the same user could inject into the app during a granted session and so reach the helper (`docs/SECURITY.md`).
-  Review it again once the builds are signed.
-* **The video codec** is Cisco's binary, downloaded at run time and loaded only when its SHA-256 matches, on every load.
-* **A controller can click on Remote's own screens**: admitting someone to the session, accepting a file on the person's
-  behalf, linking a device. The person can always take over, because local input pauses the helper and the shortcut is
-  local. Still, consider ignoring remote input over Remote's own approval controls (P2).
+  request, in the console session, after the person's consent; it talks only over a pipe that admits SYSTEM and that
+  session's user, and stops when control stops. It now also raises Ctrl+Alt+Del on request, under the same conditions
+  and only where Windows' own policy permits. What remains: a process already running as the same user could inject
+  into the app during a granted session and so reach the helper. Review it again once the builds are signed.
+* **A helper can click on some of Remote's own screens** — admitting another person into the session, accepting a file
+  on the person's behalf. Not the control consent (above). The person can always stop it: the stop shortcut is
+  local, and when a browser shares, their own mouse pauses the helper. Still worth ignoring remote input over those
+  controls.
+* **A burst from one participant** can no longer take the relay from everybody else (§9.3).
 
-**What Remote stores about people.** Names and e-mail addresses from the AICOUNTLY account, session metadata, participants,
-IP addresses and user agents, chat text, file names and sizes, device names, operating-system versions, key fingerprints
-and presence times. GA4 receives the origin and a masked path. Screen content and file contents are never stored.
-Retention and deletion: P0-3. Consent for analytics: P0-9.
+**What Remote stores about people.** Names and e-mail addresses from the AICOUNTLY account, session metadata,
+participants, IP addresses and user agents, chat text, file names and sizes, device names, operating-system versions,
+key fingerprints and presence times. Google Analytics receives the origin and a masked path. AICOUNTLY's own analytics
+receives a masked path, a random session id and — attached by the server — the person's user id. Screen content and
+file contents are never stored. Retention and deletion: P0-3. Consent for analytics: P0-9.
 
 ---
 
-## 8. Reliability and operations
+## 11. Reliability and operations
 
-* **Hosting.**
-  * The API (PHP) and signalling (a systemd unit) share one AlmaLinux/cPanel server (`docs/DEPLOYMENT.md:312-325`).
-  * Imunify360 WebShield sits in front of it. It has already broken sign-in once
-    (`docs/auth/SIGN_IN_WAF_INTERCEPTION.md`), so check desktop-app traffic against it whenever its rules change.
-* **Signalling.**
-  * It runs as one process and keeps its rooms in memory. Every deploy restarts it (`docs/DEPLOYMENT.md:322-324`).
-  * Media keeps flowing peer to peer while signalling is down, but nothing new can connect or renegotiate.
-  * A deploy-window guard exists (`scripts/ops/deploy-window.sh`). Keep production deploys outside office hours during
-    the pilot.
-* **TURN.**
-  * Mumbai and Greater Noida run active-active, with fallback over TLS on port 443.
-  * A probe checks them every 5 minutes (`jobs.txt`).
-  * Admission only observes, and the capacity figures are placeholders (P0-7).
-  * The relays are shared with Connect and the sandbox.
-  * The end-to-end relay test is a manual workflow (`docs/E2E_TEST_PLAN.md`, stage 1).
+* **Hosting.** The API (PHP) and signalling (a systemd unit) share one AlmaLinux/cPanel server. Imunify360 sits in
+  front of it and has already broken sign-in once (`docs/auth/SIGN_IN_WAF_INTERCEPTION.md`): check desktop-app traffic
+  against it whenever its rules change.
+* **Signalling** is one process that keeps its rooms in memory, and every deploy restarts it. After a restart every
+  participant reconnects within about a second: measured, 10,000 clients were all back 6.5 seconds after the old
+  process was told to stop, and after five seconds of downtime nobody gave up. Media keeps flowing peer to peer
+  meanwhile; nothing new can connect.
+* **The relay's limits are now explicit**: at most 64 participants in a room; a ceiling on connections just below the
+  process's open-file limit, above which it answers 503 and says so in its log once a minute; `/signal/health` keeps
+  answering at the ceiling. **Check the limit on the server**: with the common default of 1,024 open files the ceiling
+  is 960, and every signed-in computer holds one connection even when idle (`docs/DEPLOYMENT.md`,
+  `REMOTE_SIGNAL_MAX_CONNECTIONS`).
+* **Sessions** are closed by a job every five minutes once they are past their time, which also frees a computer left
+  "busy" in one (`remote:sessions-sweep`; the production deploy installs it). Before, a session expired only when
+  somebody next looked at it.
+* **A deploy** keeps the previous version's files for 30 days; the maintenance page can be switched on from the server.
+* **Console.** If Console cannot be reached, Remote goes on with the last database details it was given, and asks again
+  now and then, instead of every request waiting on it.
+* **TURN.** Mumbai and Greater Noida run active-active, with fallback over TLS on port 443, probed every five minutes.
+  Admission only watches, and the capacity figures are placeholders (P0-7). The relays are shared with Connect and the
+  sandbox.
 * **Testing.**
-  * The desktop release always runs desktop CI first (`release-windows.yml:83-88`).
-  * Web and backend deploys do not, unless someone ticks the box (P0-5).
-  * The native calls are compiled on a Windows runner. `desktop/tests/MANUAL.md:3-6` still says they have not been
-    executed, and no completed manual pass is recorded. Your own runs since then have found real bugs (the app closing
-    itself, `791de21`; the portal hanging Windows, `6ac04ef`), so treat the pilot as the first systematic pass.
-* **Sessions** expire only when someone next reads them, with no warning (P1-6). There is no idle timeout.
-* **Diagnostics.**
-  * Each computer keeps its own logs (`%ProgramData%\AICOUNTLY\Remote\logs\agent.log`, `service.log`), and the path is
-    shown in About.
-  * There is no way to send the logs, and no crash reporting (P1-7).
-  * The web now has an error screen, and reloads a page that outlived a deploy (P1-8, fixed).
-* **Unknown from this repository:** database backups, uptime alerting, who is on call, and where the API host and its logs
-  physically are. The TURN documents mention an "OVH application server". Settle all four before launch (P0-5, and §10
-  for CERT-In).
+  * 2,626 automated tests on 14 November: 1,118 for the API (15 of them skipped without a TURN relay), 593 for the web
+    (552 and 41 for the ICE kit), 46 for signalling, 732 in Rust and 137 for the desktop window. All pass, with the Rust
+    code checked for Linux and cross-checked for Windows. The Mac-only code was last compiled by the release run on
+    `972a9fb`. This pass added one Mac-only function (reading where the pointer is, with the same two system calls the
+    Mac's input code already makes); it has not been compiled on a Mac. A release compiles it before anything ships.
+  * A desktop release always runs the desktop suite first. A production deploy runs the web and API suites unless that
+    is switched off. No suite runs on a pull request or a push.
+  * No manual pass on real machines is recorded (P0-11).
+* **Diagnostics.** Each computer keeps its own logs, and About has **Open the folder**. There is no way to send them
+  and no crash reporting (P1-7). The app now shows the reason for a failure instead of "Something went wrong", which
+  is most of what a person on the phone to support needs to read out.
+* **Unknown from this repository:** database backups, uptime alerting, who is on call, where the API host and its logs
+  physically are, and the six server facts in §9.6. Settle them before launch (P0-5, and §12 for CERT-In).
 
 ---
 
-## 9. User experience
+## 12. Legal and compliance
 
-* **There are two places to act, and the app now explains them.** People share in the browser and confirm in the app. The
-  "Getting help on this computer" card lists the three steps and the stop shortcut (`App.tsx:630`). In the pilot, watch
-  whether people find **Enable control from this computer** (`CompanionPanel.tsx:172`) without help.
-* **Defaults.** The app's Start page starts on "Entire screen", and the room's Share button now follows the Start page
-  (P1-13, fixed). A plain browser still starts on Safe Share (`StartSessionPage.tsx:35-37`): start on "Entire screen"
-  whenever the person has the app signed in (S).
-* **Failures that say nothing.** Input refused by an elevated window still says nothing (P1-2). The Secure Desktop is now
-  explained in the room. A computer without the codec shows no picture; the app says so and names the setting.
-* **The things a helper misses most:** the clipboard (P1-5), special keys (P2-13), switching screens (P2-2), and a
-  session that stops at 60 minutes (P1-6). Full screen is in this release.
-* **Misleading wording:** the analytics banner's "nothing that identifies you" (P0-9). "This computer's ID" (P1-4) and
-  "The clipboard is shared in both directions" (P2-10) are fixed in this release.
-* **Trust signals.** The helper appears only by their display name (P0-4). Competitors show who is connecting and warn
-  about scams.
-* **Reach.** English only (P2-6). Phones can watch and chat only. Linux can be watched but not controlled.
-* **Accessibility** is partial. There are ARIA roles and labels on the dialogs, but no audit has been done (P2-6).
-
----
-
-## 10. Legal and compliance
-
-Use this to brief counsel. It is not legal advice.
+Use this to brief counsel. It is not legal advice. Nothing in this table changed in this pass except the two analytics
+rows.
 
 | Item | Status in the product | Needed before a public launch |
 |---|---|---|
 | Terms of Service | None anywhere: web, app or installer | Terms covering acceptable use, the ban on unauthorised access and scams, suspension and liability. Accept them at the first session (P0-2). |
-| Privacy notice | Only the general `aicountly.com/privacy-policy`, linked from the analytics banner (`AnalyticsConsent.tsx:11`) | A section for Remote: each kind of data in §7, why it is kept, for how long, who processes it (Google Analytics, the hosting provider, the TURN hosts), and the person's rights. Link it from the web, the app and the installer. |
-| EULA | No licence page in the NSIS installer (`tauri.conf.json:60-67`). About shows Cisco's OpenH264 licence text (PR #93). | A licence for the desktop app, shown in the installer and in About. **It must reproduce Cisco's OpenH264 binary licence text and its fourth condition** (`desktop/legal/OPENH264_BINARY_LICENSE.txt`, `docs/legal/OPENH264.md`). |
-| H.264 patents | Cisco's binary, under Cisco's AVC/H.264 pool licence (PR #93) | Nothing to buy while Cisco's four conditions are met. Before paid plans, ask counsel whether the pool's content-provider ("(b) sublicence") terms apply; if so, the licence is from Via Licensing Alliance (via-la.com). |
-| DPDP Act 2023 (India) | Analytics consent only. No grievance contact. No retention. Erasure only when the account closes, and only partly (P0-3). | A notice and consent that list each kind of data and its purpose. A way to withdraw consent. A grievance contact. Erasure once the purpose is served. Reasonable security safeguards. Telling the Data Protection Board and the people affected about a breach. Verifiable parental consent for anyone under 18 (check with the portal team how sign-up handles age). Processor contracts. The DPDP Rules 2025 bring in most obligations in stages; confirm the dates with counsel. |
+| Privacy notice | Only the general `aicountly.com/privacy-policy`, linked from the analytics banner and the app's About | A section for Remote: each kind of data in §10, why it is kept, for how long, who processes it (Google Analytics, AICOUNTLY's analytics, the hosting provider, the TURN hosts), and the person's rights. Link it from the web, the app and the installer. |
+| EULA | No licence page in the installer. About shows Cisco's OpenH264 licence text. | A licence for the desktop app, shown in the installer and in About. **It must reproduce Cisco's OpenH264 binary licence text and its fourth condition** (`docs/legal/OPENH264.md`). |
+| H.264 patents | Cisco's binary, under Cisco's licence | Nothing to buy while Cisco's four conditions are met. Before paid plans, ask counsel whether the pool's content-provider terms apply. |
+| DPDP Act 2023 (India) | A choice is offered for Google Analytics only, and it loads before the choice. AICOUNTLY's own analytics records signed-in page views under a user id with no choice offered (P0-9). No grievance contact. No retention. Erasure only when the account closes, and only partly (P0-3). | A notice and consent that list each kind of data and its purpose. A way to withdraw consent. A grievance contact. Erasure once the purpose is served. Reasonable security safeguards. Breach notification. Verifiable parental consent for anyone under 18 (ask the portal team how sign-up handles age). Processor contracts. Confirm the DPDP Rules' dates with counsel. |
 | IT Act 2000 and IT Rules 2021 | Remote passes chat between users, so it is probably an intermediary (counsel to confirm). | Published terms and privacy policy, and a named grievance officer. Acknowledge a complaint within 24 hours and resolve it within 15 days. |
 | CERT-In Directions (28 April 2022) | No incident process or log policy in this repository | Report a cyber incident within 6 hours. Keep ICT logs for 180 days in India. Synchronise clocks to NTP. Fit this with DPDP deletion (P0-3), and confirm where the hosts are. |
-| GDPR, only if you offer the service in the EU | GA4 loads before consent (`analytics.ts:44`) | Consent before analytics (P0-9). An Article 13 notice. A lawful basis for each purpose. Processor agreements. An EU representative (Art. 27), unless exempt. A transfer mechanism. A process for access and deletion requests. |
+| GDPR, only if you offer the service in the EU | Both analytics pipelines run before, and one regardless of, consent | Consent before analytics (P0-9). An Article 13 notice. A lawful basis for each purpose. Processor agreements. An EU representative, unless exempt. A transfer mechanism. A process for access and deletion requests. |
 | Advertising and comparisons | — | Comparisons with named competitors must be accurate (P0-6), and the competitor columns in §4 must be verified first. |
 
 ---
 
-## 11. Office-pilot test script
+## 13. Office-pilot test script
+
+This is the walk a group of people does together. The desktop app's own checklist, step by step and platform by
+platform, is `desktop/tests/MANUAL.md`; run that first on one PC and one Mac (PB-3).
 
 **You need:**
 
 * **PC-1**: Windows 10 22H2 or 11, the computer being helped, signed in as account **A**.
 * **PC-2**: Windows, the helper's computer, account **B**. A browser is enough here.
-* **Mac**: macOS 13 or later, being helped, account **C**.
-* All three accounts are personal AICOUNTLY accounts.
-* Use computers that have one Windows user each.
+* **Mac**: macOS 13 or later, being helped, account **C**. Later, also as the helper's computer.
+* All three accounts are personal AICOUNTLY accounts. Use computers that have one Windows user each.
 * One person sits at each computer, and you can talk to each other by phone.
-* If possible, have one laptop with display scaling at 125–150% and one computer with two screens.
+* If possible: one laptop with display scaling at 125–150%, one computer with two screens, and one phone.
 * Write down the build number, the computer and the time for every result.
 
 "Pass" describes what you should see. Anything else is a fail: write down exactly what appeared.
 
 **A. Install and check the build (on every computer)**
 
-1. **Download** the installer for this release.
-   *Pass:* the file name contains `-b` and 12 digits, for example `Aicountly-Remote-1.0.0-b202610300716-x64-Setup.exe`, or
-   `…-arm64.dmg` / `…-x64.dmg` for a Mac.
-2. **Windows: run the installer.** On "Windows protected your PC", click **More info**, then **Run anyway** (expected while
-   the app is unsigned). Answer **Yes** to the Windows prompt. Finish with "Run AICOUNTLY Remote" ticked.
-   *Pass:* the window opens and the tray icon appears.
-   *Fail:* antivirus or IT policy blocks it. Record the exact message.
+1. **Download** the installer for the build made from the merged branch.
+   *Pass:* the file name contains `-b` and 12 digits.
+2. **Windows: run the installer.** On "Windows protected your PC", click **More info**, then **Run anyway** (expected
+   while the app is unsigned). Answer **Yes** to the Windows prompt.
+   *Pass:* the window opens and the tray icon appears. *Fail:* antivirus or IT policy blocks it — record the message.
 3. **Mac: install.** Open the `.dmg`, drag AICOUNTLY Remote to Applications and open it. If macOS refuses, go to System
    Settings → Privacy & Security, click **Open Anyway**, then open the app again.
    *Pass:* the window opens and the menu-bar icon appears.
 4. **Open App settings → About.**
-   *Pass:* Version is 1.0.0. Build shows the same 12 digits as the file name, not "Local build". Platform is correct.
-5. **Close the window and reopen it**: from the Start menu on Windows, or by clicking the Dock icon on the Mac.
-   *Pass:* the window comes back. On the Mac, this is fixed in this release.
+   *Pass:* Build shows the same 12 digits as the file name, not "Local build". **Open the folder** opens the logs folder.
+5. **Close the window and reopen it.**
+   *Pass:* the window comes back.
 
 **B. Sign in**
 
-6. **Sign in.** Click **Sign in to AICOUNTLY** and sign in inside the window (or choose **Open in browser instead**).
-   Check that the code shown matches, then confirm.
-   *Pass:* within a few seconds, This computer shows **Online**. The **Remote** tab opens the portal, signed in, with no
-   organisation switcher.
-7. **Mac only: Accessibility.** When the app asks, go to System Settings → Privacy & Security → Accessibility and turn on
-   AICOUNTLY Remote.
-   *Pass:* the app's permissions card no longer warns about input.
+6. **Sign in.** Click **Sign in to AICOUNTLY**, sign in, check that the code and the computer's name shown match, then
+   confirm.
+   *Pass:* within a few seconds, This computer shows **Online**. The **Remote** tab opens the web app, signed in.
+7. **Mac only.** Grant Accessibility and Screen Recording when the app asks, and reopen it.
+   *Pass:* the permissions card no longer warns. The app offers no "Windows administrator prompts" setting, no sound
+   switch and no background-service row.
 8. **The helper (PC-2).** Open `https://remote.aicountly.com` in Chrome or Edge and sign in as B.
-   *Pass:* the dashboard appears.
+   *Pass:* the dashboard appears in under a second.
 
-**C. Start a session and share the entire screen (PC-1 is helped, PC-2 helps)**
+**C. The app shares its own screen — Get help**
 
-9. **PC-1: start a session.** In the Remote tab, click **Start session** in the menu (or **Share my screen** on the
-   dashboard). Check that **Entire screen** is selected, then click **Create session**.
-   *Pass:* the session room opens and shows a 9-digit code.
-10. **Join.** Read the code to B. On PC-2, open **Join session**, type the code and click **Join session**.
-    *Pass:* PC-2 shows "Waiting for the host to admit you".
-11. **PC-1: admit B.** Where the room says someone wants to join, click **Allow**.
-    *Pass:* B is in the room and is labelled "AICOUNTLY user".
-12. **PC-1: share.** Click **Share** in the room's toolbar. The dialog "You're about to share your screen" opens. If it
-    does not say Entire screen, click **Change what to share** and choose **Entire screen** (it proposes what Start
-    session chose). Click **Continue to choose screen**, then pick the whole screen in the picker (in Chrome: the
-    **Entire screen** tab, the screen, then **Share**).
-    *Pass:* a "You're sharing · Entire screen" banner appears. Within about 5 seconds PC-2 shows PC-1's screen, and the
-    text is readable.
+9. **PC-1: Get help → Get a code.**
+   *Pass:* a nine-digit code, large, with a Copy button and where the helper types it. The strip at the top says
+   "Waiting for someone to join — nobody is connected yet".
+10. **PC-2: Join session**, type the code, Join.
+    *Pass:* PC-2 says it is waiting to be let in. PC-1 asks "B wants to join", with a caution to let in only somebody
+    you know, on whichever tab is open.
+11. **PC-1: Let B in.**
+    *Pass:* within about 10 seconds PC-2 sees PC-1's screen, moving, sharp enough to read. PC-1's strip says "B can see
+    this computer's screen".
+12. **Leave both alone for five minutes.**
+    *Pass:* the picture keeps moving and the session is still running. (Before PR #116 it ended at about two minutes.)
+13. **PC-2: Control → Request control.**
+    *Pass:* PC-2 shows a strip, "Waiting for … to answer your request", with **Cancel request**. On PC-1 the app's
+    window comes forward and the question takes the whole window: who is asking, a red caution, what control means, how
+    to stop it. **Both buttons can be reached.** Pressing Enter straight away answers nothing.
+14. **PC-1: Not now.** Then PC-2: **Ask again**, and PC-1: **Allow control**.
+    *Pass:* after "Not now", PC-2 is told and offered **Ask again**. After **Allow control**, PC-2 says "You are
+    controlling this computer" within a second or two, and PC-1's strip says "B is controlling this computer".
+15. **PC-2: use PC-1.** Open Notepad and type `Test é € 123`. Select it, Ctrl+C, End, Ctrl+V, Ctrl+Z. Right-click.
+    Double-click a word. Scroll a long page. Move the pointer into all four corners.
+    *Pass:* the text appears as typed; copy, paste and undo happen; clicks land where B points, corners included; any
+    delay feels shorter than half a second.
+16. **PC-1: move your own mouse** while B is moving theirs.
+    *Expected:* both move the pointer; nothing pauses when the app shares its own screen. A stops B with **Stop
+    control** or the shortcut (step 21). (When a browser shares, A's mouse pauses B: step 26.)
+17. **A window running as administrator.** On PC-1 open Task Manager and bring it to the front. B clicks in it.
+    *Pass:* B's clicks do nothing there, and **within a second B's room says a window running as administrator is in
+    front**. Bring an ordinary window forward: the notice goes and input works again.
+18. **Two screens** (if PC-1 has them).
+    *Pass:* B sees **1** and **2** beside the full screen button, switches, and clicks land on the screen shown.
+19. **The Keys menu.** B opens **Keys** and tries Task Manager, Start menu, Run…, Show the desktop, Switch window.
+    *Pass:* each does on PC-1 what it does at its own keyboard.
+20. **Sound.** On PC-1 switch on **Share this computer's sound** in App settings and play a video.
+    *Pass:* the switch says **Saved**; B hears it within a second or two. Switch it off: the sound stops, the picture
+    carries on.
+21. **Stop.** PC-1: press Ctrl+Alt+Shift+S (on a Mac, ⌘⌥⇧S).
+    *Pass:* control ends at once; B's mouse no longer moves PC-1's pointer; PC-2 says why.
+22. **PC-1: End session.**
+    *Pass:* PC-2's room closes and says the session ended. **Sessions** lists it, and its timeline reads in words —
+    "Control of the computer allowed", not "control granted".
 
-**D. Enable control from this computer**
+**D. A browser shares, the app carries control**
 
-13. **PC-1: link the computer.** Click **Control** in the toolbar, then **Enable control from this computer**, then
-    **Use \<PC-1's name\>**. If more than one computer is listed, pick the one you are sitting at.
-    *Pass:* the panel says "Confirm on \<PC-1\> to continue".
-14. **PC-1: confirm in the app.** The AICOUNTLY Remote window comes to the front and asks "Let people in session … control
-    this computer while you share it?". Click **Allow while I share**. If it asks which screen you are sharing, pick it.
-    *Pass:* the web panel says "Ready. \<PC-1\> will carry control you allow." The app says "This computer can be
-    controlled while you share".
+23. **PC-1, in the app's Remote tab: Start session.** Check that **Entire screen** is selected. Create session.
+    *Pass:* the room opens with the session code shown large. In a plain browser, Start session begins on Safe Share and
+    a sentence underneath says a helper can look but not control.
+24. **B joins by the code; A allows.** A clicks **Share** and shares the entire screen.
+    *Pass:* PC-2 shows PC-1's screen within about 5 seconds.
+25. **PC-1: Control → Control from this computer → Use \<PC-1\>**, then **Allow while I share** in the app.
+    *Pass:* the panel says "Ready", in green.
+26. **PC-2: Request control.** On PC-1, in the browser:
+    *Pass:* a strip above the picture says "B is asking to control this computer", the Control panel opens by itself
+    with a caution and the question, and the browser tab's title names B. **Allow control** works as in step 14.
+    Then A moves their own mouse while B is moving theirs: PC-2 shows "Paused — someone is using that computer", and
+    B's control comes back about 2 seconds after A stops.
+27. **Close PC-1's browser tab without ending the session.**
+    *Pass:* within a minute the app on PC-1 says the sharer has gone, and **Get help** can start a new session at once.
 
-**E. Request, grant and use control**
+**E. Windows prompts and Ctrl+Alt+Del** (needs the background service)
 
-15. **PC-2: ask for control.** Once PC-1 is ready, a **Control** button appears in PC-2's toolbar. Click it, then
-    **Request control**.
-    *Pass:* PC-2 shows "Waiting for A to answer".
-16. **PC-1: grant it.** The **Control** button on PC-1 shows a badge. Open it, and where it says "B is asking to control
-    this computer", click **Allow control**.
-    *Pass:* PC-2 shows "You are controlling this computer". The AICOUNTLY Remote window on PC-1 says "B is controlling
-    this computer".
-17. **PC-2: use PC-1.**
-    * Open Notepad on PC-1 and type `Test é € 123`.
-    * Select the text and right-click it.
-    * Scroll a long web page.
-    * Move the pointer into all four corners of the screen.
-
-    *Pass:* the text appears exactly as typed. Clicks land where B points, corners included. The right-click opens PC-1's
-    own menu. Any delay feels shorter than half a second.
-18. **PC-1: take over.** Move your own mouse while B is moving theirs.
-    *Pass:* PC-2 shows "Paused: someone is using that computer", and the app on PC-1 says "Paused while you use this
-    computer". B's control comes back about 2 seconds after A stops.
-19. **Known limit: check it, do not try to fix it.** From PC-2, open Task Manager on PC-1 and click in it.
-    *Pass (meaning "behaves as expected"):* B's clicks do nothing in Task Manager (an elevated window). Write down what B
-    saw. (UAC prompts are steps 40–45.)
-20. **Scaling and second screens** (if you have them). On the scaled laptop, and on a computer with two screens sharing the
-    second one, repeat the corner test from step 17.
-    *Pass:* clicks land where B points.
-
-**F. Stop control**
-
-21. **PC-1: press Ctrl+Alt+Shift+S** (on a Mac, ⌘⌥⇧S).
-    *Pass:* control ends at once. PC-2 says control has ended, and moving B's mouse no longer moves PC-1's pointer. The
-    control banner on PC-1 disappears. If the shortcut does nothing, note it, and use **Stop control** in the app or the
-    tray icon instead.
-22. **Stop from the helper's side.** B clicks **Request control** again and A clicks **Allow control**. Then B clicks
-    **Stop controlling**.
-    *Pass:* control ends cleanly, and the picture continues.
-
-**G. Files and chat**
-
-23. **B sends a file to A.** On PC-2 open **Files**, choose **Send to** A, then **Choose a file** (a PDF of about 5 MB).
-    On PC-1 click **Accept**, then **Save**.
-    *Pass:* the saved file opens and is the same size as the original.
-24. **A sends a file to B.** Repeat step 23 the other way round.
-    *Pass:* the same as step 23.
-25. **Try a 30 MB file.**
-    *Pass:* it is refused before anything is sent, with a message that the most you can send is 25 MB.
-26. **Chat.** Each person sends a message in **Chat**.
-    *Pass:* each message arrives within a second or so, and both people see the same history.
-
-**H. End, then repeat elsewhere**
-
-27. **PC-1: click End.**
-    *Pass:*
-    * PC-2 is told the session has ended.
-    * The PC-1 app shows no session and no control.
-    * **Sessions** lists the session, with its timeline.
-28. **Repeat C to H with the Mac as the computer being helped** (account C), with B helping. Share from the app's Remote
-    tab. If it says sharing is not available, choose **Open in browser** and share from Chrome. On the Mac, the shortcut is
-    ⌘⌥⇧S.
-    *Pass:* the same as on PC-1. Write down which way the screen was shared.
-29. **Repeat steps 9–17 from another network**, with B on a phone hotspot or at home.
-    *Pass:* the picture appears within about 10 seconds. Write down what the session's **Security** panel says about the
-    connection.
-30. **Optional: leave a session running past 60 minutes.**
-    *Expected today:* it ends at 60 minutes, with no warning. Write down when it ended.
-31. **Sign out and uninstall.**
-    * Click **Sign this computer out**.
-    * Then uninstall the app.
-
-    *Pass:*
-    * The web's Computers page shows the computer as revoked.
-    * Signing in again on the same computer (before uninstalling) brings it back online without restarting the app.
-    * After the uninstall, the folder `C:\ProgramData\AICOUNTLY\Remote` is gone.
-32. **When a newer build is published, open the app.**
-    *Pass:*
-    * The app offers "1.0.0 (build …)", or a newer version, with a higher build number than yours.
-    * After installing it, About shows the new build.
-
-**The app hosting its own screen** (this release):
-
-33. **PC-1 (account A): Get help.** In the app choose **Get help → Get a code**.
-    *Pass:* a nine-digit code appears, and within a few seconds the banner says a session is active.
-34. **PC-2 (account B): Connect → Help someone**, type the code, Join.
-    *Pass:* PC-1 asks "B wants to join your help session" on whichever tab is open. **Let B in**: within about 10 seconds
-    PC-2 sees PC-1's screen (from the app, not a browser share), moving, sharp enough to read.
-35. **PC-2: ask for control.** PC-1 approves. Move, click, type, scroll.
-    *Pass:* the input lands where PC-2 points, on the screen PC-2 sees. Ctrl+Alt+Shift+S on PC-1 stops it at once.
-36. **PC-1: End the session** in Get help.
-    *Pass:* PC-2's room closes; PC-1 shows no session.
-37. **Unattended (account A on both).** Sign PC-2 in as account A. On PC-1 open **Unattended access → Turn on in Remote →
-    Computers**, confirm. Leave PC-1 alone.
-    *Pass:* PC-1's row says unattended access is on. On PC-2, **Connect** lists both computers with "2 computers
-    registered · 2 online"; **Connect** on PC-1 shows its screen and controls it without anybody at PC-1, and PC-1's
-    banner shows the connection. Account B cannot connect to PC-1.
-38. **History.** On PC-1, **This computer → History**, and in the web **Computers → History** for PC-1.
-    *Pass:* both list the sessions from steps 33–37 and the change "Unattended access switched on."
-39. **Mac: repeat 33–37 with the Mac as the computer being helped.** The first time, allow Screen Recording in System
-    Settings and reopen the app.
-    *Pass:* the same as on PC-1. On a Retina Mac a click lands where it was pointed.
-
-**Administrator prompts, the codec and two-step verification** (PR #93):
-
-40. **UAC consent prompt, box ticked.** In a Get help session (steps 33–35), when B asks for control, A ticks **Also let
-    them answer Windows administrator prompts** and allows. On PC-1 start something that needs a "Yes/No" UAC prompt.
-    *Pass:* PC-2's picture switches to the prompt, the room says "A Windows administrator prompt is open on that computer.
-    You can answer it.", and B's click on **Yes** works. The picture returns to the desktop afterwards.
-41. **UAC credential prompt.** As step 40, but a prompt that asks for an administrator's password.
-    *Pass:* B can type into the user name and password fields.
-42. **Box not ticked.** Repeat step 40 without ticking the box.
+28. **Box ticked.** In a Get help session, when B asks for control, A ticks **Also let them answer Windows
+    administrator prompts** and allows. On PC-1 start something that shows a "Yes/No" prompt.
+    *Pass:* PC-2's picture switches to the prompt, the room says "You can answer it", and B's click on **Yes** works.
+29. **Box not ticked.** Repeat without the box.
     *Pass:* the room says "Ask the person at the computer to answer it", and B's input does nothing on the prompt.
-43. **Stop during a prompt.** With a prompt open and B answering it, press Ctrl+Alt+Shift+S on PC-1.
-    *Pass:* B's input stops at once and the room says control ended. Ending the session also stops it.
-44. **Lock screen, unattended.** On PC-1 turn on **Let my unattended connections answer administrator prompts and the
-    lock screen** in App settings, connect unattended from PC-2 (step 37), then lock PC-1 (Win+L).
-    *Pass:* PC-2 sees the lock screen and can type the password. Turn the switch off and repeat: "Ask the person at the
-    computer to answer it".
-45. **Ctrl+Alt+Del.** Note whether anything in the room can send it (expected: not yet, P2-13).
-46. **The codec, on every computer.** After installing, open App settings → Video codec.
-    *Pass:* within a minute it shows "Installed · OpenH264 2.6.0", beside "OpenH264 Video Codec provided by Cisco Systems,
-    Inc.". Turn it off: a Get help session shows the warning and B sees no picture; turn it back on and the picture
-    returns. On an office network behind a proxy, write down whether the download worked. About → Third-party licences
-    shows Cisco's licence text.
-47. **Two-step verification.** On PC-2 (account A) open Settings → Two-step verification, scan the QR code with an
-    authenticator app, confirm, and save the recovery codes. Sign out and in again.
-    *Pass:* Remote asks for a code before anything else. Turning unattended access on asks for a fresh code; an account
-    without two-step is sent to Settings when it tries. A recovery code works once.
+30. **Ctrl+Alt+Del, box ticked.** B chooses **Keys → Ctrl+Alt+Del**.
+    *Pass, one of two:* the Windows security screen appears and B can choose from it; or the room says "Windows on that
+    computer does not let an app send it". **Write down which** — it depends on that PC's Windows policy.
+31. **Ctrl+Alt+Del, box not ticked.**
+    *Pass:* nothing happens on PC-1, and the room says it can only be sent when the box was ticked.
+32. **Lock screen, unattended.** Turn on the matching switch in App settings, connect unattended (step 37), lock PC-1.
+    *Pass:* PC-2 sees the lock screen and can type the password.
+
+**F. The clipboard**
+
+33. **With the box.** A ticks **Also share the clipboard** when allowing control. B copies a sentence in another tab,
+    returns to the room, clicks into Notepad on PC-1 and presses Ctrl+V.
+    *Pass:* B's sentence is pasted.
+34. **Without the box.**
+    *Pass:* Ctrl+V pastes whatever was on PC-1's own clipboard. Nothing of B's is sent.
+35. **The other way.** Copy something on PC-1, paste on PC-2.
+    *Pass:* it is **not** there.
+
+**G. Unattended, and your own computers**
+
+36. **Two-step verification.** On PC-2 (account A) open Settings → Two-step verification, scan the code with an
+    authenticator app, confirm, save the recovery codes.
+    *Pass:* signing in again asks for a code first.
+37. **Unattended.** In Remote → Computers, **Allow unattended** for PC-1 (it asks for a fresh code). Leave PC-1 alone.
+    On PC-2, **Connect** to PC-1.
+    *Pass:* PC-1's screen appears and can be controlled with nobody there; PC-1 shows an amber banner. Account B
+    cannot connect to it. The Computers page has **Remove** and **History** for each computer.
+
+**H. A Mac**
+
+38. **Repeat C with the Mac as the computer being helped.**
+    *Pass:* as on PC-1, and: the helper sees the Mac's **pointer** move, the same size as on the Mac; ⌘-click and
+    ⇧-click select files in Finder; the consent dialog says "this Mac" and offers no clipboard box and no Windows
+    box.
+39. **Keys on a Mac.** B opens **Keys**.
+    *Pass:* Force Quit, Spotlight search, Switch app, Mission Control, Close window, Quit app, Interrupt, Esc — not
+    the Windows list. Each does what it says.
+40. **A PC helping a Mac.** From PC-2, in TextEdit on the Mac: Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+Z.
+    *Pass:* select all, copy, paste and undo happen.
+41. **A Mac helping a PC.** Sign in as B on the Mac's browser and help PC-1. In Notepad: ⌘A, ⌘C, ⌘V, ⌘Z. Tap ⌘ alone.
+    *Pass:* select all, copy, paste and undo happen; the Start menu does **not** open.
+42. **Known gap — record it.** On a Mac with a British or German keyboard, type `#` or `@` (with Option) into Notepad
+    on PC-1.
+    *Expected today:* nothing is typed.
+
+**I. Files, chat, a phone, and endings**
+
+43. **Files and chat**, between two browsers (section D's kind of session): send a 5 MB file each way; try a 30 MB one;
+    send a chat message each.
+    *Pass:* files arrive intact; 30 MB is refused before sending; messages arrive within a second.
+44. **A phone.** Sign in on a phone's browser.
+    *Pass:* **Join session** is the first, highlighted card; "Share my screen" says it is not available in this
+    browser. In a room, every toolbar button is on screen and the picture fills most of it.
+45. **A declined helper.** B joins by a code; A presses **Decline**.
+    *Pass:* B is told, and the page stops waiting.
+46. **Leave and End.** As a helper, press **Leave**; in another session, press **End**. As the person being helped,
+    press **End**.
+    *Pass:* a helper's Leave takes only the helper out, and a helper's End asks "End it for everyone?" first. The
+    person being helped has **End** alone, and it ends their session at once.
+47. **The time limit.** Leave a session running.
+    *Pass:* at 55 minutes the room says it ends in 5 minutes. At 60 it ends. Write down when.
+48. **Another network.** Repeat steps 9–15 with B on a phone hotspot.
+    *Pass:* the picture appears within about 10 seconds. Write down what the **Security** panel says about the
+    connection — and that it speaks to B about "the person sharing", not as if B were sharing.
+49. **Offline.** Unplug PC-1's network and open **Get help**.
+    *Pass:* a notice on every tab says the computer is not connected, and why; **Get a code** is disabled.
+50. **Sign out and uninstall.** **Sign this computer out**, then uninstall.
+    *Pass:* the web's Computers page shows it as removed; `C:\ProgramData\AICOUNTLY\Remote` is gone.
 
 **Results sheet.** Copy this table and fill in one row for each step:
 
@@ -807,38 +996,78 @@ Use this to brief counsel. It is not legal advice.
 
 ---
 
-## 12. Roadmap
+## 14. Roadmap
 
-### The next two weeks: pilot, and the quick P0/P1 fixes
+### To make this pass live
+
+Nothing in §2.1 reaches anybody until these are done, in this order. Each is the owner's to start.
+
+| Step | What it brings | Note |
+|---|---|---|
+| 1. Merge the branch into `main`. | — | The suites are green locally (§11). |
+| 2. Deploy to production (web and API). | The room's new behaviour, the web's fixes, limits per caller, no relay bookings for idle PCs, Console's outage isolated, the sweep job (the deploy installs it), the previous version's files kept from the *next* deploy on. | The deploy window is 20:00–08:00 IST. Existing desktop builds keep working with it. |
+| 3. Restart the signalling service (the deploy does). | The relay's fixes. | Everybody reconnects within a few seconds. Check the line it logs: "accepting up to N connections". |
+| 4. Release a Windows and a Mac build from the merged commit. | The desktop window's fixes, the refused-input notice, Ctrl+Alt+Del, the Mac's pointer. | The release compiles the Mac code first; one small Mac-only function added in this pass has not been compiled on a Mac yet. |
+| 5. Publish the downloads. | People can get the build. | `publish-downloads.yml` |
+| 6. Run `desktop/tests/MANUAL.md` on a PC and a Mac. | Proof. | Half a day. |
+
+### The next two weeks
 
 | When | What |
 |---|---|
-| Days 1–2 | ~~Deploy (PB-1) and publish numbered builds (PB-2)~~ — done (`4e0d7e2`, `202611010121`). Check the guest-link entitlement row (PB-5). |
-| Days 2–5 | Run the whole pilot script (§11, steps 1–47) with 2 PCs and a Mac — the first run of hosting, the Secure Desktop helper and the Cisco download on real machines. Then 5–10 people doing real help sessions for a week. Fix what they find. |
-| Week 1 (S items) | Turn CI back on for pull requests and make the deploy gate default to on (P0-5). Load no analytics before consent (P0-9). Keep the previous deploy's files for a day (the rest of P1-8). Tell the helper when an elevated window refused input (P1-2c), and add a Ctrl+Alt+Del button (P2-13). Publish a security contact (P1-10). (The error screen, the rename, the clipboard message and the documents are done.) |
-| Week 2 | Start the Terms, privacy notice and EULA with counsel (P0-2). Write the retention schedule and the purge job (P0-3). Design the scam warning and reporting (P0-4). Set up uptime monitoring, alerts and a backup restore test (P0-5). Decide pricing and the free tier (P0-7). Write the update signature check, ready to switch on when the certificate arrives (P0-1). |
+| Days 1–2 | The six steps above. Check the guest-link setting (PB-5). Ask whoever runs the server the six questions in §9.6, and raise the relay's open-file limit. |
+| Days 2–7 | The pilot script (§13) with 2 PCs and a Mac, then 5–10 people doing real help sessions. Fix what they find. |
+| Week 1 (small items) | Decide the analytics question and flip the two switches accordingly (P0-9). A security contact, and stop the deploy excluding `.well-known/` (P1-10). Turn CI back on for pull requests if the minutes can be afforded, or keep running the suites locally and say so (P0-5). Ask who is waiting every 5 s, drop the unused "I am here" call (P2-15, P2-16). Edit the newest release's notes (P2-19). |
+| Week 2 | Start the Terms, privacy notice and EULA with counsel (P0-2). Write the retention schedule and the purge job (P0-3). "Report this person" and account suspension (P0-4). Uptime monitoring, alerts and a backup restore test (P0-5). Decide pricing and the free tier (P0-7). The three indexes (P1-16). |
 
 ### The next quarter
 
 | Month | What | Result |
 |---|---|---|
-| 1 | Finish every P0. Measure TURN capacity, then switch admission to `enforce` when the licence source allows it (P0-7). Add a relay outside India if you will market there (P0-8). Warn before the 60-minute limit and allow extending it (P1-6). Rate limiting per account (P1-11). | **Public launch possible**, positioned as attended help in the browser (P0-6). |
-| 1–3 | ~~The video encoder (P1-1), the Secure Desktop (P1-2), unattended access with two-step (P1-3, P1-9)~~ — built. Left: once the certificate is in, sign the builds and add `uiAccess` for elevated windows (P1-2b); a hardware encoder or an encode thread (P1-1); ScreenCaptureKit on macOS 14+; the portal's own second factor (portal team). | Matches the competitors on the features users look for first. |
-| 2–3 | Connect by ID and an address book (P1-4). Clipboard during companion control (P1-5). Reconnecting after a restart (P1-6). Crash reporting and log upload (P1-7). | Fewer support tickets, and a smoother experience for helpers. |
-| Later | Recording, Wake-on-LAN, restart, mobile apps, Linux, languages, a per-user installer (P2). | — |
+| 1 | Finish every P0. Sign the builds when the certificates arrive, then switch on the update signature check (P0-1) and `uiAccess` for elevated windows (P1-2b). Measure TURN capacity, then switch admission to `enforce` (P0-7). | **Public launch possible.** |
+| 1–2 | The Option key from a Mac (P1-14). Clipboard through a companion and on a Mac (P1-5). Extending a session (P1-6). Crash reporting and sending logs (P1-7). Remove the older desktop sign-in on 31 December (P1-17). | A helper stops noticing which computer they are on. |
+| 2–3 | The relay tells the room when something changed, instead of the room asking (P1-15). A connection pooler; relay bookings in the database (§9.5). | Thousands of sessions on one server instead of hundreds. |
+| 2–3 | Connect by ID (P1-4). A hardware encoder (P1-1). Chat and files in the app's own sessions (P2-20). | Closer to what people know from other tools. |
+| Later | Recording, Wake-on-LAN, restart, mobile apps, Linux, languages, a per-user installer, a second server (P2). | — |
 
 ---
 
-## Appendix: documents that now say the wrong thing
+## Appendix A: documents corrected in this pass
 
-All corrected in this release (P1-12). Kept here as the record of what each used to say.
-
-| Document | What it said | What is true now |
+| Document | What it said | What is true |
 |---|---|---|
-| `README.md` ("Tests") | `ci.yml` runs on every pull request and push to `main`. | It runs only on demand, or when a deploy calls it (`ci.yml:16`). |
-| `README.md` ("What it deliberately does not do") | "macOS and Linux agents are not built." | macOS is a control companion (`docs/desktop/ARCHITECTURE.md:106-113`). |
-| `docs/SECURITY.md:56-59` | Control requires AICOUNTLY Remote for Windows at the other end. | A browser share can be controlled through the person's own app, on Windows or Mac. |
-| `docs/desktop/CONTROL_COMPANION.md:56`, `:60`, `:66` | A personal session has no companions (`PERSONAL_SCOPE`). | Personal sessions take personal companions. Only other scopes answer `COMPANION_SCOPE` (`CompanionService.php:958-974`). |
-| `docs/desktop/ARCHITECTURE.md:240-241` | Automatic updates are deliberately inactive. | The app checks for updates when it starts and offers to install them (`update.rs`; `commands/mod.rs:722-770`). |
-| `backend/app/Config/Remote.php:131` | "the agent's signed update manifest" | The manifest is not signed (P0-1). |
-| `docs/DATABASE.md:222` | Chat has its own retention. | Nothing deletes chat (P0-3). |
+| `README.md` | Control "on a Windows machine". | A Mac hosts and is controlled too. What only Windows does is listed as such. |
+| `README.md`, `docs/desktop/WINDOWS_RELEASE.md` | No unsigned artifact can become a release. | `allow_unsigned` does exactly that, and every build so far used it. |
+| `README.md`, `docs/DEVELOPMENT.md`, `docs/desktop/TESTING.md`, `docs/desktop/ARCHITECTURE.md`, `docs/DESKTOP_AGENT.md` | Test counts from several releases ago (211 / 104 / 27 / 432 / 36). | 1,118 / 593 / 46 / 732 / 137. |
+| `docs/desktop/ARCHITECTURE.md` | macOS is "a companion and nothing else"; capture refused; "never unattended". | It hosts with Core Graphics capture, and is reachable unattended while the app runs. |
+| `docs/DESKTOP_AGENT.md` | "macOS and Linux are not built"; the control switches all default off. | macOS is built. For a personal account control, unattended access and the clipboard are permitted by default. |
+| `docs/desktop/TESTING.md` | Tests run "on every push". Nothing native has run. | No workflow runs on a push. Builds are installed and run by people; no manual pass is recorded. |
+| `docs/DEPLOYMENT.md`, `ci.yml` | CI runs on every pull request and push to `main`. | Only when started by hand, or by a deploy. |
+| `docs/DEPLOYMENT.md` | — | How to raise the relay's open-file limit. |
+| `docs/SECURITY.md` | Control needs the app as the companion of a browser share. | The app also shares its own screen. |
+| `docs/SECURITY.md` | The web's policy allows the named origins and "nothing wider". | `connect-src` allows any `https:` and `wss:` address. |
+| `docs/SECURITY.md` | Analytics is Google Analytics, governed by the banner. | A second pipeline runs whatever the banner's answer. |
+| `docs/BROWSER_SUPPORT.md` | Nothing about controlling a computer; "to send Esc, leave full screen first". | A table of what each browser can do while controlling; Esc is sent in Chrome and Edge, and from the Keys menu everywhere. |
+| `docs/desktop/WINDOWS_AGENT.md` | Keys are injected as Unicode, never as keys. Ctrl+Alt+Del "does nothing" when the policy forbids it. | A shortcut is pressed as a key. The helper is told which of three outcomes happened. |
+| `docs/ARCHITECTURE.md` | The app holds nothing that is a user's credential. | Its Remote tab is the web app signed in as the person. |
+| `desktop/tests/MANUAL.md` | A Windows prompt: "No input reaches it". | With the box ticked the helper answers it. Sections 4d–4f are new. |
+
+## Appendix B: where the numbers came from
+
+Everything measured in this document was measured in the session that wrote it, on one Linux machine with four cores,
+and can be measured again the same way:
+
+| What | How |
+|---|---|
+| The five suites | `backend`: `vendor/bin/phpunit` against PostgreSQL 16. `web`: `npm run typecheck && npm test && npm run build`. `signalling`: `npm test`. `desktop`: `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, the same for `--target x86_64-pc-windows-gnu -p aicountly-remote-desktop`, `cargo fmt --all -- --check`, and `npm run typecheck && npm test`. |
+| The encoder | `cargo test -p remote-webrtc --release --no-default-features --features bundled-openh264 --lib encoding_fits_the_frame_interval -- --ignored --nocapture` |
+| The web's load times, contrast and keyboard order | Scripts that drive a real browser against the built app with a stand-in for the server. They are not in the repository. |
+| The desktop window's pictures and contrast | The same kind of script, against the window's own pages. Not in the repository. |
+| The relay load test | A script that starts the repository's relay and opens thousands of connections to it. Not in the repository. |
+| The server's request sums and the slow reads | Read from the code; the reads were timed in a throwaway database with a million sessions. |
+
+What those tools printed, and ten before-and-after pictures, are kept beside this document in
+`docs/audit/evidence-2026-11-14/`.
+
+The three sets of scripts lived in the working area of the session and are gone when it ends. If the audit is to be
+re-run again, adding them to the repository first would save rebuilding them.

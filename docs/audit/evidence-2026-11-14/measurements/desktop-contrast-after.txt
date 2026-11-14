@@ -1,0 +1,21 @@
+74 distinct text styles measured; failing AA:
+
+ratio  needs ink      paper    size         element                                     sample
+2.57   4.5   #ffffff  #7fae74  14px/600     [disabled] button.btn.btn--primary          "Join"
+2.58   4.5   #fdfdfd  #7dac72  13px/600     [disabled] button.btn.btn--primary.btn--small"Connect"
+
+passing, for reference:
+4.60   4.5   #68726a  #edf9e9  12px/400     span.field__hint                            "Read it to the person helping you. They type"
+4.60   4.5   #68726a  #edf9e9  12px/700     strong                                      "Join session"
+4.65   4.5   #667068  #f2f4f2  12px/600     span.pill.pill--neutral                     "Allowed by policy"
+4.69   4.5   #2563eb  #eff4ff  12px/600     span.pill.pill--info                        "This computer"
+4.69   4.5   #ffffff  #9a6a24  12px/400     kbd                                         "Ctrl+Alt+Shift+S"
+4.69   4.5   #2563eb  #eff4ff  13px/700     p.notice__title                             "Allow AICOUNTLY Remote in Accessibility"
+4.69   4.5   #2563eb  #eff4ff  13px/400     p                                           "macOS only lets an app use this Mac 's mouse"
+4.69   4.5   #2563eb  #eff4ff  13px/400     li                                          "Open System Settings → Privacy & Security → "
+4.69   4.5   #2563eb  #eff4ff  13px/700     strong                                      "AICOUNTLY Remote"
+4.73   4.5   #667068  #edf9e9  12px/600     span.help__code-label                       "Your code"
+4.79   4.5   #68726a  #fffaeb  12px/400     p.field__hint                               "You confirm it there, signed in as yourself."
+4.82   4.5   #68726a  #fafbfa  12px/400     p.field__hint                               "Offline · last seen 12 Nov 2026, 00:12"
+4.93   4.5   #ffffff  #378025  12px/400     kbd                                         "Ctrl+Alt+Shift+S"
+4.96   4.5   #667068  #fafbfa  13px/400     p.computer__facts                           "Windows · Online · Unattended access off"
