@@ -130,6 +130,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
+      - name: Verify S01 deployment target
+        id: s01_target
+        env:
+          AIC_S01_TARGETS: '[{"domain":"downloads.aicountly.com","account":"downloadsaic","root":"/home/downloadsaic/public_html","verified_blueprint":true,"ssh_login":"aicd31e8b732c43ed669"}]'
+          AIC_TARGET_DOWNLOAD_PROD_SSH_HOST: ${{ secrets.DOWNLOAD_PROD_SSH_HOST }}
+          AIC_TARGET_DOWNLOAD_PROD_SSH_PORT: ${{ secrets.DOWNLOAD_PROD_SSH_PORT }}
+          AIC_TARGET_DOWNLOAD_PROD_SSH_REMOTE_ROOT: ${{ secrets.DOWNLOAD_PROD_SSH_REMOTE_ROOT }}
+          AIC_TARGET_DOWNLOAD_PROD_SSH_USER: ${{ secrets.DOWNLOAD_PROD_SSH_USER }}
+        run: python3 "$GITHUB_WORKSPACE/.github/scripts/s01-target-guard.py"
+
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
@@ -300,8 +310,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          ssh-keyscan -p "${SSH_PORT}" -H "${SSH_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || \
-            echo "::warning::ssh-keyscan failed; rsync will use StrictHostKeyChecking=accept-new"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/s01-keyscan.py" -p "${SSH_PORT}" -H "${SSH_HOST}" > ~/.ssh/known_hosts 2>/dev/null || \
+            { echo "::error::S01 host-key verification failed; deployment stopped."; exit 1; }
 
       - name: Check REMOTE_ROOT is the downloads host, not the website
         # Connect's publish ran twice into the wrong cPanel account before
@@ -316,7 +326,7 @@ jobs:
           REMOTE_ROOT: ${{ secrets.DOWNLOAD_PROD_SSH_REMOTE_ROOT }}
         run: |
           set -euo pipefail
-          if ! ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=accept-new \
+          if ! ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=yes \
                  "${SSH_USER}@${SSH_HOST}" \
                  "grep -q 'Aicountly downloads' '${REMOTE_ROOT}/index.html' 2>/dev/null"; then
             echo "::error title=Not the downloads document root::DOWNLOAD_PROD_SSH_REMOTE_ROOT does not hold the downloads host's landing page, so this is not the root downloads.aicountly.com serves -- uploading here would put hundreds of megabytes where nothing can fetch it. It must be the same value DOWNLOAD_PROD_SSH_REMOTE_ROOT has in aicountly/aicountly-downloads, whose deploy put that page there. If that deploy has never run, run it first."
@@ -330,11 +340,11 @@ jobs:
           # means this workflow has, and a run that shows neither is pointed
           # somewhere nothing has ever been uploaded.
           echo "Top level of the downloads root:"
-          ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=accept-new \
+          ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=yes \
             "${SSH_USER}@${SSH_HOST}" "ls -la '${REMOTE_ROOT}'" || true
 
           echo "What is published for ${PRODUCT} so far:"
-          ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=accept-new \
+          ssh -p "${SSH_PORT}" -o StrictHostKeyChecking=yes \
             "${SSH_USER}@${SSH_HOST}" "ls -la '${REMOTE_ROOT}/${PRODUCT}' 2>/dev/null || echo '  nothing yet'" || true
 
       # Into the version's own directory, so publishing 1.1.0 cannot disturb
@@ -361,7 +371,7 @@ jobs:
           rsync -avz --chmod=D755,F644 \
             --exclude='manifest.json' \
             --rsync-path="mkdir -p '${DEST}' && rsync" \
-            -e "ssh -p ${SSH_PORT} -o StrictHostKeyChecking=accept-new" \
+            -e "ssh -p ${SSH_PORT} -o StrictHostKeyChecking=yes" \
             staging/ \
             "${SSH_USER}@${SSH_HOST}:${DEST}/"
 
@@ -432,7 +442,7 @@ jobs:
           DEST="${REMOTE_ROOT%/}/${PRODUCT}"
           rsync -avz --chmod=F644 \
             --rsync-path="mkdir -p '${DEST}' && rsync" \
-            -e "ssh -p ${SSH_PORT} -o StrictHostKeyChecking=accept-new" \
+            -e "ssh -p ${SSH_PORT} -o StrictHostKeyChecking=yes" \
             manifest.json \
             "${SSH_USER}@${SSH_HOST}:${DEST}/manifest.json"
 
