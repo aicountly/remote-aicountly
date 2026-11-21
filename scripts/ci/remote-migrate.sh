@@ -19,9 +19,10 @@
 # still exits 0 after a failed migration, which is why "apply" judges by remote:db-check afterwards.
 #
 # PHP: the <php cli> argument (the *_PHP_CLI repository variable) when it is not empty, otherwise the
-# first of /opt/cpanel/ea-php84/83/82/81, /usr/local/bin/php and the php on PATH that is PHP 8.2+
-# with pgsql (CodeIgniter's Postgre driver), intl and mbstring. cPanel's default php is often older or
-# lacks pgsql, which is why it comes last.
+# first of /opt/cpanel/ea-php84/83/82/81, /usr/local/bin/php, the php on PATH and /opt/remi/php84/83/
+# 82/81 that is PHP 8.2+ with pgsql (CodeIgniter's Postgre driver), intl and mbstring. cPanel's default
+# php is often older or lacks pgsql, which is why it comes after EasyApache's. The S01 host has Remi's
+# PHP (/opt/remi), not EasyApache, and the deploy user may have no php on its PATH.
 #
 # Exit status: 0 ok (status: nothing pending); 10 status: migrations are pending; 1 the status could
 # not be read, or a migration failed; 2 usage; 3 the api folder, spark or api/.env is missing, or no
@@ -84,14 +85,18 @@ else
     /opt/cpanel/ea-php82/root/usr/bin/php \
     /opt/cpanel/ea-php81/root/usr/bin/php \
     /usr/local/bin/php \
-    "$(command -v php 2> /dev/null || true)"; do
+    "$(command -v php 2> /dev/null || true)" \
+    /opt/remi/php84/root/usr/bin/php \
+    /opt/remi/php83/root/usr/bin/php \
+    /opt/remi/php82/root/usr/bin/php \
+    /opt/remi/php81/root/usr/bin/php; do
     if usable "$candidate"; then
       php="$candidate"
       break
     fi
   done
   if [ -z "$php" ]; then
-    echo "No PHP 8.2+ with pgsql, intl and mbstring found (tried ea-php84/83/82/81, /usr/local/bin/php and php on PATH). Set the *_PHP_CLI repository variable." >&2
+    echo "No PHP 8.2+ with pgsql, intl and mbstring found (tried ea-php84/83/82/81, /usr/local/bin/php, php on PATH and /opt/remi/php84/83/82/81). Set the *_PHP_CLI repository variable." >&2
     exit 3
   fi
 fi

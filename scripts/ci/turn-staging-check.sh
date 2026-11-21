@@ -26,7 +26,9 @@ api="$root/api"
 cd "$api" || verdict "FAIL: cannot enter the API folder"
 
 pick() {
-  for c in "$php" /opt/cpanel/ea-php84/root/usr/bin/php /opt/cpanel/ea-php83/root/usr/bin/php /opt/cpanel/ea-php82/root/usr/bin/php /usr/local/bin/php php; do
+  # S01 has Remi's PHP (/opt/remi), not cPanel EasyApache, and the deploy user may have no php on its PATH.
+  for c in "$php" /opt/cpanel/ea-php84/root/usr/bin/php /opt/cpanel/ea-php83/root/usr/bin/php /opt/cpanel/ea-php82/root/usr/bin/php /usr/local/bin/php php \
+           /opt/remi/php84/root/usr/bin/php /opt/remi/php83/root/usr/bin/php /opt/remi/php82/root/usr/bin/php /opt/remi/php81/root/usr/bin/php; do
     [ -n "$c" ] || continue
     command -v "$c" >/dev/null 2>&1 || [ -x "$c" ] || continue
     if "$c" -r 'exit(PHP_VERSION_ID >= 80200 && extension_loaded("openssl") ? 0 : 1);' 2>/dev/null; then echo "$c"; return 0; fi
@@ -35,7 +37,7 @@ pick() {
 }
 
 echo "=== environment"
-P="$(pick)" || { echo "no PHP 8.2+ with openssl found (set SANDBOX_PHP_CLI / PROD_PHP_CLI)"; verdict "FAIL: no usable PHP"; }
+P="$(pick)" || { echo "no PHP 8.2+ with openssl found (tried ea-php84/83/82, /usr/local/bin/php, php on PATH and /opt/remi/php84/83/82/81; set SANDBOX_PHP_CLI / PROD_PHP_CLI)"; verdict "FAIL: no usable PHP"; }
 "$P" -r 'echo "php ".PHP_VERSION; foreach (["openssl","sodium","pdo_pgsql","curl","sockets"] as $e) echo " ".$e."=".(extension_loaded($e)?"yes":"no"); echo "\n";'
 echo "kit $(cat lib/ice-kit/VERSION 2>/dev/null || echo missing) · product $product · host $(hostname -s 2>/dev/null || echo ?)"
 if [ -f .env ]; then
