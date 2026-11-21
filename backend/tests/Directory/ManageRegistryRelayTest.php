@@ -152,7 +152,7 @@ final class ManageRegistryRelayTest extends CIUnitTestCase
      */
     public function testAddUserLookupAndInviteAreRelayedAsPostOnly(): void
     {
-        $this->assertSame('1.7.0', trim((string) file_get_contents(dirname(ROOTPATH) . '/web/src/company-access/VERSION')));
+        $this->assertSame('1.8.0', trim((string) file_get_contents(dirname(ROOTPATH) . '/web/src/company-access/VERSION')));
         foreach ([['POST', 'v1/companies/74/people/lookup'], ['POST', 'v1/companies/74/people/invite']] as [$method, $path]) {
             $this->assertTrue(ManageRegistryRelay::isRegistryRoute($method, $path), "{$method} {$path} is relayed");
         }
