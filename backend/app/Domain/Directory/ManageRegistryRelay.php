@@ -56,6 +56,8 @@ class ManageRegistryRelay
             '#^v1/workspaces/\d+/(members|accept|decline|exit)$#',
             // company-access 1.3.0: move one person between the Workspace team and Company users.
             '#^v1/workspaces/\d+/members/' . self::REF . '/move$#',
+            // company-access 1.7.0: Add user — find a person, invite them.
+            '#^v1/companies/\d+/people/(lookup|invite)$#',
         ],
         'PUT' => [
             '#^v1/companies/\d+/visibility$#',

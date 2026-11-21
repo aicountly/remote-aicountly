@@ -98,7 +98,6 @@ final class ManageRegistryRelayTest extends CIUnitTestCase
     {
         // 1.4.0 adds no call: setting the same team permissions for several people, or moving several Company users
         // to the team, makes the per-person calls below (PATCH …/members/{ref}, POST …/move), one after another.
-        $this->assertSame('1.4.0', trim((string) file_get_contents(dirname(ROOTPATH) . '/web/src/company-access/VERSION')));
         foreach ([['GET', 'v1/app-roles'], ['GET', 'v1/company-creation-targets'], ['PATCH', 'v1/workspaces/12'],
             ['PATCH', 'v1/workspaces/12/members/1f2e-uuid'], ['POST', 'v1/companies/74/creator-access/retry'],
             ['GET', 'v1/companies/74/plan'], ['GET', 'v1/me/plan'], ['GET', 'v1/me/pending'],
@@ -146,6 +145,38 @@ final class ManageRegistryRelayTest extends CIUnitTestCase
         }
     }
 
+    /**
+     * company-access 1.7.0: Add user finds a person by e-mail, mobile or account ID and invites one not tied to the
+     * company yet. Both are POSTs, for one numeric company, and nothing wider; an invitation sends an e-mail, so it
+     * waits as long as any other write.
+     */
+    public function testAddUserLookupAndInviteAreRelayedAsPostOnly(): void
+    {
+        $this->assertSame('1.7.0', trim((string) file_get_contents(dirname(ROOTPATH) . '/web/src/company-access/VERSION')));
+        foreach ([['POST', 'v1/companies/74/people/lookup'], ['POST', 'v1/companies/74/people/invite']] as [$method, $path]) {
+            $this->assertTrue(ManageRegistryRelay::isRegistryRoute($method, $path), "{$method} {$path} is relayed");
+        }
+        foreach ([
+            // The wrong method.
+            ['GET', 'v1/companies/74/people/lookup'], ['GET', 'v1/companies/74/people/invite'],
+            ['PATCH', 'v1/companies/74/people/invite'], ['PUT', 'v1/companies/74/people/lookup'],
+            ['DELETE', 'v1/companies/74/people/invite'],
+            // Other shapes.
+            ['GET', 'v1/companies/74/people'], ['POST', 'v1/companies/74/people'],
+            ['POST', 'v1/companies/74/people/lookup/extra'], ['POST', 'v1/companies/74/people/search'],
+            ['POST', 'v1/companies/x/people/lookup'], ['POST', 'v1/companies/people/invite'],
+            ['POST', 'v1/workspaces/3/people/lookup'],
+        ] as [$method, $path]) {
+            $this->assertFalse(ManageRegistryRelay::isRegistryRoute($method, $path), "{$method} {$path} is not relayed");
+        }
+
+        $relay = self::scripted(['status' => 200, 'contentType' => 'application/json', 'body' => '{"data":{}}', 'correlationId' => '']);
+        $relay->relay('POST', ['v1', 'companies', '74', 'people', 'invite'], '', ['Authorization' => 'Bearer ses-1', 'Content-Type' => 'application/json'], '{"email":"bob@example.com"}');
+        $this->assertSame('https://manage.example.test/api/v1/companies/74/people/invite', $relay->sent[0]['url']);
+        $this->assertSame('{"email":"bob@example.com"}', $relay->sent[0]['body']);
+        $this->assertSame(45, $relay->sent[0]['timeout'], 'an invitation is a write: it waits 45 s');
+    }
+
     public function testAWriteGoesOnWithThePersonsTokenAndNothingElseOfTheBrowsers(): void
     {
         $relay  = self::scripted(['status' => 200, 'contentType' => 'application/json', 'body' => '{"data":{}}', 'correlationId' => 'corr-up']);
@@ -179,6 +210,8 @@ final class ManageRegistryRelayTest extends CIUnitTestCase
         yield 'a climb out of a company member' => ['DELETE', ['v1', 'companies', '3', 'members', '%2E%2E']];
         yield 'a climb out of a move' => ['POST', ['v1', 'workspaces', '3', 'members', '..', 'move']];
         yield 'a move read' => ['GET', ['v1', 'workspaces', '3', 'members', '1f2e', 'move']];
+        yield 'a look-up read' => ['GET', ['v1', 'companies', '74', 'people', 'lookup']];
+        yield 'an invitation read' => ['GET', ['v1', 'companies', '74', 'people', 'invite']];
         yield 'a current-directory segment' => ['GET', ['v1', '.', 'workspaces']];
         yield 'an empty segment' => ['GET', ['v1', '', 'workspaces']];
         yield 'an odd character' => ['DELETE', ['v1', 'companies', '74', 'permissions', 'a b']];
