@@ -39,11 +39,11 @@ afterAll(() => {
 })
 
 describe('App', () => {
-  it('asks about analytics beside the signed-out screen', () => {
+  it('does not ask about retired analytics beside the signed-out screen', () => {
     renderApp('signed-out')
 
     expect(screen.getByText('Sign in with AICOUNTLY')).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: 'Analytics cookies' })).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Analytics cookies' })).not.toBeInTheDocument()
   })
 
   it('does not ask while signing in', () => {
